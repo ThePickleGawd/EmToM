@@ -1,82 +1,100 @@
 prompt: |-
-        {system_tag}
-        You are an explorer in a simulated home environment. Your goal is to discover how things work, especially any unusual or unexpected behaviors (surprises).
+        - Overview:
+        You are exploring a simulated home environment to discover how things work. Your goal is to find unusual or unexpected behaviors (surprises). You have access to tools for navigation, manipulation, and communication with another agent.
 
-        You have access to the following tools:
         {tool_descriptions}
 
-        WORKFLOW: To interact with objects physically, FIRST navigate to them, THEN interact.
-        Example: To pick up "apple_1" on "counter_5":
-        1. Navigate[counter_5]  (get close to the counter)
-        2. Pick[apple_1]        (now you can pick it up)
+        IMPORTANT:
+        - To interact with objects physically, you MUST first navigate close to them.
+        - When you observe something UNEXPECTED, include "Surprise:" in your Thought to record the discovery.
 
-        {eot_tag}
+        Here are some examples:
 
-        {user_tag}
-        Here is an example of how to explore:
-        {eot_tag}
-        {assistant_tag}
-        Example:
-        World State: I am in kitchen_0. I see: fridge_1, counter_2, cabinet_3.
-        History: No recent actions.
-        Thought: I should explore what's in the fridge. Let me navigate to it first, then open it.
-        Agent_{id}_Action: Navigate[fridge_1]
+        Example 1:
+        Task: Explore the house and discover interesting object behaviors.
+        Thought: First I should find what rooms are available in this house.
+        Agent_{id}_Action: FindRoomTool[all rooms]
         Assigned!
-        {eot_tag}
-        {user_tag}
+        Agent_{id}_Observation: kitchen_0, living_room_0, bedroom_0, bathroom_0.
+        Thought: I will explore the kitchen first since it usually has many interactive objects.
+        Agent_{id}_Action: Explore[kitchen_0]
+        Assigned!
         Agent_{id}_Observation: Successful execution!
-        {eot_tag}
-        {assistant_tag}
-        Thought: Now I'm close to the fridge. Let me open it to see what's inside.
-        Agent_{id}_Action: Open[fridge_1]
+        Thought: Now that I have explored the kitchen, let me find what furniture is there.
+        Agent_{id}_Action: FindReceptacleTool[furniture in kitchen]
         Assigned!
-        {eot_tag}
-        {user_tag}
+        Agent_{id}_Observation: fridge_0, cabinet_1, counter_2, drawer_3 found in kitchen.
+        Thought: I see a fridge. Let me navigate to it and try opening it to see what happens.
+        Agent_{id}_Action: Navigate[fridge_0]
+        Assigned!
         Agent_{id}_Observation: Successful execution!
-        {eot_tag}
-        {assistant_tag}
-        Thought: I opened the fridge. Let me explore another room to find more objects.
-        Agent_{id}_Action: FindRoomTool[bedroom]
+        Thought: Now I am close to the fridge. Let me open it.
+        Agent_{id}_Action: Open[fridge_0]
         Assigned!
-        {eot_tag}
-        {user_tag}
-        Agent_{id}_Observation: bedroom_0, bedroom_1 found.
-        {eot_tag}
-        {assistant_tag}
-        Thought: I'll go explore bedroom_0.
-        Agent_{id}_Action: Navigate[bedroom_0]
+        Agent_{id}_Observation: Successful execution! Also, drawer_3 in bedroom_0 opened by itself!
+        Thought: Surprise: Opening the fridge caused a drawer in the bedroom to open! This is a remote control mechanic - the fridge and drawer_3 are linked. I should tell my teammate.
+        Agent_{id}_Action: Communicate[Discovery: Opening fridge_0 also opens drawer_3 in bedroom - they are linked!]
         Assigned!
-        {eot_tag}
+        Agent_{id}_Observation: Message delivered. Your teammate will see your message in their context.
+        Thought: I found a mechanic. Let me continue exploring.
+        Final Thought: Exit!
 
-        {user_tag}
-        Now explore the environment. Select actions that are likely to reveal new information about how the world works.
+        Example 2:
+        Task: Explore and test object interactions for surprising behaviors.
+        Thought: I should find some objects to interact with.
+        Agent_{id}_Action: FindObjectTool[small objects]
+        Assigned!
+        Agent_{id}_Observation: apple_0 on counter_2, cup_1 on table_3, book_2 on shelf_4.
+        Thought: Let me navigate to the apple and inspect it closely.
+        Agent_{id}_Action: Navigate[counter_2]
+        Assigned!
+        Agent_{id}_Observation: Successful execution!
+        Thought: Now I am near the counter. Let me hide the apple to see if anything unexpected happens.
+        Agent_{id}_Action: Hide[apple_0]
+        Assigned!
+        Agent_{id}_Observation: You hide apple_0. The cup_1 starts glowing!
+        Thought: Surprise: Hiding the apple caused cup_1 to start glowing! This is an inverse state mechanic - hiding one object affects another. I should share this discovery.
+        Agent_{id}_Action: Communicate[Discovery: Hiding apple_0 makes cup_1 glow - inverse state mechanic!]
+        Assigned!
+        Agent_{id}_Observation: Message delivered. Your teammate will see your message in their context.
+        Thought: I discovered a mechanic. Let me explore more.
+        Final Thought: Exit!
 
-        Current world state:
-        {world_description}
+        Example 3:
+        Task: Coordinate with teammate to explore and find hidden mechanics.
+        Thought: Let me find openable furniture to test.
+        Agent_{id}_Action: FindReceptacleTool[openable furniture]
+        Assigned!
+        Agent_{id}_Observation: chest_0, cabinet_1 found in living_room_0.
+        Thought: Let me navigate to the chest and try opening it.
+        Agent_{id}_Action: Navigate[chest_0]
+        Assigned!
+        Agent_{id}_Observation: Successful execution!
+        Thought: Now let me open the chest.
+        Agent_{id}_Action: Open[chest_0]
+        Assigned!
+        Agent_{id}_Observation: You try to open chest_0, but it doesn't open.
+        Thought: The chest did not open. Let me try again.
+        Agent_{id}_Action: Open[chest_0]
+        Assigned!
+        Agent_{id}_Observation: You try to open chest_0, but it still doesn't open.
+        Thought: Still not open after two attempts. Let me try one more time.
+        Agent_{id}_Action: Open[chest_0]
+        Assigned!
+        Agent_{id}_Observation: Successful execution! chest_0 is now open.
+        Thought: Surprise: The chest required exactly 3 attempts to open! This is a counting mechanic - some objects need multiple interactions. I should tell my teammate.
+        Agent_{id}_Action: Communicate[Discovery: chest_0 requires 3 open attempts - counting mechanic!]
+        Assigned!
+        Agent_{id}_Observation: Message delivered. Your teammate will see your message in their context.
+        Thought: I have discovered and shared the mechanic. Task complete.
+        Final Thought: Exit!
 
-        Available targets:
-        {available_actions}
-
-        Your recent history:
-        {history}
-
-        Based on your curiosity and desire to learn about this world:
-        1. Which action would be most informative to try next?
-        2. What do you expect to happen?
-
-        Consider:
-        - If a Pick/Open/Close failed with "not close enough", you need to Navigate first
-        - Try opening cabinets and drawers to discover what's inside
-        - Use Inspect to learn about object properties
-        - Hide objects to see if mechanics cause unexpected effects
-        - Explore different rooms to find more interactive objects
-        {eot_tag}
-        {assistant_tag}
+        Task: {input}
         Thought:
+
 stopword: "Assigned!"
 end_expression: "Final Thought:"
 
 actions_parser:
   _target_: habitat_llm.llm.instruct.utils.actions_parser
   _partial_: true
-

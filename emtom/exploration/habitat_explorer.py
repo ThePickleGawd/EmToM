@@ -430,19 +430,15 @@ class HabitatExplorer:
         obs = self.env.get_observations()
 
         for agent_id in self.config.agent_ids:
-            print(f"\n[{agent_id}]")
+            # Extract agent UID for ReACT format (e.g., "agent_0" -> "0")
+            agent_uid = agent_id.split("_")[-1] if "_" in agent_id else agent_id
 
             # Build world description from Habitat state
             world_text = self._build_world_description(agent_id)
             available_actions = self._get_available_actions(agent_id)
             recent_history = self.logger.get_recent_actions(agent_id, n=5)
 
-            # Print current location
-            location = self.world_adapter.get_agent_location(agent_id)
-            print(f"  Location: {location or 'unknown'}")
-
             # Select action via curiosity model (with tool descriptions from agent)
-            print(f"  Selecting action...")
             action_choice = self.curiosity.select_action(
                 agent_id=agent_id,
                 world_description=world_text,
@@ -452,43 +448,52 @@ class HabitatExplorer:
             )
             agent_actions[agent_id] = action_choice
 
-            # Print chosen action
-            print(f"  Chosen: {action_choice.action}[{action_choice.target or ''}]")
-            if action_choice.reasoning:
-                print(f"  Reason: {action_choice.reasoning[:80]}...")
+            # Print in ReACT format (matching benchmark)
+            print(f"Thought: {action_choice.reasoning}")
+            print(f"Agent_{agent_uid}_Action: {action_choice.action}[{action_choice.target or ''}]")
+            print("Assigned!")
+
+            # Check if agent wants to end exploration
+            if action_choice.action == "Done":
+                print(f"Agent_{agent_uid}_Observation: Exploration complete.")
+                self._is_running = False
+                action_results[agent_id] = ActionResult(
+                    success=True,
+                    observations={agent_id: "Exploration complete."},
+                )
+                continue
 
             # Execute action in Habitat
             result = self._execute_action(agent_id, action_choice)
             action_results[agent_id] = result
 
-            # Print result
-            obs_text = result.observations.get(agent_id, "")
-            if obs_text:
-                print(f"  Result: {obs_text[:100]}..." if len(obs_text) > 100 else f"  Result: {obs_text}")
+            # Get observation text
+            obs_text = result.observations.get(agent_id, "Successful execution!")
 
-            # Detect surprise
-            if result.surprise_triggers.get(agent_id):
-                surprise_assessment = self.surprise_detector.assess_surprise(
+            # Print observation in ReACT format
+            print(f"Agent_{agent_uid}_Observation: {obs_text}")
+
+            # Add observation to curiosity model's conversation
+            self.curiosity.add_observation(agent_id, obs_text)
+
+            # Check if the LLM detected a surprise in its reasoning
+            if action_choice.surprise:
+                print(f"\n*** SURPRISE DETECTED ***")
+                print(f"    {action_choice.surprise}")
+                print()
+
+                # Record the surprise
+                surprise_record = SurpriseRecord(
+                    step=self.step_count,
                     agent_id=agent_id,
                     action=action_choice.action,
-                    target=action_choice.target,
-                    expected=action_choice.expected_outcome,
-                    actual=result.observations.get(agent_id, ""),
-                    trigger=result.surprise_triggers.get(agent_id),
+                    target=action_choice.target or "",
+                    observation=obs_text,
+                    surprise_level=3,  # Default level for LLM-detected surprises
+                    explanation=action_choice.surprise,
                 )
-
-                if surprise_assessment.is_surprised:
-                    surprise_record = SurpriseRecord(
-                        step=self.step_count,
-                        agent_id=agent_id,
-                        action=action_choice.action,
-                        target=action_choice.target,
-                        surprise_level=surprise_assessment.level,
-                        explanation=surprise_assessment.explanation,
-                        hypothesis=surprise_assessment.hypothesis,
-                    )
-                    step_surprises.append(surprise_record)
-                    self.surprise_moments.append(surprise_record)
+                step_surprises.append(surprise_record)
+                self.surprise_moments.append(surprise_record)
 
         # Record frame with actions
         obs = self.env.get_observations()
@@ -505,7 +510,7 @@ class HabitatExplorer:
                     "action": ac.action,
                     "target": ac.target,
                     "reasoning": ac.reasoning,
-                    "expected_outcome": ac.expected_outcome,
+                    "surprise": ac.surprise,
                 }
                 for aid, ac in agent_actions.items()
             },
@@ -683,8 +688,6 @@ class HabitatExplorer:
         action_name = action_choice.action
         target = action_choice.target or ""
 
-        print(f"  Executing: {action_name}[{target}]")
-
         # Check if this is a custom EMTOM action
         if action_name in EMTOM_ACTIONS:
             return self._execute_custom_action(agent_id, action_name, target)
@@ -695,7 +698,6 @@ class HabitatExplorer:
 
         # Check if the agent has this tool
         if action_name not in self.agent.tools:
-            print(f"    Tool '{action_name}' not found, available: {list(self.agent.tools.keys())}")
             return ActionResult(
                 success=False,
                 observations={agent_id: f"Tool '{action_name}' not available."},
@@ -711,7 +713,6 @@ class HabitatExplorer:
 
         # If it's a perception tool (returns None), just return the response
         if low_level_action is None:
-            print(f"    Perception result: {response[:100]}..." if len(response) > 100 else f"    Perception result: {response}")
             return ActionResult(
                 success=True,
                 observations={agent_id: response},
@@ -752,8 +753,6 @@ class HabitatExplorer:
                 # Skill completed or failed
                 break
 
-        print(f"    Completed in {skill_steps} steps")
-
         # Build result
         final_response = response or f"Executed {action_name}[{target}]"
 
@@ -781,7 +780,6 @@ class HabitatExplorer:
         Execute action directly without Agent (fallback mode).
         Uses env_interface methods directly when no Agent is available.
         """
-        print(f"    [Direct mode - no Agent available]")
 
         # For now, just log the action - actual implementation would
         # need to instantiate tools directly
@@ -799,7 +797,6 @@ class HabitatExplorer:
         Custom actions are simulated interactions (Hide, Inspect, WriteMessage, etc.)
         that can be affected by mechanics to produce surprising outcomes.
         """
-        print(f"    [Custom EMTOM action: {action_name}]")
 
         # Record frame with the custom action for video
         obs = self.env.get_observations()
@@ -842,8 +839,6 @@ class HabitatExplorer:
         if custom_result.surprise_trigger:
             surprise_triggers[agent_id] = custom_result.surprise_trigger
 
-        print(f"    Result: {observation[:80]}..." if len(observation) > 80 else f"    Result: {observation}")
-
         return ActionResult(
             success=custom_result.success,
             observations=observations,
@@ -864,7 +859,6 @@ class HabitatExplorer:
                 continue  # Navigation doesn't have mechanic effects
 
             if mechanic.applies_to(mechanic_action, target, mock_world):
-                print(f"    Mechanic '{mechanic.name}' applies!")
                 intended = create_default_effect(mechanic_action, target, mock_world)
                 result = mechanic.transform_effect(
                     mechanic_action, agent_id, target, intended, mock_world

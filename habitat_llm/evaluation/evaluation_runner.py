@@ -379,7 +379,7 @@ class EvaluationRunner:
             planner_log["steps"].append(step_info)
 
         with open(file_path_json, "w+") as file:
-            file.write(json.dumps(planner_log))
+            file.write(json.dumps(planner_log, indent=2, default=str))
 
         print("Successfully logged planner data!")
         if self.evaluation_runner_config.log_detailed_traces:
@@ -415,7 +415,7 @@ class EvaluationRunner:
             planner_log["steps"].append(step_info)
         try:
             with open(file_path_json, "w") as file:
-                file.write(json.dumps(planner_log, default=str))
+                file.write(json.dumps(planner_log, indent=2, default=str))
         except Exception:
             pass  # Ignore flush errors to not interrupt the run
 

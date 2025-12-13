@@ -9,11 +9,10 @@ Uses YAML config for prompts (like the benchmark) for consistency and scalabilit
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from omegaconf import OmegaConf
 
@@ -24,9 +23,8 @@ class ActionChoice:
 
     action: str
     target: Optional[str]
-    expected_outcome: str
     reasoning: str
-    confidence: float = 0.5
+    surprise: Optional[str] = None  # If LLM detected something unexpected
 
 
 class CuriosityModel:
@@ -36,7 +34,7 @@ class CuriosityModel:
     Uses an LLM to select actions that are likely to reveal new information
     about how the world works, particularly to discover unexpected behaviors.
 
-    Now uses YAML config for prompts (matching benchmark structure) for consistency.
+    Uses YAML config for prompts (matching benchmark structure) for consistency.
     """
 
     # Default config path relative to habitat_llm/conf/instruct/
@@ -47,7 +45,6 @@ class CuriosityModel:
         llm_client: Any,
         instruct_config: Optional[Any] = None,
         llm_config: Optional[Any] = None,
-        exploration_bonus: float = 0.3,
     ):
         """
         Initialize the curiosity model.
@@ -56,10 +53,8 @@ class CuriosityModel:
             llm_client: LLM client with generate(prompt) method
             instruct_config: Optional instruct config (OmegaConf). If None, loads default.
             llm_config: Optional LLM config with system_tag, user_tag, etc.
-            exploration_bonus: Bonus for trying new actions (not yet used)
         """
         self.llm = llm_client
-        self.exploration_bonus = exploration_bonus
 
         # Load instruct config if not provided
         if instruct_config is not None:
@@ -80,9 +75,14 @@ class CuriosityModel:
             "eot_tag": "",
         })
 
+        # Current prompt (accumulates conversation like benchmark planner)
+        self.curr_prompt = ""
+
+        # Tool descriptions (set by explorer)
+        self._tool_descriptions: Optional[str] = None
+
     def _load_default_config(self) -> Any:
         """Load the default exploration YAML config."""
-        # Find the config file
         config_path = Path(__file__).parent.parent.parent / "habitat_llm" / "conf" / "instruct" / f"{self.DEFAULT_CONFIG}.yaml"
 
         if not config_path.exists():
@@ -94,13 +94,12 @@ class CuriosityModel:
         return OmegaConf.load(config_path)
 
     def set_tool_descriptions(self, tool_descriptions: str):
-        """
-        Set the tool descriptions to use in prompts.
+        """Set the tool descriptions to use in prompts."""
+        self._tool_descriptions = tool_descriptions
 
-        Args:
-            tool_descriptions: Formatted string of tool descriptions from agent
-        """
-        self.tool_descriptions = tool_descriptions
+    def reset(self):
+        """Reset the conversation state for a new episode."""
+        self.curr_prompt = ""
 
     def select_action(
         self,
@@ -121,176 +120,193 @@ class CuriosityModel:
             tool_descriptions: Optional tool descriptions (uses stored if not provided)
 
         Returns:
-            ActionChoice with selected action and reasoning
+            ActionChoice with selected action, reasoning, and optional surprise
+
+        Raises:
+            ValueError: If the LLM response doesn't match expected ReACT format
         """
+        # Extract agent UID (e.g., "agent_0" -> "0")
+        agent_uid = agent_id.split("_")[-1] if "_" in agent_id else agent_id
+
         # Use provided tool descriptions or stored ones
-        tools_desc = tool_descriptions or getattr(self, 'tool_descriptions', self._get_default_tool_descriptions())
+        tools_desc = tool_descriptions or self._tool_descriptions or self._get_default_tool_descriptions()
 
-        # Build the prompt using the YAML template
-        prompt = self._build_prompt(
-            agent_id=agent_id,
-            world_description=world_description,
-            available_actions=available_actions,
-            exploration_history=exploration_history or [],
-            tool_descriptions=tools_desc,
-        )
+        # Build task description from world state
+        task = self._build_task_description(world_description, exploration_history or [])
 
-        response = self.llm.generate(prompt, self.stopword)
+        # Build initial prompt if this is the first action
+        if not self.curr_prompt:
+            self.curr_prompt = self.prompt_template.format(
+                id=agent_uid,
+                tool_descriptions=tools_desc,
+                input=task,
+            )
 
-        return self._parse_response(response, available_actions)
+        # Generate response
+        response = self.llm.generate(self.curr_prompt, self.stopword)
 
-    def _build_prompt(
+        # Parse response - fail explicitly if it doesn't match expected format
+        action_choice = self._parse_response(response, agent_uid)
+
+        # Append response to conversation
+        self.curr_prompt += response
+        if not self.curr_prompt.endswith(self.stopword):
+            self.curr_prompt += self.stopword
+
+        return action_choice
+
+    def add_observation(self, agent_id: str, observation: str):
+        """
+        Add an observation to the conversation.
+
+        Args:
+            agent_id: ID of the agent
+            observation: The observation text
+        """
+        agent_uid = agent_id.split("_")[-1] if "_" in agent_id else agent_id
+        self.curr_prompt += f"\nAgent_{agent_uid}_Observation: {observation}\n"
+
+    def _build_task_description(
         self,
-        agent_id: str,
         world_description: str,
-        available_actions: List[Dict[str, Any]],
         exploration_history: List[Dict[str, Any]],
-        tool_descriptions: str,
     ) -> str:
-        """Build the prompt using the YAML template."""
-        # Format placeholders
-        params = {
-            "id": agent_id,
-            "tool_descriptions": tool_descriptions,
-            "world_description": world_description,
-            "available_actions": self._format_actions(available_actions),
-            "history": self._format_history(exploration_history),
-            "system_tag": self.llm_config.get("system_tag", ""),
-            "user_tag": self.llm_config.get("user_tag", ""),
-            "assistant_tag": self.llm_config.get("assistant_tag", ""),
-            "eot_tag": self.llm_config.get("eot_tag", ""),
-        }
+        """Build a task description from current world state."""
+        parts = ["Explore the house and discover interesting object behaviors."]
+        parts.append(f"\nCurrent state: {world_description}")
 
-        return self.prompt_template.format(**params)
+        if exploration_history:
+            parts.append("\nRecent actions:")
+            for entry in exploration_history[-3:]:
+                action = entry.get("action", "unknown")
+                target = entry.get("target", "")
+                obs = entry.get("observation", "")
+                obs_short = obs[:50] + "..." if len(obs) > 50 else obs
+                if target:
+                    parts.append(f"  - {action}[{target}]: {obs_short}")
+                else:
+                    parts.append(f"  - {action}: {obs_short}")
+
+        return "\n".join(parts)
 
     def _get_default_tool_descriptions(self) -> str:
-        """Get default tool descriptions (fallback if none provided)."""
-        return """=== MOTOR SKILLS (require navigation first) ===
+        """Get default tool descriptions."""
+        return """Available tools:
 - Navigate[target]: Move to a room or furniture. You MUST navigate close to objects before interacting.
-- Pick[object]: Pick up an object. Must be near it first (Navigate to get close).
 - Open[furniture]: Open articulated furniture (cabinets, drawers, fridges). Must be near it first.
 - Close[furniture]: Close articulated furniture. Must be near it first.
+- Pick[object]: Pick up an object. Must be near it first.
 - Explore[room]: Thoroughly search a room by visiting all furniture in it.
-
-=== PERCEPTION TOOLS ===
 - FindObjectTool[query]: Search for objects matching a description.
 - FindReceptacleTool[query]: Search for furniture/receptacles matching a description.
 - FindRoomTool[query]: Search for rooms matching a description.
-
-=== CUSTOM ACTIONS ===
-- Hide[object]: Hide an object so others can't see it. Useful for testing what other agents know.
+- FindAgentActionTool[]: Check what the other agent is doing.
 - Inspect[object]: Carefully examine an object to learn its properties and state.
-- WriteMessage[furniture]: Leave a message on a surface for other agents to find."""
+- Hide[object]: Hide an object so others can't see it.
+- Communicate[message]: Send a message to your teammate."""
 
-    def _format_actions(self, actions: List[Dict[str, Any]]) -> str:
-        """Format available actions for the prompt."""
-        lines = []
-        for action in actions:
-            action_name = action.get("name", action.get("action", "unknown"))
-            targets = action.get("targets", [])
-            description = action.get("description", "")
+    def _parse_response(self, response: str, agent_uid: str) -> ActionChoice:
+        """
+        Parse LLM response into ActionChoice.
 
-            if targets:
-                # Limit targets shown to avoid overwhelming prompt
-                shown_targets = targets[:5]
-                if len(targets) > 5:
-                    target_str = f" (targets: {', '.join(shown_targets)}, ... and {len(targets) - 5} more)"
-                else:
-                    target_str = f" (targets: {', '.join(shown_targets)})"
-            else:
-                target_str = ""
+        Extracts:
+        - Reasoning (the Thought text)
+        - Surprise (if "Surprise:" is in the Thought)
+        - Action and target
 
-            if description:
-                lines.append(f"- {action_name}{target_str}: {description}")
-            else:
-                lines.append(f"- {action_name}{target_str}")
+        Args:
+            response: The LLM response text
+            agent_uid: The agent UID (e.g., "0")
 
-        return "\n".join(lines) if lines else "No actions available"
+        Returns:
+            ActionChoice with action, target, reasoning, and optional surprise
 
-    def _format_history(self, history: List[Dict[str, Any]]) -> str:
-        """Format recent history for the prompt."""
-        if not history:
-            return "No recent actions"
-
-        lines = []
-        for entry in history[-5:]:  # Last 5 actions
-            action = entry.get("action", "unknown")
-            target = entry.get("target", "")
-            observation = entry.get("observation", "")
-            step = entry.get("step", "?")
-
-            action_str = f"{action}"
-            if target:
-                action_str += f"[{target}]"
-
-            lines.append(f"Step {step}: {action_str}")
-            if observation:
-                # Truncate long observations
-                obs_short = observation[:100] + "..." if len(observation) > 100 else observation
-                lines.append(f"  Result: {obs_short}")
-
-        return "\n".join(lines)
-
-    def _parse_response(
-        self,
-        response: str,
-        available_actions: List[Dict[str, Any]],
-    ) -> ActionChoice:
-        """Parse LLM response into ActionChoice."""
-        # Try to extract action from response using the same format as benchmark
-        # Look for Agent_X_Action: ActionName[target]
-        action_pattern = r"Agent_\d+_Action:\s*(\w+)\[([^\]]*)\]"
-        match = re.search(action_pattern, response)
-
-        if match:
-            action_name = match.group(1)
-            target = match.group(2) if match.group(2) else None
-
-            # Extract reasoning from Thought: line
-            thought_match = re.search(r"Thought:\s*(.+?)(?=Agent_|$)", response, re.DOTALL)
-            reasoning = thought_match.group(1).strip() if thought_match else ""
-
+        Raises:
+            ValueError: If the response doesn't match expected format
+        """
+        # Check for Final Thought (end of exploration)
+        if "Final Thought:" in response:
+            # Extract reasoning before Final Thought
+            parts = response.split("Final Thought:")
+            reasoning = parts[0].strip()
+            # Remove "Thought:" prefix if present
+            if reasoning.startswith("Thought:"):
+                reasoning = reasoning[8:].strip()
+            # Check for surprise in the reasoning
+            surprise = self._extract_surprise(reasoning)
             return ActionChoice(
-                action=action_name,
-                target=target,
-                expected_outcome="Exploring the environment",
-                reasoning=reasoning,
-                confidence=0.7,
+                action="Done",
+                target=None,
+                reasoning=reasoning if reasoning else "Exploration complete",
+                surprise=surprise,
             )
 
-        # Fallback: try to extract action in simple format ActionName[target]
-        simple_pattern = r"(\w+)\[([^\]]*)\]"
-        match = re.search(simple_pattern, response)
+        # Extract Action - try formats in order of preference
+        # 1. Agent_{id}_Action: ActionName[target]
+        action_pattern = rf"Agent_{agent_uid}_Action:\s*(\w+)\[([^\]]*)\]"
+        action_match = re.search(action_pattern, response)
 
-        if match:
-            return ActionChoice(
-                action=match.group(1),
-                target=match.group(2) if match.group(2) else None,
-                expected_outcome="unknown",
-                reasoning="Extracted from LLM response",
-                confidence=0.5,
+        # 2. Agent_X_Action: ActionName[target] (any agent ID)
+        if not action_match:
+            action_pattern = r"Agent_\d+_Action:\s*(\w+)\[([^\]]*)\]"
+            action_match = re.search(action_pattern, response)
+
+        # 3. Simple ActionName[target] format (LLM sometimes omits prefix)
+        if not action_match:
+            action_pattern = r"^(\w+)\[([^\]]*)\]"
+            action_match = re.search(action_pattern, response.strip(), re.MULTILINE)
+
+        if not action_match:
+            raise ValueError(
+                f"Failed to parse Action from LLM response. "
+                f"Expected 'Agent_{agent_uid}_Action: ActionName[target]' but got:\n{response}"
             )
 
-        # Try to find any action name in the response
-        action_names = [
-            a.get("name", a.get("action", ""))
-            for a in available_actions
-        ]
-        for action_name in action_names:
-            if action_name.lower() in response.lower():
-                return ActionChoice(
-                    action=action_name,
-                    target=None,
-                    expected_outcome="unknown",
-                    reasoning="Extracted action name from LLM response",
-                    confidence=0.3,
-                )
+        action_name = action_match.group(1)
+        target = action_match.group(2) if action_match.group(2) else None
 
-        # Default to Explore if nothing else works
+        # Extract reasoning - everything before the Action
+        action_start = action_match.start()
+        reasoning = response[:action_start].strip()
+
+        # Remove "Thought:" prefix if present
+        if reasoning.startswith("Thought:"):
+            reasoning = reasoning[8:].strip()
+
+        # Extract surprise from reasoning
+        surprise = self._extract_surprise(reasoning)
+
+        # If no reasoning found, use a default
+        if not reasoning:
+            reasoning = f"Executing {action_name}"
+
         return ActionChoice(
-            action="Explore",
-            target=None,
-            expected_outcome="Exploring to find objects",
-            reasoning="Could not parse LLM response, defaulting to exploration",
-            confidence=0.1,
+            action=action_name,
+            target=target,
+            reasoning=reasoning,
+            surprise=surprise,
         )
+
+    def _extract_surprise(self, reasoning: str) -> Optional[str]:
+        """
+        Extract surprise description from reasoning if present.
+
+        Looks for "Surprise:" keyword in the reasoning text.
+
+        Args:
+            reasoning: The thought/reasoning text
+
+        Returns:
+            The surprise description, or None if no surprise detected
+        """
+        # Look for "Surprise:" in the reasoning
+        surprise_match = re.search(r"Surprise:\s*(.+?)(?=\.|!|$)", reasoning, re.IGNORECASE)
+        if surprise_match:
+            return surprise_match.group(1).strip()
+
+        # Also check for variations
+        surprise_match = re.search(r"Surprise:\s*(.+)", reasoning, re.IGNORECASE)
+        if surprise_match:
+            return surprise_match.group(1).strip()
+
+        return None
