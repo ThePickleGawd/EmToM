@@ -27,7 +27,7 @@ from emtom.mechanics.remote_control import RemoteControlMechanic
 from emtom.mechanics.counting_state import CountingStateMechanic
 
 # Core types
-from emtom.core.mechanic import (
+from emtom.mechanics.mechanic import (
     Mechanic,
     SceneAwareMechanic,
     ActionResult,

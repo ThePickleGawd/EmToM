@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Type
 
-from emtom.core.mechanic import Mechanic, MechanicCategory
+from emtom.mechanics.mechanic import Mechanic, MechanicCategory
 
 # Global registry of mechanic classes
 _MECHANIC_REGISTRY: Dict[str, Type[Mechanic]] = {}

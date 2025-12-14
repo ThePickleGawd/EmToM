@@ -220,7 +220,7 @@ class SceneAwareMechanic(Mechanic):
     def get_selector(self) -> "ObjectSelector":
         """Get or create the object selector."""
         if self._selector is None:
-            from emtom.core.object_selector import ObjectSelector
+            from emtom.mechanics.object_selector import ObjectSelector
             self._selector = ObjectSelector()
         return self._selector
 

@@ -10,7 +10,7 @@ Tests the agent's ability to discover hidden activation conditions.
 import random
 from typing import Any, Dict, List, Optional, Set
 
-from emtom.core.mechanic import (
+from emtom.mechanics.mechanic import (
     ActionResult,
     Effect,
     MechanicCategory,

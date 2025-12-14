@@ -5,7 +5,7 @@ A framework for testing theory of mind reasoning through mechanics
 with "unexpected behaviors" that induce surprise and require mental modeling.
 """
 
-from emtom.core.mechanic import Mechanic, MechanicCategory, Effect, ActionResult, SceneAwareMechanic
+from emtom.mechanics.mechanic import Mechanic, MechanicCategory, Effect, ActionResult, SceneAwareMechanic
 from emtom.mechanics.registry import MechanicRegistry, register_mechanic
 
 __all__ = [

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Union
 
 import yaml
 
-from emtom.core.mechanic import Mechanic
+from emtom.mechanics.mechanic import Mechanic
 from emtom.exploration import ExplorationConfig
 
 # Default config directory

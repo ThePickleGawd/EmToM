@@ -10,13 +10,13 @@ Tests the agent's ability to discover hidden cause-effect relationships.
 import random
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from emtom.core.mechanic import (
+from emtom.mechanics.mechanic import (
     ActionResult,
     Effect,
     MechanicCategory,
     SceneAwareMechanic,
 )
-from emtom.core.object_selector import BINARY_STATES
+from emtom.mechanics.object_selector import BINARY_STATES
 from emtom.mechanics.registry import register_mechanic
 
 

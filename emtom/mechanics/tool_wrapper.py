@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, TYPE_CHECKING
 
-from emtom.core.mechanic import Mechanic, ActionResult, create_default_effect
+from emtom.mechanics.mechanic import Mechanic, ActionResult, create_default_effect
 
 if TYPE_CHECKING:
     pass

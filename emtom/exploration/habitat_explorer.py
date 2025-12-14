@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import torch
 
-from emtom.core.mechanic import (
+from emtom.mechanics.mechanic import (
     ActionResult,
     Effect,
     Mechanic,

@@ -9,7 +9,7 @@ Tests the agent's ability to discover and adapt to inverted action semantics.
 
 from typing import Any, Dict, List, Optional, Set
 
-from emtom.core.mechanic import (
+from emtom.mechanics.mechanic import (
     ActionResult,
     Effect,
     MechanicCategory,
