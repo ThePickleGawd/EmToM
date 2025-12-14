@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -19,11 +19,9 @@ from emtom.benchmark.task_runner import (
     TaskRunner,
     TaskResult,
     TaskStatus,
-    AgentInterface,
     StepResult,
     RunConfig,
 )
-from emtom.task_gen.task_generator import GeneratedTask
 
 if TYPE_CHECKING:
     from habitat_llm.agent.env import EnvironmentInterface
@@ -359,9 +357,7 @@ def create_habitat_runner(
     Returns:
         Configured HabitatTaskRunner instance
     """
-    import hydra
     from hydra import compose, initialize_config_dir
-    from omegaconf import OmegaConf
 
     from habitat_llm.agent.env import (
         EnvironmentInterface,

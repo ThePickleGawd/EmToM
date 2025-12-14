@@ -24,9 +24,8 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 import hydra
-from omegaconf import OmegaConf
 
-from habitat_llm.utils import cprint, setup_config, fix_config
+from habitat_llm.utils import setup_config, fix_config
 from habitat_llm.agent.env import (
     EnvironmentInterface,
     register_actions,

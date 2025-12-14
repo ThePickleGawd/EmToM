@@ -269,7 +269,6 @@ class SceneAwareMechanic(Mechanic):
         Returns:
             True if successfully bound to at least one target
         """
-        from emtom.core.object_selector import BINARY_STATES, get_entity_binary_states
         import random
 
         selector = self.get_selector()

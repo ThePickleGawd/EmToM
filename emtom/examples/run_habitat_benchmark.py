@@ -18,9 +18,7 @@ Usage:
 import json
 import os
 import sys
-import time
 import traceback
-from datetime import datetime
 from pathlib import Path
 
 # Add project root to path
@@ -35,7 +33,6 @@ from habitat_llm.agent.env import (
     register_actions,
     register_measures,
     register_sensors,
-    remove_visual_sensors,
 )
 from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 from habitat_llm.evaluation import DecentralizedEvaluationRunner
@@ -46,14 +43,6 @@ from emtom.tools import get_emtom_tools
 
 # Import CommunicationTool for agent-to-agent messaging
 from habitat_llm.tools.perception.communication_tool import CommunicationTool
-from omegaconf import OmegaConf
-
-# Import mechanics
-from emtom.mechanics import (
-    InverseStateMechanic,
-    RemoteControlMechanic,
-    CountingStateMechanic,
-)
 
 
 def load_tasks(task_file: str) -> list:

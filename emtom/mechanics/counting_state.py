@@ -8,7 +8,7 @@ Tests the agent's ability to discover hidden activation conditions.
 """
 
 import random
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 from emtom.core.mechanic import (
     ActionResult,

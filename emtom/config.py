@@ -4,11 +4,9 @@ Configuration loading for EMTOM benchmark.
 Loads YAML configs and instantiates mechanics, exploration settings, etc.
 """
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 import yaml
 
@@ -70,9 +68,6 @@ def load_mechanics_config(
         List of instantiated Mechanic objects
     """
     from emtom.mechanics.registry import MechanicRegistry
-
-    # Import mechanics to ensure they're registered
-    from emtom.mechanics import inverse_open, remote_switch, counting_trigger
 
     if isinstance(config, dict):
         config_data = config

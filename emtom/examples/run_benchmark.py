@@ -28,10 +28,6 @@ from emtom.benchmark import (
 )
 from emtom.task_gen import GeneratedTask
 
-# Import mechanics to register them
-from emtom.mechanics import inverse_open, remote_switch, counting_trigger
-
-
 def load_tasks(task_file: str) -> list:
     """Load tasks from JSON file."""
     with open(task_file) as f:

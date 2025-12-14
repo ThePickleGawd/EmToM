@@ -12,12 +12,10 @@ This module uses partnr's built-in tools:
 from __future__ import annotations
 
 import os
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-import numpy as np
 import torch
 
 from emtom.core.mechanic import (
@@ -28,13 +26,12 @@ from emtom.core.mechanic import (
     create_default_effect,
 )
 from emtom.exploration.curiosity import ActionChoice, CuriosityModel
-from emtom.exploration.surprise_detector import SurpriseAssessment, SurpriseDetector
+from emtom.exploration.surprise_detector import SurpriseDetector
 from emtom.exploration.trajectory_logger import SurpriseRecord, TrajectoryLogger
 from emtom.actions.custom_actions import EMTOMActionExecutor, EMTOM_ACTIONS
 
 if TYPE_CHECKING:
     from habitat_llm.agent.env import EnvironmentInterface
-    from habitat_llm.world_model import WorldGraph, Furniture, Object
     from habitat_llm.agent import Agent
 
 
@@ -811,7 +808,6 @@ class HabitatExplorer:
         world_state = self._build_world_state_for_actions(agent_id, rooms, entities)
 
         # Execute via custom action executor (applies mechanics automatically)
-        from emtom.actions.custom_actions import ActionResult as CustomActionResult
         custom_result = self.custom_action_executor.execute(
             action_name, agent_id, target, world_state
         )

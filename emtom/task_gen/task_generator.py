@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from emtom.task_gen.trajectory_analyzer import TrajectoryAnalysis, DiscoveredMechanic
+from emtom.task_gen.trajectory_analyzer import TrajectoryAnalysis
 
 
 class TaskCategory(Enum):

@@ -13,17 +13,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from emtom.core.mechanic import Mechanic, ActionResult, Effect, create_default_effect
 from emtom.core.world_state import TextWorldState, Entity
 from emtom.mechanics.registry import MechanicRegistry
-from emtom.task_gen.task_generator import (
-    GeneratedTask,
-    Subtask,
-    SuccessCondition,
-    FailureCondition,
-)
+from emtom.task_gen.task_generator import GeneratedTask, Subtask
 
 
 class TaskStatus(Enum):
