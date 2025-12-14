@@ -340,7 +340,7 @@ class GPTGuidedExplorer:
         self,
         room_explorer: Any,
         gpt_model: str = "gpt-4o-mini",
-        output_dir: str = "./exploration_results"
+        output_dir: str = "./main/exploration/exploration_results"
     ):
         """
         Initialize the GPT-guided explorer.
@@ -457,18 +457,25 @@ class GPTGuidedExplorer:
     def explore_with_gpt(
         self,
         max_rooms: Optional[int] = None,
-        max_interactions_per_room: int = 3
-    ) -> ExplorationSession:
+        max_interactions_per_room: int = 3,
+        on_surprise_callback: Optional[callable] = None,
+        stop_on_first_surprise: bool = False
+    ) -> Tuple[ExplorationSession, bool]:
         """
         Run GPT-guided exploration of all rooms.
 
         Args:
             max_rooms: Maximum rooms to visit (None = all rooms)
             max_interactions_per_room: Max interactions per room
+            on_surprise_callback: Optional callback function called when a surprise is found.
+                                  Receives (session, room_visit, interaction, finding) as args.
+                                  If it returns False, exploration stops immediately.
+            stop_on_first_surprise: If True, stop exploration after the first surprising finding
 
         Returns:
-            ExplorationSession with all data
+            Tuple of (ExplorationSession with all data, stopped_early: bool)
         """
+        stopped_early = False
         self.session = ExplorationSession(
             start_time=datetime.now().isoformat(),
             gpt_model=self.gpt_guide.model
@@ -578,8 +585,37 @@ class GPTGuidedExplorer:
                     room_visit.surprising_findings.append(evaluation["finding"])
                     self.session.total_surprising_findings += 1
 
+                    # Call surprise callback if provided
+                    if on_surprise_callback is not None:
+                        should_continue = on_surprise_callback(
+                            self.session,
+                            room_visit,
+                            interaction_record,
+                            evaluation["finding"]
+                        )
+                        if should_continue is False:
+                            self._print_and_log("[System] Stopping exploration due to callback", "yellow")
+                            stopped_early = True
+                            # Add current room to session before stopping
+                            visited_rooms.append(chosen_room)
+                            self.session.rooms_visited.append(room_visit)
+                            break
+
+                    # Check if we should stop on first surprise
+                    if stop_on_first_surprise:
+                        self._print_and_log("[System] Stopping exploration after first surprise", "yellow")
+                        stopped_early = True
+                        # Add current room to session before stopping
+                        visited_rooms.append(chosen_room)
+                        self.session.rooms_visited.append(room_visit)
+                        break
+
                 interactions_done += 1
                 self.session.total_interactions += 1
+
+            # Check if we need to break out of the outer loop too
+            if stopped_early:
+                break
 
             # Mark room as visited
             visited_rooms.append(chosen_room)
@@ -602,15 +638,16 @@ class GPTGuidedExplorer:
         # Save to JSON
         json_path = self._save_session_to_json()
 
+        status_msg = "STOPPED EARLY (surprise found)" if stopped_early else "COMPLETE"
         self._print_and_log("\n" + "=" * 60, "green")
-        self._print_and_log("🤖 GPT-GUIDED EXPLORATION COMPLETE", "green")
+        self._print_and_log(f"🤖 GPT-GUIDED EXPLORATION {status_msg}", "green")
         self._print_and_log(f"   Rooms visited: {len(visited_rooms)}", "blue")
         self._print_and_log(f"   Total interactions: {self.session.total_interactions}", "blue")
         self._print_and_log(f"   Surprising findings: {self.session.total_surprising_findings}", "blue")
         self._print_and_log(f"   Results saved to: {json_path}", "blue")
         self._print_and_log("=" * 60 + "\n", "green")
 
-        return self.session
+        return self.session, stopped_early
 
     def _save_session_to_json(self) -> str:
         """Save the exploration session to a JSON file."""
