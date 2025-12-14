@@ -1,4 +1,7 @@
 #!/bin/bash
+# Height Difference Exploration Script
+# Runs GPT-guided exploration and generates tasks when surprising findings are detected
+
 # Navigate to project root first
 cd /data4/parth/Partnr-EmToM
 
@@ -15,7 +18,11 @@ echo "X11 Display: $DISPLAY"
 echo "Testing X11 connection..."
 xdpyinfo | head -3 || echo "Warning: X11 may not be working"
 
-# Run the random walk script with video display enabled
+echo ""
+echo "=== Running GPT-GUIDED EXPLORATION mode ==="
+echo "    (Will stop and generate tasks on first surprising finding)"
+echo ""
+
 HYDRA_FULL_ERROR=1 python -m main.mechanics.height_difference.height_difference \
     hydra.run.dir="." \
     +skill_runner_show_topdown=False \
@@ -23,4 +30,9 @@ HYDRA_FULL_ERROR=1 python -m main.mechanics.height_difference.height_difference 
     evaluation.save_video=True \
     habitat.dataset.data_path=data/datasets/partnr_episodes/v0_0/val_mini.json.gz \
     +skill_runner_episode_id="334" \
-    +num_random_walks=3
+    +exploration_mode=gpt \
+    +live_display=True \
+    +gpt_model=gpt-4o-mini \
+    +max_rooms=5 \
+    +max_interactions_per_room=3 \
+    +num_tasks=5
