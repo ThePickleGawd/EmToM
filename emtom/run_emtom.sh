@@ -28,6 +28,9 @@ print_usage() {
     echo "Exploration Options:"
     echo "  --steps N            Number of exploration steps (default: $EXPLORATION_STEPS)"
     echo ""
+    echo "Task Generation:"
+    echo "  (Interactive prompt will ask for task type: 1=Theory of Mind, 2=Regular)"
+    echo ""
     echo "Benchmark Options:"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
     echo "  --max-llm-calls N    Max LLM calls per agent (default: $MAX_LLM_CALLS)"
@@ -61,11 +64,33 @@ run_generate() {
     echo "=============================================="
     echo "Running EMTOM Task Generation"
     echo "=============================================="
+    echo ""
+    echo "Select the type of task to generate:"
+    echo "  1) Theory of Mind tasks"
+    echo "  2) Regular tasks"
+    echo ""
+    read -p "Enter your choice (1 or 2): " TASK_TYPE
+
+    # Validate input
+    while [ "$TASK_TYPE" != "1" ] && [ "$TASK_TYPE" != "2" ]; do
+        echo "Invalid choice. Please enter 1 or 2."
+        read -p "Enter your choice (1 or 2): " TASK_TYPE
+    done
+
+    if [ "$TASK_TYPE" -eq 1 ]; then
+        TASK_TYPE_NAME="Theory of Mind"
+    else
+        TASK_TYPE_NAME="Regular"
+    fi
+
+    echo ""
+    echo "Task Type: $TASK_TYPE_NAME (option $TASK_TYPE)"
     echo "This generates tasks from exploration trajectories."
     echo ""
     python emtom/examples/generate_tasks.py \
         --trajectory-dir data/emtom/trajectories \
-        --output-dir data/emtom/tasks
+        --output-dir data/emtom/tasks \
+        --task-type $TASK_TYPE
 }
 
 run_benchmark() {

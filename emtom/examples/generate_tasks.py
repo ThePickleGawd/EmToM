@@ -110,8 +110,13 @@ def generate_tasks_from_trajectory(
     llm_client: Any,
     num_agents: int = 2,
     max_tasks: int = 5,
+    task_type: int = 1,
 ) -> List[Any]:
-    """Generate tasks from a single trajectory using LLM."""
+    """Generate tasks from a single trajectory using LLM.
+
+    Args:
+        task_type: Type of task to generate (1 = Theory of Mind, 2 = Regular)
+    """
     print(f"\n[Analyzing] Trajectory: {trajectory.get('episode_id', 'unknown')}")
     print(f"  Scene: {trajectory.get('metadata', {}).get('scene_id', 'unknown')}")
     print(f"  Steps: {trajectory.get('statistics', {}).get('total_steps', 'N/A')}")
@@ -136,13 +141,15 @@ def generate_tasks_from_trajectory(
     analysis = analyzer.analyze(trajectory)
 
     # Generate tasks using LLM
-    print(f"\n  Generating tasks with LLM...")
+    task_type_name = "Theory of Mind" if task_type == 1 else "Regular"
+    print(f"\n  Generating {task_type_name} tasks with LLM...")
     generator = TaskGenerator(llm_client=llm_client)
     tasks = generator.generate_tasks(
         trajectory=trajectory,
         analysis=analysis,
         num_agents=num_agents,
         max_tasks=max_tasks,
+        task_type=task_type,
     )
 
     print(f"  Generated {len(tasks)} collaborative tasks")
@@ -205,6 +212,13 @@ def main():
         action="store_true",
         help="Print generated tasks to console",
     )
+    parser.add_argument(
+        "--task-type",
+        type=int,
+        choices=[1, 2],
+        default=1,
+        help="Type of task to generate: 1 = Theory of Mind tasks, 2 = Regular tasks (default: 1)",
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -229,6 +243,10 @@ def main():
 
     print(f"\nFound {len(trajectory_files)} trajectory file(s)")
 
+    # Display task type selection
+    task_type_name = "Theory of Mind" if args.task_type == 1 else "Regular"
+    print(f"\nTask Type: {task_type_name} (option {args.task_type})")
+
     # Process each trajectory
     all_tasks = []
     for traj_file in trajectory_files:
@@ -240,6 +258,7 @@ def main():
                 llm_client=llm_client,
                 num_agents=args.num_agents,
                 max_tasks=args.max_tasks,
+                task_type=args.task_type,
             )
             all_tasks.extend(tasks)
 

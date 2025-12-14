@@ -16,6 +16,13 @@ from typing import Any, Dict, List, Optional
 from emtom.task_gen.trajectory_analyzer import TrajectoryAnalysis
 
 
+class TaskType(Enum):
+    """Type of task to generate."""
+
+    THEORY_OF_MIND = "theory_of_mind"  # Tasks requiring theory of mind reasoning
+    REGULAR = "regular"  # Simple everyday tasks without ToM requirements
+
+
 class TaskCategory(Enum):
     """Categories of collaborative tasks."""
 
@@ -24,6 +31,7 @@ class TaskCategory(Enum):
     COMMUNICATION = "communication"  # Agents must share information to succeed
     SEQUENTIAL = "sequential"  # Tasks must be done in order
     RESOURCE_SHARING = "resource_sharing"  # Agents share limited resources/abilities
+    SIMPLE_ACTION = "simple_action"  # Single agent simple actions (for regular tasks)
 
 
 @dataclass
@@ -162,12 +170,29 @@ Articulated Furniture (can be opened/closed): {articulated}
 {surprises}
 
 ## Task Requirements
+The TYPE of task generated is based on user input:
+- If user selects 1: Generate Theory of Mind tasks
+- If user selects 2: Generate Regular tasks
+
+Selected task type: {task_type}
+
+### This prompt is for THEORY OF MIND TASKS (user selected option 1).
 - Design a task for {num_agents} agents working together
 - Use ONLY objects/furniture from the Scene Inventory above
 - The task should leverage the discovered mechanics (surprising behaviors)
 - One agent knows about the mechanics, the other does not (theory of mind)
 - Agents must communicate and coordinate to succeed
 - Success conditions must reference REAL objects from the inventory
+
+### This prompt is for REGULAR TASKS (user selected option 2).
+- Design simple, everyday household tasks for {num_agents} agent(s)
+- Use ONLY objects/furniture from the Scene Inventory above
+- Tasks should be straightforward actions like:
+  * Pick up and move objects (e.g., "pick up the cell phone and place it on the table")
+  * Clean or organize items (e.g., "put dirty dishes in the sink")
+  * Open/close furniture (e.g., "open the fridge")
+  * Navigate and interact (e.g., "go to the bedroom and turn on the lamp")
+  * Washing/cleaning (e.g., "wash the clothes", "clean the plate")
 
 ## Output Format
 Respond with a JSON object:
@@ -224,6 +249,7 @@ class TaskGenerator:
         analysis: TrajectoryAnalysis,
         num_agents: int = 2,
         max_tasks: int = 5,
+        task_type: int = 1,
     ) -> List[GeneratedTask]:
         """
         Generate collaborative tasks from a trajectory using LLM.
@@ -233,6 +259,9 @@ class TaskGenerator:
             analysis: Analysis with discovered mechanics
             num_agents: Number of agents for tasks
             max_tasks: Maximum tasks to generate
+            task_type: Type of task to generate:
+                       1 = Theory of Mind tasks
+                       2 = Regular tasks
 
         Returns:
             List of generated challenge tasks
@@ -275,6 +304,9 @@ class TaskGenerator:
         # Format surprises for prompt
         surprise_text = self._format_surprises(surprises)
 
+        # Convert task_type to string for prompt
+        task_type_str = "Theory of Mind (option 1)" if task_type == 1 else "Regular (option 2)"
+
         # Generate tasks
         tasks = []
         for i in range(min(max_tasks, len(surprises))):
@@ -286,6 +318,8 @@ class TaskGenerator:
                     scene_inventory=scene_inventory,
                     num_agents=num_agents,
                     episode_id=trajectory.get("episode_id", "unknown"),
+                    task_type=task_type,
+                    task_type_str=task_type_str,
                 )
                 if task:
                     tasks.append(task)
@@ -313,8 +347,15 @@ class TaskGenerator:
         scene_inventory: Dict[str, List[str]],
         num_agents: int,
         episode_id: str,
+        task_type: int = 1,
+        task_type_str: str = "Theory of Mind (option 1)",
     ) -> Optional[GeneratedTask]:
-        """Generate a single task using LLM."""
+        """Generate a single task using LLM.
+
+        Args:
+            task_type: 1 for Theory of Mind, 2 for Regular tasks
+            task_type_str: Human-readable task type for prompt
+        """
         # Format scene inventory for prompt
         rooms = ", ".join(scene_inventory.get("rooms", [])[:10]) or "unknown"
         furniture = ", ".join(scene_inventory.get("furniture", [])[:15]) or "unknown"
@@ -328,6 +369,7 @@ class TaskGenerator:
             articulated=articulated,
             surprises=surprises,
             num_agents=num_agents,
+            task_type=task_type_str,
         )
 
         response = self.llm.generate(prompt)
@@ -339,7 +381,7 @@ class TaskGenerator:
             json_match = re.search(r'\{[\s\S]*\}', response)
             if json_match:
                 task_data = json.loads(json_match.group())
-                return self._parse_task_response(task_data, episode_id, num_agents)
+                return self._parse_task_response(task_data, episode_id, num_agents, task_type)
         except json.JSONDecodeError as e:
             print(f"  Failed to parse LLM response as JSON: {e}")
             print(f"  Response: {response[:500]}...")
@@ -351,8 +393,13 @@ class TaskGenerator:
         data: Dict[str, Any],
         episode_id: str,
         num_agents: int,
+        task_type: int = 1,
     ) -> GeneratedTask:
-        """Parse LLM response into GeneratedTask."""
+        """Parse LLM response into GeneratedTask.
+
+        Args:
+            task_type: 1 for Theory of Mind, 2 for Regular tasks
+        """
         task_id = f"task_{uuid.uuid4().hex[:8]}"
 
         # Parse subtasks
@@ -391,6 +438,10 @@ class TaskGenerator:
                 max_failed_attempts=10,
             ))
 
+        # Set theory_of_mind_required based on task_type
+        # task_type 1 = Theory of Mind, task_type 2 = Regular
+        is_tom_task = (task_type == 1)
+
         return GeneratedTask(
             task_id=task_id,
             title=data.get("title", "Untitled Task"),
@@ -404,9 +455,9 @@ class TaskGenerator:
             subtasks=subtasks,
             success_condition=success_condition,
             failure_conditions=failure_conditions,
-            difficulty=data.get("difficulty", 3),
-            estimated_steps=data.get("estimated_steps", 15),
-            theory_of_mind_required=True,
-            communication_required=True,
+            difficulty=data.get("difficulty", 3 if is_tom_task else 1),
+            estimated_steps=data.get("estimated_steps", 15 if is_tom_task else 5),
+            theory_of_mind_required=is_tom_task,
+            communication_required=is_tom_task,
             source_trajectory=episode_id,
         )

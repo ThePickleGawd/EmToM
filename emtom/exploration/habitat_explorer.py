@@ -370,8 +370,12 @@ class HabitatExplorer:
                 if mechanic.bind_to_scene(mock_world):
                     self._active_mechanics.append(mechanic)
                     debug_state = mechanic.get_hidden_state_for_debug()
+                    bound_names = debug_state.get('bound_names', [])
+                    bound_targets = debug_state.get('bound_targets', [])
+                    # Show human-readable names if available, otherwise internal IDs
+                    display_targets = bound_names if bound_names else bound_targets
                     self.logger.log_message(
-                        f"Mechanic '{mechanic.name}' bound to: {debug_state.get('bound_targets', [])}"
+                        f"Mechanic '{mechanic.name}' bound to: {display_targets}"
                     )
                 else:
                     self.logger.log_message(
