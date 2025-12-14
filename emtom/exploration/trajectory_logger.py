@@ -26,7 +26,8 @@ class SurpriseRecord:
     target: Optional[str]
     surprise_level: int  # 1-5 scale
     explanation: str
-    hypothesis: str  # Agent's hypothesis about why this happened
+    observation: Optional[str] = None  # The observation that triggered the surprise
+    hypothesis: str = ""  # Agent's hypothesis about why this happened
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def to_dict(self) -> Dict[str, Any]:

@@ -199,7 +199,10 @@ class SceneAwareMechanic(Mechanic):
     def __init__(self) -> None:
         """Initialize scene-aware mechanic."""
         self._is_bound: bool = False
-        self._bound_targets: List[str] = []
+        self._bound_targets: List[str] = []  # Internal entity IDs
+        self._bound_names: List[str] = []  # Human-readable names (e.g., fridge_58)
+        self._id_to_name: Dict[str, str] = {}  # Mapping from ID to name
+        self._name_to_id: Dict[str, str] = {}  # Mapping from name to ID
         self._bound_states: Dict[str, str] = {}  # entity_id -> state_name
         self._selector: Optional["ObjectSelector"] = None
         self._explicit_bindings: List[Dict[str, Any]] = []  # For explicit binding mode
@@ -327,12 +330,22 @@ class SceneAwareMechanic(Mechanic):
             selected = valid_candidates[:max_targets]
 
         self._bound_targets = []
+        self._bound_names = []
+        self._id_to_name = {}
+        self._name_to_id = {}
         self._bound_states = {}
 
         for entity, states in selected:
-            self._bound_targets.append(entity.id)
+            entity_id = entity.id
+            # Get human-readable name - try 'name' property first, fall back to id
+            entity_name = getattr(entity, 'name', None) or entity_id
+
+            self._bound_targets.append(entity_id)
+            self._bound_names.append(entity_name)
+            self._id_to_name[entity_id] = entity_name
+            self._name_to_id[entity_name] = entity_id
             # Pick a random state from available states for this entity
-            self._bound_states[entity.id] = random.choice(states) if random_select else states[0]
+            self._bound_states[entity_id] = random.choice(states) if random_select else states[0]
 
         self._is_bound = True
         return True
@@ -344,16 +357,21 @@ class SceneAwareMechanic(Mechanic):
         Check if this mechanic applies to the given action.
 
         By default, applies to any action on bound targets.
+        Checks both internal IDs and human-readable names.
         """
         if not self._is_bound:
             return False
-        return target in self._bound_targets
+        # Check if target matches either internal ID or human-readable name
+        return target in self._bound_targets or target in self._bound_names
 
     def reset(self) -> None:
         """Reset mechanic state including bindings."""
         super().reset()
         self._is_bound = False
         self._bound_targets = []
+        self._bound_names = []
+        self._id_to_name = {}
+        self._name_to_id = {}
         self._bound_states = {}
 
     def get_hidden_state_for_debug(self) -> Dict[str, Any]:
@@ -361,6 +379,7 @@ class SceneAwareMechanic(Mechanic):
         return {
             "is_bound": self._is_bound,
             "bound_targets": self._bound_targets,
+            "bound_names": self._bound_names,
             "bound_states": self._bound_states,
             "required_affordance": self.required_affordance,
         }
