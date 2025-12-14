@@ -25,6 +25,11 @@ from emtom.mechanics.registry import MechanicRegistry, register_mechanic
 from emtom.mechanics.inverse_state import InverseStateMechanic
 from emtom.mechanics.remote_control import RemoteControlMechanic
 from emtom.mechanics.counting_state import CountingStateMechanic
+from emtom.mechanics.delayed_effect import DelayedEffectMechanic
+from emtom.mechanics.conditional_unlock import ConditionalUnlockMechanic
+from emtom.mechanics.state_mirroring import StateMirroringMechanic
+from emtom.mechanics.decaying_state import DecayingStateMechanic
+from emtom.mechanics.sequence_lock import SequenceLockMechanic
 
 # Core types
 from emtom.mechanics.mechanic import (
@@ -91,6 +96,11 @@ __all__ = [
     "InverseStateMechanic",
     "RemoteControlMechanic",
     "CountingStateMechanic",
+    "DelayedEffectMechanic",
+    "ConditionalUnlockMechanic",
+    "StateMirroringMechanic",
+    "DecayingStateMechanic",
+    "SequenceLockMechanic",
     # Core types
     "Mechanic",
     "SceneAwareMechanic",

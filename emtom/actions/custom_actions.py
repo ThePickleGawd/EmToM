@@ -31,6 +31,7 @@ class ActionResult:
     effect: Optional[str] = None  # What actually changed
     other_observations: Dict[str, str] = field(default_factory=dict)  # What other agents observe
     surprise_trigger: Optional[str] = None  # If this should trigger surprise detection
+    spawned_items: List[str] = field(default_factory=list)  # Items revealed/spawned by action
 
 
 class EMTOMAction(ABC):
@@ -63,8 +64,8 @@ class EMTOMAction(ABC):
 
     def get_available_targets(
         self,
-        env_interface: "EnvironmentInterface",
-        world_state: Dict[str, Any],
+        _env_interface: "EnvironmentInterface",
+        _world_state: Dict[str, Any],
     ) -> List[str]:
         """Get valid targets for this action in current state."""
         return []
@@ -89,9 +90,9 @@ class HideAction(EMTOMAction):
 
     def execute(
         self,
-        agent_id: str,
+        _agent_id: str,
         target: Optional[str],
-        env_interface: "EnvironmentInterface",
+        _env_interface: "EnvironmentInterface",
         world_state: Dict[str, Any],
     ) -> ActionResult:
         if not target:
@@ -124,7 +125,7 @@ class HideAction(EMTOMAction):
 
     def get_available_targets(
         self,
-        env_interface: "EnvironmentInterface",
+        _env_interface: "EnvironmentInterface",
         world_state: Dict[str, Any],
     ) -> List[str]:
         # Can hide any object (not furniture)
@@ -161,9 +162,9 @@ class InspectAction(EMTOMAction):
 
     def execute(
         self,
-        agent_id: str,
+        _agent_id: str,
         target: Optional[str],
-        env_interface: "EnvironmentInterface",
+        _env_interface: "EnvironmentInterface",
         world_state: Dict[str, Any],
     ) -> ActionResult:
         if not target:
@@ -202,7 +203,7 @@ class InspectAction(EMTOMAction):
 
     def get_available_targets(
         self,
-        env_interface: "EnvironmentInterface",
+        _env_interface: "EnvironmentInterface",
         world_state: Dict[str, Any],
     ) -> List[str]:
         # Can inspect any entity
@@ -230,7 +231,7 @@ class WriteMessageAction(EMTOMAction):
         self,
         agent_id: str,
         target: Optional[str],
-        env_interface: "EnvironmentInterface",
+        _env_interface: "EnvironmentInterface",
         world_state: Dict[str, Any],
     ) -> ActionResult:
         location = target or world_state.get("agent_location", "here")
@@ -252,7 +253,7 @@ class WriteMessageAction(EMTOMAction):
 
     def get_available_targets(
         self,
-        env_interface: "EnvironmentInterface",
+        _env_interface: "EnvironmentInterface",
         world_state: Dict[str, Any],
     ) -> List[str]:
         # Can write on furniture surfaces
@@ -261,6 +262,99 @@ class WriteMessageAction(EMTOMAction):
             if entity.get("type") == "furniture":
                 targets.append(entity.get("name", entity.get("id")))
         return targets[:10]  # Limit to 10
+
+
+@register_action("Shake")
+class ShakeAction(EMTOMAction):
+    """
+    Shake an object to reveal hidden items inside.
+
+    Like finding a key in a vase in Zelda - shaking reveals what's hidden.
+    The hidden item is "spawned" into the scene and can then be picked up.
+
+    Game state property:
+    - hidden_items[object_id] = {"contains": "key_1"}
+    - After shaking: item spawns, property is cleared
+
+    Can be affected by:
+    - inverse_state: Shaking hides items instead of revealing
+    - remote_control: Shaking X reveals item from Y
+    """
+
+    name = "Shake"
+    description = "Shake an object to reveal any hidden items inside. Items will fall out and can be picked up."
+
+    def execute(
+        self,
+        _agent_id: str,
+        target: Optional[str],
+        _env_interface: "EnvironmentInterface",
+        world_state: Dict[str, Any],
+    ) -> ActionResult:
+        if not target:
+            return ActionResult(
+                success=False,
+                observation="You need to specify what to shake.",
+            )
+
+        # Check if target exists
+        entities = world_state.get("entities", [])
+        entity_names = [e.get("name", e.get("id")) for e in entities]
+        if target not in entity_names:
+            return ActionResult(
+                success=False,
+                observation=f"You don't see {target} here.",
+            )
+
+        # Check if this object has hidden items (stored in game state)
+        hidden_items = world_state.get("hidden_items", {})
+        hidden_info = hidden_items.get(target, {})
+        contained_item = hidden_info.get("contains")
+
+        if contained_item:
+            # Item found! Spawn it
+            observation = f"You shake {target}. A {contained_item} falls out!"
+
+            # Other agents nearby see the item fall out
+            other_observations = {}
+            for other_agent in world_state.get("other_agents", []):
+                if world_state.get(f"{other_agent}_location") == world_state.get("agent_location"):
+                    other_observations[other_agent] = f"You see a {contained_item} fall out of {target}."
+
+            return ActionResult(
+                success=True,
+                observation=observation,
+                effect=f"revealed={contained_item}",
+                other_observations=other_observations,
+                spawned_items=[contained_item],
+            )
+        else:
+            # Nothing hidden
+            observation = f"You shake {target}. Nothing happens."
+            return ActionResult(
+                success=True,
+                observation=observation,
+            )
+
+    def get_available_targets(
+        self,
+        _env_interface: "EnvironmentInterface",
+        world_state: Dict[str, Any],
+    ) -> List[str]:
+        # Can shake small objects (not heavy furniture)
+        targets = []
+        for entity in world_state.get("entities", []):
+            entity_type = entity.get("type", "")
+            # Can shake objects, and small furniture like vases, boxes, containers
+            if entity_type == "object":
+                targets.append(entity.get("name", entity.get("id")))
+            elif entity_type == "furniture":
+                # Only shakeable furniture (containers, small items)
+                furniture_name = entity.get("name", "").lower()
+                shakeable_types = ["vase", "box", "container", "basket", "jar", "pot", "bin"]
+                if any(t in furniture_name for t in shakeable_types):
+                    targets.append(entity.get("name", entity.get("id")))
+        return targets[:10]
 
 
 def get_all_actions() -> Dict[str, EMTOMAction]:
