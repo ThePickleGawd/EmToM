@@ -13,6 +13,9 @@ cd "$PROJECT_ROOT"
 MAX_SIM_STEPS=20000
 MAX_LLM_CALLS=20
 EXPLORATION_STEPS=50
+MECHANICS=""
+TASK_FILE=""
+LLM_AGENTS=""
 
 print_usage() {
     echo "EMTOM Benchmark Pipeline"
@@ -23,6 +26,7 @@ print_usage() {
     echo "  exploration    Run LLM-guided exploration in Habitat"
     echo "  generate       Generate tasks from exploration trajectories"
     echo "  benchmark      Run benchmark with generated tasks"
+    echo "  test           Human-in-the-loop testing mode (manual command input)"
     echo "  all            Run full pipeline: exploration -> generate -> benchmark"
     echo ""
     echo "Exploration Options:"
@@ -35,10 +39,17 @@ print_usage() {
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
     echo "  --max-llm-calls N    Max LLM calls per agent (default: $MAX_LLM_CALLS)"
     echo ""
+    echo "Test Options:"
+    echo "  --mechanics M1 M2    Mechanics to enable (e.g., inverse_state remote_control)"
+    echo "  --task FILE          Task file to load (uses task's mechanic bindings automatically)"
+    echo "  --llm-agents A1 A2   Agents to make LLM-controlled (e.g., agent_1)"
+    echo ""
     echo "Examples:"
     echo "  ./emtom/run_emtom.sh exploration --steps 30"
     echo "  ./emtom/run_emtom.sh generate"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000 --max-llm-calls 15"
+    echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
+    echo "  ./emtom/run_emtom.sh test --task data/emtom/tasks/emtom_tom_test.json"
     echo "  ./emtom/run_emtom.sh all --steps 50 --max-sim-steps 2000"
 }
 
@@ -110,6 +121,40 @@ run_benchmark() {
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-benchmark"
 }
 
+run_test() {
+    echo "=============================================="
+    echo "Running EMTOM Human Test Mode"
+    echo "=============================================="
+    echo "Mechanics: ${MECHANICS:-from task file or default}"
+    echo "Task file: ${TASK_FILE:-none}"
+    echo "LLM agents: ${LLM_AGENTS:-none (all human-controlled)}"
+    echo "=============================================="
+    echo ""
+    echo "Commands: Open[target], Close[target], Navigate[target], Pick[target]"
+    echo "          Hide[target], Inspect[target], WriteMessage[target]"
+    echo "          llm, status, mechanics, history, help, quit"
+    echo ""
+
+    # Build command arguments
+    CMD_ARGS=""
+    if [ -n "$MECHANICS" ]; then
+        CMD_ARGS="$CMD_ARGS --mechanics $MECHANICS"
+    fi
+    if [ -n "$TASK_FILE" ]; then
+        CMD_ARGS="$CMD_ARGS --task $TASK_FILE"
+        # Use task mechanics by default when task is provided
+        CMD_ARGS="$CMD_ARGS --use-task-mechanics"
+    fi
+    if [ -n "$LLM_AGENTS" ]; then
+        CMD_ARGS="$CMD_ARGS --llm-agents $LLM_AGENTS"
+    fi
+
+    python emtom/examples/run_human_test.py \
+        --config-name examples/planner_multi_agent_demo_config \
+        $CMD_ARGS \
+        "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-human_test"
+}
+
 run_all() {
     echo "=============================================="
     echo "Running Full EMTOM Pipeline"
@@ -123,7 +168,7 @@ run_all() {
 COMMAND=""
 while [[ $# -gt 0 ]]; do
     case $1 in
-        exploration|generate|benchmark|all)
+        exploration|generate|benchmark|test|all)
             COMMAND=$1
             shift
             ;;
@@ -138,6 +183,28 @@ while [[ $# -gt 0 ]]; do
         --steps)
             EXPLORATION_STEPS=$2
             shift 2
+            ;;
+        --mechanics)
+            # Collect all mechanics until next flag or end
+            shift
+            while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
+                MECHANICS="$MECHANICS $1"
+                shift
+            done
+            MECHANICS=$(echo "$MECHANICS" | xargs)  # trim whitespace
+            ;;
+        --task)
+            TASK_FILE=$2
+            shift 2
+            ;;
+        --llm-agents)
+            # Collect all agents until next flag or end
+            shift
+            while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
+                LLM_AGENTS="$LLM_AGENTS $1"
+                shift
+            done
+            LLM_AGENTS=$(echo "$LLM_AGENTS" | xargs)  # trim whitespace
             ;;
         -h|--help)
             print_usage
@@ -165,6 +232,9 @@ case $COMMAND in
         ;;
     benchmark)
         run_benchmark
+        ;;
+    test)
+        run_test
         ;;
     all)
         run_all

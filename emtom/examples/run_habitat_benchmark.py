@@ -128,26 +128,21 @@ def main(config: DictConfig) -> None:
     os.makedirs(output_dir, exist_ok=True)
     cprint(f"Output directory: {output_dir}", "blue")
 
-    # Load EMTOM tasks first (needed for mechanics setup)
+    # Load EMTOM tasks
     task_dir = Path("data/emtom/tasks")
     if not task_dir.exists():
         cprint(f"ERROR: Task directory not found: {task_dir}", "red")
         cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
         sys.exit(1)
 
-    # Prefer test files with mechanic bindings over generated challenge files
-    test_file = task_dir / "emtom_tom_test.json"
-    if test_file.exists():
-        task_file = test_file
-        cprint(f"Using test task file with mechanic bindings: {task_file}", "green")
-    else:
-        task_files = list(task_dir.glob("emtom_challenges_*.json"))
-        if not task_files:
-            cprint(f"ERROR: No task files found in {task_dir}", "red")
-            cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
-            sys.exit(1)
-        task_file = sorted(task_files)[-1]
-        cprint(f"Using task file: {task_file}", "blue")
+    # Use most recent generated task file
+    task_files = list(task_dir.glob("emtom_challenges_*.json"))
+    if not task_files:
+        cprint(f"ERROR: No task files found in {task_dir}", "red")
+        cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
+        sys.exit(1)
+    task_file = sorted(task_files)[-1]
+    cprint(f"Using task file: {task_file}", "blue")
 
     tasks = load_tasks(str(task_file))
     if not tasks:

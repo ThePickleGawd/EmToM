@@ -1,6 +1,0 @@
-# Only hidden mapping mechanics
-mechanics:
-  - name: remote_switch
-    params:
-      mappings: null  # Random mappings
-      seed: 42

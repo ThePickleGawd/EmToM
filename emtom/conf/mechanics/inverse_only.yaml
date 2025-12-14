@@ -1,8 +1,0 @@
-# Only inverse effect mechanics
-mechanics:
-  - name: inverse_open
-    params:
-      affected_types:
-        - door
-        - cabinet
-        - drawer
