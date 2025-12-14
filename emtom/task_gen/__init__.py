@@ -9,6 +9,7 @@ from emtom.task_gen.trajectory_analyzer import (
 from emtom.task_gen.task_generator import (
     FailureCondition,
     GeneratedTask,
+    MechanicBinding,
     Subtask,
     SuccessCondition,
     TaskCategory,
@@ -24,6 +25,7 @@ __all__ = [
     # Generator
     "FailureCondition",
     "GeneratedTask",
+    "MechanicBinding",
     "Subtask",
     "SuccessCondition",
     "TaskCategory",

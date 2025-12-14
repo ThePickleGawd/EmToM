@@ -219,6 +219,33 @@ class InverseStateMechanic(SceneAwareMechanic):
             return f"{target} should become {adj}"
         return f"{action_name} on {target} should have normal effect"
 
+    def bind_explicit(self, bindings: List[Dict[str, Any]]) -> bool:
+        """
+        Bind the mechanic with explicit target mappings.
+
+        Args:
+            bindings: List of binding dicts with keys:
+                - trigger_object: Object to apply inverse effect to
+                - target_state: State to invert (default: "is_open")
+
+        Returns:
+            True if bindings were applied successfully
+        """
+        self._explicit_bindings = bindings
+        self._bound_targets = []
+        self._bound_states = {}
+
+        for binding in bindings:
+            trigger = binding.get("trigger_object")
+            state = binding.get("target_state", "is_open")
+
+            if trigger:
+                self._bound_targets.append(trigger)
+                self._bound_states[trigger] = state
+
+        self._is_bound = len(self._bound_targets) > 0
+        return self._is_bound
+
     def get_hidden_state_for_debug(self) -> Dict[str, Any]:
         """Return debug info about this mechanic."""
         base_info = super().get_hidden_state_for_debug()

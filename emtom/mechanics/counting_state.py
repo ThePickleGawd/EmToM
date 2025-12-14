@@ -8,7 +8,7 @@ Tests the agent's ability to discover hidden activation conditions.
 """
 
 import random
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from emtom.core.mechanic import (
     ActionResult,
@@ -291,6 +291,37 @@ class CountingStateMechanic(SceneAwareMechanic):
             "show_progress": self.show_progress,
         })
         return base_info
+
+    def bind_explicit(self, bindings: List[Dict[str, Any]]) -> bool:
+        """
+        Bind the mechanic with explicit target mappings.
+
+        Args:
+            bindings: List of binding dicts with keys:
+                - trigger_object: Object that requires multiple interactions
+                - count: Number of interactions needed (default: 3)
+
+        Returns:
+            True if bindings were applied successfully
+        """
+        self._explicit_bindings = bindings
+        self._bound_targets = []
+        self._target_thresholds.clear()
+        self._interaction_counts.clear()
+        self._state_changed.clear()
+
+        for binding in bindings:
+            trigger = binding.get("trigger_object")
+            count = binding.get("count", self.required_count)
+
+            if trigger:
+                self._bound_targets.append(trigger)
+                self._target_thresholds[trigger] = count
+                self._interaction_counts[trigger] = {}
+                self._state_changed[trigger] = set()
+
+        self._is_bound = len(self._bound_targets) > 0
+        return self._is_bound
 
     def reset(self) -> None:
         """Reset per-episode state."""

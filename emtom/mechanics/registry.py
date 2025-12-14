@@ -217,6 +217,51 @@ class MechanicRegistry:
 
         return "\n".join(lines)
 
+    @staticmethod
+    def instantiate_from_bindings(bindings: List[Dict[str, Any]]) -> List[Mechanic]:
+        """
+        Create mechanic instances from task binding format.
+
+        This is used for benchmark tasks where specific object bindings
+        are defined in the task file.
+
+        Binding format (from MechanicBinding):
+            {
+                "mechanic_type": "remote_control",
+                "trigger_object": "fridge_58",
+                "target_object": "chest_of_drawers_52",
+                "target_state": "is_open",
+                "count": 3  # for counting_state
+            }
+
+        Args:
+            bindings: List of binding dicts
+
+        Returns:
+            List of instantiated and bound mechanics
+        """
+        # Group bindings by mechanic type
+        bindings_by_type: Dict[str, List[Dict[str, Any]]] = {}
+        for binding in bindings:
+            mech_type = binding.get("mechanic_type")
+            if mech_type:
+                if mech_type not in bindings_by_type:
+                    bindings_by_type[mech_type] = []
+                bindings_by_type[mech_type].append(binding)
+
+        # Create mechanics and apply explicit bindings
+        mechanics = []
+        for mech_type, type_bindings in bindings_by_type.items():
+            try:
+                mechanic = MechanicRegistry.instantiate(mech_type)
+                if hasattr(mechanic, 'bind_explicit'):
+                    mechanic.bind_explicit(type_bindings)
+                mechanics.append(mechanic)
+            except KeyError:
+                print(f"[MechanicRegistry] Warning: Unknown mechanic type '{mech_type}'")
+
+        return mechanics
+
 
 def clear_registry() -> None:
     """Clear all registered mechanics (useful for testing)."""

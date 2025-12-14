@@ -86,6 +86,35 @@ class FailureCondition:
 
 
 @dataclass
+class MechanicBinding:
+    """Specifies how a mechanic is bound to scene objects."""
+    mechanic_type: str  # "inverse_state", "remote_control", "counting_state"
+    trigger_object: str  # Object that triggers the mechanic (e.g., "fridge_58")
+    target_object: Optional[str] = None  # For remote_control: the affected object
+    target_state: Optional[str] = None  # State being affected (e.g., "is_open")
+    count: Optional[int] = None  # For counting_state: number of interactions needed
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "mechanic_type": self.mechanic_type,
+            "trigger_object": self.trigger_object,
+            "target_object": self.target_object,
+            "target_state": self.target_state,
+            "count": self.count,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MechanicBinding":
+        return cls(
+            mechanic_type=data["mechanic_type"],
+            trigger_object=data["trigger_object"],
+            target_object=data.get("target_object"),
+            target_state=data.get("target_state"),
+            count=data.get("count"),
+        )
+
+
+@dataclass
 class GeneratedTask:
     """A collaborative challenge task."""
 
@@ -109,6 +138,9 @@ class GeneratedTask:
     estimated_steps: int
     theory_of_mind_required: bool
     communication_required: bool
+
+    # Optional fields with defaults must come last
+    mechanic_bindings: List[MechanicBinding] = field(default_factory=list)
     source_trajectory: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -124,6 +156,11 @@ class GeneratedTask:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "GeneratedTask":
         """Create task from dictionary."""
+        # Parse mechanic bindings if present
+        bindings = []
+        for b in data.get("mechanic_bindings", []):
+            bindings.append(MechanicBinding.from_dict(b))
+
         return cls(
             task_id=data["task_id"],
             title=data["title"],
@@ -131,6 +168,7 @@ class GeneratedTask:
             description=data["description"],
             initial_world_state=data["initial_world_state"],
             required_mechanics=data["required_mechanics"],
+            mechanic_bindings=bindings,
             num_agents=data["num_agents"],
             agent_roles=data["agent_roles"],
             agent_knowledge=data["agent_knowledge"],

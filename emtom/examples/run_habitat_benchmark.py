@@ -40,6 +40,7 @@ from habitat_llm.utils import cprint, setup_config, fix_config
 
 from emtom.task_gen import GeneratedTask
 from emtom.tools import get_emtom_tools
+from emtom.mechanics import MechanicRegistry, wrap_tools_with_mechanics
 
 # Import CommunicationTool for agent-to-agent messaging
 from habitat_llm.tools.perception.communication_tool import CommunicationTool
@@ -59,7 +60,12 @@ def load_tasks(task_file: str) -> list:
 
 
 def task_to_instruction(task: GeneratedTask) -> str:
-    """Convert an EMTOM task to a natural language instruction for the agents."""
+    """Convert an EMTOM task to a natural language instruction for the agents.
+
+    Note: We don't include global mechanic hints here since both agents see this instruction.
+    Agent-specific knowledge (including mechanic knowledge for agent_0) is in the task's
+    agent_knowledge section.
+    """
     # Build an instruction that includes the task context
     instruction_parts = [
         f"Task: {task.title}",
@@ -68,8 +74,9 @@ def task_to_instruction(task: GeneratedTask) -> str:
     ]
 
     # Add any special knowledge that agents have
+    # Note: This is where agent_0 gets mechanic knowledge and agent_1 doesn't
     if task.agent_knowledge:
-        instruction_parts.append("\nAgent-specific knowledge:")
+        instruction_parts.append("\nAgent-specific knowledge (only visible to that agent):")
         for agent_id, knowledge in task.agent_knowledge.items():
             if knowledge:
                 instruction_parts.append(f"  {agent_id}: {', '.join(knowledge)}")
@@ -116,6 +123,54 @@ def main(config: DictConfig) -> None:
     eval_runner = DecentralizedEvaluationRunner(config.evaluation, env_interface)
     cprint(f"Evaluation runner created: {eval_runner}", "green")
 
+    # Setup output directory
+    output_dir = config.paths.results_dir
+    os.makedirs(output_dir, exist_ok=True)
+    cprint(f"Output directory: {output_dir}", "blue")
+
+    # Load EMTOM tasks first (needed for mechanics setup)
+    task_dir = Path("data/emtom/tasks")
+    if not task_dir.exists():
+        cprint(f"ERROR: Task directory not found: {task_dir}", "red")
+        cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
+        sys.exit(1)
+
+    # Prefer test files with mechanic bindings over generated challenge files
+    test_file = task_dir / "emtom_tom_test.json"
+    if test_file.exists():
+        task_file = test_file
+        cprint(f"Using test task file with mechanic bindings: {task_file}", "green")
+    else:
+        task_files = list(task_dir.glob("emtom_challenges_*.json"))
+        if not task_files:
+            cprint(f"ERROR: No task files found in {task_dir}", "red")
+            cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
+            sys.exit(1)
+        task_file = sorted(task_files)[-1]
+        cprint(f"Using task file: {task_file}", "blue")
+
+    tasks = load_tasks(str(task_file))
+    if not tasks:
+        cprint(f"ERROR: No tasks found in {task_file}", "red")
+        sys.exit(1)
+
+    cprint(f"Loaded {len(tasks)} EMTOM tasks", "green")
+
+    # Run first task
+    task = tasks[0]
+
+    # Setup mechanics from task bindings using unified mechanics system
+    mechanics = []
+    if task.mechanic_bindings:
+        # Convert MechanicBinding objects to dicts for the registry
+        bindings_dicts = [b.to_dict() for b in task.mechanic_bindings]
+        mechanics = MechanicRegistry.instantiate_from_bindings(bindings_dicts)
+        cprint(f"\nMechanics loaded from task bindings:", "green")
+        for b in task.mechanic_bindings:
+            cprint(f"  - {b.mechanic_type}: {b.trigger_object} -> {b.target_object or 'self'}", "green")
+    else:
+        cprint(f"\nNo mechanic bindings in task - mechanics will not be active", "yellow")
+
     # Inject EMTOM tools and CommunicationTool into each agent
     cprint("\nInjecting tools into agents...", "blue")
     for agent in eval_runner.agents.values():
@@ -139,42 +194,19 @@ def main(config: DictConfig) -> None:
         agent.tools["Communicate"] = comm_tool
         cprint(f"  Added Communicate to agent_{agent_uid}", "green")
 
+        # Wrap tools with unified mechanics system if mechanics are active
+        if mechanics:
+            agent.tools = wrap_tools_with_mechanics(
+                agent_tools=agent.tools,
+                mechanics=mechanics,
+                world_state_adapter=None,  # TODO: Add world state adapter if needed
+            )
+
     # Print agent info
     cprint(f"\nAgents: {eval_runner.agent_list}", "blue")
     for agent in eval_runner.agents.values():
         cprint(f"  agent_{agent.uid} tools: {list(agent.tools.keys())}", "blue")
 
-    # Setup output directory
-    output_dir = config.paths.results_dir
-    os.makedirs(output_dir, exist_ok=True)
-    cprint(f"Output directory: {output_dir}", "blue")
-
-    # Find EMTOM task files in data/emtom/tasks/
-    task_dir = Path("data/emtom/tasks")
-    if not task_dir.exists():
-        cprint(f"ERROR: Task directory not found: {task_dir}", "red")
-        cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
-        sys.exit(1)
-
-    task_files = list(task_dir.glob("emtom_challenges_*.json"))
-    if not task_files:
-        cprint(f"ERROR: No task files found in {task_dir}", "red")
-        cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
-        sys.exit(1)
-
-    # Use the most recent task file
-    task_file = sorted(task_files)[-1]
-    cprint(f"Using task file: {task_file}", "blue")
-
-    tasks = load_tasks(str(task_file))
-    if not tasks:
-        cprint(f"ERROR: No tasks found in {task_file}", "red")
-        sys.exit(1)
-
-    cprint(f"Loaded {len(tasks)} EMTOM tasks", "green")
-
-    # Run first task
-    task = tasks[0]
     instruction = task_to_instruction(task)
 
     cprint(f"\n{'='*60}", "blue")
@@ -182,6 +214,10 @@ def main(config: DictConfig) -> None:
     cprint(f"{'='*60}", "blue")
     print(f"Description: {task.description}")
     print(f"Mechanics: {task.required_mechanics}")
+    if task.mechanic_bindings:
+        print(f"Mechanic bindings: {len(task.mechanic_bindings)} active")
+        for b in task.mechanic_bindings:
+            print(f"  - {b.mechanic_type}: {b.trigger_object} -> {b.target_object or 'self'}")
     print(f"Goal: {task.success_condition.description}")
     print(f"\nInstruction to agents:\n{instruction}")
 

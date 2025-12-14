@@ -184,6 +184,9 @@ class SceneAwareMechanic(Mechanic):
     1. Set `required_affordance` or override `bind_to_scene()`
     2. Store discovered targets in `bound_targets`
     3. Use `is_bound` to check if the mechanic is active
+
+    For benchmark tasks with explicit bindings, use `bind_explicit()` instead
+    of `bind_to_scene()`. This allows reproducible task execution.
     """
 
     name: str = "scene_aware_mechanic"
@@ -199,6 +202,7 @@ class SceneAwareMechanic(Mechanic):
         self._bound_targets: List[str] = []
         self._bound_states: Dict[str, str] = {}  # entity_id -> state_name
         self._selector: Optional["ObjectSelector"] = None
+        self._explicit_bindings: List[Dict[str, Any]] = []  # For explicit binding mode
 
     @property
     def is_bound(self) -> bool:
@@ -247,6 +251,29 @@ class SceneAwareMechanic(Mechanic):
         self._bound_targets = [e.id for e in candidates]
         self._is_bound = True
         return True
+
+    def bind_explicit(self, bindings: List[Dict[str, Any]]) -> bool:
+        """
+        Bind the mechanic with explicit target mappings.
+
+        Used for benchmark tasks where specific bindings are required
+        for reproducibility. Subclasses should override to handle
+        their specific binding format.
+
+        Args:
+            bindings: List of binding dicts with keys:
+                - trigger_object: Object that triggers the mechanic
+                - target_object: Object affected (for remote_control)
+                - target_state: State to modify (e.g., "is_open")
+                - count: Number of interactions needed (for counting_state)
+
+        Returns:
+            True if bindings were applied successfully
+        """
+        self._explicit_bindings = bindings
+        self._bound_targets = [b["trigger_object"] for b in bindings if "trigger_object" in b]
+        self._is_bound = len(self._bound_targets) > 0
+        return self._is_bound
 
     def bind_to_entities_with_state(
         self,

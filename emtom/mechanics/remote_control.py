@@ -307,6 +307,34 @@ class RemoteControlMechanic(SceneAwareMechanic):
         })
         return base_info
 
+    def bind_explicit(self, bindings: List[Dict[str, Any]]) -> bool:
+        """
+        Bind the mechanic with explicit target mappings.
+
+        Args:
+            bindings: List of binding dicts with keys:
+                - trigger_object: Object that triggers the remote effect
+                - target_object: Object that is affected remotely
+                - target_state: State to toggle on target (default: "is_open")
+
+        Returns:
+            True if bindings were applied successfully
+        """
+        self._mappings.clear()
+        self._explicit_bindings = bindings
+
+        for binding in bindings:
+            trigger = binding.get("trigger_object")
+            target = binding.get("target_object")
+            state = binding.get("target_state", "is_open")
+
+            if trigger and target:
+                self._mappings[trigger] = (target, state)
+
+        self._bound_targets = list(self._mappings.keys())
+        self._is_bound = len(self._mappings) > 0
+        return self._is_bound
+
     def reset(self) -> None:
         """Reset per-episode state."""
         super().reset()
