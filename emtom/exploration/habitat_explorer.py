@@ -513,10 +513,8 @@ class HabitatExplorer:
                     object_descriptions.append(name)
             lines.append(f"Objects: {', '.join(object_descriptions)}")
 
-        # Highlight special items on furniture that can be picked up directly
-        if virtual_objects:
-            for vo in virtual_objects:
-                lines.append(f"\033[93m*** You notice a {vo['name']} sitting on {vo['location']}. You can Pick[{vo['name']}] to grab it. ***\033[0m")
+        # Note: virtual objects (like the key) are already included in the objects list above
+        # Don't highlight them specially - let the agent discover them naturally through exploration
 
         rooms = self.world_adapter.get_room_ids()
         if rooms:

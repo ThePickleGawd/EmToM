@@ -254,6 +254,7 @@ class GameStateManager:
             or None if no tables found
         """
         import random
+        import time
 
         if state is None:
             state = self.state
@@ -273,8 +274,11 @@ class GameStateManager:
         if not tables:
             return state, None
 
-        # Pick a random table
-        chosen_table = random.choice(tables)
+        # Use a time-based seed for truly random table selection
+        # (avoids being affected by global simulation seed)
+        rng = random.Random(int(time.time() * 1000000))
+        rng.shuffle(tables)
+        chosen_table = tables[0]
 
         # Create key spawn info
         key_id = "exploration_key"
