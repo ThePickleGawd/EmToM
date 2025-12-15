@@ -429,7 +429,7 @@ class HabitatExplorer:
             actions_for_video[i] = (ac.action, ac.target or "")
         self._record_frame(obs, actions_for_video)
 
-        # Log step
+        # Log step (surprises are tracked in the surprises array, not in agent_actions)
         self.logger.log_step(
             step=self.step_count,
             agent_actions={
@@ -437,7 +437,6 @@ class HabitatExplorer:
                     "action": ac.action,
                     "target": ac.target,
                     "reasoning": ac.reasoning,
-                    "surprise": ac.surprise,
                 }
                 for aid, ac in agent_actions.items()
             },

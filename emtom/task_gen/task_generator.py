@@ -347,7 +347,9 @@ class TaskGenerator:
 
         # Generate tasks
         tasks = []
-        for i in range(min(max_tasks, len(surprises))):
+        num_to_generate = min(max_tasks, len(surprises))
+        for i in range(num_to_generate):
+            print(f"    Generating task {i+1}/{num_to_generate}...", end=" ", flush=True)
             try:
                 task = self._generate_single_task(
                     scene_id=scene_id,
@@ -361,8 +363,11 @@ class TaskGenerator:
                 )
                 if task:
                     tasks.append(task)
+                    print(f"OK - {task.title[:40]}...")
+                else:
+                    print("SKIP (no valid task)")
             except Exception as e:
-                print(f"  Failed to generate task {i+1}: {e}")
+                print(f"FAIL: {e}")
 
         return tasks
 
