@@ -30,7 +30,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Add project root to path
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -51,14 +51,142 @@ from habitat_llm.agent.env import (
 from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 from habitat_llm.agent import Agent
 
-from emtom.mechanics import (
-    MechanicRegistry,
-    Mechanic,
-    wrap_tools_with_mechanics,
-)
+from emtom import GameStateManager, list_mechanics, MECHANIC_INFO, ActionExecutionResult
 from emtom.tools import get_emtom_tools
-from emtom.actions.custom_actions import EMTOMActionExecutor, EMTOM_ACTIONS
-from emtom.exploration.habitat_explorer import HabitatWorldAdapter, HabitatMechanicWorldState
+from emtom.actions.custom_actions import EMTOM_ACTIONS, EMTOMActionExecutor
+from emtom.exploration.habitat_explorer import HabitatWorldAdapter
+
+
+def interactive_select(
+    title: str,
+    items: List[Dict[str, Any]],
+    default_selected: Optional[List[str]] = None,
+) -> List[str]:
+    """
+    Interactive checkbox-style selection menu.
+
+    Args:
+        title: Title to display
+        items: List of dicts with 'name' and 'description' keys
+        default_selected: Names to select by default
+
+    Returns:
+        List of selected item names
+    """
+    selected = set(default_selected or [])
+
+    while True:
+        # Clear screen and show menu
+        print("\n" + "=" * 60)
+        print(title)
+        print("=" * 60)
+        print("Toggle: type number | Select all: 'a' | Clear: 'c' | Confirm: Enter")
+        print("-" * 60)
+
+        for i, item in enumerate(items, 1):
+            name = item["name"]
+            desc = item.get("description", "")[:40]
+            check = "x" if name in selected else " "
+            print(f"  [{check}] {i}. {name:<20} {desc}")
+
+        print("-" * 60)
+        print(f"Selected: {len(selected)}/{len(items)}")
+
+        try:
+            choice = input("\n> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n[Using current selection]")
+            break
+
+        if choice == "":
+            # Confirm selection
+            break
+        elif choice == "a":
+            # Select all
+            selected = {item["name"] for item in items}
+        elif choice == "c":
+            # Clear all
+            selected = set()
+        elif choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(items):
+                name = items[idx]["name"]
+                if name in selected:
+                    selected.remove(name)
+                else:
+                    selected.add(name)
+            else:
+                print(f"Invalid number. Enter 1-{len(items)}")
+        else:
+            # Try to match by name prefix
+            matches = [item["name"] for item in items if item["name"].lower().startswith(choice)]
+            if len(matches) == 1:
+                name = matches[0]
+                if name in selected:
+                    selected.remove(name)
+                else:
+                    selected.add(name)
+            elif len(matches) > 1:
+                print(f"Ambiguous: {matches}")
+            else:
+                print("Unknown input. Use number, 'a', 'c', or Enter")
+
+    return list(selected)
+
+
+def run_interactive_setup() -> Tuple[List[str], List[str]]:
+    """
+    Run interactive setup to select mechanics and actions.
+
+    Returns:
+        (selected_mechanics, selected_actions)
+    """
+    print("\n" + "=" * 60)
+    print("EMTOM Interactive Setup")
+    print("=" * 60)
+
+    # Get available mechanics
+    mechanic_items = []
+    for name in list_mechanics():
+        info = MECHANIC_INFO.get(name, {})
+        mechanic_items.append({
+            "name": name,
+            "description": info.get("description", "No description"),
+        })
+
+    # Get available actions
+    action_items = []
+    for name, action in EMTOM_ACTIONS.items():
+        action_items.append({
+            "name": name,
+            "description": getattr(action, "description", "Custom action"),
+        })
+
+    # Default selections
+    default_mechanics = ["inverse_state", "remote_control"]
+    default_actions = list(EMTOM_ACTIONS.keys())  # All actions enabled by default
+
+    # Select mechanics
+    selected_mechanics = interactive_select(
+        "Select MECHANICS to enable:",
+        mechanic_items,
+        default_selected=default_mechanics,
+    )
+
+    # Select actions
+    selected_actions = interactive_select(
+        "Select CUSTOM ACTIONS to enable:",
+        action_items,
+        default_selected=default_actions,
+    )
+
+    print("\n" + "-" * 60)
+    print("Configuration complete!")
+    print(f"  Mechanics: {selected_mechanics or '(none)'}")
+    print(f"  Actions: {selected_actions or '(none)'}")
+    print("-" * 60)
+
+    return selected_mechanics, selected_actions
 
 
 @dataclass
@@ -81,14 +209,14 @@ class HumanTestRunner:
         self,
         env_interface: EnvironmentInterface,
         agents: Dict[int, Agent],
-        mechanics: List[Mechanic],
+        game_manager: GameStateManager,
         config: HumanTestConfig,
         task_info: Optional[Dict[str, Any]] = None,
         llm_agents: Optional[List[str]] = None,
     ):
         self.env = env_interface
         self.agents = agents
-        self.mechanics = mechanics
+        self.game_manager = game_manager
         self.config = config
         self.task_info = task_info
 
@@ -101,11 +229,11 @@ class HumanTestRunner:
             else:
                 self.agent_modes[agent_id] = "human"
 
-        # World adapter for mechanics
+        # World adapter for exploration
         self.world_adapter = HabitatWorldAdapter(env_interface, agent_uid=0)
 
-        # Custom EMTOM action executor
-        self.custom_action_executor = EMTOMActionExecutor(env_interface, mechanics)
+        # Custom EMTOM action executor (for actions not handled by game manager)
+        self.custom_action_executor = EMTOMActionExecutor(env_interface)
 
         # LLM client for delegation (lazy loaded)
         self._llm_client = None
@@ -114,12 +242,12 @@ class HumanTestRunner:
         # Action history
         self.action_history: List[Dict[str, Any]] = []
 
+        # Mechanic bindings (set during run_interactive)
+        self._bindings: Dict[str, Any] = {}
+
         # Video recording
         self._dvu = None
         self._setup_video_recording()
-
-        # Wrap agent tools with mechanics
-        self._wrap_tools_with_mechanics()
 
     def _setup_video_recording(self):
         """Setup video recording utilities."""
@@ -136,20 +264,6 @@ class HumanTestRunner:
             )
         except ImportError as e:
             print(f"[Warning] Video utils not available: {e}")
-
-    def _wrap_tools_with_mechanics(self):
-        """Wrap agent tools with mechanics system."""
-        if not self.mechanics:
-            return
-
-        world_state = HabitatMechanicWorldState(self.world_adapter)
-
-        for uid, agent in self.agents.items():
-            agent.tools = wrap_tools_with_mechanics(
-                agent_tools=agent.tools,
-                mechanics=self.mechanics,
-                world_state_adapter=world_state,
-            )
 
     def _get_llm_client(self):
         """Lazy-load LLM client for delegation."""
@@ -171,9 +285,46 @@ class HumanTestRunner:
         print("EMTOM Human Test Mode")
         print("=" * 70)
 
+        # Get entities from Habitat and bind mechanics to real objects
+        print("\nSyncing scene and binding mechanics...")
+        entities = self.world_adapter.get_interactable_entities()
+        print(f"  Found {len(entities)} entities in scene")
+
+        # Set entities on game state for auto-binding
+        state = self.game_manager.get_state()
+        state.entities = entities
+        self.game_manager.set_state(state)
+
+        # Auto-bind mechanics to real objects
+        state, bindings = self.game_manager.auto_bind_mechanics()
+        self._bindings = bindings  # Store for later display
+
+        # Show what was bound
+        if bindings:
+            print("\n" + "-" * 50)
+            print("MECHANIC BINDINGS (test these!):")
+            print("-" * 50)
+            for mech, info in bindings.items():
+                if mech == "hidden_items":
+                    for container, item in info.items():
+                        print(f"  Shake[{container}] -> reveals {item}")
+                elif mech == "inverse_state":
+                    print(f"  inverse_state: Open/Close[{info['target']}] does the OPPOSITE")
+                elif mech == "remote_control":
+                    print(f"  remote_control: Open[{info['trigger']}] -> affects {info['target']}")
+                elif mech == "counting_state":
+                    print(f"  counting_state: Open[{info['target']}] {info['required_count']}x to activate")
+                elif mech == "state_mirroring":
+                    print(f"  state_mirroring: {info['pair'][0]} <-> {info['pair'][1]} stay in sync")
+                elif mech == "conditional_unlock":
+                    print(f"  conditional_unlock: Open[{info['prerequisite']}] first, then {info['target']}")
+                elif mech == "delayed_effect":
+                    print(f"  delayed_effect: Open[{info['target']}] takes {info['delay_steps']} steps")
+            print("-" * 50)
+
         # Show task info if available
         if self.task_info:
-            print(f"Task: {self.task_info.get('title', 'N/A')}")
+            print(f"\nTask: {self.task_info.get('title', 'N/A')}")
             print(f"Description: {self.task_info.get('description', 'N/A')}")
 
         # Show active mechanics
@@ -211,45 +362,51 @@ class HumanTestRunner:
                     print(f"\n[{agent_id} is LLM-controlled]")
                     result = self._run_llm_turn(agent_id, uid)
                 else:
-                    # Human input
-                    try:
-                        command = input(f"\n{agent_id}> ").strip()
-                    except (EOFError, KeyboardInterrupt):
-                        print("\n[Interrupted]")
-                        running = False
-                        break
+                    # Human input loop - control commands don't consume turn
+                    result = None
+                    while result is None:
+                        try:
+                            command = input(f"\n{agent_id}> ").strip()
+                        except (EOFError, KeyboardInterrupt):
+                            print("\n[Interrupted]")
+                            running = False
+                            break
 
-                    if not command:
-                        continue
+                        if not command:
+                            continue
 
-                    # Handle special commands
-                    if command.lower() == "quit":
-                        running = False
+                        # Handle control commands (don't consume turn)
+                        cmd = command.lower()
+                        if cmd == "quit":
+                            running = False
+                            break
+                        elif cmd == "help":
+                            self._display_help()
+                        elif cmd == "status":
+                            self._display_full_status()
+                        elif cmd == "mechanics":
+                            self._display_mechanics(verbose=True)
+                        elif cmd == "bindings":
+                            self._display_bindings()
+                        elif cmd == "history":
+                            self._display_history()
+                        # Action commands (consume turn)
+                        elif cmd == "llm":
+                            result = self._run_llm_turn(agent_id, uid)
+                        else:
+                            result = self._execute_command(agent_id, uid, command)
+
+                    if not running:
                         break
-                    elif command.lower() == "llm":
-                        result = self._run_llm_turn(agent_id, uid)
-                    elif command.lower() == "help":
-                        self._display_help()
-                        continue
-                    elif command.lower() == "status":
-                        self._display_full_status()
-                        continue
-                    elif command.lower() == "mechanics":
-                        self._display_mechanics(verbose=True)
-                        continue
-                    elif command.lower() == "history":
-                        self._display_history()
-                        continue
-                    else:
-                        result = self._execute_command(agent_id, uid, command)
 
                 # Display result
                 if result:
                     self._display_result(agent_id, result)
 
                 # Record frame
-                obs = self.env.get_observations()
-                self._record_frame(obs, {uid: (result.get("action", ""), result.get("target", ""))})
+                if result:
+                    obs = self.env.get_observations()
+                    self._record_frame(obs, {uid: (result.get("action", ""), result.get("target", ""))})
 
         # Save video and cleanup
         self._finish()
@@ -264,58 +421,143 @@ class HumanTestRunner:
 
         print(f"\n--- {agent_id} ({mode}) in {location_str} ---")
 
+        # Get bound targets from bindings
+        bound_targets = set()
+        for mech, info in self._bindings.items():
+            if mech == "hidden_items":
+                bound_targets.update(info.keys())
+            elif isinstance(info, dict):
+                bound_targets.add(info.get("target", ""))
+                bound_targets.add(info.get("trigger", ""))
+                bound_targets.add(info.get("prerequisite", ""))
+                if "pair" in info:
+                    bound_targets.update(info["pair"])
+
         # Get nearby entities
         entities = self.world_adapter.get_interactable_entities()
-        furniture = [e for e in entities if e["type"] == "furniture"]
+
+        # Filter out floor entities, prioritize articulated and bound items
+        furniture = [e for e in entities if e["type"] == "furniture" and not e["name"].startswith("floor_")]
         objects = [e for e in entities if e["type"] == "object"]
 
-        # Show furniture with states
+        # Sort: bound items first, then articulated, then others
+        def sort_key(e):
+            is_bound = e["name"] in bound_targets
+            is_articulated = e.get("is_articulated", False)
+            return (not is_bound, not is_articulated, e["name"])
+
+        furniture.sort(key=sort_key)
+        objects.sort(key=sort_key)
+
+        # Show furniture (more items, mark bound ones with *)
         if furniture:
             furniture_strs = []
-            for f in furniture[:8]:
-                state_parts = []
-                for key, val in f.get("states", {}).items():
-                    if isinstance(val, bool):
-                        state_parts.append(f"{key}={val}")
-                state_str = f" ({', '.join(state_parts)})" if state_parts else ""
-                furniture_strs.append(f"{f['name']}{state_str}")
+            for f in furniture[:12]:
+                name = f["name"]
+                marker = "*" if name in bound_targets else ""
+                furniture_strs.append(f"{name}{marker}")
             print(f"Furniture: {', '.join(furniture_strs)}")
+            if len(furniture) > 12:
+                print(f"  ... and {len(furniture) - 12} more (type 'status' for full list)")
 
-        # Show objects
+        # Show objects (mark bound ones with *)
         if objects:
-            object_names = [o["name"] for o in objects[:8]]
-            print(f"Objects: {', '.join(object_names)}")
+            object_strs = [f"{o['name']}{'*' if o['name'] in bound_targets else ''}" for o in objects[:8]]
+            print(f"Objects: {', '.join(object_strs)}")
 
         # Show rooms
         rooms = self.world_adapter.get_room_ids()
         if rooms:
             print(f"Rooms: {', '.join(rooms)}")
 
+        # Show inventory
+        state = self.game_manager.get_state()
+        inventory = state.agent_inventory.get(agent_id, [])
+        if inventory:
+            print(f"Inventory: {', '.join(inventory)}")
+
     def _display_mechanics(self, verbose: bool = False):
         """Display active mechanics."""
         print("\nMechanics Active:")
-        if not self.mechanics:
+        debug_info = self.game_manager.get_debug_info()
+        active = debug_info.get("active_mechanics", [])
+
+        if not active:
             print("  (none)")
             return
 
-        for mechanic in self.mechanics:
+        for mech_name in active:
+            mech_info = MECHANIC_INFO.get(mech_name, {})
             if verbose:
-                debug_state = mechanic.get_hidden_state_for_debug()
-                print(f"  {mechanic.name}:")
-                print(f"    Description: {mechanic.description}")
-                print(f"    Bound targets: {debug_state.get('bound_targets', [])}")
-                if "mappings" in debug_state:
-                    print(f"    Mappings: {debug_state['mappings']}")
-                if "target_thresholds" in debug_state:
-                    print(f"    Thresholds: {debug_state['target_thresholds']}")
-                if "interaction_counts" in debug_state:
-                    counts = debug_state["interaction_counts"]
-                    if counts:
-                        print(f"    Interaction counts: {counts}")
+                print(f"  {mech_name}:")
+                print(f"    Description: {mech_info.get('description', 'Unknown')}")
+
+                # Show mechanic-specific state
+                if mech_name == "inverse_state":
+                    targets = debug_info.get("inverse_objects", [])
+                    print(f"    Inverse targets: {targets}")
+                elif mech_name == "remote_control":
+                    mappings = debug_info.get("remote_mappings", {})
+                    print(f"    Remote mappings: {mappings}")
+                elif mech_name == "state_mirroring":
+                    pairs = debug_info.get("mirror_pairs", [])
+                    print(f"    Mirror pairs: {pairs}")
+                elif mech_name == "counting_state":
+                    counts = debug_info.get("interaction_counts", {})
+                    print(f"    Interaction counts: {counts}")
+                elif mech_name == "sequence_lock":
+                    progress = debug_info.get("sequence_progress", {})
+                    print(f"    Sequence progress: {progress}")
+                elif mech_name == "conditional_unlock":
+                    unlocked = debug_info.get("unlocked_targets", [])
+                    print(f"    Unlocked: {unlocked}")
             else:
-                debug_state = mechanic.get_hidden_state_for_debug()
-                targets = debug_state.get("bound_targets", [])
-                print(f"  {mechanic.name}: {targets}")
+                desc = mech_info.get("description", "")[:50]
+                print(f"  {mech_name}: {desc}...")
+
+    def _display_bindings(self):
+        """Display what objects mechanics are bound to (what to test)."""
+        print("\n" + "=" * 50)
+        print("MECHANIC BINDINGS - Test These Commands!")
+        print("=" * 50)
+
+        if not self._bindings:
+            print("  (no bindings - mechanics not bound to objects)")
+            return
+
+        for mech, info in self._bindings.items():
+            if mech == "hidden_items":
+                for container, item in info.items():
+                    print(f"\n  SHAKE TEST:")
+                    print(f"    Command: Shake[{container}]")
+                    print(f"    Expected: '{item}' falls out")
+            elif mech == "inverse_state":
+                print(f"\n  INVERSE STATE TEST:")
+                print(f"    Command: Open[{info['target']}]")
+                print(f"    Expected: It CLOSES instead (opposite)")
+            elif mech == "remote_control":
+                print(f"\n  REMOTE CONTROL TEST:")
+                print(f"    Command: Open[{info['trigger']}]")
+                print(f"    Expected: '{info['target']}' opens instead")
+            elif mech == "counting_state":
+                print(f"\n  COUNTING STATE TEST:")
+                print(f"    Command: Open[{info['target']}] (repeat {info['required_count']}x)")
+                print(f"    Expected: Only works after {info['required_count']} tries")
+            elif mech == "state_mirroring":
+                print(f"\n  STATE MIRRORING TEST:")
+                print(f"    Command: Open[{info['pair'][0]}]")
+                print(f"    Expected: '{info['pair'][1]}' also opens")
+            elif mech == "conditional_unlock":
+                print(f"\n  CONDITIONAL UNLOCK TEST:")
+                print(f"    Step 1: Open[{info['prerequisite']}]")
+                print(f"    Step 2: Open[{info['target']}]")
+                print(f"    Expected: Target only works after prerequisite")
+            elif mech == "delayed_effect":
+                print(f"\n  DELAYED EFFECT TEST:")
+                print(f"    Command: Open[{info['target']}]")
+                print(f"    Expected: Takes {info['delay_steps']} steps to take effect")
+
+        print("\n" + "=" * 50)
 
     def _display_help(self):
         """Display help message."""
@@ -334,9 +576,11 @@ class HumanTestRunner:
         print("\nCustom EMTOM Actions:")
         print("  Hide[object]        - Hide object from view")
         print("  Inspect[target]     - Examine object properties")
+        print("  Shake[object]       - Shake object to reveal hidden items")
         print("  WriteMessage[furniture] - Leave a message")
 
         print("\nControl Commands:")
+        print("  bindings            - Show what to test (mechanic bindings)")
         print("  llm                 - Let LLM take this turn")
         print("  status              - Show full world state")
         print("  mechanics           - Show mechanic details")
@@ -381,6 +625,104 @@ class HumanTestRunner:
             obs = entry.get("observation", "")[:60]
             print(f"  {agent}: {action}[{target}] -> {obs}...")
 
+    def _check_mechanics(self, action_name: str, target: str) -> Optional[Dict[str, Any]]:
+        """
+        Check if any mechanic should transform this action.
+
+        Returns dict with:
+        - mechanic: name of the mechanic
+        - actual_action: action to actually execute
+        - actual_target: target to actually affect
+        - observation: description of what happened
+        """
+        state = self.game_manager.get_state()
+
+        # Inverse state: open becomes close, close becomes open
+        if target in state.inverse_objects:
+            inverse_map = {"Open": "Close", "Close": "Open"}
+            if action_name in inverse_map:
+                opposite = inverse_map[action_name]
+                return {
+                    "mechanic": "inverse_state",
+                    "actual_action": opposite,
+                    "actual_target": target,
+                    "observation": f"You try to {action_name.lower()} {target}, but it {opposite.lower()}s instead!",
+                }
+
+        # Remote control: acting on trigger affects a different target
+        if target in state.remote_mappings:
+            remote_target, remote_state = state.remote_mappings[target]
+            return {
+                "mechanic": "remote_control",
+                "actual_action": action_name,
+                "actual_target": remote_target,
+                "observation": f"You {action_name.lower()} {target}, but {remote_target} responds instead!",
+            }
+
+        # Counting state: need N interactions before it works
+        if target in state.interaction_counts:
+            current = state.interaction_counts[target]
+            required = state.object_properties.get(target, {}).get("required_count", 3)
+            new_count = current + 1
+            state.interaction_counts[target] = new_count
+            self.game_manager.set_state(state)
+
+            if new_count < required:
+                return {
+                    "mechanic": "counting_state",
+                    "actual_action": action_name,
+                    "actual_target": target,
+                    "observation": f"You {action_name.lower()} {target}. It doesn't respond yet ({new_count}/{required}).",
+                }
+            else:
+                return {
+                    "mechanic": "counting_state",
+                    "actual_action": action_name,
+                    "actual_target": target,
+                    "observation": f"You {action_name.lower()} {target}. After {required} attempts, it finally responds!",
+                }
+
+        # State mirroring: one object mirrors another
+        for obj1, obj2, state_prop in state.mirror_pairs:
+            if target == obj1:
+                return {
+                    "mechanic": "state_mirroring",
+                    "actual_action": action_name,
+                    "actual_target": target,
+                    "observation": f"You {action_name.lower()} {target}. {obj2} also {action_name.lower()}s in sync!",
+                }
+            elif target == obj2:
+                return {
+                    "mechanic": "state_mirroring",
+                    "actual_action": action_name,
+                    "actual_target": target,
+                    "observation": f"You {action_name.lower()} {target}. {obj1} also {action_name.lower()}s in sync!",
+                }
+
+        # Conditional unlock: check if prerequisite was done
+        prereq = state.object_properties.get(target, {}).get("prerequisite")
+        if prereq and target not in state.unlocked_targets:
+            return {
+                "mechanic": "conditional_unlock",
+                "actual_action": action_name,
+                "actual_target": target,
+                "observation": f"You try to {action_name.lower()} {target}, but it seems locked. Maybe something else needs to happen first.",
+            }
+
+        # Check if this action unlocks something
+        unlocks = state.object_properties.get(target, {}).get("unlocks")
+        if unlocks:
+            state.unlocked_targets.add(unlocks)
+            self.game_manager.set_state(state)
+            return {
+                "mechanic": "conditional_unlock",
+                "actual_action": action_name,
+                "actual_target": target,
+                "observation": f"You {action_name.lower()} {target}. You hear a click - something else is now accessible.",
+            }
+
+        return None
+
     def _execute_command(self, agent_id: str, uid: int, command: str) -> Dict[str, Any]:
         """Execute a human command."""
         # Parse command: Action[target]
@@ -403,32 +745,39 @@ class HumanTestRunner:
         if action_name in EMTOM_ACTIONS:
             return self._execute_custom_action(agent_id, action_name, target)
 
+        # Check for mechanics on this action/target
+        mechanic_effect = self._check_mechanics(action_name, target)
+
+        # If mechanic transforms the action, apply it
+        if mechanic_effect:
+            actual_action = mechanic_effect.get("actual_action", action_name)
+            actual_target = mechanic_effect.get("actual_target", target)
+            print(f"  [Mechanic: {mechanic_effect['mechanic']}]")
+        else:
+            actual_action = action_name
+            actual_target = target
+
         # Execute via agent tools
         agent = self.agents.get(uid)
         if not agent:
             return {"observation": f"No agent with uid {uid}"}
 
-        if action_name not in agent.tools:
+        if actual_action not in agent.tools:
             available = list(agent.tools.keys())
-            return {"observation": f"Unknown action: {action_name}. Available: {available}"}
+            return {"observation": f"Unknown action: {actual_action}. Available: {available}"}
 
         # Get observations
         obs = self.env.get_observations()
 
-        # Execute the tool
+        # Execute the tool (with transformed action/target if mechanic applied)
         try:
             low_level_action, response = agent.process_high_level_action(
-                action_name, target, obs
+                actual_action, actual_target, obs
             )
 
             # If perception tool (returns None), just return response
             if low_level_action is None:
-                result = {
-                    "action": action_name,
-                    "target": target,
-                    "observation": response,
-                    "success": True,
-                }
+                obs_text = response
             else:
                 # Execute motor skill until done
                 skill_steps = 0
@@ -437,23 +786,36 @@ class HumanTestRunner:
                 while skill_steps < max_steps:
                     raw_obs, reward, done, info = self.env.step({uid: low_level_action})
                     parsed_obs = self.env.parse_observations(raw_obs)
-                    self._record_frame(parsed_obs, {uid: (action_name, target)})
+                    self._record_frame(parsed_obs, {uid: (actual_action, actual_target)})
                     skill_steps += 1
 
                     # Get next action
                     low_level_action, response = agent.process_high_level_action(
-                        action_name, target, raw_obs
+                        actual_action, actual_target, raw_obs
                     )
                     if low_level_action is None:
                         break
 
-                result = {
-                    "action": action_name,
-                    "target": target,
-                    "observation": response or f"Executed {action_name}[{target}]",
-                    "success": True,
-                    "steps": skill_steps,
-                }
+                obs_text = response or f"Executed {actual_action}[{actual_target}]"
+
+            # Build observation with mechanic description
+            if mechanic_effect:
+                mechanic_obs = mechanic_effect.get("observation", "")
+                if mechanic_obs:
+                    obs_text = mechanic_obs
+                elif actual_action != action_name or actual_target != target:
+                    # Describe what actually happened
+                    obs_text = f"You tried to {action_name} {target}, but {actual_action}d {actual_target} instead. {obs_text}"
+
+            result = {
+                "action": action_name,
+                "target": target,
+                "observation": obs_text,
+                "success": True,
+            }
+
+            if mechanic_effect:
+                result["mechanic"] = mechanic_effect["mechanic"]
 
             # Record in history
             self.action_history.append({
@@ -472,36 +834,32 @@ class HumanTestRunner:
             }
 
     def _execute_custom_action(self, agent_id: str, action_name: str, target: str) -> Dict[str, Any]:
-        """Execute a custom EMTOM action."""
-        entities = self.world_adapter.get_interactable_entities()
-        rooms = self.world_adapter.get_room_ids()
+        """Execute a custom EMTOM action through the GameStateManager."""
+        # Sync state from Habitat first
+        self.game_manager.sync_from_habitat()
 
-        world_state = {
-            "agent_location": self.world_adapter.get_agent_location(agent_id),
-            "rooms": rooms,
-            "entities": entities,
-            "entity_details": {
-                e["name"]: {
-                    "properties": e.get("properties", {}),
-                    "states": e.get("states", {}),
-                }
-                for e in entities
-            },
-        }
-
-        custom_result = self.custom_action_executor.execute(
-            action_name, agent_id, target, world_state
+        # Execute action through game manager (applies mechanics)
+        state, exec_result = self.game_manager.apply_action(
+            action_name, agent_id, target
         )
+
+        # Tick time-based effects
+        state, triggered = self.game_manager.tick()
+        if triggered:
+            print(f"[DELAYED EFFECTS] {', '.join(triggered)}")
 
         result = {
             "action": action_name,
             "target": target,
-            "observation": custom_result.observation,
-            "success": custom_result.success,
+            "observation": exec_result.observation,
+            "success": exec_result.success,
         }
 
-        if custom_result.surprise_trigger:
-            result["surprise"] = custom_result.surprise_trigger
+        if exec_result.surprise_trigger:
+            result["surprise"] = exec_result.surprise_trigger
+
+        if exec_result.spawned_items:
+            result["spawned"] = exec_result.spawned_items
 
         self.action_history.append({
             "agent_id": agent_id,
@@ -633,14 +991,8 @@ def load_task(task_file: str) -> Dict[str, Any]:
 def parse_extra_args():
     """Parse extra CLI arguments before Hydra."""
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--mechanics", nargs="*", default=None,
-                        help="Mechanics to enable (e.g., inverse_state remote_control)")
     parser.add_argument("--task", type=str, default=None,
-                        help="Task file to load")
-    parser.add_argument("--use-task-mechanics", action="store_true",
-                        help="Use mechanics from task file bindings")
-    parser.add_argument("--llm-agents", nargs="*", default=None,
-                        help="Agents to make LLM-controlled (e.g., agent_1)")
+                        help="Task file to load (skips interactive setup)")
 
     # Parse known args, let Hydra handle the rest
     args, remaining = parser.parse_known_args()
@@ -720,51 +1072,43 @@ def main(config: DictConfig):
         print("ERROR: No agents created!")
         return
 
-    # Setup mechanics
-    print("\nSetting up mechanics...")
-    mechanics: List[Mechanic] = []
+    # Setup GameStateManager
+    print("\nSetting up GameStateManager...")
+    game_manager = GameStateManager(env_interface)
     task_info = None
 
-    # Load task if specified
+    # Build task data for game manager initialization
+    task_data = {"mechanics": [], "enabled_actions": None}
+
+    # Load task if specified (skips interactive)
     if extra_args and extra_args.task:
         task_info = load_task(extra_args.task)
         if task_info:
             print(f"Loaded task: {task_info.get('title', 'N/A')}")
 
-            # Use task mechanics if requested
-            if extra_args.use_task_mechanics and task_info.get("mechanic_bindings"):
-                bindings = task_info["mechanic_bindings"]
-                mechanics = MechanicRegistry.instantiate_from_bindings(bindings)
-                print(f"  Loaded {len(mechanics)} mechanics from task bindings")
+            # Use mechanics from task
+            if task_info.get("mechanic_bindings"):
+                task_data["mechanics"] = task_info["mechanic_bindings"]
+                print(f"  Mechanics: {len(task_data['mechanics'])} from task")
 
-    # Otherwise use CLI-specified mechanics
-    if not mechanics and extra_args and extra_args.mechanics:
-        for mech_name in extra_args.mechanics:
-            try:
-                mechanic = MechanicRegistry.instantiate(mech_name)
-                mechanics.append(mechanic)
-                print(f"  Added {mech_name}")
-            except KeyError:
-                print(f"  Warning: Unknown mechanic '{mech_name}'")
-                print(f"  Available: {MechanicRegistry.list_all()}")
+            # Copy hidden items from task
+            if task_info.get("hidden_items"):
+                task_data["hidden_items"] = task_info["hidden_items"]
 
-    # Default mechanics if none specified
-    if not mechanics:
-        print("  No mechanics specified - using defaults")
-        mechanics = [
-            MechanicRegistry.instantiate("inverse_state"),
-            MechanicRegistry.instantiate("remote_control"),
-        ]
-        print(f"  Added: {[m.name for m in mechanics]}")
+            # Copy goals from task
+            if task_info.get("goals"):
+                task_data["goals"] = task_info["goals"]
 
-    # Bind mechanics to scene
-    world_adapter = HabitatWorldAdapter(env_interface, agent_uid=0)
-    world_state = HabitatMechanicWorldState(world_adapter)
+    # Interactive mode is DEFAULT
+    else:
+        selected_mechanics, selected_actions = run_interactive_setup()
+        for mech_name in selected_mechanics:
+            task_data["mechanics"].append({"mechanic_type": mech_name})
+        task_data["enabled_actions"] = selected_actions
 
-    for mechanic in mechanics:
-        mechanic.reset()
-        if hasattr(mechanic, 'bind_to_scene'):
-            mechanic.bind_to_scene(world_state)
+    # Initialize game state from task data
+    game_manager.initialize_from_task(task_data)
+    print(f"  Active mechanics: {game_manager.get_debug_info()['active_mechanics']}")
 
     # Get output directory
     output_dir = config.paths.results_dir if hasattr(config, 'paths') else "data/emtom/human_test"
@@ -776,17 +1120,13 @@ def main(config: DictConfig):
         output_dir=output_dir,
     )
 
-    # Get LLM agents
-    llm_agents = extra_args.llm_agents if extra_args else None
-
     # Create and run test runner
     runner = HumanTestRunner(
         env_interface=env_interface,
         agents=agents,
-        mechanics=mechanics,
+        game_manager=game_manager,
         config=test_config,
         task_info=task_info,
-        llm_agents=llm_agents,
     )
 
     runner.run_interactive()

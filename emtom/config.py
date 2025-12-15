@@ -1,7 +1,7 @@
 """
 Configuration loading for EMTOM benchmark.
 
-Loads YAML configs and instantiates mechanics, exploration settings, etc.
+Loads YAML configs for mechanics, exploration settings, etc.
 """
 
 import os
@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Union
 
 import yaml
 
-from emtom.mechanics.mechanic import Mechanic
 from emtom.exploration import ExplorationConfig
+from emtom.mechanics import list_mechanics, MECHANIC_INFO
 
 # Default config directory
 CONFIG_DIR = Path(__file__).parent / "conf"
@@ -57,25 +57,51 @@ def find_config(name: str, config_type: str) -> Path:
 
 def load_mechanics_config(
     config: Union[str, Path, Dict[str, Any]] = "default"
-) -> List[Mechanic]:
+) -> List[Dict[str, Any]]:
     """
-    Load mechanics from a config file or dict.
+    Load mechanics configuration from a config file or dict.
+
+    Returns a list of mechanic binding dicts that can be passed
+    to GameStateManager.initialize_from_task().
 
     Args:
         config: Config name, path, or dict
 
     Returns:
-        List of instantiated Mechanic objects
+        List of mechanic binding dicts
     """
-    from emtom.mechanics.registry import MechanicRegistry
-
     if isinstance(config, dict):
         config_data = config
     else:
         config_path = find_config(str(config), "mechanics")
         config_data = load_yaml(config_path)
 
-    return MechanicRegistry.instantiate_from_config(config_data)
+    # Extract mechanic bindings from config
+    mechanics = config_data.get("mechanics", [])
+
+    # Normalize to list of dicts
+    result = []
+    for mech in mechanics:
+        if isinstance(mech, str):
+            result.append({"mechanic_type": mech})
+        elif isinstance(mech, dict):
+            # Ensure mechanic_type is set
+            if "mechanic_type" not in mech and "name" in mech:
+                mech["mechanic_type"] = mech["name"]
+            result.append(mech)
+
+    return result
+
+
+def get_available_mechanics() -> List[str]:
+    """Get list of all available mechanic types."""
+    return list_mechanics()
+
+
+def get_mechanic_description(name: str) -> str:
+    """Get description of a mechanic."""
+    info = MECHANIC_INFO.get(name, {})
+    return info.get("description", "Unknown mechanic")
 
 
 def load_exploration_config(
@@ -183,8 +209,8 @@ class EMTOMConfig:
         self._exploration_data = load_exploration_config(exploration_config)
         self._task_gen_data = load_task_gen_config(task_gen_config)
 
-    def get_mechanics(self) -> List[Mechanic]:
-        """Get instantiated mechanics."""
+    def get_mechanics_bindings(self) -> List[Dict[str, Any]]:
+        """Get mechanic bindings for GameStateManager."""
         return load_mechanics_config(self._mechanics_data)
 
     def get_exploration_config(self) -> ExplorationConfig:

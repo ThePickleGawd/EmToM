@@ -40,7 +40,8 @@ from habitat_llm.utils import cprint, setup_config, fix_config
 
 from emtom.task_gen import GeneratedTask
 from emtom.tools import get_emtom_tools
-from emtom.mechanics import MechanicRegistry, wrap_tools_with_mechanics
+from emtom import GameStateManager, list_mechanics
+from emtom.exploration.habitat_explorer import HabitatWorldAdapter
 
 # Import CommunicationTool for agent-to-agent messaging
 from habitat_llm.tools.perception.communication_tool import CommunicationTool
@@ -154,17 +155,40 @@ def main(config: DictConfig) -> None:
     # Run first task
     task = tasks[0]
 
-    # Setup mechanics from task bindings using unified mechanics system
-    mechanics = []
+    # Setup GameStateManager with mechanics from task
+    cprint("\nSetting up GameStateManager with mechanics...", "blue")
+    game_manager = GameStateManager(env_interface)
+
+    # Convert task to mechanics initialization format
     if task.mechanic_bindings:
-        # Convert MechanicBinding objects to dicts for the registry
-        bindings_dicts = [b.to_dict() for b in task.mechanic_bindings]
-        mechanics = MechanicRegistry.instantiate_from_bindings(bindings_dicts)
-        cprint(f"\nMechanics loaded from task bindings:", "green")
+        task_data = {
+            "mechanics": [
+                {"mechanic_type": b.mechanic_type, **b.to_dict()}
+                for b in task.mechanic_bindings
+            ]
+        }
+        game_manager.initialize_from_task(task_data)
+        cprint(f"Mechanics loaded from task bindings:", "green")
         for b in task.mechanic_bindings:
             cprint(f"  - {b.mechanic_type}: {b.trigger_object} -> {b.target_object or 'self'}", "green")
     else:
-        cprint(f"\nNo mechanic bindings in task - mechanics will not be active", "yellow")
+        # Use all mechanics and auto-bind
+        all_mechanics = list_mechanics()
+        task_data = {"mechanics": [{"mechanic_type": m} for m in all_mechanics]}
+        game_manager.initialize_from_task(task_data)
+        cprint(f"No mechanic bindings in task - using auto-bind with all mechanics", "yellow")
+
+    # Get entities and auto-bind if needed
+    world_adapter = HabitatWorldAdapter(env_interface, agent_uid=0)
+    entities = world_adapter.get_interactable_entities()
+    state = game_manager.get_state()
+    state.entities = entities
+    game_manager.set_state(state)
+
+    if not task.mechanic_bindings:
+        state, bindings = game_manager.auto_bind_mechanics()
+        if bindings:
+            cprint(f"Auto-bound mechanics: {bindings}", "green")
 
     # Inject EMTOM tools and CommunicationTool into each agent
     cprint("\nInjecting tools into agents...", "blue")
@@ -188,14 +212,6 @@ def main(config: DictConfig) -> None:
         comm_tool.set_environment(env_interface)
         agent.tools["Communicate"] = comm_tool
         cprint(f"  Added Communicate to agent_{agent_uid}", "green")
-
-        # Wrap tools with unified mechanics system if mechanics are active
-        if mechanics:
-            agent.tools = wrap_tools_with_mechanics(
-                agent_tools=agent.tools,
-                mechanics=mechanics,
-                world_state_adapter=None,  # TODO: Add world state adapter if needed
-            )
 
     # Print agent info
     cprint(f"\nAgents: {eval_runner.agent_list}", "blue")

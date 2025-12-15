@@ -9,7 +9,6 @@ Videos are generated showing the exploration process.
 
 Usage:
     python run_habitat_exploration.py --steps 50
-    python run_habitat_exploration.py evaluation.save_video=true
 """
 
 import os
@@ -17,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-# Add project root to path (handles running from any directory)
+# Add project root to path
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
@@ -48,15 +47,11 @@ def run_exploration_loop(env_interface, config, max_steps=50, seed=42):
     from emtom.exploration.habitat_explorer import (
         HabitatExplorer,
         HabitatExplorationConfig,
+        HabitatWorldAdapter,
     )
-    from emtom.exploration.curiosity import (
-        CuriosityModel,
-    )
-    from emtom.mechanics import (
-        InverseStateMechanic,
-        RemoteControlMechanic,
-        CountingStateMechanic,
-    )
+    from emtom.exploration.curiosity import CuriosityModel
+    from emtom.exploration.surprise_detector import SurpriseDetector
+    from emtom import GameStateManager, list_mechanics
     from emtom.tools import get_emtom_tools
     from habitat_llm.agent import Agent
 
@@ -76,8 +71,6 @@ def run_exploration_loop(env_interface, config, max_steps=50, seed=42):
     # Create Agent with partnr tools
     print("\nCreating Agent with partnr tools...")
     agent = None
-
-    # Try to find agent config in various locations
     agent_conf = None
 
     # Check config.agents (from root config)
@@ -117,37 +110,43 @@ def run_exploration_loop(env_interface, config, max_steps=50, seed=42):
             print(f"  Failed to create agent: {e}")
             agent = None
     else:
-        print("  WARNING: No agent config found - tools will not be available")
-        print(f"  config.agents exists: {hasattr(config, 'agents')}")
-        if hasattr(config, 'agents'):
-            print(f"  config.agents keys: {list(config.agents.keys()) if config.agents else 'empty'}")
+        print("  WARNING: No agent config found")
 
-    # Setup mechanics
-    print("\nSetting up mechanics...")
-    mechanics = [
-        InverseStateMechanic(max_targets=2),
-        RemoteControlMechanic(num_mappings=2),
-        CountingStateMechanic(required_count=3, max_targets=2),
-    ]
-    for m in mechanics:
-        print(f"  - {m.name}: {m.description}")
+    # Setup GameStateManager with mechanics
+    print("\nSetting up GameStateManager...")
+    game_manager = GameStateManager(env_interface)
 
-    # Setup LLM client (required for both curiosity and surprise detection)
+    # Use all available mechanics for exploration
+    all_mechanics = list_mechanics()
+    task_data = {
+        "mechanics": [{"mechanic_type": m} for m in all_mechanics]
+    }
+    game_manager.initialize_from_task(task_data)
+    print(f"  Active mechanics: {all_mechanics}")
+
+    # Get entities and auto-bind mechanics
+    world_adapter = HabitatWorldAdapter(env_interface, agent_uid=0)
+    entities = world_adapter.get_interactable_entities()
+    state = game_manager.get_state()
+    state.entities = entities
+    game_manager.set_state(state)
+
+    state, bindings = game_manager.auto_bind_mechanics()
+    print(f"  Bindings: {bindings}")
+
+    # Setup LLM client
     print("\nSetting up LLM client...")
     from habitat_llm.llm import instantiate_llm
     llm_client = instantiate_llm("openai_chat")
     print(f"  Using model: {llm_client.generation_params.model}")
 
-    # Pass LLM to agent tools (required for perception tools like FindObjectTool)
+    # Pass LLM to agent tools
     if agent is not None:
         print("  Passing LLM to agent tools...")
         agent.pass_llm_to_tools(llm_client)
 
-    # Setup curiosity model (LLM-based) with YAML config
+    # Setup curiosity model
     print("\nSetting up curiosity model...")
-    from emtom.exploration.surprise_detector import SurpriseDetector
-
-    # Get LLM config for tags (if available from planner config)
     llm_config = None
     if hasattr(config, 'evaluation') and hasattr(config.evaluation, 'agents'):
         agent_list = list(config.evaluation.agents.values())
@@ -155,9 +154,9 @@ def run_exploration_loop(env_interface, config, max_steps=50, seed=42):
             llm_config = agent_list[0].planner.llm
 
     curiosity = CuriosityModel(llm_client, llm_config=llm_config)
-    print("  LLM-guided exploration enabled (using YAML config)")
+    print("  LLM-guided exploration enabled")
 
-    # Setup surprise detector (LLM-based)
+    # Setup surprise detector
     print("\nSetting up surprise detector...")
     surprise = SurpriseDetector(llm_client)
     print("  LLM-based surprise detection enabled")
@@ -177,11 +176,11 @@ def run_exploration_loop(env_interface, config, max_steps=50, seed=42):
         save_fpv=True,
     )
 
-    # Create explorer
+    # Create explorer with new GameStateManager
     print("\nCreating Habitat explorer...")
     explorer = HabitatExplorer(
         env_interface=env_interface,
-        mechanics=mechanics,
+        game_manager=game_manager,
         curiosity_model=curiosity,
         surprise_detector=surprise,
         agent=agent,
@@ -212,7 +211,7 @@ def run_exploration_loop(env_interface, config, max_steps=50, seed=42):
     print(f"Actions per agent: {stats.get('actions_per_agent', {})}")
     print(f"Unique actions: {stats.get('unique_actions', 0)}")
 
-    # Print messages (mechanic binding info)
+    # Print mechanic bindings
     if episode_data.get("messages"):
         print("\nMechanic binding info:")
         for msg in episode_data["messages"][:10]:
