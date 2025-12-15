@@ -1,6 +1,6 @@
 #!/bin/bash
 # EMTOM Benchmark Pipeline
-# Usage: ./emtom/run_emtom.sh [exploration|generate|benchmark|all]
+# Usage: ./emtom/run_emtom.sh <command> [task_type] [options]
 
 set -e
 
@@ -21,7 +21,7 @@ LLM_AGENTS=""
 print_usage() {
     echo "EMTOM Benchmark Pipeline"
     echo ""
-    echo "Usage: ./emtom/run_emtom.sh <command> [options]"
+    echo "Usage: ./emtom/run_emtom.sh <command> [task_type] [options]"
     echo ""
     echo "Commands:"
     echo "  exploration    Run LLM-guided exploration in Habitat"
@@ -30,11 +30,12 @@ print_usage() {
     echo "  test           Human-in-the-loop testing mode (manual command input)"
     echo "  all            Run full pipeline: exploration -> generate -> benchmark"
     echo ""
+    echo "Task Type (for generate/all commands):"
+    echo "  1              Theory of Mind tasks (default)"
+    echo "  2              Regular tasks"
+    echo ""
     echo "Exploration Options:"
     echo "  --steps N            Number of exploration steps (default: $EXPLORATION_STEPS)"
-    echo ""
-    echo "Task Generation Options:"
-    echo "  --task-type N        1=Theory of Mind (default), 2=Regular tasks"
     echo ""
     echo "Benchmark Options:"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
@@ -47,11 +48,12 @@ print_usage() {
     echo ""
     echo "Examples:"
     echo "  ./emtom/run_emtom.sh exploration --steps 30"
-    echo "  ./emtom/run_emtom.sh generate"
-    echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000 --max-llm-calls 15"
+    echo "  ./emtom/run_emtom.sh generate 1              # Generate ToM tasks"
+    echo "  ./emtom/run_emtom.sh generate 2              # Generate regular tasks"
+    echo "  ./emtom/run_emtom.sh all 1                   # Full pipeline with ToM tasks"
+    echo "  ./emtom/run_emtom.sh all 2                   # Full pipeline with regular tasks"
+    echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
-    echo "  ./emtom/run_emtom.sh test --task data/emtom/tasks/emtom_tom_test.json"
-    echo "  ./emtom/run_emtom.sh all --steps 50 --max-sim-steps 2000"
 }
 
 run_exploration() {
@@ -82,8 +84,7 @@ run_generate() {
     echo "=============================================="
     echo "Running EMTOM Task Generation"
     echo "=============================================="
-    echo "Task Type: $TASK_TYPE_NAME"
-    echo "(use --task-type 2 for regular tasks)"
+    echo "Task Type: $TASK_TYPE_NAME (type $TASK_TYPE)"
     echo "=============================================="
     echo ""
     python emtom/examples/generate_tasks.py \
@@ -159,6 +160,11 @@ while [[ $# -gt 0 ]]; do
         exploration|generate|benchmark|test|all)
             COMMAND=$1
             shift
+            # Check if next argument is a task type (1 or 2)
+            if [[ $# -gt 0 && "$1" =~ ^[12]$ ]]; then
+                TASK_TYPE=$1
+                shift
+            fi
             ;;
         --max-sim-steps)
             MAX_SIM_STEPS=$2
@@ -170,10 +176,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --steps)
             EXPLORATION_STEPS=$2
-            shift 2
-            ;;
-        --task-type)
-            TASK_TYPE=$2
             shift 2
             ;;
         --mechanics)
