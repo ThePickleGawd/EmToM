@@ -84,6 +84,11 @@ MECHANIC_INFO = {
         "category": "conditional",
         "setup_keys": ["trigger_object", "sequence"],
     },
+    "key_locked": {
+        "description": "Objects with codes require matching key to open",
+        "category": "conditional",
+        "setup_keys": [],
+    },
 }
 
 
@@ -522,6 +527,79 @@ def handle_sequence_lock(
     return no_effect(state)
 
 
+def handle_key_locked(
+    action_name: str,
+    agent_id: str,
+    target: Optional[str],
+    state: EMTOMGameState,
+) -> HandlerResult:
+    """
+    Key Locked: Objects with number codes require a matching key to open.
+
+    - Doors with codes (e.g., "cabinet_3 [#127]") can only be opened
+      with a key that has the matching code (e.g., "key [#127]")
+    - Doors without codes open normally
+    - Agent must discover this relationship themselves
+
+    Setup in state:
+        state.key_locked_objects = {"cabinet_3": "127", "door_1": "42"}
+        Agent inventory might have: ["key [#127]", "key [#42]"]
+    """
+    if not target:
+        return no_effect(state)
+
+    # Only applies to open/close actions
+    action_lower = action_name.lower()
+    if action_lower not in ["open"]:
+        return no_effect(state)
+
+    # Target may include the code suffix (e.g., "cabinet_3 [#127]")
+    # Extract the base name for lookup
+    import re
+    base_target = re.sub(r'\s*\[#\d+\]$', '', target)
+
+    # Check if target is key-locked (has a code)
+    required_code = state.key_locked_objects.get(base_target)
+    if not required_code:
+        # No code on this door - opens normally
+        return no_effect(state)
+
+    # Door has a code - check if agent has a key with matching code
+    agent_items = state.agent_inventory.get(agent_id, [])
+
+    # Look for a key with matching code in inventory
+    has_matching_key = False
+    for item in agent_items:
+        # Keys are stored with their code like "key [#127]" or just the code
+        if "key" in item.lower():
+            # Extract code from key name (format: "key [#CODE]")
+            if f"[#{required_code}]" in item:
+                has_matching_key = True
+                break
+
+    if has_matching_key:
+        # Key matches - allow the action
+        return HandlerResult(
+            applies=True,
+            state=state,
+            observation=f"You use your key to unlock {base_target} and open it.",
+            success=True,
+            effects=[f"unlocked_with_key={required_code}"],
+            actual_action=action_name,
+            actual_target=base_target,  # Use base target for Habitat action
+        )
+    else:
+        # No matching key - block the action (don't hint about needing a key)
+        return HandlerResult(
+            applies=True,
+            state=state,
+            observation=f"Door [#{required_code}] is locked.",
+            success=False,
+            effects=[],
+            blocked=True,
+        )
+
+
 # =============================================================================
 # Handler Registry
 # =============================================================================
@@ -535,6 +613,7 @@ MECHANIC_HANDLERS: Dict[str, MechanicHandler] = {
     "conditional_unlock": handle_conditional_unlock,
     "state_mirroring": handle_state_mirroring,
     "sequence_lock": handle_sequence_lock,
+    "key_locked": handle_key_locked,
 }
 
 

@@ -134,13 +134,31 @@ def run_exploration_loop(env_interface, config, max_steps=50, seed=42):
     state, bindings = game_manager.auto_bind_mechanics()
     print(f"  Bindings: {bindings}")
 
-    # Spawn a key on a random table
-    state, key_spawn_info = game_manager.spawn_key_on_table()
-    if key_spawn_info:
-        # Use cyan color for visibility
-        print(f"\033[96m  ★ Key spawned on: {key_spawn_info['location']} ★\033[0m")
+    # Lock random doors with codes and spawn matching keys
+    state, locked_doors = game_manager.lock_random_doors(num_doors=2)
+    if locked_doors:
+        print()
+        print("\033[93m" + "=" * 60 + "\033[0m")
+        print("\033[93m  🔒 LOCKED DOORS (require matching key to open)\033[0m")
+        print("\033[93m" + "=" * 60 + "\033[0m")
+        for door, code in locked_doors.items():
+            print(f"\033[91m    🚪 {door} \033[93;1m[#{code}]\033[0m")
+        print()
+        # Spawn keys for each locked door
+        state, key_spawn_info_list = game_manager.spawn_keys_for_locked_doors()
+        print("\033[96m" + "-" * 60 + "\033[0m")
+        print("\033[96m  🗝️  KEYS SPAWNED (agent must find and collect)\033[0m")
+        print("\033[96m" + "-" * 60 + "\033[0m")
+        for key_info in key_spawn_info_list:
+            print(f"\033[92m    🗝️  key \033[96;1m[#{key_info['code']}]\033[0m \033[90m→ on \033[95m{key_info['location']}\033[0m")
+        print("\033[93m" + "=" * 60 + "\033[0m")
+        print()
     else:
-        print("\033[93m  Warning: No tables found, key not spawned\033[0m")
+        print("\033[93m  Warning: No doors found to lock\033[0m")
+        # Fall back to spawning a regular key
+        state, key_spawn_info = game_manager.spawn_key_on_table()
+        if key_spawn_info:
+            print(f"\033[96m  ★ Key spawned on: {key_spawn_info['location']} ★\033[0m")
 
     # Pass game_manager to EMTOM tools so they can access hidden_items
     if agent is not None:

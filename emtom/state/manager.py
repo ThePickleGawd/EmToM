@@ -238,6 +238,165 @@ class GameStateManager:
         self.state = new_state
         return new_state
 
+    def lock_random_doors(
+        self,
+        num_doors: int = 2,
+        state: Optional[EMTOMGameState] = None,
+    ) -> Tuple[EMTOMGameState, Dict[str, str]]:
+        """
+        Lock N random door-like objects with unique codes.
+
+        Locked doors will have a code displayed (e.g., "cabinet_3 [#127]")
+        and require a key with matching code to open.
+
+        Args:
+            num_doors: Number of doors to lock (default 2)
+            state: State to update. If None, uses self.state.
+
+        Returns:
+            (new_state, locked_doors) where locked_doors maps door_id -> code
+        """
+        import random
+        import time
+
+        if state is None:
+            state = self.state
+
+        entities = getattr(state, 'entities', [])
+        if not entities:
+            return state, {}
+
+        # Find all door-like objects (articulated furniture)
+        door_candidates = []
+        for e in entities:
+            name = e.get("name", e.get("id", ""))
+            e_type = e.get("type", "")
+            is_art = e.get("is_articulated", False)
+
+            # Include doors, drawers, cabinets, fridges, closets
+            if is_art or any(k in name.lower() for k in ["door", "drawer", "cabinet", "fridge", "closet"]):
+                door_candidates.append(name)
+
+        if not door_candidates:
+            return state, {}
+
+        # Use time-based seed for truly random selection
+        rng = random.Random(int(time.time() * 1000000))
+        rng.shuffle(door_candidates)
+
+        # Select N doors to lock (or fewer if not enough candidates)
+        num_to_lock = min(num_doors, len(door_candidates))
+        doors_to_lock = door_candidates[:num_to_lock]
+
+        # Generate unique codes for each door
+        locked_doors = {}
+        for door in doors_to_lock:
+            code = str(rng.randint(100, 999))  # 3-digit code
+            locked_doors[door] = code
+
+        # Update state
+        new_state = copy.copy(state)
+        new_state.key_locked_objects = copy.copy(state.key_locked_objects)
+        new_state.key_locked_objects.update(locked_doors)
+
+        # Activate the key_locked mechanic
+        if "key_locked" not in new_state.active_mechanics:
+            new_state.active_mechanics = list(new_state.active_mechanics) + ["key_locked"]
+
+        self.state = new_state
+        return new_state, locked_doors
+
+    def spawn_keys_for_locked_doors(
+        self,
+        state: Optional[EMTOMGameState] = None,
+    ) -> Tuple[EMTOMGameState, List[Dict[str, Any]]]:
+        """
+        Spawn keys on random tables for all locked doors.
+
+        Each locked door gets a corresponding key with matching code
+        (e.g., door with code "127" gets "key [#127]").
+
+        Args:
+            state: State to update. If None, uses self.state.
+
+        Returns:
+            (new_state, spawn_info_list) where spawn_info_list contains
+            info about each spawned key
+        """
+        import random
+        import time
+
+        if state is None:
+            state = self.state
+
+        locked_doors = state.key_locked_objects
+        if not locked_doors:
+            return state, []
+
+        entities = getattr(state, 'entities', [])
+        if not entities:
+            return state, []
+
+        # Find all tables
+        tables = []
+        for e in entities:
+            name = e.get("name", e.get("id", ""))
+            e_type = e.get("type", "")
+            if e_type == "furniture" and "table" in name.lower():
+                tables.append(name)
+
+        if not tables:
+            return state, []
+
+        # Use time-based seed for random table selection
+        rng = random.Random(int(time.time() * 1000000))
+
+        new_state = copy.copy(state)
+        new_state.world_objects = copy.copy(state.world_objects)
+        new_entities = list(state.entities)
+
+        spawn_info_list = []
+
+        for door_id, code in locked_doors.items():
+            # Pick a random table for this key
+            chosen_table = rng.choice(tables)
+
+            # Create key with code in name
+            key_id = f"key_{code}"
+            key_name = f"key [#{code}]"
+
+            spawn_info = {
+                "key_id": key_id,
+                "key_name": key_name,
+                "code": code,
+                "for_door": door_id,
+                "location": chosen_table,
+                "spawned_at_step": state.current_step,
+            }
+            spawn_info_list.append(spawn_info)
+
+            # Add key to world_objects
+            new_state.world_objects[key_id] = {
+                "type": "object",
+                "name": key_name,
+                "location": chosen_table,
+                "pickable": True,
+                "code": code,
+            }
+
+            # Add to entities
+            new_entities.append({
+                "id": key_id,
+                "name": key_name,
+                "type": "object",
+                "location": chosen_table,
+                "is_on_table": True,
+            })
+
+        new_state.entities = new_entities
+        self.state = new_state
+        return new_state, spawn_info_list
+
     def spawn_key_on_table(
         self, state: Optional[EMTOMGameState] = None
     ) -> Tuple[EMTOMGameState, Optional[Dict[str, Any]]]:
@@ -673,6 +832,7 @@ class GameStateManager:
             "interaction_counts": state.interaction_counts,
             "sequence_progress": state.sequence_progress,
             "unlocked_targets": list(state.unlocked_targets),
+            "key_locked_objects": state.key_locked_objects,
             "pending_effects": len(state.pending_effects),
             "spawned_items": [s.item_id for s in state.spawned_items],
             "hidden_objects": list(state.hidden_objects),

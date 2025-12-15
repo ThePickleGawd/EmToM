@@ -578,8 +578,15 @@ class HabitatExplorer:
                 "targets": rooms[:5],
             })
 
-        # Open/Close
-        open_targets = [f["name"] for f in articulated[:10]]
+        # Open/Close - add codes to locked doors so agent can see them
+        key_locked = getattr(state, 'key_locked_objects', {})
+        open_targets = []
+        for f in articulated[:10]:
+            name = f["name"]
+            # If this door is locked, display with its code
+            if name in key_locked:
+                name = f"{name} [#{key_locked[name]}]"
+            open_targets.append(name)
         if open_targets:
             actions.append({
                 "name": "Open",

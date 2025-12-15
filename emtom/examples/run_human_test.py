@@ -299,6 +299,25 @@ class HumanTestRunner:
         state, bindings = self.game_manager.auto_bind_mechanics()
         self._bindings = bindings  # Store for later display
 
+        # Lock random doors with codes and spawn matching keys
+        state, locked_doors = self.game_manager.lock_random_doors(num_doors=2)
+        if locked_doors:
+            print()
+            print("\033[93m" + "=" * 60 + "\033[0m")
+            print("\033[93m  🔒 LOCKED DOORS (require matching key to open)\033[0m")
+            print("\033[93m" + "=" * 60 + "\033[0m")
+            for door, code in locked_doors.items():
+                print(f"\033[91m    🚪 {door} \033[93;1m[#{code}]\033[0m")
+            print()
+            # Spawn keys for each locked door
+            state, key_spawn_info_list = self.game_manager.spawn_keys_for_locked_doors()
+            print("\033[96m" + "-" * 60 + "\033[0m")
+            print("\033[96m  🗝️  KEYS SPAWNED (agent must find and collect)\033[0m")
+            print("\033[96m" + "-" * 60 + "\033[0m")
+            for key_info in key_spawn_info_list:
+                print(f"\033[92m    🗝️  key \033[96;1m[#{key_info['code']}]\033[0m \033[90m→ on \033[95m{key_info['location']}\033[0m")
+            print("\033[93m" + "=" * 60 + "\033[0m")
+
         # Show what was bound
         if bindings:
             print("\n" + "-" * 50)
@@ -754,6 +773,40 @@ class HumanTestRunner:
                     "observation": f"You {action_name.lower()} {target}. You hear a faint click... something will happen in {delay} steps.",
                     "block": False,
                 }
+
+        # === KEY LOCKED: Block unless agent has matching key ===
+        if action_name.lower() == "open":
+            import re
+            # Extract base target name (remove code suffix if present)
+            base_target = re.sub(r'\s*\[#\d+\]$', '', target)
+            required_code = state.key_locked_objects.get(base_target)
+            if required_code:
+                # Check if agent has a key with matching code
+                # In human test mode, use agent_0 as default
+                agent_items = state.agent_inventory.get("agent_0", [])
+                has_matching_key = False
+                for item in agent_items:
+                    if "key" in item.lower() and f"[#{required_code}]" in item:
+                        has_matching_key = True
+                        break
+
+                if has_matching_key:
+                    return {
+                        "mechanic": "key_locked",
+                        "actual_action": action_name,
+                        "actual_target": base_target,
+                        "observation": f"You use your key to unlock {base_target} and open it.",
+                        "block": False,
+                    }
+                else:
+                    # Don't hint about needing a key - agent must reason this
+                    return {
+                        "mechanic": "key_locked",
+                        "actual_action": None,  # BLOCK
+                        "actual_target": base_target,
+                        "observation": f"Door [#{required_code}] is locked.",
+                        "block": True,
+                    }
 
         return None
 
