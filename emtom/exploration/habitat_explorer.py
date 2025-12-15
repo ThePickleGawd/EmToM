@@ -539,14 +539,31 @@ class HabitatExplorer:
         return actions
 
     def _execute_action(self, agent_id: str, action_choice: ActionChoice) -> Dict[str, Any]:
-        """Execute an action in the Habitat environment."""
+        """Execute an action in the Habitat environment.
+
+        Mechanics are ALWAYS applied:
+        - If mechanic blocks the action (counting_state not reached, conditional_unlock locked),
+          we return immediately without executing
+        - If mechanic transforms the action (inverse_state, remote_control),
+          we execute the transformed action
+        """
         action_name = action_choice.action
         target = action_choice.target or ""
 
         # Check for mechanics on this action/target
         mechanic_effect = self._check_mechanics(action_name, target)
 
+        # Handle mechanic effects
         if mechanic_effect:
+            # If mechanic BLOCKS the action, return without executing
+            if mechanic_effect.get("block"):
+                return {
+                    "success": False,
+                    "observation": mechanic_effect.get("observation", f"Action blocked on {target}"),
+                    "mechanic": mechanic_effect.get("mechanic"),
+                    "blocked": True,
+                }
+
             actual_action = mechanic_effect.get("actual_action", action_name)
             actual_target = mechanic_effect.get("actual_target", target)
         else:
@@ -556,10 +573,15 @@ class HabitatExplorer:
         # Custom EMTOM action - use GameStateManager
         if action_name in EMTOM_ACTIONS:
             state, result = self.game_manager.apply_action(action_name, agent_id, target)
+            obs_text = result.observation
+            # Override with mechanic observation if present
+            if mechanic_effect:
+                obs_text = mechanic_effect.get("observation", obs_text)
             return {
                 "success": result.success,
-                "observation": result.observation,
+                "observation": obs_text,
                 "surprise": result.surprise_trigger,
+                "mechanic": mechanic_effect.get("mechanic") if mechanic_effect else None,
             }
 
         # Partnr tools
@@ -569,7 +591,7 @@ class HabitatExplorer:
                 "observation": f"No agent configured. Cannot execute {action_name}[{target}].",
             }
 
-        if actual_action not in self.agent.tools:
+        if actual_action and actual_action not in self.agent.tools:
             return {
                 "success": False,
                 "observation": f"Tool '{actual_action}' not available.",
@@ -610,7 +632,13 @@ class HabitatExplorer:
 
             obs_text = response or f"Executed {actual_action}[{actual_target}]"
 
-        # Build observation with mechanic effect
+        # Execute on mirror target if state_mirroring
+        if mechanic_effect and mechanic_effect.get("mirror_target"):
+            mirror_target = mechanic_effect["mirror_target"]
+            if actual_action in self.agent.tools:
+                self.agent.process_high_level_action(actual_action, mirror_target, obs)
+
+        # Override observation with mechanic effect text
         if mechanic_effect:
             mechanic_obs = mechanic_effect.get("observation", "")
             if mechanic_obs:
@@ -623,13 +651,31 @@ class HabitatExplorer:
         }
 
     def _check_mechanics(self, action_name: str, target: str) -> Optional[Dict[str, Any]]:
-        """Check if any mechanic should transform this action."""
-        state = self.game_manager.get_state()
-        effects = []
+        """Check if any mechanic should transform this action.
 
-        # Inverse state - action does the opposite
+        Mechanics are ALWAYS applied when conditions are met:
+        - inverse_state: Open becomes Close and vice versa
+        - remote_control: Action affects a different target
+        - counting_state: Action is BLOCKED until count reached
+        - conditional_unlock: Action is BLOCKED until prerequisite done
+        - state_mirroring: Action also affects mirrored object
+        - delayed_effect: Action queues effect for later
+        """
+        state = self.game_manager.get_state()
+
+        # Update interaction count for counting_state
+        new_state = state
+        if target in [b.get("target") for b in state.mechanic_bindings if b.get("mechanic_type") == "counting_state"]:
+            import copy
+            new_state = copy.copy(state)
+            new_counts = copy.copy(state.interaction_counts)
+            new_counts[target] = new_counts.get(target, 0) + 1
+            new_state.interaction_counts = new_counts
+            self.game_manager.set_state(new_state)
+
+        # === INVERSE STATE: Action does the opposite ===
         if target in state.inverse_objects:
-            inverse_map = {"Open": "Close", "Close": "Open"}
+            inverse_map = {"Open": "Close", "Close": "Open", "Pick": "Place", "Place": "Pick"}
             if action_name in inverse_map:
                 opposite = inverse_map[action_name]
                 return {
@@ -637,63 +683,88 @@ class HabitatExplorer:
                     "actual_action": opposite,
                     "actual_target": target,
                     "observation": f"You try to {action_name.lower()} {target}, but it {opposite.lower()}s instead!",
+                    "block": False,
                 }
 
-        # Remote control - action affects a different object
+        # === REMOTE CONTROL: Action affects a different object ===
         if target in state.remote_mappings:
             remote_target, remote_state = state.remote_mappings[target]
             return {
                 "mechanic": "remote_control",
                 "actual_action": action_name,
                 "actual_target": remote_target,
-                "observation": f"You {action_name.lower()} {target}, but {remote_target} responds instead!",
+                "observation": f"You {action_name.lower()} {target}, and {remote_target} responds!",
+                "block": False,
+                "also_execute_original": False,  # Only affect remote target
             }
 
-        # Counting state - requires multiple interactions
+        # === COUNTING STATE: Block until count reached ===
         for binding in state.mechanic_bindings:
             if binding.get("mechanic_type") == "counting_state" and binding.get("target") == target:
                 required = binding.get("required_count", 3)
-                current = state.interaction_counts.get(target, 0) + 1
+                current = new_state.interaction_counts.get(target, 0)
                 if current < required:
-                    effects.append(f"Nothing happens... ({current}/{required} attempts)")
+                    return {
+                        "mechanic": "counting_state",
+                        "actual_action": None,  # BLOCK the action
+                        "actual_target": target,
+                        "observation": f"You try to {action_name.lower()} {target}... nothing happens. ({current}/{required} attempts)",
+                        "block": True,
+                    }
                 else:
-                    effects.append(f"After {required} attempts, {target} finally responds!")
+                    return {
+                        "mechanic": "counting_state",
+                        "actual_action": action_name,
+                        "actual_target": target,
+                        "observation": f"After {required} attempts, {target} finally responds to your {action_name.lower()}!",
+                        "block": False,
+                    }
 
-        # Delayed effect - effect happens later
-        for binding in state.mechanic_bindings:
-            if binding.get("mechanic_type") == "delayed_effect" and binding.get("target") == target:
-                delay = binding.get("delay_steps", 2)
-                effects.append(f"You hear a faint click... something will happen in {delay} steps.")
-
-        # State mirroring - another object mirrors this one
-        for pair in state.mirror_pairs:
-            if len(pair) >= 2:
-                obj_a, obj_b = pair[0], pair[1]
-                if target == obj_a:
-                    effects.append(f"As you interact with {target}, {obj_b} also responds!")
-                elif target == obj_b:
-                    effects.append(f"As you interact with {target}, {obj_a} also responds!")
-
-        # Conditional unlock - check if blocked
+        # === CONDITIONAL UNLOCK: Block until prerequisite done ===
         for binding in state.mechanic_bindings:
             if binding.get("mechanic_type") == "conditional_unlock" and binding.get("target") == target:
                 prereq = binding.get("prerequisite")
                 if target not in state.unlocked_targets:
-                    effects.append(f"{target} seems locked. Maybe you need to do something else first...")
+                    return {
+                        "mechanic": "conditional_unlock",
+                        "actual_action": None,  # BLOCK the action
+                        "actual_target": target,
+                        "observation": f"You try to {action_name.lower()} {target}, but it won't budge. Something else needs to happen first...",
+                        "block": True,
+                        "prerequisite": prereq,
+                    }
 
-        # Sequence lock - show sequence progress
-        if target in state.sequence_progress and target not in state.sequence_unlocked:
-            progress = state.sequence_progress[target]
-            effects.append(f"You hear a click... sequence progress: step {progress}")
+        # === STATE MIRRORING: Also affect mirrored object ===
+        for pair in state.mirror_pairs:
+            if len(pair) >= 2:
+                obj_a, obj_b = pair[0], pair[1]
+                mirror_target = None
+                if target == obj_a:
+                    mirror_target = obj_b
+                elif target == obj_b:
+                    mirror_target = obj_a
+                if mirror_target:
+                    return {
+                        "mechanic": "state_mirroring",
+                        "actual_action": action_name,
+                        "actual_target": target,
+                        "mirror_target": mirror_target,
+                        "observation": f"You {action_name.lower()} {target}, and {mirror_target} mirrors the action!",
+                        "block": False,
+                    }
 
-        # Return combined effects if any
-        if effects:
-            return {
-                "mechanic": "multiple",
-                "actual_action": action_name,
-                "actual_target": target,
-                "observation": f"Executed {action_name}[{target}]. " + " ".join(effects),
-            }
+        # === DELAYED EFFECT: Queue effect for later ===
+        for binding in state.mechanic_bindings:
+            if binding.get("mechanic_type") == "delayed_effect" and binding.get("target") == target:
+                delay = binding.get("delay_steps", 2)
+                return {
+                    "mechanic": "delayed_effect",
+                    "actual_action": action_name,
+                    "actual_target": target,
+                    "observation": f"You {action_name.lower()} {target}. You hear a faint click... something will happen in {delay} steps.",
+                    "block": False,
+                    "delay_steps": delay,
+                }
 
         return None
 

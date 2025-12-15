@@ -629,17 +629,25 @@ class HumanTestRunner:
         """
         Check if any mechanic should transform this action.
 
+        Mechanics are ALWAYS applied:
+        - inverse_state: Open becomes Close and vice versa
+        - remote_control: Action affects a different target
+        - counting_state: Action is BLOCKED until count reached
+        - conditional_unlock: Action is BLOCKED until prerequisite done
+        - state_mirroring: Action also affects mirrored object
+
         Returns dict with:
         - mechanic: name of the mechanic
-        - actual_action: action to actually execute
+        - actual_action: action to actually execute (None if blocked)
         - actual_target: target to actually affect
         - observation: description of what happened
+        - block: True if action should be blocked
         """
         state = self.game_manager.get_state()
 
-        # Inverse state: open becomes close, close becomes open
+        # === INVERSE STATE: Open becomes Close and vice versa ===
         if target in state.inverse_objects:
-            inverse_map = {"Open": "Close", "Close": "Open"}
+            inverse_map = {"Open": "Close", "Close": "Open", "Pick": "Place", "Place": "Pick"}
             if action_name in inverse_map:
                 opposite = inverse_map[action_name]
                 return {
@@ -647,79 +655,105 @@ class HumanTestRunner:
                     "actual_action": opposite,
                     "actual_target": target,
                     "observation": f"You try to {action_name.lower()} {target}, but it {opposite.lower()}s instead!",
+                    "block": False,
                 }
 
-        # Remote control: acting on trigger affects a different target
+        # === REMOTE CONTROL: Action affects a different target ===
         if target in state.remote_mappings:
             remote_target, remote_state = state.remote_mappings[target]
             return {
                 "mechanic": "remote_control",
                 "actual_action": action_name,
                 "actual_target": remote_target,
-                "observation": f"You {action_name.lower()} {target}, but {remote_target} responds instead!",
+                "observation": f"You {action_name.lower()} {target}, and {remote_target} responds!",
+                "block": False,
             }
 
-        # Counting state: need N interactions before it works
-        if target in state.interaction_counts:
-            current = state.interaction_counts[target]
-            required = state.object_properties.get(target, {}).get("required_count", 3)
-            new_count = current + 1
-            state.interaction_counts[target] = new_count
-            self.game_manager.set_state(state)
+        # === COUNTING STATE: Block until count reached ===
+        for binding in state.mechanic_bindings:
+            if binding.get("mechanic_type") == "counting_state" and binding.get("target") == target:
+                required = binding.get("required_count", 3)
+                current = state.interaction_counts.get(target, 0) + 1
 
-            if new_count < required:
-                return {
-                    "mechanic": "counting_state",
-                    "actual_action": action_name,
-                    "actual_target": target,
-                    "observation": f"You {action_name.lower()} {target}. It doesn't respond yet ({new_count}/{required}).",
-                }
-            else:
-                return {
-                    "mechanic": "counting_state",
-                    "actual_action": action_name,
-                    "actual_target": target,
-                    "observation": f"You {action_name.lower()} {target}. After {required} attempts, it finally responds!",
-                }
+                # Update count in state
+                state.interaction_counts[target] = current
+                self.game_manager.set_state(state)
 
-        # State mirroring: one object mirrors another
-        for obj1, obj2, state_prop in state.mirror_pairs:
-            if target == obj1:
-                return {
-                    "mechanic": "state_mirroring",
-                    "actual_action": action_name,
-                    "actual_target": target,
-                    "observation": f"You {action_name.lower()} {target}. {obj2} also {action_name.lower()}s in sync!",
-                }
-            elif target == obj2:
-                return {
-                    "mechanic": "state_mirroring",
-                    "actual_action": action_name,
-                    "actual_target": target,
-                    "observation": f"You {action_name.lower()} {target}. {obj1} also {action_name.lower()}s in sync!",
-                }
+                if current < required:
+                    return {
+                        "mechanic": "counting_state",
+                        "actual_action": None,  # BLOCK
+                        "actual_target": target,
+                        "observation": f"You try to {action_name.lower()} {target}... nothing happens. ({current}/{required} attempts)",
+                        "block": True,
+                    }
+                else:
+                    return {
+                        "mechanic": "counting_state",
+                        "actual_action": action_name,
+                        "actual_target": target,
+                        "observation": f"After {required} attempts, {target} finally responds to your {action_name.lower()}!",
+                        "block": False,
+                    }
 
-        # Conditional unlock: check if prerequisite was done
-        prereq = state.object_properties.get(target, {}).get("prerequisite")
-        if prereq and target not in state.unlocked_targets:
-            return {
-                "mechanic": "conditional_unlock",
-                "actual_action": action_name,
-                "actual_target": target,
-                "observation": f"You try to {action_name.lower()} {target}, but it seems locked. Maybe something else needs to happen first.",
-            }
+        # === CONDITIONAL UNLOCK: Block until prerequisite done ===
+        for binding in state.mechanic_bindings:
+            if binding.get("mechanic_type") == "conditional_unlock" and binding.get("target") == target:
+                prereq = binding.get("prerequisite")
+                if target not in state.unlocked_targets:
+                    return {
+                        "mechanic": "conditional_unlock",
+                        "actual_action": None,  # BLOCK
+                        "actual_target": target,
+                        "observation": f"You try to {action_name.lower()} {target}, but it won't budge. Something else needs to happen first...",
+                        "block": True,
+                    }
 
         # Check if this action unlocks something
-        unlocks = state.object_properties.get(target, {}).get("unlocks")
-        if unlocks:
-            state.unlocked_targets.add(unlocks)
-            self.game_manager.set_state(state)
-            return {
-                "mechanic": "conditional_unlock",
-                "actual_action": action_name,
-                "actual_target": target,
-                "observation": f"You {action_name.lower()} {target}. You hear a click - something else is now accessible.",
-            }
+        for binding in state.mechanic_bindings:
+            if binding.get("mechanic_type") == "conditional_unlock" and binding.get("prerequisite") == target:
+                unlocks = binding.get("target")
+                if unlocks:
+                    state.unlocked_targets.add(unlocks)
+                    self.game_manager.set_state(state)
+                    return {
+                        "mechanic": "conditional_unlock",
+                        "actual_action": action_name,
+                        "actual_target": target,
+                        "observation": f"You {action_name.lower()} {target}. You hear a click - {unlocks} is now accessible!",
+                        "block": False,
+                    }
+
+        # === STATE MIRRORING: One object mirrors another ===
+        for pair in state.mirror_pairs:
+            if len(pair) >= 2:
+                obj1, obj2 = pair[0], pair[1]
+                mirror_target = None
+                if target == obj1:
+                    mirror_target = obj2
+                elif target == obj2:
+                    mirror_target = obj1
+                if mirror_target:
+                    return {
+                        "mechanic": "state_mirroring",
+                        "actual_action": action_name,
+                        "actual_target": target,
+                        "mirror_target": mirror_target,
+                        "observation": f"You {action_name.lower()} {target}. {mirror_target} also {action_name.lower()}s in sync!",
+                        "block": False,
+                    }
+
+        # === DELAYED EFFECT: Queue effect for later ===
+        for binding in state.mechanic_bindings:
+            if binding.get("mechanic_type") == "delayed_effect" and binding.get("target") == target:
+                delay = binding.get("delay_steps", 2)
+                return {
+                    "mechanic": "delayed_effect",
+                    "actual_action": action_name,
+                    "actual_target": target,
+                    "observation": f"You {action_name.lower()} {target}. You hear a faint click... something will happen in {delay} steps.",
+                    "block": False,
+                }
 
         return None
 
@@ -748,11 +782,21 @@ class HumanTestRunner:
         # Check for mechanics on this action/target
         mechanic_effect = self._check_mechanics(action_name, target)
 
-        # If mechanic transforms the action, apply it
+        # Handle mechanic effects
         if mechanic_effect:
+            print(f"  [Mechanic: {mechanic_effect['mechanic']}]")
+
+            # If mechanic BLOCKS the action, return immediately
+            if mechanic_effect.get("block"):
+                print(f"  [Action BLOCKED]")
+                return {
+                    "observation": mechanic_effect.get("observation", f"Action blocked on {target}"),
+                    "mechanic": mechanic_effect.get("mechanic"),
+                    "blocked": True,
+                }
+
             actual_action = mechanic_effect.get("actual_action", action_name)
             actual_target = mechanic_effect.get("actual_target", target)
-            print(f"  [Mechanic: {mechanic_effect['mechanic']}]")
         else:
             actual_action = action_name
             actual_target = target

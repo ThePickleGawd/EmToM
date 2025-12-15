@@ -1,0 +1,3 @@
+- The game folder is unofficial. It can be used for reference, but is not part of partnr.
+- Be skeptical of this code, since it is written by students.
+- It is no longer used, and we'll only be using the emtom/run_emtom.sh flow from now on.
