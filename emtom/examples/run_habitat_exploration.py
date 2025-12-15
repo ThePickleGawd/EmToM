@@ -134,6 +134,14 @@ def run_exploration_loop(env_interface, config, max_steps=50, seed=42):
     state, bindings = game_manager.auto_bind_mechanics()
     print(f"  Bindings: {bindings}")
 
+    # Spawn a key on a random table
+    state, key_spawn_info = game_manager.spawn_key_on_table()
+    if key_spawn_info:
+        # Use cyan color for visibility
+        print(f"\033[96m  ★ Key spawned on: {key_spawn_info['location']} ★\033[0m")
+    else:
+        print("\033[93m  Warning: No tables found, key not spawned\033[0m")
+
     # Pass game_manager to EMTOM tools so they can access hidden_items
     if agent is not None:
         print("  Passing game_manager to EMTOM tools...")

@@ -238,6 +238,76 @@ class GameStateManager:
         self.state = new_state
         return new_state
 
+    def spawn_key_on_table(
+        self, state: Optional[EMTOMGameState] = None
+    ) -> Tuple[EMTOMGameState, Optional[Dict[str, Any]]]:
+        """
+        Spawn a key object on a random table in the scene.
+
+        The key will only spawn on furniture that has 'table' in its name.
+
+        Args:
+            state: State to update. If None, uses self.state.
+
+        Returns:
+            (new_state, spawn_info) where spawn_info contains key location,
+            or None if no tables found
+        """
+        import random
+
+        if state is None:
+            state = self.state
+
+        entities = getattr(state, 'entities', [])
+        if not entities:
+            return state, None
+
+        # Find all tables (furniture with 'table' in name)
+        tables = []
+        for e in entities:
+            name = e.get("name", e.get("id", ""))
+            e_type = e.get("type", "")
+            if e_type == "furniture" and "table" in name.lower():
+                tables.append(name)
+
+        if not tables:
+            return state, None
+
+        # Pick a random table
+        chosen_table = random.choice(tables)
+
+        # Create key spawn info
+        key_id = "exploration_key"
+        spawn_info = {
+            "key_id": key_id,
+            "location": chosen_table,
+            "spawned_at_step": state.current_step,
+        }
+
+        # Add key to world_objects (objects spawned on furniture)
+        new_state = copy.copy(state)
+        new_state.world_objects = copy.copy(state.world_objects)
+        new_state.world_objects[key_id] = {
+            "type": "object",
+            "name": "key",
+            "location": chosen_table,
+            "pickable": True,
+        }
+
+        # Also add to entities so it shows up in world description
+        new_entities = list(state.entities)
+        new_entities.append({
+            "id": key_id,
+            "name": "key",
+            "type": "object",
+            "location": chosen_table,
+            "is_on_table": True,
+        })
+        new_state.entities = new_entities
+
+        self.state = new_state
+        return new_state, spawn_info
+
     def auto_bind_mechanics(
         self, state: Optional[EMTOMGameState] = None
     ) -> Tuple[EMTOMGameState, Dict[str, Any]]:

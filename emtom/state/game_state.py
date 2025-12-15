@@ -119,6 +119,8 @@ class EMTOMGameState:
     hidden_objects: Set[str] = field(default_factory=set)
     # Messages written by WriteMessage action
     written_messages: Dict[str, str] = field(default_factory=dict)
+    # World objects spawned on furniture (e.g., key on table)
+    world_objects: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     # === Mechanic state (owned here, mechanics are stateless) ===
     # delayed_effect, decaying_state: effects waiting to trigger
@@ -232,6 +234,7 @@ class EMTOMGameState:
                 for s in self.spawned_items
             ],
             "hidden_objects": list(self.hidden_objects),
+            "world_objects": self.world_objects,
             "pending_effects": [
                 {
                     "effect_id": e.effect_id,
@@ -280,6 +283,7 @@ class EMTOMGameState:
             SpawnedItem(**s) for s in data.get("spawned_items", [])
         ]
         state.hidden_objects = set(data.get("hidden_objects", []))
+        state.world_objects = data.get("world_objects", {})
         state.pending_effects = [
             PendingEffect(**e) for e in data.get("pending_effects", [])
         ]

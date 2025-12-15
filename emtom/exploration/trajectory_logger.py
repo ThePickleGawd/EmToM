@@ -45,6 +45,7 @@ class StepRecord:
     observations: Dict[str, str]  # agent_id -> observation text
     surprises: List[SurpriseRecord] = field(default_factory=list)
     world_snapshot: Optional[Dict[str, Any]] = None
+    inventory: Dict[str, List[str]] = field(default_factory=dict)  # agent_id -> list of items
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -55,6 +56,7 @@ class StepRecord:
             "observations": self.observations,
             "surprises": [s.to_dict() for s in self.surprises],
             "world_snapshot": self.world_snapshot,
+            "inventory": self.inventory,
         }
 
 
@@ -173,6 +175,7 @@ class TrajectoryLogger:
         observations: Dict[str, str],
         surprises: Optional[List[SurpriseRecord]] = None,
         world_snapshot: Optional[Dict[str, Any]] = None,
+        inventory: Optional[Dict[str, List[str]]] = None,
     ) -> StepRecord:
         """
         Log a single exploration step.
@@ -184,6 +187,7 @@ class TrajectoryLogger:
             observations: Per-agent observation strings
             surprises: List of surprise records
             world_snapshot: Optional world state snapshot
+            inventory: Per-agent inventory {agent_id: [item1, item2, ...]}
 
         Returns:
             The created StepRecord
@@ -204,6 +208,7 @@ class TrajectoryLogger:
             observations=observations,
             surprises=surprises or [],
             world_snapshot=world_snapshot,
+            inventory=inventory or {},
         )
         self.steps.append(record)
         return record

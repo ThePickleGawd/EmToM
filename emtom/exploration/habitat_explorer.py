@@ -429,6 +429,21 @@ class HabitatExplorer:
             actions_for_video[i] = (ac.action, ac.target or "")
         self._record_frame(obs, actions_for_video)
 
+        # Get current inventory for logging
+        state = self.game_manager.get_state()
+        world_objects = getattr(state, 'world_objects', {})
+        inventory_log = {}
+        for aid in agent_actions.keys():
+            agent_inv = state.agent_inventory.get(aid, [])
+            # Resolve item names for readability
+            inv_names = []
+            for item_id in agent_inv:
+                if item_id in world_objects:
+                    inv_names.append(world_objects[item_id].get("name", item_id))
+                else:
+                    inv_names.append(item_id)
+            inventory_log[aid] = inv_names if inv_names else []
+
         # Log step (surprises are tracked in the surprises array, not in agent_actions)
         self.logger.log_step(
             step=self.step_count,
@@ -446,6 +461,7 @@ class HabitatExplorer:
                 for aid, r in action_results.items()
             },
             surprises=step_surprises,
+            inventory=inventory_log,
         )
 
         return HabitatStepResult(
@@ -468,17 +484,55 @@ class HabitatExplorer:
         furniture = [e for e in entities if e["type"] == "furniture"]
         objects = [e for e in entities if e["type"] == "object"]
 
+        # Include spawned world objects (like the key on a table)
+        state = self.game_manager.get_state()
+        world_objects = getattr(state, 'world_objects', {})
+        virtual_objects = []
+        for obj_id, obj_info in world_objects.items():
+            # Skip if already picked up
+            if obj_id in state.agent_inventory.get(agent_id, []):
+                continue
+            obj_name = obj_info.get("name", obj_id)
+            obj_location = obj_info.get("location", "somewhere")
+            virtual_objects.append({"name": obj_name, "location": obj_location})
+            objects.append({"name": obj_name, "location": obj_location})
+
         if furniture:
             furniture_names = [f["name"] for f in furniture[:10]]
             lines.append(f"Furniture: {', '.join(furniture_names)}")
 
         if objects:
-            object_names = [o["name"] for o in objects[:10]]
-            lines.append(f"Objects: {', '.join(object_names)}")
+            # Show objects with their locations for spawned items
+            object_descriptions = []
+            for o in objects[:10]:
+                name = o["name"] if isinstance(o, dict) else o
+                loc = o.get("location") if isinstance(o, dict) else None
+                if loc:
+                    object_descriptions.append(f"{name} (on {loc})")
+                else:
+                    object_descriptions.append(name)
+            lines.append(f"Objects: {', '.join(object_descriptions)}")
+
+        # Highlight special items on furniture that can be picked up directly
+        if virtual_objects:
+            for vo in virtual_objects:
+                lines.append(f"\033[93m*** You notice a {vo['name']} sitting on {vo['location']}. You can Pick[{vo['name']}] to grab it. ***\033[0m")
 
         rooms = self.world_adapter.get_room_ids()
         if rooms:
             lines.append(f"Rooms you can go to: {', '.join(rooms)}")
+
+        # Show agent inventory
+        inventory = state.agent_inventory.get(agent_id, [])
+        if inventory:
+            # Resolve names for inventory items
+            inv_names = []
+            for item_id in inventory:
+                if item_id in world_objects:
+                    inv_names.append(world_objects[item_id].get("name", item_id))
+                else:
+                    inv_names.append(item_id)
+            lines.append(f"\033[92mYour inventory: {', '.join(inv_names)}\033[0m")
 
         return "\n".join(lines)
 
@@ -488,6 +542,23 @@ class HabitatExplorer:
 
         rooms = self.world_adapter.get_room_ids()
         entities = self.world_adapter.get_interactable_entities()
+
+        # Include spawned world objects (like the key on a table)
+        state = self.game_manager.get_state()
+        world_objects = getattr(state, 'world_objects', {})
+        for obj_id, obj_info in world_objects.items():
+            # Skip if already picked up
+            if obj_id in state.agent_inventory.get(agent_id, []):
+                continue
+            entities.append({
+                "id": obj_id,
+                "name": obj_info.get("name", obj_id),
+                "type": obj_info.get("type", "object"),
+                "location": obj_info.get("location"),
+                "is_articulated": False,
+                "properties": {},
+            })
+
         furniture = [e for e in entities if e["type"] == "furniture"]
         articulated = [f for f in furniture if f.get("is_articulated")]
         objects = [e for e in entities if e["type"] == "object"]
@@ -588,6 +659,36 @@ class HabitatExplorer:
                 "observation": mechanic_observation or result.observation,
                 "surprise": surprise_trigger,
             }
+
+        # Handle Pick action for virtual objects (e.g., key spawned on table)
+        if actual_action == "Pick":
+            state = self.game_manager.get_state()
+            # Check if target matches a virtual object by name or id
+            for obj_id, obj_info in state.world_objects.items():
+                obj_name = obj_info.get("name", obj_id)
+                if actual_target == obj_name or actual_target == obj_id:
+                    # Check if already picked up
+                    if obj_id in state.agent_inventory.get(agent_id, []):
+                        return {
+                            "success": False,
+                            "observation": f"You already have the {obj_name}.",
+                        }
+                    # Add to inventory
+                    import copy
+                    new_state = copy.copy(state)
+                    new_state.agent_inventory = copy.copy(state.agent_inventory)
+                    if agent_id not in new_state.agent_inventory:
+                        new_state.agent_inventory[agent_id] = []
+                    else:
+                        new_state.agent_inventory[agent_id] = list(new_state.agent_inventory[agent_id])
+                    new_state.agent_inventory[agent_id].append(obj_id)
+                    self.game_manager.set_state(new_state)
+
+                    location = obj_info.get("location", "the table")
+                    return {
+                        "success": True,
+                        "observation": f"\033[92m✓ You pick up the {obj_name} from {location}. It's now in your inventory.\033[0m",
+                    }
 
         # Partnr tools - execute in Habitat
         if self.agent is None:
