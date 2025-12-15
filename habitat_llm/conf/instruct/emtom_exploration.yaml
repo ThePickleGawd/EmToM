@@ -4,6 +4,18 @@ prompt: |-
 
         {tool_descriptions}
 
+        CRITICAL RULES:
+        - Output exactly ONE action per turn. Do NOT plan multiple actions in your Thought.
+        - After each action, wait for the Observation before deciding your next action.
+        - NEVER output "Done", "Final Thought", or try to end exploration early.
+        - Exploration continues until the system stops you - keep discovering!
+
+        EXPLORATION STRATEGY:
+        - Focus on INTERACTING with furniture: Open drawers, cabinets, fridges, chests.
+        - Try the SAME action multiple times on objects that don't respond immediately.
+        - When something unexpected happens, record it with "Surprise:" in your Thought.
+        - Navigate close to objects BEFORE trying to open/close/pick them.
+
         IMPORTANT:
         - To interact with objects physically, you MUST first navigate close to them.
         - When you observe something UNEXPECTED, include "Surprise:" in your Thought to record the discovery.

@@ -25,6 +25,11 @@ class HandlerResult:
     success: bool
     effects: list
     surprise_trigger: Optional[str] = None
+    # What action should actually be executed (for transforms like inverse_state)
+    actual_action: Optional[str] = None
+    actual_target: Optional[str] = None
+    # Whether the action should be blocked (not executed in Habitat)
+    blocked: bool = False
 
 
 # Type alias for handler functions
@@ -152,6 +157,7 @@ def handle_inverse_state(
     if not target or target not in state.inverse_objects:
         return no_effect(state)
 
+    # Map both lowercase and capitalized action names
     inverse_map = {
         "open": "close",
         "close": "open",
@@ -159,19 +165,28 @@ def handle_inverse_state(
         "turn_off": "turn_on",
         "lock": "unlock",
         "unlock": "lock",
+        "Open": "Close",
+        "Close": "Open",
     }
 
-    if action_name not in inverse_map:
+    action_lower = action_name.lower()
+    if action_lower not in ["open", "close", "turn_on", "turn_off", "lock", "unlock"]:
         return no_effect(state)
 
-    inverted = inverse_map[action_name]
+    # Get inverted action, preserving case
+    inverted = inverse_map.get(action_name, inverse_map.get(action_lower, action_name))
+    # Capitalize for Habitat tools
+    inverted_capitalized = inverted.capitalize() if inverted.islower() else inverted
+
     return HandlerResult(
         applies=True,
         state=state,
-        observation=f"You try to {action_name} {target}, but it {inverted}s instead!",
+        observation=f"You try to {action_lower} {target}, but it {inverted.lower()}s instead!",
         success=True,
         effects=[f"inverted={action_name}->{inverted}"],
         surprise_trigger=f"{target} did the opposite of expected",
+        actual_action=inverted_capitalized,
+        actual_target=target,
     )
 
 
@@ -191,14 +206,17 @@ def handle_remote_control(
         return no_effect(state)
 
     remote_target, remote_state = state.remote_mappings[target]
+    action_lower = action_name.lower()
 
     return HandlerResult(
         applies=True,
         state=state,
-        observation=f"You {action_name} {target}. You hear something happen to {remote_target}!",
+        observation=f"You {action_lower} {target}. You hear something happen to {remote_target}!",
         success=True,
         effects=[f"remote_effect={remote_target}.{remote_state}"],
         surprise_trigger=f"{target} affected {remote_target} remotely",
+        actual_action=action_name,  # Same action, different target
+        actual_target=remote_target,
     )
 
 
@@ -220,6 +238,7 @@ def handle_counting_state(
 
     required_count = state.get_object_property(target, "required_count", 3)
     current_count = state.interaction_counts.get(target, 0) + 1
+    action_lower = action_name.lower()
 
     # Update count
     new_counts = copy.copy(state.interaction_counts)
@@ -233,18 +252,22 @@ def handle_counting_state(
         return HandlerResult(
             applies=True,
             state=new_state,
-            observation=f"You {action_name} {target}. This time it responds!",
+            observation=f"You {action_lower} {target}. This time it responds!",
             success=True,
             effects=[f"count_reached={current_count}"],
+            actual_action=action_name,
+            actual_target=target,
         )
     else:
+        # Block the action - don't execute in Habitat
         return HandlerResult(
             applies=True,
             state=new_state,
-            observation=f"You {action_name} {target}, but nothing happens.",
+            observation=f"You {action_lower} {target}, but nothing happens. ({current_count}/{required_count})",
             success=False,
             effects=[f"count={current_count}/{required_count}"],
             surprise_trigger=f"{target} didn't respond (attempt {current_count})",
+            blocked=True,  # Don't execute in Habitat
         )
 
 
@@ -264,6 +287,12 @@ def handle_delayed_effect(
     if not delay_steps or not target:
         return no_effect(state)
 
+    # Only apply to state-changing actions (not Navigate, Pick, etc.)
+    action_lower = action_name.lower()
+    state_changing_actions = {"open", "close", "turn_on", "turn_off", "lock", "unlock"}
+    if action_lower not in state_changing_actions:
+        return no_effect(state)
+
     # Create pending effect
     effect = PendingEffect(
         effect_id=str(uuid.uuid4()),
@@ -280,10 +309,13 @@ def handle_delayed_effect(
     return HandlerResult(
         applies=True,
         state=new_state,
-        observation=f"You {action_name} {target}, but nothing seems to happen immediately.",
+        observation=f"You {action_lower} {target}, but nothing seems to happen immediately.",
         success=True,
         effects=[f"delayed={delay_steps}_steps"],
         surprise_trigger=f"{target} didn't respond immediately",
+        actual_action=action_name,
+        actual_target=target,
+        blocked=True,  # Don't execute immediately - effect is delayed
     )
 
 
@@ -301,6 +333,12 @@ def handle_decaying_state(
     """
     decay_steps = state.get_object_property(target, "decay_steps")
     if not decay_steps or not target:
+        return no_effect(state)
+
+    # Only apply to state-changing actions (not Navigate, Pick, etc.)
+    action_lower = action_name.lower()
+    state_changing_actions = {"open", "close", "turn_on", "turn_off", "lock", "unlock"}
+    if action_lower not in state_changing_actions:
         return no_effect(state)
 
     # Schedule reversion (opposite of current action)
@@ -322,9 +360,11 @@ def handle_decaying_state(
     return HandlerResult(
         applies=True,
         state=new_state,
-        observation=f"You {action_name} {target}. It responds normally.",
+        observation=f"You {action_lower} {target}. It responds normally.",
         success=True,
         effects=[f"will_decay_in={decay_steps}_steps"],
+        actual_action=action_name,
+        actual_target=target,
     )
 
 
@@ -344,16 +384,19 @@ def handle_conditional_unlock(
     if not target:
         return no_effect(state)
 
+    action_lower = action_name.lower()
+
     # Check if target is locked by prerequisite
     prerequisite = state.get_object_property(target, "prerequisite")
     if prerequisite and target not in state.unlocked_targets:
         return HandlerResult(
             applies=True,
             state=state,
-            observation=f"You try to {action_name} {target}, but it won't budge. Something seems to be blocking it.",
+            observation=f"You try to {action_lower} {target}, but it won't budge. Something seems to be blocking it.",
             success=False,
             effects=[],
             surprise_trigger=f"{target} is locked by unknown prerequisite",
+            blocked=True,  # Don't execute in Habitat
         )
 
     # Check if this action unlocks something
@@ -367,10 +410,12 @@ def handle_conditional_unlock(
         return HandlerResult(
             applies=True,
             state=new_state,
-            observation=f"You {action_name} {target}. You hear a click somewhere!",
+            observation=f"You {action_lower} {target}. You hear a click somewhere!",
             success=True,
             effects=[f"unlocked={unlocks}"],
             surprise_trigger=f"Something was unlocked",
+            actual_action=action_name,
+            actual_target=target,
         )
 
     return no_effect(state)

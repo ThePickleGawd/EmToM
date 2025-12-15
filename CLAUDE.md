@@ -1,1 +1,2 @@
 - gpt-5 and gpt-5-mini are valid models
+- Use `./emtom/run_emtom` as the entry point for our benchmark. Don't call python files directly unless absolutely needed

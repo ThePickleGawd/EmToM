@@ -219,6 +219,7 @@ class HabitatExplorer:
         # Track current skill execution
         self._current_skill_steps = 0
         self._max_skill_steps = 500
+        self._episode_done = False
 
         # Cache tool descriptions from agent
         self._tool_descriptions: Optional[str] = None
@@ -290,10 +291,14 @@ class HabitatExplorer:
         self._record_frame(obs, {})
 
         # Main exploration loop
-        while self._is_running and self.step_count < self.config.max_steps:
+        while self._is_running and self.step_count < self.config.max_steps and not self._episode_done:
             step_result = self._run_step()
 
             if step_result.is_terminal and self.config.stop_on_terminal:
+                break
+
+            if self._episode_done:
+                print("\n[HabitatExplorer] Episode ended early - stopping exploration")
                 break
 
             self.step_count += 1
@@ -399,10 +404,11 @@ class HabitatExplorer:
 
             self.curiosity.add_observation(agent_id, obs_text)
 
-            # Check for surprise
-            if action_choice.surprise:
+            # Check for surprise from LLM reasoning OR from mechanic triggers
+            surprise_text = action_choice.surprise or result.get("surprise")
+            if surprise_text:
                 print(f"\n*** SURPRISE DETECTED ***")
-                print(f"    {action_choice.surprise}")
+                print(f"    {surprise_text}")
 
                 surprise_record = SurpriseRecord(
                     step=self.step_count,
@@ -410,8 +416,8 @@ class HabitatExplorer:
                     action=action_choice.action,
                     target=action_choice.target or "",
                     observation=obs_text,
-                    surprise_level=3,
-                    explanation=action_choice.surprise,
+                    surprise_level=4 if result.get("surprise") else 3,  # Higher level for mechanic surprises
+                    explanation=surprise_text,
                 )
                 step_surprises.append(surprise_record)
                 self.surprise_moments.append(surprise_record)
@@ -541,50 +547,50 @@ class HabitatExplorer:
     def _execute_action(self, agent_id: str, action_choice: ActionChoice) -> Dict[str, Any]:
         """Execute an action in the Habitat environment.
 
-        Mechanics are ALWAYS applied:
+        ALL actions are routed through GameStateManager first, which applies mechanics.
+        Mechanics are world settings that ALWAYS apply:
         - If mechanic blocks the action (counting_state not reached, conditional_unlock locked),
-          we return immediately without executing
+          we return immediately without executing in Habitat
         - If mechanic transforms the action (inverse_state, remote_control),
-          we execute the transformed action
+          we execute the transformed action in Habitat
         """
         action_name = action_choice.action
         target = action_choice.target or ""
 
-        # Check for mechanics on this action/target
-        mechanic_effect = self._check_mechanics(action_name, target)
+        # Route through GameStateManager to apply mechanics
+        # apply_mechanics is called inside apply_action, so we get the handler result from there
+        from emtom.mechanics.handlers import apply_mechanics
 
-        # Handle mechanic effects
-        if mechanic_effect:
-            # If mechanic BLOCKS the action, return without executing
-            if mechanic_effect.get("block"):
-                return {
-                    "success": False,
-                    "observation": mechanic_effect.get("observation", f"Action blocked on {target}"),
-                    "mechanic": mechanic_effect.get("mechanic"),
-                    "blocked": True,
-                }
+        # First check mechanics to get transformation info
+        mech_result = apply_mechanics(action_name, agent_id, target, self.game_manager.get_state())
 
-            actual_action = mechanic_effect.get("actual_action", action_name)
-            actual_target = mechanic_effect.get("actual_target", target)
-        else:
-            actual_action = action_name
-            actual_target = target
+        # Now apply the action (this will also call apply_mechanics and update state)
+        state, result = self.game_manager.apply_action(action_name, agent_id, target)
 
-        # Custom EMTOM action - use GameStateManager
-        if action_name in EMTOM_ACTIONS:
-            state, result = self.game_manager.apply_action(action_name, agent_id, target)
-            obs_text = result.observation
-            # Override with mechanic observation if present
-            if mechanic_effect:
-                obs_text = mechanic_effect.get("observation", obs_text)
+        # If mechanic blocked the action, return without executing in Habitat
+        if mech_result.blocked:
             return {
-                "success": result.success,
-                "observation": obs_text,
-                "surprise": result.surprise_trigger,
-                "mechanic": mechanic_effect.get("mechanic") if mechanic_effect else None,
+                "success": False,
+                "observation": mech_result.observation,
+                "surprise": mech_result.surprise_trigger,
+                "blocked": True,
             }
 
-        # Partnr tools
+        # Get the actual action to execute (may be transformed by mechanic)
+        actual_action = mech_result.actual_action or action_name
+        actual_target = mech_result.actual_target or target
+        mechanic_observation = mech_result.observation if mech_result.applies else None
+        surprise_trigger = mech_result.surprise_trigger if mech_result.applies else result.surprise_trigger
+
+        # Custom EMTOM action - already handled by GameStateManager
+        if action_name in EMTOM_ACTIONS:
+            return {
+                "success": result.success,
+                "observation": mechanic_observation or result.observation,
+                "surprise": surprise_trigger,
+            }
+
+        # Partnr tools - execute in Habitat
         if self.agent is None:
             return {
                 "success": False,
@@ -611,10 +617,23 @@ class HabitatExplorer:
             tool = self.agent.tools[actual_action]
 
             while skill_steps < self._max_skill_steps:
-                raw_obs, reward, done, info = self.env.step({0: low_level_action})
+                try:
+                    raw_obs, reward, done, info = self.env.step({0: low_level_action})
+                except AssertionError as e:
+                    # Episode ended - handle gracefully
+                    if "Episode over" in str(e):
+                        obs_text = f"Episode ended during {actual_action}[{actual_target}]"
+                        self._episode_done = True
+                        break
+                    raise
                 parsed_obs = self.env.parse_observations(raw_obs)
                 self._record_frame(parsed_obs, {0: (actual_action, actual_target)})
                 skill_steps += 1
+
+                # Check if episode ended
+                if done:
+                    self._episode_done = True
+                    break
 
                 if hasattr(tool, 'skill') and hasattr(tool.skill, '_is_skill_done'):
                     is_done = tool.skill._is_skill_done(
@@ -632,141 +651,15 @@ class HabitatExplorer:
 
             obs_text = response or f"Executed {actual_action}[{actual_target}]"
 
-        # Execute on mirror target if state_mirroring
-        if mechanic_effect and mechanic_effect.get("mirror_target"):
-            mirror_target = mechanic_effect["mirror_target"]
-            if actual_action in self.agent.tools:
-                self.agent.process_high_level_action(actual_action, mirror_target, obs)
-
-        # Override observation with mechanic effect text
-        if mechanic_effect:
-            mechanic_obs = mechanic_effect.get("observation", "")
-            if mechanic_obs:
-                obs_text = mechanic_obs
+        # Use mechanic observation if one was generated
+        if mechanic_observation:
+            obs_text = mechanic_observation
 
         return {
             "success": True,
             "observation": obs_text,
-            "mechanic": mechanic_effect.get("mechanic") if mechanic_effect else None,
+            "surprise": surprise_trigger,
         }
-
-    def _check_mechanics(self, action_name: str, target: str) -> Optional[Dict[str, Any]]:
-        """Check if any mechanic should transform this action.
-
-        Mechanics are ALWAYS applied when conditions are met:
-        - inverse_state: Open becomes Close and vice versa
-        - remote_control: Action affects a different target
-        - counting_state: Action is BLOCKED until count reached
-        - conditional_unlock: Action is BLOCKED until prerequisite done
-        - state_mirroring: Action also affects mirrored object
-        - delayed_effect: Action queues effect for later
-        """
-        state = self.game_manager.get_state()
-
-        # Update interaction count for counting_state
-        new_state = state
-        if target in [b.get("target") for b in state.mechanic_bindings if b.get("mechanic_type") == "counting_state"]:
-            import copy
-            new_state = copy.copy(state)
-            new_counts = copy.copy(state.interaction_counts)
-            new_counts[target] = new_counts.get(target, 0) + 1
-            new_state.interaction_counts = new_counts
-            self.game_manager.set_state(new_state)
-
-        # === INVERSE STATE: Action does the opposite ===
-        if target in state.inverse_objects:
-            inverse_map = {"Open": "Close", "Close": "Open", "Pick": "Place", "Place": "Pick"}
-            if action_name in inverse_map:
-                opposite = inverse_map[action_name]
-                return {
-                    "mechanic": "inverse_state",
-                    "actual_action": opposite,
-                    "actual_target": target,
-                    "observation": f"You try to {action_name.lower()} {target}, but it {opposite.lower()}s instead!",
-                    "block": False,
-                }
-
-        # === REMOTE CONTROL: Action affects a different object ===
-        if target in state.remote_mappings:
-            remote_target, remote_state = state.remote_mappings[target]
-            return {
-                "mechanic": "remote_control",
-                "actual_action": action_name,
-                "actual_target": remote_target,
-                "observation": f"You {action_name.lower()} {target}, and {remote_target} responds!",
-                "block": False,
-                "also_execute_original": False,  # Only affect remote target
-            }
-
-        # === COUNTING STATE: Block until count reached ===
-        for binding in state.mechanic_bindings:
-            if binding.get("mechanic_type") == "counting_state" and binding.get("target") == target:
-                required = binding.get("required_count", 3)
-                current = new_state.interaction_counts.get(target, 0)
-                if current < required:
-                    return {
-                        "mechanic": "counting_state",
-                        "actual_action": None,  # BLOCK the action
-                        "actual_target": target,
-                        "observation": f"You try to {action_name.lower()} {target}... nothing happens. ({current}/{required} attempts)",
-                        "block": True,
-                    }
-                else:
-                    return {
-                        "mechanic": "counting_state",
-                        "actual_action": action_name,
-                        "actual_target": target,
-                        "observation": f"After {required} attempts, {target} finally responds to your {action_name.lower()}!",
-                        "block": False,
-                    }
-
-        # === CONDITIONAL UNLOCK: Block until prerequisite done ===
-        for binding in state.mechanic_bindings:
-            if binding.get("mechanic_type") == "conditional_unlock" and binding.get("target") == target:
-                prereq = binding.get("prerequisite")
-                if target not in state.unlocked_targets:
-                    return {
-                        "mechanic": "conditional_unlock",
-                        "actual_action": None,  # BLOCK the action
-                        "actual_target": target,
-                        "observation": f"You try to {action_name.lower()} {target}, but it won't budge. Something else needs to happen first...",
-                        "block": True,
-                        "prerequisite": prereq,
-                    }
-
-        # === STATE MIRRORING: Also affect mirrored object ===
-        for pair in state.mirror_pairs:
-            if len(pair) >= 2:
-                obj_a, obj_b = pair[0], pair[1]
-                mirror_target = None
-                if target == obj_a:
-                    mirror_target = obj_b
-                elif target == obj_b:
-                    mirror_target = obj_a
-                if mirror_target:
-                    return {
-                        "mechanic": "state_mirroring",
-                        "actual_action": action_name,
-                        "actual_target": target,
-                        "mirror_target": mirror_target,
-                        "observation": f"You {action_name.lower()} {target}, and {mirror_target} mirrors the action!",
-                        "block": False,
-                    }
-
-        # === DELAYED EFFECT: Queue effect for later ===
-        for binding in state.mechanic_bindings:
-            if binding.get("mechanic_type") == "delayed_effect" and binding.get("target") == target:
-                delay = binding.get("delay_steps", 2)
-                return {
-                    "mechanic": "delayed_effect",
-                    "actual_action": action_name,
-                    "actual_target": target,
-                    "observation": f"You {action_name.lower()} {target}. You hear a faint click... something will happen in {delay} steps.",
-                    "block": False,
-                    "delay_steps": delay,
-                }
-
-        return None
 
     def _record_frame(self, obs: Dict[str, Any], actions: Dict[int, Any]) -> None:
         """Record a video frame."""
