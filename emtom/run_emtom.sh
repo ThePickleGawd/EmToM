@@ -13,6 +13,7 @@ cd "$PROJECT_ROOT"
 MAX_SIM_STEPS=20000
 MAX_LLM_CALLS=20
 EXPLORATION_STEPS=50
+TASK_TYPE=1  # 1 = Theory of Mind (default), 2 = Regular
 MECHANICS=""
 TASK_FILE=""
 LLM_AGENTS=""
@@ -32,8 +33,8 @@ print_usage() {
     echo "Exploration Options:"
     echo "  --steps N            Number of exploration steps (default: $EXPLORATION_STEPS)"
     echo ""
-    echo "Task Generation:"
-    echo "  (Interactive prompt will ask for task type: 1=Theory of Mind, 2=Regular)"
+    echo "Task Generation Options:"
+    echo "  --task-type N        1=Theory of Mind (default), 2=Regular tasks"
     echo ""
     echo "Benchmark Options:"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
@@ -72,31 +73,18 @@ run_exploration() {
 }
 
 run_generate() {
-    echo "=============================================="
-    echo "Running EMTOM Task Generation"
-    echo "=============================================="
-    echo ""
-    echo "Select the type of task to generate:"
-    echo "  1) Theory of Mind tasks"
-    echo "  2) Regular tasks"
-    echo ""
-    read -p "Enter your choice (1 or 2): " TASK_TYPE
-
-    # Validate input
-    while [ "$TASK_TYPE" != "1" ] && [ "$TASK_TYPE" != "2" ]; do
-        echo "Invalid choice. Please enter 1 or 2."
-        read -p "Enter your choice (1 or 2): " TASK_TYPE
-    done
-
     if [ "$TASK_TYPE" -eq 1 ]; then
         TASK_TYPE_NAME="Theory of Mind"
     else
         TASK_TYPE_NAME="Regular"
     fi
 
-    echo ""
-    echo "Task Type: $TASK_TYPE_NAME (option $TASK_TYPE)"
-    echo "This generates tasks from exploration trajectories."
+    echo "=============================================="
+    echo "Running EMTOM Task Generation"
+    echo "=============================================="
+    echo "Task Type: $TASK_TYPE_NAME"
+    echo "(use --task-type 2 for regular tasks)"
+    echo "=============================================="
     echo ""
     python emtom/examples/generate_tasks.py \
         --trajectory-dir data/emtom/trajectories \
@@ -182,6 +170,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --steps)
             EXPLORATION_STEPS=$2
+            shift 2
+            ;;
+        --task-type)
+            TASK_TYPE=$2
             shift 2
             ;;
         --mechanics)

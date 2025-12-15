@@ -30,10 +30,15 @@ class EMTOMTool(Tool):
         super().__init__(name_arg or self.action_name, agent_uid_arg)
         self.env_interface: Optional["EnvironmentInterface"] = None
         self._action = None
+        self._game_manager = None
 
     def set_environment(self, env_interface: "EnvironmentInterface"):
         """Set the environment interface for this tool."""
         self.env_interface = env_interface
+
+    def set_game_manager(self, game_manager):
+        """Set the GameStateManager for this tool to access game state."""
+        self._game_manager = game_manager
 
     def to(self, device):
         """Compatibility method for device placement."""
@@ -62,6 +67,7 @@ class EMTOMTool(Tool):
             "entities": [],
             "entity_details": {},
             "other_agents": [],
+            "hidden_items": {},
         }
 
         try:
@@ -87,6 +93,19 @@ class EMTOMTool(Tool):
                         }
         except Exception:
             pass
+
+        # Get hidden_items from GameStateManager if available
+        if self._game_manager:
+            try:
+                state = self._game_manager.get_state()
+                # Build hidden_items dict from object_properties
+                for obj_id, props in state.object_properties.items():
+                    if "hidden_inside" in props:
+                        world_state["hidden_items"][obj_id] = {
+                            "contains": props["hidden_inside"]
+                        }
+            except Exception:
+                pass
 
         return world_state
 
@@ -181,11 +200,30 @@ class WriteMessageTool(EMTOMTool):
         return ["FURNITURE_INSTANCE"]
 
 
+class ShakeTool(EMTOMTool):
+    """Tool for shaking objects to reveal hidden items."""
+
+    action_name = "Shake"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Shake[object]: Shake an object to reveal any hidden items inside. "
+            "Items will fall out and can be picked up. Like finding a key in "
+            "a vase. Example: Shake[vase_1]"
+        )
+
+    @property
+    def argument_types(self) -> List[str]:
+        return ["OBJECT_INSTANCE", "FURNITURE_INSTANCE"]
+
+
 # Registry of EMTOM tools
 EMTOM_TOOLS = {
     "Hide": HideTool,
     "Inspect": InspectTool,
     "WriteMessage": WriteMessageTool,
+    "Shake": ShakeTool,
 }
 
 

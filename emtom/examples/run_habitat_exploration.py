@@ -134,6 +134,13 @@ def run_exploration_loop(env_interface, config, max_steps=50, seed=42):
     state, bindings = game_manager.auto_bind_mechanics()
     print(f"  Bindings: {bindings}")
 
+    # Pass game_manager to EMTOM tools so they can access hidden_items
+    if agent is not None:
+        print("  Passing game_manager to EMTOM tools...")
+        for tool_name, tool in agent.tools.items():
+            if hasattr(tool, 'set_game_manager'):
+                tool.set_game_manager(game_manager)
+
     # Setup LLM client
     print("\nSetting up LLM client...")
     from habitat_llm.llm import instantiate_llm

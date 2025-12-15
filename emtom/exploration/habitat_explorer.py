@@ -381,11 +381,12 @@ class HabitatExplorer:
             print("Assigned!")
 
             if action_choice.action == "Done":
-                print(f"Agent_{agent_uid}_Observation: Exploration complete.")
-                self._is_running = False
+                # Don't allow Done during exploration - re-prompt with a hint
+                print(f"Agent_{agent_uid}_Observation: Keep exploring! There's more to discover.")
+                self.curiosity.add_observation(agent_id, "Keep exploring! There's more to discover.")
                 action_results[agent_id] = {
                     "success": True,
-                    "observation": "Exploration complete.",
+                    "observation": "Keep exploring! There's more to discover.",
                 }
                 continue
 
@@ -624,8 +625,9 @@ class HabitatExplorer:
     def _check_mechanics(self, action_name: str, target: str) -> Optional[Dict[str, Any]]:
         """Check if any mechanic should transform this action."""
         state = self.game_manager.get_state()
+        effects = []
 
-        # Inverse state
+        # Inverse state - action does the opposite
         if target in state.inverse_objects:
             inverse_map = {"Open": "Close", "Close": "Open"}
             if action_name in inverse_map:
@@ -637,7 +639,7 @@ class HabitatExplorer:
                     "observation": f"You try to {action_name.lower()} {target}, but it {opposite.lower()}s instead!",
                 }
 
-        # Remote control
+        # Remote control - action affects a different object
         if target in state.remote_mappings:
             remote_target, remote_state = state.remote_mappings[target]
             return {
@@ -645,6 +647,52 @@ class HabitatExplorer:
                 "actual_action": action_name,
                 "actual_target": remote_target,
                 "observation": f"You {action_name.lower()} {target}, but {remote_target} responds instead!",
+            }
+
+        # Counting state - requires multiple interactions
+        for binding in state.mechanic_bindings:
+            if binding.get("mechanic_type") == "counting_state" and binding.get("target") == target:
+                required = binding.get("required_count", 3)
+                current = state.interaction_counts.get(target, 0) + 1
+                if current < required:
+                    effects.append(f"Nothing happens... ({current}/{required} attempts)")
+                else:
+                    effects.append(f"After {required} attempts, {target} finally responds!")
+
+        # Delayed effect - effect happens later
+        for binding in state.mechanic_bindings:
+            if binding.get("mechanic_type") == "delayed_effect" and binding.get("target") == target:
+                delay = binding.get("delay_steps", 2)
+                effects.append(f"You hear a faint click... something will happen in {delay} steps.")
+
+        # State mirroring - another object mirrors this one
+        for pair in state.mirror_pairs:
+            if len(pair) >= 2:
+                obj_a, obj_b = pair[0], pair[1]
+                if target == obj_a:
+                    effects.append(f"As you interact with {target}, {obj_b} also responds!")
+                elif target == obj_b:
+                    effects.append(f"As you interact with {target}, {obj_a} also responds!")
+
+        # Conditional unlock - check if blocked
+        for binding in state.mechanic_bindings:
+            if binding.get("mechanic_type") == "conditional_unlock" and binding.get("target") == target:
+                prereq = binding.get("prerequisite")
+                if target not in state.unlocked_targets:
+                    effects.append(f"{target} seems locked. Maybe you need to do something else first...")
+
+        # Sequence lock - show sequence progress
+        if target in state.sequence_progress and target not in state.sequence_unlocked:
+            progress = state.sequence_progress[target]
+            effects.append(f"You hear a click... sequence progress: step {progress}")
+
+        # Return combined effects if any
+        if effects:
+            return {
+                "mechanic": "multiple",
+                "actual_action": action_name,
+                "actual_target": target,
+                "observation": f"Executed {action_name}[{target}]. " + " ".join(effects),
             }
 
         return None
@@ -670,16 +718,16 @@ class HabitatExplorer:
         if self._dvu and self._dvu.frames:
             try:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"exploration_{timestamp}.mp4"
-                output_path = os.path.join(self.config.log_path, filename)
-                self._dvu.create_and_save_video(output_path, fps=self.config.video_fps)
-                video_paths["third_person"] = output_path
+                self._dvu._make_video(play=False, postfix=f"exploration_{timestamp}")
+                # Video is saved to {output_dir}/videos/video-exploration_{timestamp}-{ms}.mp4
+                video_paths["third_person"] = f"{self.config.log_path}/videos/"
             except Exception as e:
                 print(f"[HabitatExplorer] Failed to save third-person video: {e}")
 
-        if self._fpv_recorder:
+        if self._fpv_recorder and self._fpv_recorder._frames:
             try:
-                fpv_paths = self._fpv_recorder.save_videos()
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                fpv_paths = self._fpv_recorder.save(postfix=timestamp)
                 video_paths.update(fpv_paths)
             except Exception as e:
                 print(f"[HabitatExplorer] Failed to save FPV video: {e}")

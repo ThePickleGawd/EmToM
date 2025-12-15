@@ -60,27 +60,46 @@ def load_tasks(task_file: str) -> list:
     return tasks
 
 
-def task_to_instruction(task: GeneratedTask) -> str:
-    """Convert an EMTOM task to a natural language instruction for the agents.
+def task_to_instruction(task: GeneratedTask, for_agent: str = None) -> str:
+    """Convert an EMTOM task to a natural language instruction.
 
-    Note: We don't include global mechanic hints here since both agents see this instruction.
-    Agent-specific knowledge (including mechanic knowledge for agent_0) is in the task's
-    agent_knowledge section.
+    For Theory of Mind tasks, agent_0 gets mechanic knowledge while agent_1 doesn't.
+    This creates asymmetric information where agent_0 must communicate discoveries.
+
+    Args:
+        task: The GeneratedTask to convert
+        for_agent: If specified, only include that agent's knowledge (for per-agent prompts)
     """
-    # Build an instruction that includes the task context
     instruction_parts = [
         f"Task: {task.title}",
         f"Description: {task.description}",
         f"Goal: {task.success_condition.description}",
     ]
 
-    # Add any special knowledge that agents have
-    # Note: This is where agent_0 gets mechanic knowledge and agent_1 doesn't
-    if task.agent_knowledge:
-        instruction_parts.append("\nAgent-specific knowledge (only visible to that agent):")
-        for agent_id, knowledge in task.agent_knowledge.items():
+    # For ToM tasks, only show knowledge to the appropriate agent
+    if task.theory_of_mind_required:
+        if for_agent:
+            # Per-agent instruction - show only that agent's knowledge
+            knowledge = task.agent_knowledge.get(for_agent, [])
             if knowledge:
-                instruction_parts.append(f"  {agent_id}: {', '.join(knowledge)}")
+                instruction_parts.append(f"\nYour knowledge: {', '.join(knowledge)}")
+            else:
+                instruction_parts.append("\nYou have no special knowledge about this environment.")
+        else:
+            # Shared instruction - hint that knowledge is asymmetric
+            instruction_parts.append("\nNote: Each agent has different knowledge about this environment.")
+            instruction_parts.append("agent_0 has discovered something important that agent_1 doesn't know.")
+    else:
+        # For regular tasks, show all knowledge to everyone
+        if task.agent_knowledge:
+            instruction_parts.append("\nKnown information:")
+            for agent_id, knowledge in task.agent_knowledge.items():
+                if knowledge:
+                    instruction_parts.append(f"  {agent_id}: {', '.join(knowledge)}")
+
+    # Add communication hint for ToM tasks
+    if task.theory_of_mind_required:
+        instruction_parts.append("\nHint: Use Communicate[message] to share discoveries with your teammate.")
 
     return "\n".join(instruction_parts)
 
@@ -195,10 +214,11 @@ def main(config: DictConfig) -> None:
     for agent in eval_runner.agents.values():
         agent_uid = agent.uid
 
-        # Add EMTOM tools (Hide, Inspect, WriteMessage)
+        # Add EMTOM tools (Hide, Inspect, WriteMessage, Shake)
         emtom_tools = get_emtom_tools(agent_uid=agent_uid)
         for tool_name, tool in emtom_tools.items():
             tool.set_environment(env_interface)
+            tool.set_game_manager(game_manager)
             agent.tools[tool_name] = tool
             cprint(f"  Added {tool_name} to agent_{agent_uid}", "green")
 

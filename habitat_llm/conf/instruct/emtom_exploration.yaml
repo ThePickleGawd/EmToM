@@ -36,8 +36,7 @@ prompt: |-
         Agent_{id}_Action: Communicate[Discovery: Opening fridge_0 also opens drawer_3 in bedroom - they are linked!]
         Assigned!
         Agent_{id}_Observation: Message delivered. Your teammate will see your message in their context.
-        Thought: I found a mechanic. Let me continue exploring.
-        Final Thought: Exit!
+        Thought: I found a mechanic. Let me continue exploring other areas.
 
         Example 2:
         Task: Explore and test object interactions for surprising behaviors.
@@ -57,8 +56,7 @@ prompt: |-
         Agent_{id}_Action: Communicate[Discovery: Hiding apple_0 makes cup_1 glow - inverse state mechanic!]
         Assigned!
         Agent_{id}_Observation: Message delivered. Your teammate will see your message in their context.
-        Thought: I discovered a mechanic. Let me explore more.
-        Final Thought: Exit!
+        Thought: I discovered a mechanic. Let me explore more areas.
 
         Example 3:
         Task: Coordinate with teammate to explore and find hidden mechanics.
@@ -86,14 +84,13 @@ prompt: |-
         Agent_{id}_Action: Communicate[Discovery: chest_0 requires 3 open attempts - counting mechanic!]
         Assigned!
         Agent_{id}_Observation: Message delivered. Your teammate will see your message in their context.
-        Thought: I have discovered and shared the mechanic. Task complete.
-        Final Thought: Exit!
+        Thought: I have discovered and shared the mechanic. Let me explore other rooms.
 
         Task: {input}
         Thought:
 
 stopword: "Assigned!"
-end_expression: "Final Thought:"
+end_expression: "EXPLORATION_COMPLETE_DO_NOT_USE"
 
 actions_parser:
   _target_: habitat_llm.llm.instruct.utils.actions_parser
