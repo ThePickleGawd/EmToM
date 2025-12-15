@@ -762,10 +762,63 @@ class HabitatExplorer:
         }
 
     def _record_frame(self, obs: Dict[str, Any], actions: Dict[int, Any]) -> None:
-        """Record a video frame."""
+        """Record a video frame with step counter and inventory overlays."""
+        import cv2
+
         if self._dvu:
             try:
                 self._dvu._store_for_video(obs, actions, popup_images={})
+
+                # Add step counter and inventory overlays to the last frame
+                if self._dvu.frames:
+                    frame = self._dvu.frames[-1]
+                    h, w = frame.shape[:2]
+
+                    # Step counter (top right)
+                    step_text = f"Step: {self.step_count + 1}/{self.config.max_steps}"
+                    text_size = cv2.getTextSize(step_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+                    x_pos = w - text_size[0] - 20
+                    cv2.putText(
+                        frame,
+                        step_text,
+                        (x_pos, 35),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (255, 255, 255),
+                        2,
+                    )
+
+                    # Inventory (bottom right)
+                    state = self.game_manager.get_state()
+                    world_objects = getattr(state, 'world_objects', {})
+
+                    # Collect inventory items for all agents
+                    inv_items = []
+                    for agent_id in self.config.agent_ids:
+                        agent_inv = state.agent_inventory.get(agent_id, [])
+                        for item_id in agent_inv:
+                            if item_id in world_objects:
+                                inv_items.append(world_objects[item_id].get("name", item_id))
+                            else:
+                                inv_items.append(item_id)
+
+                    if inv_items:
+                        inv_text = f"Inventory: {', '.join(inv_items)}"
+                    else:
+                        inv_text = "Inventory: (empty)"
+
+                    text_size = cv2.getTextSize(inv_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+                    x_pos = w - text_size[0] - 20
+                    y_pos = h - 20
+                    cv2.putText(
+                        frame,
+                        inv_text,
+                        (x_pos, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2,
+                    )
             except Exception:
                 pass
 
