@@ -404,23 +404,43 @@ class HabitatExplorer:
 
             self.curiosity.add_observation(agent_id, obs_text)
 
-            # Check for surprise from LLM reasoning OR from mechanic triggers
-            surprise_text = action_choice.surprise or result.get("surprise")
-            if surprise_text:
-                print(f"\n*** SURPRISE DETECTED ***")
-                print(f"    {surprise_text}")
+            # Check for surprise - if action was blocked or had unexpected outcome,
+            # use LLM to assess what the surprise actually is
+            action_blocked = result.get("blocked", False)
+            mechanic_trigger = result.get("surprise")
+            llm_surprise = action_choice.surprise
 
-                surprise_record = SurpriseRecord(
-                    step=self.step_count,
+            if action_blocked or mechanic_trigger or llm_surprise:
+                # Use LLM to assess what the actual surprise is
+                expected_outcome = f"The {action_choice.target} would open normally" if action_choice.action.lower() == "open" else f"Normal {action_choice.action.lower()} behavior"
+
+                surprise_assessment = self.surprise_detector.assess_surprise(
                     agent_id=agent_id,
                     action=action_choice.action,
-                    target=action_choice.target or "",
-                    observation=obs_text,
-                    surprise_level=4 if result.get("surprise") else 3,  # Higher level for mechanic surprises
-                    explanation=surprise_text,
+                    target=action_choice.target,
+                    expected=expected_outcome,
+                    actual=obs_text,
+                    trigger=mechanic_trigger,  # Pass system hint if any
                 )
-                step_surprises.append(surprise_record)
-                self.surprise_moments.append(surprise_record)
+
+                if surprise_assessment.is_surprised:
+                    print(f"\n*** SURPRISE DETECTED ***")
+                    print(f"    Level: {surprise_assessment.level}/5")
+                    print(f"    Explanation: {surprise_assessment.explanation}")
+                    if surprise_assessment.hypothesis:
+                        print(f"    Hypothesis: {surprise_assessment.hypothesis}")
+
+                    surprise_record = SurpriseRecord(
+                        step=self.step_count,
+                        agent_id=agent_id,
+                        action=action_choice.action,
+                        target=action_choice.target or "",
+                        observation=obs_text,
+                        surprise_level=surprise_assessment.level,
+                        explanation=surprise_assessment.explanation,
+                    )
+                    step_surprises.append(surprise_record)
+                    self.surprise_moments.append(surprise_record)
 
         # Record frame
         obs = self.env.get_observations()
@@ -642,8 +662,62 @@ class HabitatExplorer:
         # Now apply the action (this will also call apply_mechanics and update state)
         state, result = self.game_manager.apply_action(action_name, agent_id, target)
 
-        # If mechanic blocked the action, return without executing in Habitat
+        # If mechanic blocked the action (e.g., locked door), first navigate to the target
+        # so the video shows the agent approaching before being blocked
         if mech_result.blocked:
+            # Extract base target name (remove code suffix like "[#127]")
+            import re
+            base_target = re.sub(r'\s*\[#\d+\]$', '', target)
+
+            # Navigate to the target first (if we have an agent with navigation)
+            if self.agent is not None and "Navigate" in self.agent.tools:
+                try:
+                    obs = self.env.get_observations()
+                    low_level_action, response = self.agent.process_high_level_action(
+                        "Navigate", base_target, obs
+                    )
+
+                    if low_level_action is not None:
+                        tool = self.agent.tools["Navigate"]
+                        skill_steps = 0
+
+                        while skill_steps < self._max_skill_steps:
+                            try:
+                                raw_obs, reward, done, info = self.env.step({0: low_level_action})
+                            except AssertionError as e:
+                                if "Episode over" in str(e):
+                                    self._episode_done = True
+                                    break
+                                raise
+                            parsed_obs = self.env.parse_observations(raw_obs)
+                            self._record_frame(parsed_obs, {0: (action_name, target)})
+                            skill_steps += 1
+
+                            if done:
+                                self._episode_done = True
+                                break
+
+                            if hasattr(tool, 'skill') and hasattr(tool.skill, '_is_skill_done'):
+                                is_done = tool.skill._is_skill_done(
+                                    raw_obs, None, None, torch.ones(1, 1), 0
+                                )
+                                if is_done:
+                                    break
+
+                            low_level_action, response = self.agent.process_high_level_action(
+                                "Navigate", base_target, raw_obs
+                            )
+                            if low_level_action is None:
+                                break
+
+                        # Record a few extra frames at the blocked door for visual clarity
+                        for _ in range(5):
+                            obs = self.env.get_observations()
+                            self._record_frame(obs, {0: (action_name, target)})
+                except Exception as e:
+                    # If navigation fails, continue with the blocked response
+                    print(f"[HabitatExplorer] Navigation to blocked target failed: {e}")
+
             return {
                 "success": False,
                 "observation": mech_result.observation,
@@ -668,16 +742,92 @@ class HabitatExplorer:
         # Handle Pick action for virtual objects (e.g., key spawned on table)
         if actual_action == "Pick":
             state = self.game_manager.get_state()
+            import re as re_module
+
+            # Helper to check if target matches a virtual object
+            def matches_virtual_object(target_name, obj_id, obj_info):
+                obj_name = obj_info.get("name", obj_id)
+                # Exact match
+                if target_name == obj_name or target_name == obj_id:
+                    return True
+                # Case-insensitive match
+                if target_name.lower() == obj_name.lower() or target_name.lower() == obj_id.lower():
+                    return True
+                # For keys: match if target contains the key's code
+                # e.g., target="key [#127]" matches obj_name="key [#127]"
+                # or target="key" matches any key
+                if "key" in obj_name.lower() and "key" in target_name.lower():
+                    # Extract code from object name (e.g., "key [#127]" -> "127")
+                    obj_code_match = re_module.search(r'\[#(\d+)\]', obj_name)
+                    target_code_match = re_module.search(r'\[#(\d+)\]', target_name)
+                    if obj_code_match and target_code_match:
+                        # Both have codes - must match
+                        return obj_code_match.group(1) == target_code_match.group(1)
+                    elif not target_code_match:
+                        # Target is just "key" without code - match any key
+                        return True
+                return False
+
             # Check if target matches a virtual object by name or id
             for obj_id, obj_info in state.world_objects.items():
                 obj_name = obj_info.get("name", obj_id)
-                if actual_target == obj_name or actual_target == obj_id:
+                if matches_virtual_object(actual_target, obj_id, obj_info):
                     # Check if already picked up
                     if obj_id in state.agent_inventory.get(agent_id, []):
                         return {
                             "success": False,
                             "observation": f"You already have the {obj_name}.",
                         }
+
+                    # Navigate to the key's location first (for video)
+                    location = obj_info.get("location", "the table")
+                    if self.agent is not None and "Navigate" in self.agent.tools and location:
+                        try:
+                            obs = self.env.get_observations()
+                            low_level_action, response = self.agent.process_high_level_action(
+                                "Navigate", location, obs
+                            )
+
+                            if low_level_action is not None:
+                                tool = self.agent.tools["Navigate"]
+                                skill_steps = 0
+
+                                while skill_steps < self._max_skill_steps:
+                                    try:
+                                        raw_obs, reward, done, info = self.env.step({0: low_level_action})
+                                    except AssertionError as e:
+                                        if "Episode over" in str(e):
+                                            self._episode_done = True
+                                            break
+                                        raise
+                                    parsed_obs = self.env.parse_observations(raw_obs)
+                                    self._record_frame(parsed_obs, {0: ("Pick", actual_target)})
+                                    skill_steps += 1
+
+                                    if done:
+                                        self._episode_done = True
+                                        break
+
+                                    if hasattr(tool, 'skill') and hasattr(tool.skill, '_is_skill_done'):
+                                        is_done = tool.skill._is_skill_done(
+                                            raw_obs, None, None, torch.ones(1, 1), 0
+                                        )
+                                        if is_done:
+                                            break
+
+                                    low_level_action, response = self.agent.process_high_level_action(
+                                        "Navigate", location, raw_obs
+                                    )
+                                    if low_level_action is None:
+                                        break
+
+                                # Record a few extra frames at the pickup location
+                                for _ in range(3):
+                                    obs = self.env.get_observations()
+                                    self._record_frame(obs, {0: ("Pick", actual_target)})
+                        except Exception as e:
+                            print(f"[HabitatExplorer] Navigation to key location failed: {e}")
+
                     # Add to inventory
                     import copy
                     new_state = copy.copy(state)
@@ -689,10 +839,29 @@ class HabitatExplorer:
                     new_state.agent_inventory[agent_id].append(obj_id)
                     self.game_manager.set_state(new_state)
 
-                    location = obj_info.get("location", "the table")
                     return {
                         "success": True,
                         "observation": f"\033[92m✓ You pick up the {obj_name} from {location}. It's now in your inventory.\033[0m",
+                    }
+
+            # If we're looking for a key but didn't find it, provide helpful error
+            if "key" in actual_target.lower():
+                # List available keys
+                available_keys = [
+                    obj_info.get("name", oid)
+                    for oid, obj_info in state.world_objects.items()
+                    if "key" in obj_info.get("name", oid).lower()
+                    and oid not in state.agent_inventory.get(agent_id, [])
+                ]
+                if available_keys:
+                    return {
+                        "success": False,
+                        "observation": f"Could not find '{actual_target}'. Available keys: {', '.join(available_keys)}",
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "observation": f"There is no key here. Try exploring to find one.",
                     }
 
         # Partnr tools - execute in Habitat

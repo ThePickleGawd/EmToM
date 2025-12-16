@@ -242,18 +242,23 @@ class CuriosityModel:
             )
 
         # Extract Action - try formats in order of preference
+        # Note: Use greedy (.+) to handle nested brackets in targets
+        # e.g., Pick[key [#127]] should capture "key [#127]" as the full target
+        # The greedy match will find the LAST closing char on the line
+        # Also handle LLM typos like ) instead of ] for closing bracket
+
         # 1. Agent_{id}_Action: ActionName[target]
-        action_pattern = rf"Agent_{agent_uid}_Action:\s*(\w+)\[([^\]]*)\]"
+        action_pattern = rf"Agent_{agent_uid}_Action:\s*(\w+)\[(.+)[\]\)]"
         action_match = re.search(action_pattern, response)
 
         # 2. Agent_X_Action: ActionName[target] (any agent ID)
         if not action_match:
-            action_pattern = r"Agent_\d+_Action:\s*(\w+)\[([^\]]*)\]"
+            action_pattern = r"Agent_\d+_Action:\s*(\w+)\[(.+)[\]\)]"
             action_match = re.search(action_pattern, response)
 
         # 3. Simple ActionName[target] format (LLM sometimes omits prefix)
         if not action_match:
-            action_pattern = r"^(\w+)\[([^\]]*)\]"
+            action_pattern = r"^(\w+)\[(.+)[\]\)]"
             action_match = re.search(action_pattern, response.strip(), re.MULTILINE)
 
         if not action_match:
