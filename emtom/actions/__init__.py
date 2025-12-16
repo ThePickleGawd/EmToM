@@ -15,11 +15,11 @@ from emtom.actions.custom_actions import (
     ActionResult,
     EMTOMAction,
     EMTOMActionExecutor,
-    HideAction,
+    UseAction,
     InspectAction,
-    WriteMessageAction,
     EMTOM_ACTIONS,
     get_all_actions,
+    get_emtom_tools,
 )
 
 __all__ = [
@@ -31,10 +31,10 @@ __all__ = [
     "EMTOMAction",
     "EMTOMActionExecutor",
     # Actions (auto-registered)
-    "HideAction",
+    "UseAction",
     "InspectAction",
-    "WriteMessageAction",
     # Helpers
     "EMTOM_ACTIONS",
     "get_all_actions",
+    "get_emtom_tools",
 ]

@@ -52,7 +52,7 @@ from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 from habitat_llm.agent import Agent
 
 from emtom import GameStateManager, list_mechanics, MECHANIC_INFO, ActionExecutionResult
-from emtom.tools import get_emtom_tools
+from emtom.actions import get_emtom_tools
 from emtom.actions.custom_actions import EMTOM_ACTIONS, EMTOMActionExecutor
 from emtom.exploration.habitat_explorer import HabitatWorldAdapter
 

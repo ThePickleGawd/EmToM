@@ -52,7 +52,7 @@ def run_exploration_loop(env_interface, config, max_steps=50, seed=42):
     from emtom.exploration.curiosity import CuriosityModel
     from emtom.exploration.surprise_detector import SurpriseDetector
     from emtom import GameStateManager, list_mechanics
-    from emtom.tools import get_emtom_tools
+    from emtom.actions import get_emtom_tools
     from habitat_llm.agent import Agent
 
     # Get output directory from config

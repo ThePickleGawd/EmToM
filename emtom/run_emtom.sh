@@ -24,11 +24,11 @@ print_usage() {
     echo "Usage: ./emtom/run_emtom.sh <command> [task_type] [options]"
     echo ""
     echo "Commands:"
-    echo "  exploration    Run LLM-guided exploration in Habitat"
+    echo "  explore        Run LLM-guided exploration in Habitat"
     echo "  generate       Generate tasks from exploration trajectories"
     echo "  benchmark      Run benchmark with generated tasks"
     echo "  test           Human-in-the-loop testing mode (manual command input)"
-    echo "  all            Run full pipeline: exploration -> generate -> benchmark"
+    echo "  all            Run full pipeline: explore -> generate -> benchmark"
     echo ""
     echo "Task Type (for generate/all commands):"
     echo "  1              Theory of Mind tasks (default)"
@@ -47,7 +47,7 @@ print_usage() {
     echo "  --llm-agents A1 A2   Agents to make LLM-controlled (e.g., agent_1)"
     echo ""
     echo "Examples:"
-    echo "  ./emtom/run_emtom.sh exploration --steps 30"
+    echo "  ./emtom/run_emtom.sh explore --steps 30"
     echo "  ./emtom/run_emtom.sh generate 1              # Generate ToM tasks"
     echo "  ./emtom/run_emtom.sh generate 2              # Generate regular tasks"
     echo "  ./emtom/run_emtom.sh all 1                   # Full pipeline with ToM tasks"
@@ -157,7 +157,7 @@ run_all() {
 COMMAND=""
 while [[ $# -gt 0 ]]; do
     case $1 in
-        exploration|generate|benchmark|test|all)
+        explore|generate|benchmark|test|all)
             COMMAND=$1
             shift
             # Check if next argument is a task type (1 or 2)
@@ -218,7 +218,7 @@ if [ -z "$COMMAND" ]; then
 fi
 
 case $COMMAND in
-    exploration)
+    explore)
         run_exploration
         ;;
     generate)

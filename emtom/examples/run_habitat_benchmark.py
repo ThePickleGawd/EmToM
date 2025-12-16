@@ -39,7 +39,7 @@ from habitat_llm.evaluation import DecentralizedEvaluationRunner
 from habitat_llm.utils import cprint, setup_config, fix_config
 
 from emtom.task_gen import GeneratedTask
-from emtom.tools import get_emtom_tools
+from emtom.actions import get_emtom_tools
 from emtom import GameStateManager, list_mechanics
 from emtom.exploration.habitat_explorer import HabitatWorldAdapter
 
