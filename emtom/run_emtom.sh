@@ -119,9 +119,9 @@ run_test() {
     echo "LLM agents: ${LLM_AGENTS:-none (all human-controlled)}"
     echo "=============================================="
     echo ""
-    echo "Commands: Open[target], Close[target], Navigate[target], Pick[target]"
-    echo "          Hide[target], Inspect[target], WriteMessage[target]"
-    echo "          llm, status, mechanics, history, help, quit"
+    echo "Actions: Navigate[target], Open[target], Close[target], Pick[target], Place[target]"
+    echo "         Use[target], Inspect[target], Communicate[message]"
+    echo "Commands: status, mechanics, history, skip, quit, help"
     echo ""
 
     # Build command arguments
@@ -132,14 +132,15 @@ run_test() {
     if [ -n "$TASK_FILE" ]; then
         CMD_ARGS="$CMD_ARGS --task $TASK_FILE"
         # Use task mechanics by default when task is provided
-        CMD_ARGS="$CMD_ARGS --use-task-mechanics"
+        CMD_ARGS="$CMD_ARGS"
     fi
     if [ -n "$LLM_AGENTS" ]; then
         CMD_ARGS="$CMD_ARGS --llm-agents $LLM_AGENTS"
     fi
 
+    # Use same config as benchmark (emtom_two_robots has planner config)
     python emtom/examples/run_human_test.py \
-        --config-name examples/planner_multi_agent_demo_config \
+        --config-name examples/emtom_two_robots \
         $CMD_ARGS \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-human_test"
 }

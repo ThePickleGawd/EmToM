@@ -117,6 +117,7 @@ class TrajectoryLogger:
             "start_time": datetime.now().isoformat(),
             "agent_ids": agent_ids,
             "mechanics_active": mechanics_active or [],
+            "mechanic_bindings": {},  # Actual bindings: {mechanic_type: {trigger, target, ...}}
             "metadata": metadata or {},
             "scene_inventory": {},  # Will store all objects/furniture in scene
             "steps": [],
@@ -128,6 +129,25 @@ class TrajectoryLogger:
         self._started = True
 
         return episode_id
+
+    def set_mechanic_bindings(self, bindings: Dict[str, Any]) -> None:
+        """
+        Set the mechanic bindings discovered during exploration.
+
+        This is critical for task generation - without bindings, tasks won't work!
+
+        Args:
+            bindings: Dict from auto_bind_mechanics(), e.g.:
+                {
+                    "inverse_state": {"target": "fridge_58"},
+                    "remote_control": {"trigger": "chest_of_drawers_52", "target": "table_59"},
+                    "counting_state": {"target": "cabinet_57", "required_count": 3},
+                }
+        """
+        if not self._started:
+            raise RuntimeError("Must call start_episode() before setting bindings")
+
+        self.current_episode["mechanic_bindings"] = bindings
 
     def set_scene_inventory(
         self,

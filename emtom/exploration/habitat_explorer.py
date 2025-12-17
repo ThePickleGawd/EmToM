@@ -318,16 +318,36 @@ class HabitatExplorer:
         return episode_data
 
     def _log_mechanic_bindings(self) -> None:
-        """Log active mechanic bindings."""
+        """Log active mechanic bindings and save to trajectory."""
         debug_info = self.game_manager.get_debug_info()
         active = debug_info.get("active_mechanics", [])
         self.logger.log_message(f"Active mechanics: {active}")
 
+        # Build structured bindings dict for trajectory
+        bindings = {}
+
         # Log specific bindings
         if debug_info.get("inverse_objects"):
-            self.logger.log_message(f"Inverse state targets: {list(debug_info['inverse_objects'])}")
+            inverse_list = list(debug_info["inverse_objects"])
+            self.logger.log_message(f"Inverse state targets: {inverse_list}")
+            bindings["inverse_state"] = {"targets": inverse_list}
+
         if debug_info.get("remote_mappings"):
-            self.logger.log_message(f"Remote control mappings: {debug_info['remote_mappings']}")
+            remote = debug_info["remote_mappings"]
+            self.logger.log_message(f"Remote control mappings: {remote}")
+            # Convert {trigger: (target, state)} to list of bindings
+            bindings["remote_control"] = [
+                {"trigger": trigger, "target": target_info[0], "target_state": target_info[1]}
+                for trigger, target_info in remote.items()
+            ]
+
+        if debug_info.get("interaction_counts"):
+            counts = debug_info["interaction_counts"]
+            self.logger.log_message(f"Counting state targets: {counts}")
+            bindings["counting_state"] = {"targets": counts}
+
+        # Save bindings to trajectory (critical for task generation!)
+        self.logger.set_mechanic_bindings(bindings)
 
     def _log_scene_info(self) -> None:
         """Log information about the current scene."""

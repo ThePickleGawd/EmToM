@@ -337,6 +337,14 @@ class TaskGenerator:
         scene_id = trajectory.get("metadata", {}).get("scene_id", "unknown")
         mechanics = trajectory.get("mechanics_active", [])
 
+        # Get mechanic bindings from trajectory (critical for tasks to work!)
+        raw_bindings = trajectory.get("mechanic_bindings", {})
+        mechanic_bindings = self._convert_trajectory_bindings(raw_bindings)
+        if mechanic_bindings:
+            print(f"  Found {len(mechanic_bindings)} mechanic bindings from exploration")
+        else:
+            print("  WARNING: No mechanic bindings found - tasks may not work!")
+
         # Format surprises for prompt
         surprise_text = self._format_surprises(surprises)
 
@@ -358,6 +366,7 @@ class TaskGenerator:
                     episode_id=trajectory.get("episode_id", "unknown"),
                     task_type=task_type,
                     task_type_str=task_type_str,
+                    mechanic_bindings=mechanic_bindings,
                 )
                 if task:
                     tasks.append(task)
@@ -368,6 +377,58 @@ class TaskGenerator:
                 print(f"FAIL: {e}")
 
         return tasks
+
+    def _convert_trajectory_bindings(
+        self, raw_bindings: Dict[str, Any]
+    ) -> List[MechanicBinding]:
+        """
+        Convert trajectory bindings to MechanicBinding objects.
+
+        Args:
+            raw_bindings: Dict from trajectory, e.g.:
+                {
+                    "inverse_state": {"targets": ["fridge_58"]},
+                    "remote_control": [{"trigger": "chest_52", "target": "table_59", "target_state": "is_open"}],
+                    "counting_state": {"targets": {"cabinet_57": 0}},
+                }
+
+        Returns:
+            List of MechanicBinding objects
+        """
+        bindings = []
+
+        # inverse_state: list of targets
+        if "inverse_state" in raw_bindings:
+            targets = raw_bindings["inverse_state"].get("targets", [])
+            for target in targets:
+                bindings.append(MechanicBinding(
+                    mechanic_type="inverse_state",
+                    trigger_object=target,
+                ))
+
+        # remote_control: list of {trigger, target, target_state}
+        if "remote_control" in raw_bindings:
+            rc_list = raw_bindings["remote_control"]
+            if isinstance(rc_list, list):
+                for rc in rc_list:
+                    bindings.append(MechanicBinding(
+                        mechanic_type="remote_control",
+                        trigger_object=rc["trigger"],
+                        target_object=rc["target"],
+                        target_state=rc.get("target_state", "is_open"),
+                    ))
+
+        # counting_state: dict of {target: current_count}
+        if "counting_state" in raw_bindings:
+            targets = raw_bindings["counting_state"].get("targets", {})
+            for target, count in targets.items():
+                bindings.append(MechanicBinding(
+                    mechanic_type="counting_state",
+                    trigger_object=target,
+                    count=3,  # Default required count
+                ))
+
+        return bindings
 
     def _format_surprises(self, surprises: List[Dict[str, Any]]) -> str:
         """Format surprises for the prompt."""
@@ -390,12 +451,14 @@ class TaskGenerator:
         episode_id: str,
         task_type: int = 1,
         task_type_str: str = "Theory of Mind (option 1)",
+        mechanic_bindings: Optional[List[MechanicBinding]] = None,
     ) -> Optional[GeneratedTask]:
         """Generate a single task using LLM.
 
         Args:
             task_type: 1 for Theory of Mind, 2 for Regular tasks
             task_type_str: Human-readable task type for prompt
+            mechanic_bindings: Pre-computed bindings from trajectory exploration
         """
         # Format scene inventory for prompt
         rooms = ", ".join(scene_inventory.get("rooms", [])[:10]) or "unknown"
@@ -424,7 +487,8 @@ class TaskGenerator:
                 task_data = json.loads(json_match.group())
                 return self._parse_task_response(
                     task_data, episode_id, num_agents, task_type,
-                    scene_id=scene_id, mechanics=mechanics
+                    scene_id=scene_id, mechanics=mechanics,
+                    mechanic_bindings=mechanic_bindings,
                 )
         except json.JSONDecodeError as e:
             print(f"  Failed to parse LLM response as JSON: {e}")
@@ -440,6 +504,7 @@ class TaskGenerator:
         task_type: int = 1,
         scene_id: str = "unknown",
         mechanics: List[str] = None,
+        mechanic_bindings: Optional[List[MechanicBinding]] = None,
     ) -> GeneratedTask:
         """Parse LLM response into GeneratedTask.
 
@@ -447,6 +512,7 @@ class TaskGenerator:
             task_type: 1 for Theory of Mind, 2 for Regular tasks
             scene_id: The Habitat scene ID
             mechanics: List of active mechanics for this task
+            mechanic_bindings: Pre-computed bindings from trajectory
         """
         task_id = f"task_{uuid.uuid4().hex[:8]}"
 
@@ -502,7 +568,7 @@ class TaskGenerator:
             category=TaskCategory(data.get("category", "coordination")),
             scene_id=scene_id,
             active_mechanics=mechanics or [],
-            mechanic_bindings=[],  # Will be populated later from trajectory
+            mechanic_bindings=mechanic_bindings or [],  # From trajectory exploration
             public_goal=data.get("public_goal", ""),
             public_context=data.get("public_context"),
             agent_secrets=data.get("agent_secrets", {}),

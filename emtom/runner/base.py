@@ -1,0 +1,426 @@
+"""
+Base runner class for EMTOM benchmark modes.
+
+This provides common setup for environment, GameStateManager, agents, tools,
+video recording, and logging across all modes (exploration, benchmark, test).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from abc import ABC, abstractmethod
+from datetime import datetime
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+from omegaconf import DictConfig, OmegaConf
+
+if TYPE_CHECKING:
+    from habitat_llm.agent.env import EnvironmentInterface
+    from habitat_llm.agent import Agent
+
+
+class EMTOMBaseRunner(ABC):
+    """
+    Base class for all EMTOM runners.
+
+    Handles common setup:
+    - Environment initialization (sensors, actions, measures)
+    - GameStateManager with mechanics
+    - Agent creation with tool injection
+    - Video recording (DebugVideoUtil)
+    - Output directory structure
+    """
+
+    def __init__(self, config: DictConfig):
+        """
+        Initialize the base runner.
+
+        Args:
+            config: Hydra configuration (should be already fixed/setup)
+        """
+        self.config = config
+
+        # Will be set during setup
+        self.env_interface: Optional["EnvironmentInterface"] = None
+        self.game_manager = None
+        self.world_adapter = None
+        self.agents: Dict[int, "Agent"] = {}
+        self.output_dir: str = ""
+
+        # Video recording
+        self._dvu = None
+        self._fpv_recorder = None
+
+        # State tracking
+        self._step_count = 0
+        self._action_history: List[Dict[str, Any]] = []
+        self._episode_done = False
+
+    def setup(
+        self,
+        env_interface: "EnvironmentInterface",
+        task_data: Optional[Dict[str, Any]] = None,
+        output_dir: Optional[str] = None,
+    ) -> None:
+        """
+        Full setup sequence. Call before run().
+
+        Args:
+            env_interface: Initialized EnvironmentInterface
+            task_data: Optional task data with mechanics/bindings
+            output_dir: Output directory for videos/logs
+        """
+        self.env_interface = env_interface
+        self.output_dir = output_dir or getattr(
+            self.config.paths, 'results_dir', 'outputs/emtom'
+        )
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        self._setup_game_manager(task_data)
+        self._setup_agents()
+        self._setup_tools()
+        self._setup_video()
+        self._setup_logging_dirs()
+
+    def _setup_game_manager(self, task_data: Optional[Dict[str, Any]] = None) -> None:
+        """Create GameStateManager, load mechanics, auto-bind if needed."""
+        from emtom import GameStateManager, list_mechanics
+        from emtom.exploration.habitat_explorer import HabitatWorldAdapter
+
+        self.game_manager = GameStateManager(self.env_interface)
+        self.world_adapter = HabitatWorldAdapter(self.env_interface, agent_uid=0)
+
+        # Determine mechanics to use
+        if task_data and task_data.get("mechanics"):
+            self.game_manager.initialize_from_task(task_data)
+            print(f"[EMTOMBaseRunner] Loaded mechanics from task: {len(task_data['mechanics'])} bindings")
+        else:
+            # Default: enable all mechanics
+            all_mechanics = list_mechanics()
+            self.game_manager.initialize_from_task({
+                "mechanics": [{"mechanic_type": m} for m in all_mechanics]
+            })
+            print(f"[EMTOMBaseRunner] Enabled all mechanics: {all_mechanics}")
+
+        # Get entities from environment and set on game state
+        entities = self.world_adapter.get_interactable_entities()
+        state = self.game_manager.get_state()
+        state.entities = entities
+        self.game_manager.set_state(state)
+
+        # Auto-bind if no explicit bindings provided
+        if not (task_data and task_data.get("mechanics")):
+            state, bindings = self.game_manager.auto_bind_mechanics()
+            if bindings:
+                print(f"[EMTOMBaseRunner] Auto-bound mechanics: {bindings}")
+
+    def _setup_agents(self) -> None:
+        """Create Agent instances from config."""
+        from habitat_llm.agent import Agent
+
+        if not hasattr(self.config, 'evaluation') or not hasattr(self.config.evaluation, 'agents'):
+            print("[EMTOMBaseRunner] Warning: No agents in config")
+            return
+
+        for uid, agent_conf in enumerate(self.config.evaluation.agents.values()):
+            if not hasattr(agent_conf, 'config'):
+                continue
+
+            agent = Agent(
+                uid=uid,
+                agent_conf=agent_conf.config,
+                env_interface=self.env_interface,
+            )
+            self.agents[uid] = agent
+            print(f"[EMTOMBaseRunner] Created agent_{uid} with tools: {list(agent.tools.keys())}")
+
+    def _setup_tools(self) -> None:
+        """Inject EMTOM tools (Use, Inspect) and Communicate into agents."""
+        from emtom.actions import get_emtom_tools
+        from habitat_llm.tools.perception.communication_tool import CommunicationTool
+
+        for uid, agent in self.agents.items():
+            # Add EMTOM tools
+            emtom_tools = get_emtom_tools(agent_uid=uid)
+            for tool_name, tool in emtom_tools.items():
+                tool.set_environment(self.env_interface)
+                tool.set_game_manager(self.game_manager)
+                agent.tools[tool_name] = tool
+
+            # Add Communicate tool
+            comm_config = OmegaConf.create({
+                "name": "Communicate",
+                "description": "Send a message to the other agent. Usage: Communicate[your message]. Keep messages on a single line."
+            })
+            comm_tool = CommunicationTool(comm_config)
+            comm_tool.agent_uid = uid
+            comm_tool.set_environment(self.env_interface)
+            agent.tools["Communicate"] = comm_tool
+
+            print(f"[EMTOMBaseRunner] Injected EMTOM tools into agent_{uid}")
+
+    def _setup_video(self) -> None:
+        """Initialize video recording utilities."""
+        save_video = True
+        if hasattr(self.config, 'evaluation') and hasattr(self.config.evaluation, 'save_video'):
+            save_video = self.config.evaluation.save_video
+
+        if not save_video:
+            return
+
+        try:
+            from habitat_llm.examples.example_utils import DebugVideoUtil
+
+            video_dir = os.path.join(self.output_dir, "videos")
+            os.makedirs(video_dir, exist_ok=True)
+
+            self._dvu = DebugVideoUtil(
+                self.env_interface,
+                video_dir,
+                unique_postfix=True,
+            )
+            print(f"[EMTOMBaseRunner] Video recording enabled: {video_dir}")
+        except Exception as e:
+            print(f"[EMTOMBaseRunner] Video setup failed: {e}")
+
+    def _setup_logging_dirs(self) -> None:
+        """Create output directory structure."""
+        for subdir in ["prompts", "traces", "planner-log"]:
+            path = os.path.join(self.output_dir, subdir)
+            os.makedirs(path, exist_ok=True)
+
+    def record_frame(self, observations: Dict[str, Any], actions: Optional[Dict] = None) -> None:
+        """Record a video frame."""
+        if self._dvu:
+            try:
+                self._dvu._store_for_video(observations, actions or {}, popup_images={})
+            except Exception:
+                pass
+
+    def execute_action(
+        self,
+        uid: int,
+        action_name: str,
+        target: str,
+    ) -> Dict[str, Any]:
+        """
+        Execute an action via GameStateManager and agent tools.
+
+        Routes all actions through GameStateManager first to apply mechanics,
+        then executes in Habitat via agent tools.
+
+        Args:
+            uid: Agent UID
+            action_name: Name of action (Navigate, Open, Pick, etc.)
+            target: Target entity name
+
+        Returns:
+            Dict with success, observation, and optional surprise info
+        """
+        import torch
+        from emtom.mechanics.handlers import apply_mechanics
+
+        agent_id = f"agent_{uid}"
+
+        # First check mechanics
+        mech_result = apply_mechanics(
+            action_name, agent_id, target, self.game_manager.get_state()
+        )
+
+        # Apply action through game manager (updates state)
+        state, result = self.game_manager.apply_action(action_name, agent_id, target)
+
+        # If mechanic blocked the action, return early
+        if mech_result.blocked:
+            return {
+                "success": False,
+                "observation": mech_result.observation,
+                "surprise": mech_result.surprise_trigger,
+                "blocked": True,
+            }
+
+        # Get actual action to execute (may be transformed by mechanic)
+        actual_action = mech_result.actual_action or action_name
+        actual_target = mech_result.actual_target or target
+        mechanic_observation = mech_result.observation if mech_result.applies else None
+
+        # Execute via agent tools
+        if uid not in self.agents:
+            return {
+                "success": False,
+                "observation": f"No agent with uid {uid}",
+            }
+
+        agent = self.agents[uid]
+
+        if actual_action not in agent.tools:
+            return {
+                "success": False,
+                "observation": f"Tool '{actual_action}' not available",
+            }
+
+        obs = self.env_interface.get_observations()
+        low_level_action, response = agent.process_high_level_action(
+            actual_action, actual_target, obs
+        )
+
+        if low_level_action is None:
+            obs_text = response or f"Executed {actual_action}[{actual_target}]"
+        else:
+            # Execute motor skill
+            tool = agent.tools[actual_action]
+            skill_steps = 0
+            max_skill_steps = 500
+
+            while skill_steps < max_skill_steps:
+                try:
+                    raw_obs, reward, done, info = self.env_interface.step({uid: low_level_action})
+                except AssertionError as e:
+                    if "Episode over" in str(e):
+                        self._episode_done = True
+                        break
+                    raise
+
+                parsed_obs = self.env_interface.parse_observations(raw_obs)
+                self.record_frame(parsed_obs, {uid: (actual_action, actual_target)})
+                skill_steps += 1
+
+                if done:
+                    self._episode_done = True
+                    break
+
+                # Check if skill is done
+                if hasattr(tool, 'skill') and hasattr(tool.skill, '_is_skill_done'):
+                    is_done = tool.skill._is_skill_done(
+                        raw_obs, None, None, torch.ones(1, 1), 0
+                    )
+                    if is_done:
+                        break
+
+                low_level_action, response = agent.process_high_level_action(
+                    actual_action, actual_target, raw_obs
+                )
+                if low_level_action is None:
+                    break
+
+            obs_text = response or f"Executed {actual_action}[{actual_target}]"
+
+        # Use mechanic observation if one was generated
+        if mechanic_observation:
+            obs_text = mechanic_observation
+
+        return {
+            "success": True,
+            "observation": obs_text,
+            "surprise": mech_result.surprise_trigger if mech_result.applies else result.surprise_trigger,
+        }
+
+    def execute_parsed_action(self, uid: int, action_str: str) -> Dict[str, Any]:
+        """
+        Execute an action from a string like "Navigate[kitchen_1]".
+
+        Args:
+            uid: Agent UID
+            action_str: Action string in format "ActionName[target]"
+
+        Returns:
+            Result dict from execute_action
+        """
+        match = re.match(r'(\w+)\[([^\]]+)\]', action_str)
+        if not match:
+            return {
+                "success": False,
+                "observation": f"Invalid action format: {action_str}. Use ActionName[target]",
+            }
+
+        action_name, target = match.groups()
+        return self.execute_action(uid, action_name, target)
+
+    def save_video(self, suffix: str) -> Optional[str]:
+        """Save recorded video with given suffix."""
+        if not self._dvu or not self._dvu.frames:
+            return None
+
+        try:
+            self._dvu._make_video(play=False, postfix=suffix)
+            return os.path.join(self.output_dir, "videos")
+        except Exception as e:
+            print(f"[EMTOMBaseRunner] Failed to save video: {e}")
+            return None
+
+    def save_planner_log(self, data: Dict[str, Any]) -> str:
+        """Save planner log JSON."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = os.path.join(self.output_dir, "planner-log", f"planner-log-{timestamp}.json")
+
+        with open(log_file, "w") as f:
+            json.dump(data, f, indent=2, default=str)
+
+        print(f"[EMTOMBaseRunner] Saved planner log: {log_file}")
+        return log_file
+
+    def save_prompts(self, prompts: Dict[str, str], traces: Optional[Dict[str, str]] = None) -> None:
+        """
+        Save per-agent prompts and traces.
+
+        Args:
+            prompts: Dict mapping agent_id -> prompt text
+            traces: Optional dict mapping agent_id -> trace text
+        """
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        for agent_id, prompt in prompts.items():
+            # Extract uid from agent_id (e.g., "agent_0" -> "0")
+            uid = agent_id.split("_")[-1] if "_" in agent_id else agent_id
+
+            prompt_dir = os.path.join(self.output_dir, "prompts", uid)
+            os.makedirs(prompt_dir, exist_ok=True)
+
+            prompt_file = os.path.join(prompt_dir, f"prompt-{timestamp}-{uid}.txt")
+            with open(prompt_file, "w") as f:
+                f.write(prompt)
+
+        if traces:
+            for agent_id, trace in traces.items():
+                uid = agent_id.split("_")[-1] if "_" in agent_id else agent_id
+
+                trace_dir = os.path.join(self.output_dir, "traces", uid)
+                os.makedirs(trace_dir, exist_ok=True)
+
+                trace_file = os.path.join(trace_dir, f"trace-{timestamp}-{uid}.txt")
+                with open(trace_file, "w") as f:
+                    f.write(trace)
+
+    def cleanup(self) -> None:
+        """Close environment and release resources."""
+        if self.env_interface:
+            try:
+                self.env_interface.env.close()
+            except Exception:
+                pass
+
+    def get_observations(self) -> Dict[str, Any]:
+        """Get current observations from environment."""
+        return self.env_interface.get_observations()
+
+    def get_world_graph(self) -> Dict[int, Any]:
+        """Get world graph for all agents."""
+        world_graph = {}
+        for uid in self.agents.keys():
+            try:
+                world_graph[uid] = self.env_interface.world_graph[uid]
+            except Exception:
+                world_graph[uid] = None
+        return world_graph
+
+    @abstractmethod
+    def run(self, **kwargs) -> Dict[str, Any]:
+        """
+        Main execution loop. Implemented by subclasses.
+
+        Returns:
+            Dict with results (steps, history, etc.)
+        """
+        pass
