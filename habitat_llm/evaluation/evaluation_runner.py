@@ -475,12 +475,14 @@ class EvaluationRunner:
         animation.save(td_video_name, writer="ffmpeg", fps=30)
 
     def initialize_instruction_metadata(
-        self, instruction: str, output_name: str
+        self, instruction, output_name: str
     ) -> None:
         """
         Start folders where the outputs will be stored.
 
-        :param instruction: The natural language instruction for the task to be executed. If None, uses the instruction from the current episode.
+        :param instruction: The natural language instruction for the task to be executed.
+                           Can be a string or dict mapping agent_id -> instruction.
+                           If None, uses the instruction from the current episode.
         :param output_name: Name to use for output files. If empty string, generates name from instruction text.
         """
         if instruction is None:
@@ -492,7 +494,12 @@ class EvaluationRunner:
             self.current_instruction = instruction
         if self.evaluation_runner_config.do_print:
             cprint("Instruction:", "yellow")
-            print(self.current_instruction + "\n")
+            # Handle dict instructions (per-agent) vs string (shared)
+            if isinstance(self.current_instruction, dict):
+                for agent_id, instr in self.current_instruction.items():
+                    print(f"[{agent_id}]: {instr}\n")
+            else:
+                print(str(self.current_instruction) + "\n")
         # Make a safe, short filename
         def _slugify(text: str) -> str:
             txt = re.sub(r"[^a-zA-Z0-9]+", "-", text.lower()).strip("-")
@@ -503,7 +510,11 @@ class EvaluationRunner:
                 ep_id = self.env_interface.env.env.env._env.current_episode.episode_id
                 self.episode_filename = f"episode_{ep_id}"
             except Exception:
-                self.episode_filename = _slugify(self.current_instruction)[:30]
+                # Handle dict instructions for filename generation
+                instr_text = self.current_instruction
+                if isinstance(instr_text, dict):
+                    instr_text = next(iter(instr_text.values()), "instruction")
+                self.episode_filename = _slugify(str(instr_text))[:30]
         else:
             self.episode_filename = _slugify(output_name)[:30]
         # check if name is too long, truncate to be system-friendly

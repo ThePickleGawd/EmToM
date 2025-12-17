@@ -973,13 +973,11 @@ class HumanTestRunner:
 
         # Build world description
         world_text = self._build_world_description(agent_id)
-        available_actions = self._get_available_actions(agent_id)
 
         # Get action from curiosity model
         action_choice = curiosity.select_action(
             agent_id=agent_id,
             world_description=world_text,
-            available_actions=available_actions,
             exploration_history=self.action_history[-5:],
         )
 

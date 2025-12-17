@@ -772,10 +772,10 @@ class LLMPlanner(Planner):
             agent.uid: self.replan_required for agent in self.agents
         }
 
-        # Drop CommunicationTool responses to avoid triggering replans; messages already delivered in context.
+        # Drop Communicate responses to avoid triggering replans; messages already delivered in context.
         for agent in self.agents:
             sig = self.last_high_level_actions.get(agent.uid, ("", "", ""))
-            if sig[0] == "CommunicationTool":
+            if sig[0] == "Communicate":
                 responses[agent.uid] = ""
         self.replan_required = any(responses.values())
         print_str += self._add_responses_to_prompt(responses)

@@ -105,7 +105,6 @@ class CuriosityModel:
         self,
         agent_id: str,
         world_description: str,
-        available_actions: List[Dict[str, Any]],
         exploration_history: Optional[List[Dict[str, Any]]] = None,
         tool_descriptions: Optional[str] = None,
     ) -> ActionChoice:
@@ -115,7 +114,6 @@ class CuriosityModel:
         Args:
             agent_id: ID of the agent selecting
             world_description: Text description of current world state
-            available_actions: List of available actions with targets
             exploration_history: Recent action history for context
             tool_descriptions: Optional tool descriptions (uses stored if not provided)
 
@@ -129,7 +127,11 @@ class CuriosityModel:
         agent_uid = agent_id.split("_")[-1] if "_" in agent_id else agent_id
 
         # Use provided tool descriptions or stored ones
-        tools_desc = tool_descriptions or self._tool_descriptions or self._get_default_tool_descriptions()
+        tools_desc = tool_descriptions or self._tool_descriptions
+        if not tools_desc:
+            raise ValueError(
+                "Tool descriptions not set. Call set_tool_descriptions() or pass tool_descriptions parameter."
+            )
 
         # Build task description from world state
         task = self._build_task_description(world_description, exploration_history or [])
@@ -188,22 +190,6 @@ class CuriosityModel:
                     parts.append(f"  - {action}: {obs_short}")
 
         return "\n".join(parts)
-
-    def _get_default_tool_descriptions(self) -> str:
-        """Get default tool descriptions."""
-        return """Available tools:
-- Navigate[target]: Move to a room or furniture. You MUST navigate close to objects before interacting.
-- Open[furniture]: Open articulated furniture (cabinets, drawers, fridges). Must be near it first.
-- Close[furniture]: Close articulated furniture. Must be near it first.
-- Pick[object]: Pick up an object. Must be near it first.
-- Explore[room]: Thoroughly search a room by visiting all furniture in it.
-- FindObjectTool[query]: Search for objects matching a description.
-- FindReceptacleTool[query]: Search for furniture/receptacles matching a description.
-- FindRoomTool[query]: Search for rooms matching a description.
-- FindAgentActionTool[]: Check what the other agent is doing.
-- Inspect[object]: Carefully examine an object to learn its properties and state.
-- Hide[object]: Hide an object so others can't see it.
-- Communicate[message]: Send a message to your teammate."""
 
     def _parse_response(self, response: str, agent_uid: str) -> ActionChoice:
         """

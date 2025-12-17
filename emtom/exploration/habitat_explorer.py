@@ -306,6 +306,9 @@ class HabitatExplorer:
         # Save videos
         video_paths = self._save_videos()
 
+        # Save prompts from CuriosityModel (similar to DecentralizedEvaluationRunner)
+        self._save_exploration_prompts()
+
         # Finalize episode
         episode_data = self.logger.finalize_episode()
 
@@ -368,14 +371,12 @@ class HabitatExplorer:
 
             # Build world description
             world_text = self._build_world_description(agent_id)
-            available_actions = self._get_available_actions(agent_id)
             recent_history = self.logger.get_recent_actions(agent_id, n=5)
 
             # Select action via curiosity model
             action_choice = self.curiosity.select_action(
                 agent_id=agent_id,
                 world_description=world_text,
-                available_actions=available_actions,
                 exploration_history=recent_history,
                 tool_descriptions=self._tool_descriptions,
             )
@@ -1024,3 +1025,70 @@ class HabitatExplorer:
                 print(f"[HabitatExplorer] Failed to save FPV video: {e}")
 
         return video_paths
+
+    def _save_exploration_prompts(self) -> None:
+        """
+        Save LLM prompts and traces from the CuriosityModel.
+
+        Similar to DecentralizedEvaluationRunner._log_planner_data(), this saves:
+        - prompts/{agent_id}/prompt-exploration-{episode_id}-{agent_id}.txt
+        - traces/{agent_id}/trace-exploration-{episode_id}-{agent_id}.txt
+        - planner-log/planner-log-exploration-{episode_id}.json
+        """
+        print("\n[HabitatExplorer] Saving exploration prompts and traces...")
+
+        # Collect prompts from CuriosityModel
+        prompts = {}
+        traces = {}
+
+        for agent_id in self.config.agent_ids:
+            # The full prompt with all conversation history
+            if hasattr(self.curiosity, 'curr_prompt') and self.curiosity.curr_prompt:
+                prompts[agent_id] = self.curiosity.curr_prompt
+
+            # For traces, we can extract just the task + actions (without system prompt)
+            # by finding where the actual interaction starts
+            if hasattr(self.curiosity, 'curr_prompt') and self.curiosity.curr_prompt:
+                prompt = self.curiosity.curr_prompt
+                # Try to extract just the trace part (after initial prompt)
+                # Look for "Task:" which marks the start of actual interaction
+                task_marker = "Task:"
+                if task_marker in prompt:
+                    trace_start = prompt.find(task_marker)
+                    traces[agent_id] = prompt[trace_start:]
+                else:
+                    # Fallback: use entire prompt as trace
+                    traces[agent_id] = prompt
+
+        # Save prompts and traces
+        if prompts:
+            self.logger.save_prompts(prompts, traces)
+
+        # Build planner log with step-by-step info
+        planner_log = {
+            "task": "Exploration",
+            "mechanics_active": self.game_manager.get_state().active_mechanics,
+            "total_steps": self.step_count,
+            "total_surprises": len(self.surprise_moments),
+            "steps": [],
+        }
+
+        # Add per-step info from logger
+        for step_record in self.logger.steps:
+            step_info = {
+                "step": step_record.step,
+                "timestamp": step_record.timestamp,
+                "agent_actions": step_record.agent_actions,
+                "observations": step_record.observations,
+                "surprises": [s.to_dict() for s in step_record.surprises],
+                "inventory": step_record.inventory,
+            }
+            planner_log["steps"].append(step_info)
+
+        # Add summary
+        planner_log["surprise_summary"] = [
+            s.to_dict() for s in self.surprise_moments
+        ]
+
+        # Save planner log
+        self.logger.save_planner_log(planner_log)

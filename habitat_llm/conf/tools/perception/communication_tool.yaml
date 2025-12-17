@@ -2,5 +2,5 @@ communication_tool:
   _target_: habitat_llm.tools.perception.communication_tool.CommunicationTool
   _recursive_: False
   skill_config:
-    description: 'Used to exchange short text messages with the other agent. Provide the text to broadcast and their observation context is updated automatically. Cannot be used to invoke commands or actions'
-    name: CommunicationTool
+    description: 'Send a message to the other agent. Usage: Communicate[your message]. The other agent will see your message in their context. IMPORTANT: Keep your message on a single line - do not use newlines.'
+    name: Communicate

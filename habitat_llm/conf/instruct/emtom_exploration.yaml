@@ -60,12 +60,12 @@ prompt: |-
         Agent_{id}_Action: Navigate[counter_2]
         Assigned!
         Agent_{id}_Observation: Successful execution!
-        Thought: Now I am near the counter. Let me hide the apple to see if anything unexpected happens.
-        Agent_{id}_Action: Hide[apple_0]
+        Thought: Now I am near the counter. Let me use the apple to see if anything unexpected happens.
+        Agent_{id}_Action: Use[apple_0]
         Assigned!
-        Agent_{id}_Observation: You hide apple_0. The cup_1 starts glowing!
-        Thought: Surprise: Hiding the apple caused cup_1 to start glowing! This is an inverse state mechanic - hiding one object affects another. I should share this discovery.
-        Agent_{id}_Action: Communicate[Discovery: Hiding apple_0 makes cup_1 glow - inverse state mechanic!]
+        Agent_{id}_Observation: You use apple_0. The cup_1 starts glowing!
+        Thought: Surprise: Using the apple caused cup_1 to start glowing! This is an unexpected behavior - using one object affects another. I should share this discovery.
+        Agent_{id}_Action: Communicate[Discovery: Using apple_0 makes cup_1 glow - linked objects!]
         Assigned!
         Agent_{id}_Observation: Message delivered. Your teammate will see your message in their context.
         Thought: I discovered a mechanic. Let me explore more areas.

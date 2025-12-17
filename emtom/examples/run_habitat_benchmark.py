@@ -20,6 +20,7 @@ import os
 import sys
 import traceback
 from pathlib import Path
+from typing import Dict
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
@@ -43,7 +44,7 @@ from emtom.actions import get_emtom_tools
 from emtom import GameStateManager, list_mechanics
 from emtom.exploration.habitat_explorer import HabitatWorldAdapter
 
-# Import CommunicationTool for agent-to-agent messaging
+# Import CommunicationTool (used as "Communicate" action)
 from habitat_llm.tools.perception.communication_tool import CommunicationTool
 
 
@@ -60,48 +61,38 @@ def load_tasks(task_file: str) -> list:
     return tasks
 
 
-def task_to_instruction(task: GeneratedTask, for_agent: str = None) -> str:
-    """Convert an EMTOM task to a natural language instruction.
+def task_to_instruction(task: GeneratedTask) -> Dict[str, str]:
+    """Convert an EMTOM task to per-agent instructions.
 
-    For Theory of Mind tasks, agent_0 gets mechanic knowledge while agent_1 doesn't.
-    This creates asymmetric information where agent_0 must communicate discoveries.
-
-    Args:
-        task: The GeneratedTask to convert
-        for_agent: If specified, only include that agent's knowledge (for per-agent prompts)
+    Returns a dict mapping agent_id -> instruction string.
+    Each agent gets the public goal plus their own secrets (if any).
     """
-    instruction_parts = [
-        f"Task: {task.title}",
-        f"Description: {task.description}",
-        f"Goal: {task.success_condition.description}",
-    ]
+    instructions = {}
 
-    # For ToM tasks, only show knowledge to the appropriate agent
-    if task.theory_of_mind_required:
-        if for_agent:
-            # Per-agent instruction - show only that agent's knowledge
-            knowledge = task.agent_knowledge.get(for_agent, [])
-            if knowledge:
-                instruction_parts.append(f"\nYour knowledge: {', '.join(knowledge)}")
-            else:
-                instruction_parts.append("\nYou have no special knowledge about this environment.")
-        else:
-            # Shared instruction - hint that knowledge is asymmetric
-            instruction_parts.append("\nNote: Each agent has different knowledge about this environment.")
-            instruction_parts.append("agent_0 has discovered something important that agent_1 doesn't know.")
-    else:
-        # For regular tasks, show all knowledge to everyone
-        if task.agent_knowledge:
-            instruction_parts.append("\nKnown information:")
-            for agent_id, knowledge in task.agent_knowledge.items():
-                if knowledge:
-                    instruction_parts.append(f"  {agent_id}: {', '.join(knowledge)}")
+    for agent_id in task.agent_roles.keys():
+        parts = [f"Goal: {task.public_goal}"]
 
-    # Add communication hint for ToM tasks
-    if task.theory_of_mind_required:
-        instruction_parts.append("\nHint: Use Communicate[message] to share discoveries with your teammate.")
+        if task.public_context:
+            parts.append(task.public_context)
 
-    return "\n".join(instruction_parts)
+        # Per-agent actions available
+        actions = task.agent_actions.get(agent_id, [])
+        if actions:
+            parts.append(f"\nYour available actions: {', '.join(actions)}")
+
+        # Per-agent secrets (only for ToM tasks)
+        secrets = task.agent_secrets.get(agent_id, [])
+        if secrets:
+            parts.append("\nSecret Knowledge:")
+            for s in secrets:
+                parts.append(f"- {s}")
+
+        if task.theory_of_mind_required:
+            parts.append("\nUse Communicate[message] to coordinate with your teammate.")
+
+        instructions[agent_id] = "\n".join(parts)
+
+    return instructions
 
 
 @hydra.main(version_base=None, config_path="../../habitat_llm/conf")
@@ -209,12 +200,12 @@ def main(config: DictConfig) -> None:
         if bindings:
             cprint(f"Auto-bound mechanics: {bindings}", "green")
 
-    # Inject EMTOM tools and CommunicationTool into each agent
+    # Inject EMTOM tools and Communicate into each agent
     cprint("\nInjecting tools into agents...", "blue")
     for agent in eval_runner.agents.values():
         agent_uid = agent.uid
 
-        # Add EMTOM tools (Hide, Inspect, WriteMessage, Shake)
+        # Add EMTOM tools (Use, Inspect)
         emtom_tools = get_emtom_tools(agent_uid=agent_uid)
         for tool_name, tool in emtom_tools.items():
             tool.set_environment(env_interface)
@@ -222,10 +213,10 @@ def main(config: DictConfig) -> None:
             agent.tools[tool_name] = tool
             cprint(f"  Added {tool_name} to agent_{agent_uid}", "green")
 
-        # Add CommunicationTool renamed to "Communicate"
+        # Add Communicate tool for agent-to-agent messaging
         comm_config = OmegaConf.create({
             "name": "Communicate",
-            "description": "Send a message to the other agent. Usage: Communicate[your message here]. The other agent will see your message in their context."
+            "description": "Send a message to the other agent. Usage: Communicate[your message]. The other agent will see your message in their context. IMPORTANT: Keep your message on a single line - do not use newlines."
         })
         comm_tool = CommunicationTool(comm_config)
         comm_tool.agent_uid = agent_uid
@@ -243,14 +234,16 @@ def main(config: DictConfig) -> None:
     cprint(f"\n{'='*60}", "blue")
     cprint(f"EMTOM TASK: {task.title}", "blue")
     cprint(f"{'='*60}", "blue")
-    print(f"Description: {task.description}")
-    print(f"Mechanics: {task.required_mechanics}")
+    print(f"Public Goal: {task.public_goal}")
+    print(f"Mechanics: {task.active_mechanics}")
     if task.mechanic_bindings:
         print(f"Mechanic bindings: {len(task.mechanic_bindings)} active")
         for b in task.mechanic_bindings:
             print(f"  - {b.mechanic_type}: {b.trigger_object} -> {b.target_object or 'self'}")
-    print(f"Goal: {task.success_condition.description}")
-    print(f"\nInstruction to agents:\n{instruction}")
+    print(f"\nPer-agent instructions:")
+    for agent_id, instr in instruction.items():
+        print(f"\n--- {agent_id} ---")
+        print(instr)
 
     # Run the instruction using the evaluation runner
     try:

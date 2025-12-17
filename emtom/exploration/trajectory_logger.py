@@ -392,3 +392,82 @@ class TrajectoryLogger:
             if f.startswith("trajectory_") and f.endswith(".json"):
                 files.append(os.path.join(self.output_dir, f))
         return sorted(files)
+
+    def save_prompts(
+        self,
+        prompts: Dict[str, str],
+        traces: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """
+        Save LLM prompts and traces for each agent, similar to DecentralizedEvaluationRunner.
+
+        This creates:
+        - prompts/{agent_id}/prompt-{episode_id}-{agent_id}.txt
+        - traces/{agent_id}/trace-{episode_id}-{agent_id}.txt
+
+        Args:
+            prompts: Dict mapping agent_id -> full prompt string
+            traces: Optional dict mapping agent_id -> trace string (without special tokens)
+        """
+        if not self._started and not self.current_episode:
+            print("[TrajectoryLogger] Warning: No episode to save prompts for")
+            return
+
+        episode_id = self.current_episode.get("episode_id", "unknown")
+
+        # Save prompts
+        for agent_id, prompt in prompts.items():
+            # Extract numeric ID if agent_id is like "agent_0"
+            agent_num = agent_id.split("_")[-1] if "_" in agent_id else agent_id
+
+            prompt_dir = os.path.join(self.output_dir, "prompts", agent_num)
+            os.makedirs(prompt_dir, exist_ok=True)
+
+            prompt_file = os.path.join(
+                prompt_dir, f"prompt-exploration-{episode_id}-{agent_num}.txt"
+            )
+            with open(prompt_file, "w") as f:
+                f.write(prompt)
+            print(f"[TrajectoryLogger] Saved prompt for {agent_id} to {prompt_file}")
+
+        # Save traces if provided
+        if traces:
+            for agent_id, trace in traces.items():
+                agent_num = agent_id.split("_")[-1] if "_" in agent_id else agent_id
+
+                trace_dir = os.path.join(self.output_dir, "traces", agent_num)
+                os.makedirs(trace_dir, exist_ok=True)
+
+                trace_file = os.path.join(
+                    trace_dir, f"trace-exploration-{episode_id}-{agent_num}.txt"
+                )
+                with open(trace_file, "w") as f:
+                    f.write(trace)
+                print(f"[TrajectoryLogger] Saved trace for {agent_id} to {trace_file}")
+
+    def save_planner_log(
+        self,
+        planner_data: Dict[str, Any],
+    ) -> None:
+        """
+        Save planner log similar to DecentralizedEvaluationRunner.
+
+        Creates:
+        - planner-log/planner-log-{episode_id}.json
+
+        Args:
+            planner_data: Dict containing planner info per step
+        """
+        if not self._started and not self.current_episode:
+            print("[TrajectoryLogger] Warning: No episode to save planner log for")
+            return
+
+        episode_id = self.current_episode.get("episode_id", "unknown")
+
+        log_dir = os.path.join(self.output_dir, "planner-log")
+        os.makedirs(log_dir, exist_ok=True)
+
+        log_file = os.path.join(log_dir, f"planner-log-exploration-{episode_id}.json")
+        with open(log_file, "w") as f:
+            json.dump(planner_data, f, indent=2, default=str)
+        print(f"[TrajectoryLogger] Saved planner log to {log_file}")

@@ -124,31 +124,38 @@ class MechanicBinding:
 
 @dataclass
 class GeneratedTask:
-    """A collaborative challenge task."""
+    """A collaborative challenge task with clean public/secret separation."""
 
     task_id: str
     title: str
     category: TaskCategory
-    description: str
 
-    initial_world_state: Dict[str, Any]
-    required_mechanics: List[str]
+    # SCENE & ENVIRONMENT
+    scene_id: str
+    active_mechanics: List[str]
+    mechanic_bindings: List[MechanicBinding]
 
-    num_agents: int
+    # PUBLIC (shared, no secrets)
+    public_goal: str
+    public_context: Optional[str]
+
+    # PER-AGENT CONFIG
+    agent_secrets: Dict[str, List[str]]
     agent_roles: Dict[str, str]
-    agent_knowledge: Dict[str, List[str]]
+    agent_actions: Dict[str, List[str]]
 
-    subtasks: List[Subtask]
+    # INTERNAL (not shown to agents)
     success_condition: SuccessCondition
     failure_conditions: List[FailureCondition]
+    initial_world_state: Dict[str, Any]
 
+    # METADATA
+    num_agents: int
     difficulty: int
-    estimated_steps: int
     theory_of_mind_required: bool
-    communication_required: bool
 
-    # Optional fields with defaults must come last
-    mechanic_bindings: List[MechanicBinding] = field(default_factory=list)
+    # Optional
+    subtasks: List[Subtask] = field(default_factory=list)
     source_trajectory: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -173,20 +180,21 @@ class GeneratedTask:
             task_id=data["task_id"],
             title=data["title"],
             category=TaskCategory(data["category"]),
-            description=data["description"],
-            initial_world_state=data["initial_world_state"],
-            required_mechanics=data["required_mechanics"],
+            scene_id=data.get("scene_id", "unknown"),
+            active_mechanics=data.get("active_mechanics", []),
             mechanic_bindings=bindings,
-            num_agents=data["num_agents"],
-            agent_roles=data["agent_roles"],
-            agent_knowledge=data["agent_knowledge"],
-            subtasks=[Subtask.from_dict(s) for s in data["subtasks"]],
+            public_goal=data["public_goal"],
+            public_context=data.get("public_context"),
+            agent_secrets=data.get("agent_secrets", {}),
+            agent_roles=data.get("agent_roles", {}),
+            agent_actions=data.get("agent_actions", {}),
             success_condition=SuccessCondition.from_dict(data["success_condition"]),
-            failure_conditions=[FailureCondition.from_dict(f) for f in data["failure_conditions"]],
-            difficulty=data["difficulty"],
-            estimated_steps=data["estimated_steps"],
+            failure_conditions=[FailureCondition.from_dict(f) for f in data.get("failure_conditions", [])],
+            initial_world_state=data.get("initial_world_state", {}),
+            num_agents=data.get("num_agents", 2),
+            difficulty=data.get("difficulty", 3),
             theory_of_mind_required=data.get("theory_of_mind_required", False),
-            communication_required=data.get("communication_required", False),
+            subtasks=[Subtask.from_dict(s) for s in data.get("subtasks", [])],
             source_trajectory=data.get("source_trajectory"),
         )
 
@@ -214,59 +222,49 @@ The TYPE of task generated is based on user input:
 
 Selected task type: {task_type}
 
-### This prompt is for THEORY OF MIND TASKS (user selected option 1).
+### THEORY OF MIND TASKS (option 1):
 - Design a task for {num_agents} agents working together
 - Use ONLY objects/furniture from the Scene Inventory above
 - The task should leverage the discovered mechanics (surprising behaviors)
-- One agent knows about the mechanics, the other does not (theory of mind)
+- agent_0 knows about the mechanics (gets secrets), agent_1 does not (theory of mind)
 - Agents must communicate and coordinate to succeed
-- Success conditions must reference REAL objects from the inventory
 
-### This prompt is for REGULAR TASKS (user selected option 2).
+### REGULAR TASKS (option 2):
 - Design simple, everyday household tasks for {num_agents} agent(s)
 - Use ONLY objects/furniture from the Scene Inventory above
-- Tasks should be straightforward actions like:
-  * Pick up and move objects (e.g., "pick up the cell phone and place it on the table")
-  * Clean or organize items (e.g., "put dirty dishes in the sink")
-  * Open/close furniture (e.g., "open the fridge")
-  * Navigate and interact (e.g., "go to the bedroom and turn on the lamp")
-  * Washing/cleaning (e.g., "wash the clothes", "clean the plate")
+- Tasks should be straightforward actions like moving objects, opening/closing furniture
 
 ## Output Format
 Respond with a JSON object:
 {{
     "title": "Short descriptive title (max 10 words)",
     "category": "knowledge_asymmetry",
-    "description": "2-3 sentence description using ONLY real object names from inventory",
+    "public_goal": "Simple imperative goal shared by all agents (e.g., 'Place phone_stand_2 on table_10')",
+    "public_context": "Optional shared context without secrets (e.g., 'Some items may be hidden in furniture')",
     "initial_world_state": {{
         "objects": ["REAL objects from inventory"],
         "agent_positions": {{"agent_0": "REAL_room_name", "agent_1": "REAL_room_name"}}
     }},
-    "required_mechanics": ["mechanic_names from surprises"],
+    "agent_secrets": {{
+        "agent_0": ["Secret knowledge only agent_0 knows (e.g., 'Opening fridge_58 also opens chest_of_drawers_52')"],
+        "agent_1": []
+    }},
     "agent_roles": {{
-        "agent_0": "Expert - knows the discovered mechanics",
-        "agent_1": "Novice - does not know the mechanics, must follow instructions"
+        "agent_0": "Expert who discovered the mechanics",
+        "agent_1": "Novice who must learn through collaboration"
     }},
-    "agent_knowledge": {{
-        "agent_0": ["Specific mechanics knowledge - e.g., 'Opening fridge_58 also opens chest_of_drawers_52 (remote_control)'"],
-        "agent_1": ["Basic knowledge - object locations only"]
+    "agent_actions": {{
+        "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Communicate"],
+        "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
     }},
-    "subtasks": [
-        {{
-            "subtask_id": "step_1",
-            "description": "Action using REAL object names only",
-            "success_condition": {{"entity": "REAL_object_name", "state": "target_state"}}
-        }}
-    ],
     "success_condition": {{
         "description": "What success looks like using REAL object names",
-        "required_states": [{{"entity": "REAL_object_name", "property": "is_open", "value": true}}]
+        "required_states": [{{"entity": "REAL_object_name", "property": "location", "value": "REAL_target"}}]
     }},
     "failure_conditions": [
         {{"description": "What causes failure"}}
     ],
-    "difficulty": 3,
-    "estimated_steps": 15
+    "difficulty": 3
 }}
 
 Generate the task JSON (remember: ONLY use objects from the Scene Inventory):'''
@@ -424,7 +422,10 @@ class TaskGenerator:
             json_match = re.search(r'\{[\s\S]*\}', response)
             if json_match:
                 task_data = json.loads(json_match.group())
-                return self._parse_task_response(task_data, episode_id, num_agents, task_type)
+                return self._parse_task_response(
+                    task_data, episode_id, num_agents, task_type,
+                    scene_id=scene_id, mechanics=mechanics
+                )
         except json.JSONDecodeError as e:
             print(f"  Failed to parse LLM response as JSON: {e}")
             print(f"  Response: {response[:500]}...")
@@ -437,11 +438,15 @@ class TaskGenerator:
         episode_id: str,
         num_agents: int,
         task_type: int = 1,
+        scene_id: str = "unknown",
+        mechanics: List[str] = None,
     ) -> GeneratedTask:
         """Parse LLM response into GeneratedTask.
 
         Args:
             task_type: 1 for Theory of Mind, 2 for Regular tasks
+            scene_id: The Habitat scene ID
+            mechanics: List of active mechanics for this task
         """
         task_id = f"task_{uuid.uuid4().hex[:8]}"
 
@@ -485,22 +490,30 @@ class TaskGenerator:
         # task_type 1 = Theory of Mind, task_type 2 = Regular
         is_tom_task = (task_type == 1)
 
+        # Default agent_actions if not provided
+        default_agent_actions = {
+            "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Communicate"],
+            "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"],
+        }
+
         return GeneratedTask(
             task_id=task_id,
             title=data.get("title", "Untitled Task"),
             category=TaskCategory(data.get("category", "coordination")),
-            description=data.get("description", ""),
-            initial_world_state=data.get("initial_world_state", {}),
-            required_mechanics=data.get("required_mechanics", []),
-            num_agents=num_agents,
+            scene_id=scene_id,
+            active_mechanics=mechanics or [],
+            mechanic_bindings=[],  # Will be populated later from trajectory
+            public_goal=data.get("public_goal", ""),
+            public_context=data.get("public_context"),
+            agent_secrets=data.get("agent_secrets", {}),
             agent_roles=data.get("agent_roles", {}),
-            agent_knowledge=data.get("agent_knowledge", {}),
-            subtasks=subtasks,
+            agent_actions=data.get("agent_actions", default_agent_actions),
             success_condition=success_condition,
             failure_conditions=failure_conditions,
+            initial_world_state=data.get("initial_world_state", {}),
+            num_agents=num_agents,
             difficulty=data.get("difficulty", 3 if is_tom_task else 1),
-            estimated_steps=data.get("estimated_steps", 15 if is_tom_task else 5),
             theory_of_mind_required=is_tom_task,
-            communication_required=is_tom_task,
+            subtasks=subtasks,
             source_trajectory=episode_id,
         )
