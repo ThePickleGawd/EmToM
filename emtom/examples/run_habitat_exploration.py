@@ -90,30 +90,6 @@ def main(config: DictConfig):
         save_fpv=True,
     )
 
-    # Lock random doors with keys for exploration
-    print("\nSetting up locked doors and keys...")
-    state, locked_doors = runner.game_manager.lock_random_doors(num_doors=2)
-    if locked_doors:
-        print("\n\033[93m" + "=" * 60 + "\033[0m")
-        print("\033[93m  🔒 LOCKED DOORS (require matching key to open)\033[0m")
-        print("\033[93m" + "=" * 60 + "\033[0m")
-        for door, code in locked_doors.items():
-            print(f"\033[91m    🚪 {door} \033[93;1m[#{code}]\033[0m")
-
-        # Spawn keys
-        state, key_spawn_info_list = runner.game_manager.spawn_keys_for_locked_doors()
-        print("\033[96m" + "-" * 60 + "\033[0m")
-        print("\033[96m  🗝️  KEYS SPAWNED\033[0m")
-        print("\033[96m" + "-" * 60 + "\033[0m")
-        for key_info in key_spawn_info_list:
-            print(f"\033[92m    🗝️  key \033[96;1m[#{key_info['code']}]\033[0m \033[90m→ on \033[95m{key_info['location']}\033[0m")
-        print("\033[93m" + "=" * 60 + "\033[0m")
-    else:
-        print("  No doors found to lock")
-        state, key_spawn_info = runner.game_manager.spawn_key_on_table()
-        if key_spawn_info:
-            print(f"  Key spawned on: {key_spawn_info['location']}")
-
     # Run exploration
     t0 = time.time()
     print(f"\nRunning exploration for {max_steps} steps...")

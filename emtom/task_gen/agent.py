@@ -427,7 +427,7 @@ Start by exploring the available trajectories with bash."""
             from emtom.runner.benchmark import task_to_instruction
             from emtom.task_gen import GeneratedTask
             from habitat_llm.agent.env import register_actions, register_measures, register_sensors
-            from habitat_llm.world_model.world_model import CollaborationDatasetV0
+            from habitat_llm.agent.env.dataset import CollaborationDatasetV0
             from habitat_llm.agent.env.environment_interface import EnvironmentInterface
         except ImportError as e:
             return {
