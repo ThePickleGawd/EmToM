@@ -81,8 +81,11 @@ class TaskGeneratorAgent:
 
         # Whitelisted bash commands (for safety)
         self.allowed_commands = [
+            # File operations
             "ls", "cat", "head", "tail", "grep", "jq", "wc",
-            "echo", "sed", "awk", "sort", "uniq", "find"
+            "echo", "sed", "awk", "sort", "uniq", "find",
+            # Shell control structures (for loops, conditionals)
+            "for", "do", "done", "while", "if", "then", "else", "fi", "in",
         ]
 
     def run(self, num_tasks_target: int = 1) -> List[str]:
