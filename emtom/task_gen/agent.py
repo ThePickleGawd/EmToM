@@ -240,6 +240,53 @@ Start by exploring the available trajectories with bash."""
 
         return None
 
+    def _split_by_operators(self, command: str) -> List[str]:
+        """
+        Split command by shell operators (&&, ||, ;, |) while respecting quotes.
+
+        Returns list of sub-commands.
+        """
+        sub_commands = []
+        current = []
+        in_single_quote = False
+        in_double_quote = False
+        i = 0
+
+        while i < len(command):
+            char = command[i]
+
+            # Track quote state
+            if char == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+                current.append(char)
+            elif char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+                current.append(char)
+            # Check for operators outside quotes
+            elif not in_single_quote and not in_double_quote:
+                # Check for && or ||
+                if i + 1 < len(command) and command[i:i+2] in ("&&", "||"):
+                    sub_commands.append("".join(current))
+                    current = []
+                    i += 2
+                    continue
+                # Check for ; or |
+                elif char in ";|":
+                    sub_commands.append("".join(current))
+                    current = []
+                else:
+                    current.append(char)
+            else:
+                current.append(char)
+
+            i += 1
+
+        # Add the last command
+        if current:
+            sub_commands.append("".join(current))
+
+        return sub_commands
+
     def _execute_action(self, tool: str, args: str) -> str:
         """Execute the specified tool."""
         self._log(f"Executing: {tool}[{args[:100]}...]")
@@ -258,40 +305,40 @@ Start by exploring the available trajectories with bash."""
         Execute a shell command with safety limits.
 
         Allows file exploration and editing within allowed directories only.
+        Allows command chaining (&&, ||, ;, |) but validates each sub-command.
         """
-        # Block command chaining operators
-        # Note: We allow | inside quoted strings (for jq internal pipes)
-        dangerous_patterns = ["&&", "||", ";", "`", "$(", "${"]
+        # Block command substitution (dangerous - allows arbitrary code execution)
+        dangerous_patterns = ["`", "$(", "${"]
         for pattern in dangerous_patterns:
             if pattern in command:
-                return f"Command chaining not allowed: '{pattern}' detected. Use separate commands."
-
-        # Check for shell pipes (| outside of quotes)
-        # Simple heuristic: if | appears outside single quotes, it's likely a shell pipe
-        in_single_quote = False
-        in_double_quote = False
-        for i, char in enumerate(command):
-            if char == "'" and not in_double_quote:
-                in_single_quote = not in_single_quote
-            elif char == '"' and not in_single_quote:
-                in_double_quote = not in_double_quote
-            elif char == "|" and not in_single_quote and not in_double_quote:
-                return "Command chaining not allowed: '|' (shell pipe) detected. Use separate commands."
+                return f"Command substitution not allowed: '{pattern}' detected."
 
         # Allowed directories (relative to project root)
         allowed_paths = ["data/emtom/", "outputs/emtom/", "emtom/"]
 
-        # Basic safety check - command should start with allowed command
-        first_word = command.split()[0] if command.split() else ""
-
         # Allow cat with heredoc even though it writes
         is_heredoc = "<<" in command and "EOF" in command
 
-        # Check if command is allowed
-        is_allowed = first_word in self.allowed_commands or is_heredoc
+        # Split command by chain operators to validate each part
+        # For heredocs, only validate the command part before <<
+        if is_heredoc:
+            command_part = command.split("<<")[0]
+            heredoc_part = "<<" + command.split("<<", 1)[1]
+        else:
+            command_part = command
+            heredoc_part = ""
 
-        if not is_allowed:
-            return f"Command not allowed: {first_word}. Allowed: {', '.join(self.allowed_commands)}, cat with heredoc"
+        # Split by chain operators (but not inside quotes)
+        sub_commands = self._split_by_operators(command_part)
+
+        # Validate each sub-command starts with an allowed command
+        for sub_cmd in sub_commands:
+            sub_cmd = sub_cmd.strip()
+            if not sub_cmd:
+                continue
+            first_word = sub_cmd.split()[0] if sub_cmd.split() else ""
+            if first_word not in self.allowed_commands:
+                return f"Command not allowed: '{first_word}'. Allowed: {', '.join(self.allowed_commands)}"
 
         # For heredoc writes, validate the target path
         if is_heredoc and ">" in command:
@@ -305,11 +352,7 @@ Start by exploring the available trajectories with bash."""
         # For read commands, check if accessing sensitive file paths
         # Only check the command part, not heredoc content
         sensitive_paths = ["/etc/", "/root/", "~/.ssh/", ".env", "credentials.json"]
-        if is_heredoc:
-            # For heredocs, only check the command before the heredoc marker
-            command_to_check = command.split("<<")[0].lower()
-        else:
-            command_to_check = command.lower()
+        command_to_check = command_part.lower()
         for sensitive in sensitive_paths:
             if sensitive in command_to_check:
                 return f"Access denied: cannot access paths containing '{sensitive}'"
