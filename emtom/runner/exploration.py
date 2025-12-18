@@ -62,12 +62,16 @@ class ExplorationRunner(EMTOMBaseRunner):
         self._setup_curiosity()
         self._setup_trajectory_logger()
 
-        # Create exploration config
+        # Create exploration config with all agents
         from emtom.exploration.habitat_explorer import HabitatExplorationConfig
+
+        # Get all agent IDs from config
+        agent_ids = [f"agent_{uid}" for uid in sorted(self.agents.keys())]
+        print(f"[ExplorationRunner] Exploration agents: {agent_ids}")
 
         self._exploration_config = HabitatExplorationConfig(
             max_steps=max_steps,
-            agent_ids=["agent_0"],  # Single agent for exploration
+            agent_ids=agent_ids,  # All N agents for exploration
             log_path=self.output_dir,
             save_video=save_video,
             play_video=False,
@@ -132,16 +136,13 @@ class ExplorationRunner(EMTOMBaseRunner):
         if max_steps is not None:
             self._exploration_config.max_steps = max_steps
 
-        # Get agent (use first agent for exploration)
-        agent = self.agents.get(0)
-
-        # Create HabitatExplorer with our setup
+        # Create HabitatExplorer with all agents
         self._explorer = HabitatExplorer(
             env_interface=self.env_interface,
             game_manager=self.game_manager,
             curiosity_model=self.curiosity_model,
             surprise_detector=self.surprise_detector,
-            agent=agent,
+            agents=self.agents,  # Pass all agents dict
             config=self._exploration_config,
         )
 

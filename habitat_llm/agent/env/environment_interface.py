@@ -155,6 +155,40 @@ class EnvironmentInterface:
         self._trajectory_idx: int = None
         self._setup_current_episode_logging: bool = False
 
+    def get_all_agent_uids(self):
+        """
+        Get list of all agent UIDs configured in the environment.
+
+        Raises:
+            ValueError: If agent_uids is not configured in evaluation.agents
+        """
+        # First check if already populated
+        if hasattr(self, 'agent_uids') and self.agent_uids:
+            return self.agent_uids
+
+        # Try to read from config directly (needed during initialization)
+        if (
+            hasattr(self.conf, "evaluation")
+            and hasattr(self.conf.evaluation, "agents")
+            and self.conf.evaluation.agents is not None
+        ):
+            try:
+                uids = sorted(
+                    {
+                        int(agent_conf.uid)
+                        for agent_conf in self.conf.evaluation.agents.values()
+                    }
+                )
+                if uids:
+                    return uids
+            except Exception:
+                pass
+
+        raise ValueError(
+            "agent_uids not configured. Please ensure evaluation.agents is set in your config "
+            "with entries like: agents: { agent_0: { uid: 0 }, agent_1: { uid: 1 }, ... }"
+        )
+
     def initialize_perception_and_world_graph(self):
         """
         This method initializes perception and world graph
@@ -177,17 +211,13 @@ class EnvironmentInterface:
         # each agent has its own world-graph
         self.world_graph: Dict[int, Any] = {}
 
-        # create world-graphs for both agents
-        if self.partial_obs:
-            self.world_graph = {
-                self.robot_agent_uid: DynamicWorldGraph(),
-                self.human_agent_uid: DynamicWorldGraph(),
-            }
-        else:
-            self.world_graph = {
-                self.robot_agent_uid: WorldGraph(),
-                self.human_agent_uid: WorldGraph(),
-            }
+        # create world-graphs for all configured agents (supports N agents)
+        all_agent_uids = self.get_all_agent_uids()
+        for agent_uid in all_agent_uids:
+            if self.partial_obs:
+                self.world_graph[agent_uid] = DynamicWorldGraph()
+            else:
+                self.world_graph[agent_uid] = WorldGraph()
 
         # set agent-asymmetry flag if True
         if self.conf.agent_asymmetry:
@@ -458,7 +488,8 @@ class EnvironmentInterface:
         self, low_level_actions: Dict[str, np.ndarray]
     ) -> np.ndarray:
         """
-        Takes in low_level_actions and returns a joint-space final_action_vector over all agents
+        Takes in low_level_actions and returns a joint-space final_action_vector over all agents.
+        Supports arbitrary number of agents (N >= 1).
         """
 
         # Get list of action tensors
@@ -468,13 +499,14 @@ class EnvironmentInterface:
         if any(action is None for action in low_level_action_list):
             raise ValueError("low level actions cannot be None!")
 
-        # Construct final actions vector
+        # Construct final actions vector for N agents
         if len(low_level_action_list) == 0:
             raise Exception("Cannot step through environment without low level actions")
-        if len(low_level_action_list) == 1:
-            final_action_vector = low_level_action_list[0]
-        elif len(low_level_action_list) == 2:
-            final_action_vector = low_level_action_list[0] + low_level_action_list[1]
+
+        # Sum all action vectors (works for any number of agents)
+        final_action_vector = low_level_action_list[0]
+        for action in low_level_action_list[1:]:
+            final_action_vector = final_action_vector + action
 
         return final_action_vector
 
