@@ -199,24 +199,53 @@ def handle_remote_control(
     """
     Remote Control: Acting on trigger affects a remote target.
 
+    The physical action is executed on the original target in Habitat.
+    The remote effect is applied to game state (changes remote target's property).
+
     Setup in state:
-        state.remote_mappings = {"switch_1": ("light_1", "is_on")}
+        state.remote_mappings = {"switch_1": ("light_1", "is_open")}
+        - When you interact with switch_1, light_1's is_open property toggles
     """
     if not target or target not in state.remote_mappings:
         return no_effect(state)
 
-    remote_target, remote_state = state.remote_mappings[target]
+    remote_target, remote_property = state.remote_mappings[target]
     action_lower = action_name.lower()
+
+    # Determine new value based on action (toggle or set based on action type)
+    # For open/close, turn_on/turn_off: derive from action
+    # Otherwise: toggle the current value
+    current_value = state.get_object_property(remote_target, remote_property, False)
+
+    if action_lower in ("open", "turn_on", "unlock"):
+        new_value = True
+    elif action_lower in ("close", "turn_off", "lock"):
+        new_value = False
+    else:
+        # Toggle for other actions
+        new_value = not current_value
+
+    # Apply the state change to the remote target
+    new_state = state.set_object_property(remote_target, remote_property, new_value)
+
+    # Describe what happened
+    if remote_property == "is_open":
+        effect_desc = "opened" if new_value else "closed"
+    elif remote_property == "is_on":
+        effect_desc = "turned on" if new_value else "turned off"
+    else:
+        effect_desc = f"changed to {new_value}"
 
     return HandlerResult(
         applies=True,
-        state=state,
-        observation=f"You {action_lower} {target}. You hear something happen to {remote_target}!",
+        state=new_state,
+        observation=f"You hear something happen to {remote_target}! (It {effect_desc})",
         success=True,
-        effects=[f"remote_effect={remote_target}.{remote_state}"],
+        effects=[f"remote_effect={remote_target}.{remote_property}={new_value}"],
         surprise_trigger=f"{target} affected {remote_target} remotely",
-        actual_action=action_name,  # Same action, different target
-        actual_target=remote_target,
+        # Keep original action and target - don't redirect the physical action
+        actual_action=None,
+        actual_target=None,
     )
 
 
@@ -252,11 +281,9 @@ def handle_counting_state(
         return HandlerResult(
             applies=True,
             state=new_state,
-            observation=f"You {action_lower} {target}. This time it responds!",
+            observation=f"This time it responds!",
             success=True,
             effects=[f"count_reached={current_count}"],
-            actual_action=action_name,
-            actual_target=target,
         )
     else:
         # Block the action - don't execute in Habitat
@@ -360,11 +387,9 @@ def handle_decaying_state(
     return HandlerResult(
         applies=True,
         state=new_state,
-        observation=f"You {action_lower} {target}. It responds normally.",
+        observation=f"(This will revert in {decay_steps} steps)",
         success=True,
         effects=[f"will_decay_in={decay_steps}_steps"],
-        actual_action=action_name,
-        actual_target=target,
     )
 
 
@@ -410,12 +435,10 @@ def handle_conditional_unlock(
         return HandlerResult(
             applies=True,
             state=new_state,
-            observation=f"You {action_lower} {target}. You hear a click somewhere!",
+            observation=f"You hear a click somewhere!",
             success=True,
             effects=[f"unlocked={unlocks}"],
             surprise_trigger=f"Something was unlocked",
-            actual_action=action_name,
-            actual_target=target,
         )
 
     return no_effect(state)
@@ -436,25 +459,50 @@ def handle_state_mirroring(
     if not target:
         return no_effect(state)
 
-    # Find mirror partner
+    # Find mirror partner and the mirrored property
     partner = None
-    for obj_a, obj_b, mirror_state in state.mirror_pairs:
+    mirror_property = None
+    for obj_a, obj_b, prop in state.mirror_pairs:
         if obj_a == target:
             partner = obj_b
+            mirror_property = prop
             break
         elif obj_b == target:
             partner = obj_a
+            mirror_property = prop
             break
 
-    if not partner:
+    if not partner or not mirror_property:
         return no_effect(state)
+
+    # Determine new value based on action
+    action_lower = action_name.lower()
+    if action_lower in ("open", "turn_on", "unlock"):
+        new_value = True
+    elif action_lower in ("close", "turn_off", "lock"):
+        new_value = False
+    else:
+        # Toggle for other actions
+        current_value = state.get_object_property(partner, mirror_property, False)
+        new_value = not current_value
+
+    # Apply the same state change to the partner
+    new_state = state.set_object_property(partner, mirror_property, new_value)
+
+    # Describe what happened
+    if mirror_property == "is_open":
+        effect_desc = "opens" if new_value else "closes"
+    elif mirror_property == "is_on":
+        effect_desc = "turns on" if new_value else "turns off"
+    else:
+        effect_desc = f"changes to {new_value}"
 
     return HandlerResult(
         applies=True,
-        state=state,
-        observation=f"You {action_name} {target}. {partner} does the same thing!",
+        state=new_state,
+        observation=f"{partner} {effect_desc} too!",
         success=True,
-        effects=[f"mirrored={partner}"],
+        effects=[f"mirrored={partner}.{mirror_property}={new_value}"],
         surprise_trigger=f"{target} and {partner} changed together",
     )
 
@@ -485,6 +533,7 @@ def handle_sequence_lock(
             success=False,
             effects=[],
             surprise_trigger=f"{target} requires a sequence to unlock",
+            blocked=True,  # Don't execute in Habitat
         )
 
     # Check if this action advances a sequence
@@ -505,7 +554,7 @@ def handle_sequence_lock(
             return HandlerResult(
                 applies=True,
                 state=new_state,
-                observation=f"You {action_name} {target}. You hear a satisfying click - something unlocked!",
+                observation=f"You hear a satisfying click - something unlocked!",
                 success=True,
                 effects=[f"sequence_complete={sequence_target}"],
                 surprise_trigger=f"Sequence completed, {sequence_target} unlocked",
@@ -514,7 +563,7 @@ def handle_sequence_lock(
             return HandlerResult(
                 applies=True,
                 state=new_state,
-                observation=f"You {action_name} {target}. You hear a small click.",
+                observation=f"You hear a small click.",
                 success=True,
                 effects=[f"sequence_progress={new_progress[sequence_target]}/{required}"],
             )

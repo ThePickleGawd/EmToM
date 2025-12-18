@@ -225,21 +225,25 @@ class EMTOMBaseRunner(ABC):
 
         Returns:
             Dict with success, observation, and optional surprise info
+
+        Order of operations:
+            1. Check mechanics for blocking/transformation (doesn't modify state)
+            2. If blocked by mechanic, return immediately
+            3. Execute in Habitat (physical action)
+            4. If Habitat fails (too far, occluded), return failure WITHOUT applying state
+            5. If Habitat succeeds, apply mechanics to game state
         """
         import torch
         from emtom.mechanics.handlers import apply_mechanics
 
         agent_id = f"agent_{uid}"
 
-        # First check mechanics
+        # 1. Check mechanics (doesn't modify state yet)
         mech_result = apply_mechanics(
             action_name, agent_id, target, self.game_manager.get_state()
         )
 
-        # Apply action through game manager (updates state)
-        state, result = self.game_manager.apply_action(action_name, agent_id, target)
-
-        # If mechanic blocked the action, return early
+        # 2. If mechanic blocked the action, return early WITHOUT executing in Habitat
         if mech_result.blocked:
             return {
                 "success": False,
@@ -253,7 +257,7 @@ class EMTOMBaseRunner(ABC):
         actual_target = mech_result.actual_target or target
         mechanic_observation = mech_result.observation if mech_result.applies else None
 
-        # Execute via agent tools
+        # 3. Execute via agent tools in Habitat
         if uid not in self.agents:
             return {
                 "success": False,
@@ -314,14 +318,33 @@ class EMTOMBaseRunner(ABC):
 
             obs_text = response or f"Executed {actual_action}[{actual_target}]"
 
-        # Use mechanic observation if one was generated
-        if mechanic_observation:
-            obs_text = mechanic_observation
+        # 4. Check if Habitat action failed (e.g., "too far", "occluded")
+        habitat_failed = any(
+            fail_phrase in obs_text.lower()
+            for fail_phrase in ["too far", "occluded", "failed to", "unexpected failure", "cannot"]
+        )
+
+        if habitat_failed:
+            # Habitat action failed - don't apply mechanics, return failure
+            return {
+                "success": False,
+                "observation": obs_text,
+            }
+
+        # 5. Habitat action succeeded - now apply mechanic state changes
+        if mech_result.applies:
+            state, result = self.game_manager.apply_action(action_name, agent_id, target)
+            # Append mechanic observation to Habitat observation
+            if mechanic_observation:
+                obs_text = f"{obs_text} {mechanic_observation}"
+            surprise_trigger = mech_result.surprise_trigger or result.surprise_trigger
+        else:
+            surprise_trigger = None
 
         return {
             "success": True,
             "observation": obs_text,
-            "surprise": mech_result.surprise_trigger if mech_result.applies else result.surprise_trigger,
+            "surprise": surprise_trigger,
         }
 
     def execute_parsed_action(self, uid: int, action_str: str) -> Dict[str, Any]:

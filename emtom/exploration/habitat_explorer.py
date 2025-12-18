@@ -653,12 +653,12 @@ class HabitatExplorer:
     def _execute_action(self, agent_id: str, action_choice: ActionChoice) -> Dict[str, Any]:
         """Execute an action in the Habitat environment.
 
-        ALL actions are routed through GameStateManager first, which applies mechanics.
-        Mechanics are world settings that ALWAYS apply:
-        - If mechanic blocks the action (counting_state not reached, conditional_unlock locked),
-          we return immediately without executing in Habitat
-        - If mechanic transforms the action (inverse_state, remote_control),
-          we execute the transformed action in Habitat
+        Order of operations:
+        1. Check mechanics for blocking/transformation (but don't apply state changes yet)
+        2. If blocked by mechanic, return immediately
+        3. Execute in Habitat (physical action)
+        4. If Habitat fails (too far, occluded), return failure WITHOUT applying mechanics
+        5. If Habitat succeeds, apply mechanics to game state
         """
         action_name = action_choice.action
         target = action_choice.target or ""
@@ -667,15 +667,9 @@ class HabitatExplorer:
         agent_uid = int(agent_id.split("_")[-1]) if "_" in agent_id else int(agent_id)
         agent = self.agents.get(agent_uid)
 
-        # Route through GameStateManager to apply mechanics
-        # apply_mechanics is called inside apply_action, so we get the handler result from there
+        # Check mechanics for transformation/blocking info (doesn't modify state)
         from emtom.mechanics.handlers import apply_mechanics
-
-        # First check mechanics to get transformation info
         mech_result = apply_mechanics(action_name, agent_id, target, self.game_manager.get_state())
-
-        # Now apply the action (this will also call apply_mechanics and update state)
-        state, result = self.game_manager.apply_action(action_name, agent_id, target)
 
         # If mechanic blocked the action (e.g., locked door), first navigate to the target
         # so the video shows the agent approaching before being blocked
@@ -744,14 +738,16 @@ class HabitatExplorer:
         actual_action = mech_result.actual_action or action_name
         actual_target = mech_result.actual_target or target
         mechanic_observation = mech_result.observation if mech_result.applies else None
-        surprise_trigger = mech_result.surprise_trigger if mech_result.applies else result.surprise_trigger
+        surprise_trigger = mech_result.surprise_trigger if mech_result.applies else None
 
-        # Custom EMTOM action - already handled by GameStateManager
+        # Custom EMTOM action - handled by GameStateManager
         if action_name in EMTOM_ACTIONS:
+            # Apply custom action to game state
+            state, custom_result = self.game_manager.apply_action(action_name, agent_id, target)
             return {
-                "success": result.success,
-                "observation": mechanic_observation or result.observation,
-                "surprise": surprise_trigger,
+                "success": custom_result.success,
+                "observation": mechanic_observation or custom_result.observation,
+                "surprise": surprise_trigger or custom_result.surprise_trigger,
             }
 
         # Handle Pick action for virtual objects (e.g., key spawned on table)
@@ -940,9 +936,29 @@ class HabitatExplorer:
 
             obs_text = response or f"Executed {actual_action}[{actual_target}]"
 
-        # Use mechanic observation if one was generated
-        if mechanic_observation:
-            obs_text = mechanic_observation
+        # Check if Habitat action failed (e.g., "too far", "occluded")
+        habitat_failed = any(
+            fail_phrase in obs_text.lower()
+            for fail_phrase in ["too far", "occluded", "failed to", "unexpected failure", "cannot"]
+        )
+
+        if habitat_failed:
+            # Habitat action failed - don't apply mechanics, return failure
+            return {
+                "success": False,
+                "observation": obs_text,
+            }
+
+        # Habitat action succeeded - now apply mechanic state changes
+        # This updates game state (e.g., inverse_state flips, counting_state updates)
+        if mech_result.applies:
+            _, applied_result = self.game_manager.apply_action(action_name, agent_id, target)
+            # Use the mechanic's observation if it provides one
+            if mechanic_observation:
+                obs_text = f"{obs_text} {mechanic_observation}"
+            # Update surprise trigger from applied result if not already set
+            if not surprise_trigger and applied_result.surprise_trigger:
+                surprise_trigger = applied_result.surprise_trigger
 
         return {
             "success": True,
