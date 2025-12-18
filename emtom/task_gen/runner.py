@@ -75,9 +75,11 @@ def parse_args():
 def load_config(config_name: str) -> DictConfig:
     """Load Hydra configuration."""
     # Initialize Hydra
+    # Path is relative to this file: emtom/task_gen/runner.py
+    # So ../../ goes to project root
     with hydra.initialize(
         version_base=None,
-        config_path="../../../habitat_llm/conf",
+        config_path="../../habitat_llm/conf",
     ):
         config = hydra.compose(config_name=config_name)
     return config

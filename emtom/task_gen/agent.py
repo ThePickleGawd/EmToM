@@ -255,10 +255,23 @@ Start by exploring the available trajectories with bash."""
         Allows file exploration and editing within allowed directories only.
         """
         # Block command chaining operators
-        dangerous_patterns = ["&&", "||", ";", "|", "`", "$(", "${"]
+        # Note: We allow | inside quoted strings (for jq internal pipes)
+        dangerous_patterns = ["&&", "||", ";", "`", "$(", "${"]
         for pattern in dangerous_patterns:
             if pattern in command:
                 return f"Command chaining not allowed: '{pattern}' detected. Use separate commands."
+
+        # Check for shell pipes (| outside of quotes)
+        # Simple heuristic: if | appears outside single quotes, it's likely a shell pipe
+        in_single_quote = False
+        in_double_quote = False
+        for i, char in enumerate(command):
+            if char == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+            elif char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+            elif char == "|" and not in_single_quote and not in_double_quote:
+                return "Command chaining not allowed: '|' (shell pipe) detected. Use separate commands."
 
         # Allowed directories (relative to project root)
         allowed_paths = ["data/emtom/", "outputs/emtom/", "emtom/"]
@@ -284,11 +297,16 @@ Start by exploring the available trajectories with bash."""
                 if not any(target_path.startswith(p) for p in allowed_paths):
                     return f"Write not allowed: {target_path}. Can only write to: {', '.join(allowed_paths)}"
 
-        # For read commands, check if accessing sensitive paths
-        sensitive_paths = ["/etc/", "/root/", "~/.ssh", ".env", "credentials", "secret"]
-        command_lower = command.lower()
+        # For read commands, check if accessing sensitive file paths
+        # Only check the command part, not heredoc content
+        sensitive_paths = ["/etc/", "/root/", "~/.ssh/", ".env", "credentials.json"]
+        if is_heredoc:
+            # For heredocs, only check the command before the heredoc marker
+            command_to_check = command.split("<<")[0].lower()
+        else:
+            command_to_check = command.lower()
         for sensitive in sensitive_paths:
-            if sensitive in command_lower:
+            if sensitive in command_to_check:
                 return f"Access denied: cannot access paths containing '{sensitive}'"
 
         try:
