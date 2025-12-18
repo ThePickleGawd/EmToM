@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
 
 import torch
 
@@ -176,7 +176,7 @@ class HabitatExplorer:
         game_manager: "GameStateManager",
         curiosity_model: CuriosityModel,
         surprise_detector: SurpriseDetector,
-        agent: Optional["Agent"] = None,
+        agents: Optional[Dict[int, "Agent"]] = None,
         config: Optional[HabitatExplorationConfig] = None,
     ):
         """
@@ -187,18 +187,22 @@ class HabitatExplorer:
             game_manager: GameStateManager for mechanics
             curiosity_model: LLM-based model for action selection
             surprise_detector: LLM-based model for surprise detection
-            agent: Partnr Agent with tools
+            agents: Dict mapping agent UID to Partnr Agent with tools
             config: Exploration configuration
         """
         self.env = env_interface
         self.game_manager = game_manager
         self.curiosity = curiosity_model
         self.surprise_detector = surprise_detector
-        self.agent = agent
+        self.agents = agents or {}
         self.config = config or HabitatExplorationConfig()
 
-        # World adapter
-        self.world_adapter = HabitatWorldAdapter(env_interface, agent_uid=0)
+        # World adapters per agent
+        self.world_adapters: Dict[int, HabitatWorldAdapter] = {}
+        for uid in self.agents.keys():
+            self.world_adapters[uid] = HabitatWorldAdapter(env_interface, agent_uid=uid)
+        # Default adapter for general use
+        self.world_adapter = self.world_adapters.get(0) or HabitatWorldAdapter(env_interface, agent_uid=0)
 
         # Trajectory logging
         self.logger = TrajectoryLogger(
@@ -221,10 +225,11 @@ class HabitatExplorer:
         self._max_skill_steps = 500
         self._episode_done = False
 
-        # Cache tool descriptions from agent
+        # Cache tool descriptions from first agent
         self._tool_descriptions: Optional[str] = None
-        if agent and hasattr(agent, 'tool_descriptions'):
-            self._tool_descriptions = agent.tool_descriptions
+        first_agent = next(iter(self.agents.values()), None) if self.agents else None
+        if first_agent and hasattr(first_agent, 'tool_descriptions'):
+            self._tool_descriptions = first_agent.tool_descriptions
             self.curiosity.set_tool_descriptions(self._tool_descriptions)
 
     def _setup_video_recording(self) -> None:
@@ -658,6 +663,10 @@ class HabitatExplorer:
         action_name = action_choice.action
         target = action_choice.target or ""
 
+        # Get agent UID from agent_id (e.g., "agent_0" -> 0)
+        agent_uid = int(agent_id.split("_")[-1]) if "_" in agent_id else int(agent_id)
+        agent = self.agents.get(agent_uid)
+
         # Route through GameStateManager to apply mechanics
         # apply_mechanics is called inside apply_action, so we get the handler result from there
         from emtom.mechanics.handlers import apply_mechanics
@@ -676,27 +685,27 @@ class HabitatExplorer:
             base_target = re.sub(r'\s*\[#\d+\]$', '', target)
 
             # Navigate to the target first (if we have an agent with navigation)
-            if self.agent is not None and "Navigate" in self.agent.tools:
+            if agent is not None and "Navigate" in agent.tools:
                 try:
                     obs = self.env.get_observations()
-                    low_level_action, response = self.agent.process_high_level_action(
+                    low_level_action, response = agent.process_high_level_action(
                         "Navigate", base_target, obs
                     )
 
                     if low_level_action is not None:
-                        tool = self.agent.tools["Navigate"]
+                        tool = agent.tools["Navigate"]
                         skill_steps = 0
 
                         while skill_steps < self._max_skill_steps:
                             try:
-                                raw_obs, reward, done, info = self.env.step({0: low_level_action})
+                                raw_obs, reward, done, info = self.env.step({agent_uid: low_level_action})
                             except AssertionError as e:
                                 if "Episode over" in str(e):
                                     self._episode_done = True
                                     break
                                 raise
                             parsed_obs = self.env.parse_observations(raw_obs)
-                            self._record_frame(parsed_obs, {0: (action_name, target)})
+                            self._record_frame(parsed_obs, {agent_uid: (action_name, target)})
                             skill_steps += 1
 
                             if done:
@@ -710,7 +719,7 @@ class HabitatExplorer:
                                 if is_done:
                                     break
 
-                            low_level_action, response = self.agent.process_high_level_action(
+                            low_level_action, response = agent.process_high_level_action(
                                 "Navigate", base_target, raw_obs
                             )
                             if low_level_action is None:
@@ -719,7 +728,7 @@ class HabitatExplorer:
                         # Record a few extra frames at the blocked door for visual clarity
                         for _ in range(5):
                             obs = self.env.get_observations()
-                            self._record_frame(obs, {0: (action_name, target)})
+                            self._record_frame(obs, {agent_uid: (action_name, target)})
                 except Exception as e:
                     # If navigation fails, continue with the blocked response
                     print(f"[HabitatExplorer] Navigation to blocked target failed: {e}")
@@ -787,27 +796,27 @@ class HabitatExplorer:
 
                     # Navigate to the key's location first (for video)
                     location = obj_info.get("location", "the table")
-                    if self.agent is not None and "Navigate" in self.agent.tools and location:
+                    if agent is not None and "Navigate" in agent.tools and location:
                         try:
                             obs = self.env.get_observations()
-                            low_level_action, response = self.agent.process_high_level_action(
+                            low_level_action, response = agent.process_high_level_action(
                                 "Navigate", location, obs
                             )
 
                             if low_level_action is not None:
-                                tool = self.agent.tools["Navigate"]
+                                tool = agent.tools["Navigate"]
                                 skill_steps = 0
 
                                 while skill_steps < self._max_skill_steps:
                                     try:
-                                        raw_obs, reward, done, info = self.env.step({0: low_level_action})
+                                        raw_obs, reward, done, info = self.env.step({agent_uid: low_level_action})
                                     except AssertionError as e:
                                         if "Episode over" in str(e):
                                             self._episode_done = True
                                             break
                                         raise
                                     parsed_obs = self.env.parse_observations(raw_obs)
-                                    self._record_frame(parsed_obs, {0: ("Pick", actual_target)})
+                                    self._record_frame(parsed_obs, {agent_uid: ("Pick", actual_target)})
                                     skill_steps += 1
 
                                     if done:
@@ -821,7 +830,7 @@ class HabitatExplorer:
                                         if is_done:
                                             break
 
-                                    low_level_action, response = self.agent.process_high_level_action(
+                                    low_level_action, response = agent.process_high_level_action(
                                         "Navigate", location, raw_obs
                                     )
                                     if low_level_action is None:
@@ -830,7 +839,7 @@ class HabitatExplorer:
                                 # Record a few extra frames at the pickup location
                                 for _ in range(3):
                                     obs = self.env.get_observations()
-                                    self._record_frame(obs, {0: ("Pick", actual_target)})
+                                    self._record_frame(obs, {agent_uid: ("Pick", actual_target)})
                         except Exception as e:
                             print(f"[HabitatExplorer] Navigation to key location failed: {e}")
 
@@ -871,21 +880,21 @@ class HabitatExplorer:
                     }
 
         # Partnr tools - execute in Habitat
-        if self.agent is None:
+        if agent is None:
             return {
                 "success": False,
-                "observation": f"No agent configured. Cannot execute {action_name}[{target}].",
+                "observation": f"No agent configured for {agent_id}. Cannot execute {action_name}[{target}].",
             }
 
-        if actual_action and actual_action not in self.agent.tools:
+        if actual_action and actual_action not in agent.tools:
             return {
                 "success": False,
-                "observation": f"Tool '{actual_action}' not available.",
+                "observation": f"Tool '{actual_action}' not available for {agent_id}.",
             }
 
         obs = self.env.get_observations()
 
-        low_level_action, response = self.agent.process_high_level_action(
+        low_level_action, response = agent.process_high_level_action(
             actual_action, actual_target, obs
         )
 
@@ -894,11 +903,11 @@ class HabitatExplorer:
         else:
             # Execute motor skill
             skill_steps = 0
-            tool = self.agent.tools[actual_action]
+            tool = agent.tools[actual_action]
 
             while skill_steps < self._max_skill_steps:
                 try:
-                    raw_obs, reward, done, info = self.env.step({0: low_level_action})
+                    raw_obs, reward, done, info = self.env.step({agent_uid: low_level_action})
                 except AssertionError as e:
                     # Episode ended - handle gracefully
                     if "Episode over" in str(e):
@@ -907,7 +916,7 @@ class HabitatExplorer:
                         break
                     raise
                 parsed_obs = self.env.parse_observations(raw_obs)
-                self._record_frame(parsed_obs, {0: (actual_action, actual_target)})
+                self._record_frame(parsed_obs, {agent_uid: (actual_action, actual_target)})
                 skill_steps += 1
 
                 # Check if episode ended
@@ -922,7 +931,7 @@ class HabitatExplorer:
                     if is_done:
                         break
 
-                low_level_action, response = self.agent.process_high_level_action(
+                low_level_action, response = agent.process_high_level_action(
                     actual_action, actual_target, raw_obs
                 )
 
