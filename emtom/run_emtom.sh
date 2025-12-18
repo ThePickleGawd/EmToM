@@ -1,6 +1,6 @@
 #!/bin/bash
 # EMTOM Benchmark Pipeline
-# Usage: ./emtom/run_emtom.sh <command> [task_type] [options]
+# Usage: ./emtom/run_emtom.sh <command> [options]
 
 set -e
 
@@ -13,29 +13,30 @@ cd "$PROJECT_ROOT"
 MAX_SIM_STEPS=20000
 MAX_LLM_CALLS=20
 EXPLORATION_STEPS=25
-TASK_TYPE=1
 MECHANICS=""
 TASK_FILE=""
 LLM_AGENTS=""
+NUM_TASKS=1
+MODEL="gpt-5"
 
 print_usage() {
     echo "EMTOM Benchmark Pipeline"
     echo ""
-    echo "Usage: ./emtom/run_emtom.sh <command> [task_type] [options]"
+    echo "Usage: ./emtom/run_emtom.sh <command> [options]"
     echo ""
     echo "Commands:"
-    echo "  explore        Run LLM-guided exploration in Habitat"
-    echo "  generate       Generate tasks from exploration trajectories"
-    echo "  benchmark      Run benchmark with generated tasks"
-    echo "  test           Human-in-the-loop testing mode (manual command input)"
-    echo "  all            Run full pipeline: explore -> generate -> benchmark"
-    echo ""
-    echo "Task Type (for generate/all commands):"
-    echo "  1              Theory of Mind tasks (default)"
-    echo "  2              Regular tasks"
+    echo "  explore     Run LLM-guided exploration in Habitat"
+    echo "  generate    Generate tasks iteratively with testing loop"
+    echo "  benchmark   Run benchmark with generated tasks"
+    echo "  test        Human-in-the-loop testing mode (manual command input)"
+    echo "  all         Run full pipeline: explore -> generate -> benchmark"
     echo ""
     echo "Exploration Options:"
     echo "  --steps N            Number of exploration steps (default: $EXPLORATION_STEPS)"
+    echo ""
+    echo "Generation Options:"
+    echo "  --num-tasks N        Number of tasks to generate (default: 1)"
+    echo "  --model MODEL        LLM model for the agent (default: gpt-5)"
     echo ""
     echo "Benchmark Options:"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
@@ -48,10 +49,9 @@ print_usage() {
     echo ""
     echo "Examples:"
     echo "  ./emtom/run_emtom.sh explore --steps 30"
-    echo "  ./emtom/run_emtom.sh generate 1              # Generate ToM tasks"
-    echo "  ./emtom/run_emtom.sh generate 2              # Generate regular tasks"
-    echo "  ./emtom/run_emtom.sh all 1                   # Full pipeline with ToM tasks"
-    echo "  ./emtom/run_emtom.sh all 2                   # Full pipeline with regular tasks"
+    echo "  ./emtom/run_emtom.sh generate --num-tasks 5"
+    echo "  ./emtom/run_emtom.sh generate --model gpt-5-mini"
+    echo "  ./emtom/run_emtom.sh all"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
 }
@@ -75,22 +75,19 @@ run_exploration() {
 }
 
 run_generate() {
-    if [ "$TASK_TYPE" -eq 1 ]; then
-        TASK_TYPE_NAME="Theory of Mind"
-    else
-        TASK_TYPE_NAME="Regular"
-    fi
-
     echo "=============================================="
     echo "Running EMTOM Task Generation"
     echo "=============================================="
-    echo "Task Type: $TASK_TYPE_NAME (type $TASK_TYPE)"
+    echo "Target tasks: $NUM_TASKS"
+    echo "Model: $MODEL"
     echo "=============================================="
     echo ""
-    python emtom/examples/generate_tasks.py \
+    python -m emtom.task_gen.runner \
+        --num-tasks $NUM_TASKS \
+        --model $MODEL \
         --trajectory-dir data/emtom/trajectories \
-        --output-dir data/emtom/tasks \
-        --task-type $TASK_TYPE
+        --output-dir data/emtom/tasks/curated \
+        --config-name examples/emtom_two_robots
 }
 
 run_benchmark() {
@@ -131,8 +128,6 @@ run_test() {
     fi
     if [ -n "$TASK_FILE" ]; then
         CMD_ARGS="$CMD_ARGS --task $TASK_FILE"
-        # Use task mechanics by default when task is provided
-        CMD_ARGS="$CMD_ARGS"
     fi
     if [ -n "$LLM_AGENTS" ]; then
         CMD_ARGS="$CMD_ARGS --llm-agents $LLM_AGENTS"
@@ -161,11 +156,6 @@ while [[ $# -gt 0 ]]; do
         explore|generate|benchmark|test|all)
             COMMAND=$1
             shift
-            # Check if next argument is a task type (1 or 2)
-            if [[ $# -gt 0 && "$1" =~ ^[12]$ ]]; then
-                TASK_TYPE=$1
-                shift
-            fi
             ;;
         --max-sim-steps)
             MAX_SIM_STEPS=$2
@@ -177,6 +167,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --steps)
             EXPLORATION_STEPS=$2
+            shift 2
+            ;;
+        --num-tasks)
+            NUM_TASKS=$2
+            shift 2
+            ;;
+        --model)
+            MODEL=$2
             shift 2
             ;;
         --mechanics)

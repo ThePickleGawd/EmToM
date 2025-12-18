@@ -15,6 +15,7 @@ from emtom.task_gen.task_generator import (
     TaskCategory,
     TaskGenerator,
 )
+from emtom.task_gen.agent import TaskGeneratorAgent
 
 __all__ = [
     # Analyzer
@@ -22,7 +23,7 @@ __all__ = [
     "TaskOpportunity",
     "TrajectoryAnalysis",
     "TrajectoryAnalyzer",
-    # Generator
+    # Generator (legacy one-shot)
     "FailureCondition",
     "GeneratedTask",
     "MechanicBinding",
@@ -30,4 +31,6 @@ __all__ = [
     "SuccessCondition",
     "TaskCategory",
     "TaskGenerator",
+    # Agentic generator
+    "TaskGeneratorAgent",
 ]
