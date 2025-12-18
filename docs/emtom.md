@@ -41,7 +41,8 @@ The benchmark uses a three-stage pipeline:
 
 # Or run individual stages
 ./emtom/run_emtom.sh exploration --steps 50
-./emtom/run_emtom.sh generate
+./emtom/run_emtom.sh generate              # One-shot generation
+./emtom/run_emtom.sh generate-agentic      # Agentic generation (iterative)
 ./emtom/run_emtom.sh benchmark --max-sim-steps 2000
 ```
 
@@ -156,15 +157,39 @@ Agent_0_Observation: [Result of action]
 
 **Purpose**: Create collaborative challenges that leverage discovered mechanics.
 
-**Key Components**:
-- `TrajectoryAnalyzer` (`emtom/task_gen/trajectory_analyzer.py`): Extracts patterns from trajectories
-- `TaskGenerator` (`emtom/task_gen/task_generator.py`): LLM-based task creation
+**Two Approaches**:
+
+| Approach | Command | Description |
+|----------|---------|-------------|
+| One-shot | `generate` | Single LLM call generates tasks from trajectory |
+| Agentic | `generate-agentic` | ReAct agent iteratively creates/tests/refines tasks |
+
+#### One-Shot Generation
+
+**Components**: `TrajectoryAnalyzer`, `TaskGenerator`
+
+**Flow**: Trajectory → LLM → Tasks (single pass)
+
+#### Agentic Generation (Recommended)
+
+**Components**: `TaskGeneratorAgent` (`emtom/task_gen/agentic/agent.py`)
+
+**Tools** (only 3):
+- `bash` - File operations, read trajectories, edit task JSON
+- `test_task` - Run benchmark with current task, get quality metrics
+- `submit_task` - Save task when quality is good
 
 **Flow**:
-1. Analyze trajectory files to extract surprises and mechanics
-2. LLM generates tasks that require understanding the discovered mechanics
-3. Tasks include knowledge asymmetry (one agent knows mechanics, other doesn't)
-4. Success/failure conditions are grounded in real scene objects
+```
+explore trajectories (bash) → edit task file (bash) → test → iterate or submit
+```
+
+**Quality Criteria**:
+| Metric | Good | Bad |
+|--------|------|-----|
+| Steps | 10-50 | <10 (too easy) or >100 (too hard) |
+| done | True | False (agents couldn't complete) |
+| episode_over | False | True (environment error) |
 
 **Output**: JSON task files in `data/emtom/tasks/`
 
@@ -324,8 +349,12 @@ emtom/
 │   └── trajectory_logger.py   # Trajectory recording
 │
 ├── task_gen/                   # Task generation phase
-│   ├── task_generator.py      # LLM-based task creation
-│   └── trajectory_analyzer.py # Extract patterns from trajectories
+│   ├── task_generator.py      # One-shot LLM task creation
+│   ├── trajectory_analyzer.py # Extract patterns from trajectories
+│   └── agentic/               # Agentic task generation
+│       ├── agent.py           # ReAct agent with 3 tools
+│       ├── prompts.py         # System prompt + task template
+│       └── runner.py          # CLI entry point
 │
 ├── benchmark/                  # Benchmark phase
 │   ├── habitat_runner.py      # Run tasks in Habitat
