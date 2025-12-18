@@ -139,8 +139,6 @@ class EMTOMGameState:
     inverse_objects: Set[str] = field(default_factory=set)
     # remote_control: mappings from trigger -> (target, state)
     remote_mappings: Dict[str, Tuple[str, str]] = field(default_factory=dict)
-    # key_locked: objects that require a specific key code to open (door_id -> code)
-    key_locked_objects: Dict[str, str] = field(default_factory=dict)
 
     # === Agent beliefs (ToM) ===
     agent_beliefs: Dict[str, AgentBelief] = field(default_factory=dict)
@@ -257,7 +255,6 @@ class EMTOMGameState:
             "mirror_pairs": self.mirror_pairs,
             "inverse_objects": list(self.inverse_objects),
             "remote_mappings": self.remote_mappings,
-            "key_locked_objects": self.key_locked_objects,
             "current_step": self.current_step,
             "goals": [
                 {
@@ -297,7 +294,6 @@ class EMTOMGameState:
         state.mirror_pairs = data.get("mirror_pairs", [])
         state.inverse_objects = set(data.get("inverse_objects", []))
         state.remote_mappings = data.get("remote_mappings", {})
-        state.key_locked_objects = data.get("key_locked_objects", {})
         state.current_step = data.get("current_step", 0)
         state.goals = [
             Goal(
