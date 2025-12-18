@@ -102,6 +102,11 @@ class TaskGeneratorAgent:
         self._log(f"Output: {self.output_dir}")
         self._log(f"{'='*60}\n")
 
+        # Clean up working_task.json from previous runs
+        if self.task_file.exists():
+            self.task_file.unlink()
+            self._log(f"Cleaned up previous {self.task_file}")
+
         # Initialize conversation
         self.messages = [
             {"role": "system", "content": SYSTEM_PROMPT}
