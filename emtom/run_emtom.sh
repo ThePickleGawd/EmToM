@@ -82,12 +82,14 @@ run_generate() {
     echo "Model: $MODEL"
     echo "=============================================="
     echo ""
-    python -m emtom.task_gen.runner \
-        --num-tasks $NUM_TASKS \
-        --model $MODEL \
-        --trajectory-dir data/emtom/trajectories \
-        --output-dir data/emtom/tasks/curated \
-        --config-name examples/emtom_two_robots
+    # Use Hydra config system with custom overrides
+    python emtom/task_gen/runner.py \
+        --config-name examples/emtom_two_robots \
+        +num_tasks=$NUM_TASKS \
+        +model=$MODEL \
+        +trajectory_dir=data/emtom/trajectories \
+        +output_dir=data/emtom/tasks/curated \
+        "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-generate"
 }
 
 run_benchmark() {

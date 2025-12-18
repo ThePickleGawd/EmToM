@@ -176,6 +176,19 @@ class GeneratedTask:
         for b in data.get("mechanic_bindings", []):
             bindings.append(MechanicBinding.from_dict(b))
 
+        # Parse subtasks - handle both string and dict formats
+        subtasks = []
+        for i, s in enumerate(data.get("subtasks", [])):
+            if isinstance(s, str):
+                # Convert simple string to Subtask
+                subtasks.append(Subtask(
+                    subtask_id=f"subtask_{i}",
+                    description=s,
+                    success_condition={},
+                ))
+            else:
+                subtasks.append(Subtask.from_dict(s))
+
         return cls(
             task_id=data["task_id"],
             title=data["title"],
@@ -194,7 +207,7 @@ class GeneratedTask:
             num_agents=data.get("num_agents", 2),
             difficulty=data.get("difficulty", 3),
             theory_of_mind_required=data.get("theory_of_mind_required", False),
-            subtasks=[Subtask.from_dict(s) for s in data.get("subtasks", [])],
+            subtasks=subtasks,
             source_trajectory=data.get("source_trajectory"),
         )
 
