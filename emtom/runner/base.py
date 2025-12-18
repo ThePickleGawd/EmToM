@@ -120,21 +120,28 @@ class EMTOMBaseRunner(ABC):
         """Create Agent instances from config."""
         from habitat_llm.agent import Agent
 
-        if not hasattr(self.config, 'evaluation') or not hasattr(self.config.evaluation, 'agents'):
+        # Agent configs are at config.agents.agent_X.config
+        # evaluation.agents only has uid references
+        if not hasattr(self.config, 'agents'):
             print("[EMTOMBaseRunner] Warning: No agents in config")
             return
 
-        for uid, agent_conf in enumerate(self.config.evaluation.agents.values()):
-            if not hasattr(agent_conf, 'config'):
+        for agent_name, agent_entry in self.config.agents.items():
+            if not hasattr(agent_entry, 'config'):
                 continue
+
+            # Get uid from agent name (e.g., "agent_0" -> 0) or from config
+            uid = getattr(agent_entry, 'uid', None)
+            if uid is None:
+                uid = int(agent_name.split("_")[-1]) if "_" in agent_name else 0
 
             agent = Agent(
                 uid=uid,
-                agent_conf=agent_conf.config,
+                agent_conf=agent_entry.config,
                 env_interface=self.env_interface,
             )
             self.agents[uid] = agent
-            print(f"[EMTOMBaseRunner] Created agent_{uid} with tools: {list(agent.tools.keys())}")
+            print(f"[EMTOMBaseRunner] Created {agent_name} (uid={uid}) with tools: {list(agent.tools.keys())}")
 
     def _setup_tools(self) -> None:
         """Inject EMTOM tools (Use, Inspect) and Communicate into agents."""
