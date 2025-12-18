@@ -75,8 +75,8 @@ class CuriosityModel:
             "eot_tag": "",
         })
 
-        # Current prompt (accumulates conversation like benchmark planner)
-        self.curr_prompt = ""
+        # Per-agent prompts (accumulates conversation like benchmark planner)
+        self.agent_prompts: Dict[str, str] = {}
 
         # Tool descriptions (set by explorer)
         self._tool_descriptions: Optional[str] = None
@@ -97,9 +97,16 @@ class CuriosityModel:
         """Set the tool descriptions to use in prompts."""
         self._tool_descriptions = tool_descriptions
 
-    def reset(self):
-        """Reset the conversation state for a new episode."""
-        self.curr_prompt = ""
+    def reset(self, agent_id: Optional[str] = None):
+        """Reset the conversation state for a new episode.
+
+        Args:
+            agent_id: If provided, reset only that agent. Otherwise reset all.
+        """
+        if agent_id:
+            self.agent_prompts[agent_id] = ""
+        else:
+            self.agent_prompts = {}
 
     def select_action(
         self,
@@ -136,37 +143,49 @@ class CuriosityModel:
         # Build task description from world state
         task = self._build_task_description(world_description, exploration_history or [])
 
-        # Build initial prompt if this is the first action
-        if not self.curr_prompt:
-            self.curr_prompt = self.prompt_template.format(
+        # Build initial prompt if this is the first action for this agent
+        if agent_id not in self.agent_prompts or not self.agent_prompts[agent_id]:
+            self.agent_prompts[agent_id] = self.prompt_template.format(
                 id=agent_uid,
                 tool_descriptions=tools_desc,
                 input=task,
             )
 
-        # Generate response
-        response = self.llm.generate(self.curr_prompt, self.stopword)
+        # Generate response using this agent's prompt
+        curr_prompt = self.agent_prompts[agent_id]
+        response = self.llm.generate(curr_prompt, self.stopword)
 
         # Parse response - fail explicitly if it doesn't match expected format
         action_choice = self._parse_response(response, agent_uid)
 
-        # Append response to conversation
-        self.curr_prompt += response
-        if not self.curr_prompt.endswith(self.stopword):
-            self.curr_prompt += self.stopword
+        # Append response to this agent's conversation
+        curr_prompt += response
+        if not curr_prompt.endswith(self.stopword):
+            curr_prompt += self.stopword
+        self.agent_prompts[agent_id] = curr_prompt
 
         return action_choice
 
     def add_observation(self, agent_id: str, observation: str):
         """
-        Add an observation to the conversation.
+        Add an observation to this agent's conversation.
 
         Args:
             agent_id: ID of the agent
             observation: The observation text
         """
         agent_uid = agent_id.split("_")[-1] if "_" in agent_id else agent_id
-        self.curr_prompt += f"\nAgent_{agent_uid}_Observation: {observation}\n"
+        if agent_id not in self.agent_prompts:
+            self.agent_prompts[agent_id] = ""
+        self.agent_prompts[agent_id] += f"\nAgent_{agent_uid}_Observation: {observation}\n"
+
+    def get_all_prompts(self) -> Dict[str, str]:
+        """Get all agent prompts for saving.
+
+        Returns:
+            Dict mapping agent_id to their full prompt/conversation history
+        """
+        return self.agent_prompts.copy()
 
     def _build_task_description(
         self,

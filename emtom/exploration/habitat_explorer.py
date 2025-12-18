@@ -1051,21 +1051,21 @@ class HabitatExplorer:
         """
         print("\n[HabitatExplorer] Saving exploration prompts and traces...")
 
-        # Collect prompts from CuriosityModel
+        # Get all agent prompts from CuriosityModel
+        all_prompts = self.curiosity.get_all_prompts()
+
+        # Collect prompts and traces for each agent
         prompts = {}
         traces = {}
 
         for agent_id in self.config.agent_ids:
-            # The full prompt with all conversation history
-            if hasattr(self.curiosity, 'curr_prompt') and self.curiosity.curr_prompt:
-                prompts[agent_id] = self.curiosity.curr_prompt
+            # Get this agent's full prompt with conversation history
+            if agent_id in all_prompts and all_prompts[agent_id]:
+                prompts[agent_id] = all_prompts[agent_id]
 
-            # For traces, we can extract just the task + actions (without system prompt)
-            # by finding where the actual interaction starts
-            if hasattr(self.curiosity, 'curr_prompt') and self.curiosity.curr_prompt:
-                prompt = self.curiosity.curr_prompt
-                # Try to extract just the trace part (after initial prompt)
-                # Look for "Task:" which marks the start of actual interaction
+                # For traces, extract just the task + actions (without system prompt)
+                # by finding where the actual interaction starts
+                prompt = all_prompts[agent_id]
                 task_marker = "Task:"
                 if task_marker in prompt:
                     trace_start = prompt.find(task_marker)
@@ -1074,9 +1074,10 @@ class HabitatExplorer:
                     # Fallback: use entire prompt as trace
                     traces[agent_id] = prompt
 
-        # Save prompts and traces
+        # Save prompts and traces for all agents
         if prompts:
             self.logger.save_prompts(prompts, traces)
+            print(f"[HabitatExplorer] Saved prompts for {len(prompts)} agents: {list(prompts.keys())}")
 
         # Build planner log with step-by-step info
         planner_log = {
