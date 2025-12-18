@@ -12,6 +12,7 @@ This module uses partnr's built-in tools:
 from __future__ import annotations
 
 import os
+import random
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
@@ -216,7 +217,8 @@ class HabitatExplorer:
         self._setup_video_recording()
 
         # State
-        self.step_count = 0
+        self.step_count = 0  # Global step counter (for logging)
+        self.agent_step_counts: Dict[str, int] = {}  # Per-agent step counts
         self.surprise_moments: List[SurpriseRecord] = []
         self._is_running = False
 
@@ -251,6 +253,11 @@ class HabitatExplorer:
                 unique_postfix=True,
             )
 
+            # Override num_agents to match our exploration config
+            # This ensures all agents' views are included in the video
+            self._dvu.num_agents = len(self.config.agent_ids)
+            print(f"[HabitatExplorer] Video recording initialized for {self._dvu.num_agents} agents")
+
             if self.config.save_fpv:
                 try:
                     self._fpv_recorder = FirstPersonVideoRecorder(
@@ -265,7 +272,17 @@ class HabitatExplorer:
             print(f"[HabitatExplorer] Video utils not available: {e}")
 
     def run(self, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Run the full exploration loop in Habitat."""
+        """Run the full exploration loop in Habitat.
+
+        Uses round-robin execution: each agent takes one step in turn until
+        ALL agents have completed max_steps simulation steps each.
+
+        Example with 3 agents and max_steps=50:
+        - agent_0 step 1, agent_1 step 1, agent_2 step 1
+        - agent_0 step 2, agent_1 step 2, agent_2 step 2
+        - ... (continues until each agent has taken 50 steps)
+        - Total actions: 3 agents × 50 steps = 150 actions
+        """
         # Get active mechanics from game manager
         state = self.game_manager.get_state()
         mechanic_names = state.active_mechanics
@@ -278,6 +295,9 @@ class HabitatExplorer:
 
         self._is_running = True
         self.step_count = 0
+
+        # Initialize per-agent step counters
+        self.agent_step_counts = {agent_id: 0 for agent_id in self.config.agent_ids}
 
         # Clear video buffers
         if self._dvu:
@@ -293,12 +313,60 @@ class HabitatExplorer:
 
         # Record initial frame
         obs = self.env.get_observations()
-        self._record_frame(obs, {})
+        # Debug: Show available observation keys
+        rgb_keys = [k for k in obs.keys() if 'rgb' in k.lower()] if obs else []
+        print(f"[HabitatExplorer] Initial observation RGB keys: {rgb_keys}")
+        print(f"[HabitatExplorer] DebugVideoUtil num_agents: {self._dvu.num_agents if self._dvu else 'N/A'}")
 
-        # Main exploration loop - run until max_steps reached
-        while self._is_running and self.step_count < self.config.max_steps:
-            step_result = self._run_step()
-            self.step_count += 1
+        initial_recorded = self._record_frame(obs, {})
+        if not initial_recorded:
+            print(f"[HabitatExplorer] WARNING: Initial frame recording failed!")
+        else:
+            print(f"[HabitatExplorer] Initial frame recorded successfully")
+
+        n_agents = len(self.config.agent_ids)
+        total_steps = n_agents * self.config.max_steps
+
+        print(f"\n[HabitatExplorer] Round-robin exploration:")
+        print(f"  - {n_agents} agents:")
+        for agent_id in self.config.agent_ids:
+            uid = int(agent_id.split("_")[-1]) if "_" in agent_id else 0
+            color = self._get_agent_color(uid)
+            print(f"      {color}{agent_id}\033[0m")
+        print(f"  - {self.config.max_steps} steps per agent")
+        print(f"  - {total_steps} total simulation steps")
+
+        # Main exploration loop - round-robin until each agent has max_steps
+        while self._is_running:
+            # Check if all agents have completed their steps
+            all_done = all(
+                count >= self.config.max_steps
+                for count in self.agent_step_counts.values()
+            )
+            if all_done:
+                break
+
+            # Round-robin: each agent takes one step
+            for agent_id in self.config.agent_ids:
+                if not self._is_running:
+                    break
+
+                # Skip if this agent has already completed their steps
+                if self.agent_step_counts[agent_id] >= self.config.max_steps:
+                    continue
+
+                # Execute single step for this agent
+                self._run_single_agent_step(agent_id)
+
+                # Increment counters
+                self.agent_step_counts[agent_id] += 1
+                self.step_count += 1
+
+                # Frame count logging (every step for first 5, then every 10)
+                if self._dvu:
+                    frame_count = len(self._dvu.frames) if self._dvu.frames else 0
+                    if self.step_count <= 5 or self.step_count % 10 == 0:
+                        print(f"[HabitatExplorer] Progress: {self.step_count}/{total_steps} steps, {frame_count} frames recorded")
 
         # Save videos
         video_paths = self._save_videos()
@@ -371,8 +439,188 @@ class HabitatExplorer:
             articulated_furniture=articulated_names,
         )
 
+    @staticmethod
+    def _get_agent_color(agent_uid: int) -> str:
+        """Get ANSI color code for an agent.
+
+        Args:
+            agent_uid: Agent UID (0, 1, 2, ...)
+
+        Returns:
+            ANSI escape code for the agent's color
+        """
+        colors = [
+            "\033[94m",  # Blue - Agent 0
+            "\033[92m",  # Green - Agent 1
+            "\033[93m",  # Yellow - Agent 2
+            "\033[95m",  # Magenta - Agent 3
+            "\033[96m",  # Cyan - Agent 4
+            "\033[91m",  # Red - Agent 5
+        ]
+        return colors[agent_uid % len(colors)]
+
+    def _run_single_agent_step(self, agent_id: str) -> Dict[str, Any]:
+        """Execute a single simulation step for one agent.
+
+        This is called in round-robin fashion so each agent takes independent steps.
+
+        Args:
+            agent_id: The agent to execute a step for (e.g., "agent_0")
+
+        Returns:
+            Dict with action_choice, result, and any surprises
+        """
+        agent_uid = agent_id.split("_")[-1] if "_" in agent_id else agent_id
+        agent_uid_int = int(agent_uid)
+        agent_step = self.agent_step_counts.get(agent_id, 0) + 1
+
+        # Get color for this agent
+        agent_color = self._get_agent_color(agent_uid_int)
+        reset = "\033[0m"
+
+        print(f"\n{agent_color}{'='*60}{reset}")
+        print(f"{agent_color}Agent {agent_uid}{reset} - Step {agent_step}/{self.config.max_steps} (Global: {self.step_count + 1})")
+        print(f"{agent_color}{'='*60}{reset}")
+
+        # Build world description for this agent
+        world_text = self._build_world_description(agent_id)
+        recent_history = self.logger.get_recent_actions(agent_id, n=5)
+
+        # Select action via curiosity model (uses agent's own LLM client)
+        action_choice = self.curiosity.select_action(
+            agent_id=agent_id,
+            world_description=world_text,
+            exploration_history=recent_history,
+            tool_descriptions=self._tool_descriptions,
+        )
+
+        print(f"Thought: {action_choice.reasoning}")
+        print(f"{agent_color}Agent_{agent_uid}_Action:{reset} {action_choice.action}[{action_choice.target or ''}]")
+        print("Assigned!")
+
+        step_surprises: List[SurpriseRecord] = []
+
+        if action_choice.action == "Done":
+            # Don't allow Done during exploration - re-prompt with a hint
+            print(f"{agent_color}Agent_{agent_uid}_Observation:{reset} Keep exploring! There's more to discover.")
+            self.curiosity.add_observation(agent_id, "Keep exploring! There's more to discover.")
+            result = {
+                "success": True,
+                "observation": "Keep exploring! There's more to discover.",
+            }
+        else:
+            # Execute action
+            result = self._execute_action(agent_id, action_choice)
+
+            obs_text = result.get("observation", "Successful execution!")
+            print(f"{agent_color}Agent_{agent_uid}_Observation:{reset} {obs_text}")
+
+            self.curiosity.add_observation(agent_id, obs_text)
+
+            # Check for surprise
+            action_blocked = result.get("blocked", False)
+            mechanic_trigger = result.get("surprise")
+            llm_surprise = action_choice.surprise
+
+            if action_blocked or mechanic_trigger or llm_surprise:
+                expected_outcome = f"The {action_choice.target} would open normally" if action_choice.action.lower() == "open" else f"Normal {action_choice.action.lower()} behavior"
+
+                surprise_assessment = self.surprise_detector.assess_surprise(
+                    agent_id=agent_id,
+                    action=action_choice.action,
+                    target=action_choice.target,
+                    expected=expected_outcome,
+                    actual=obs_text,
+                    trigger=mechanic_trigger,
+                )
+
+                if surprise_assessment.is_surprised:
+                    print(f"\n*** SURPRISE DETECTED ***")
+                    print(f"    Level: {surprise_assessment.level}/5")
+                    print(f"    Explanation: {surprise_assessment.explanation}")
+                    if surprise_assessment.hypothesis:
+                        print(f"    Hypothesis: {surprise_assessment.hypothesis}")
+
+                    surprise_record = SurpriseRecord(
+                        step=self.step_count,
+                        agent_id=agent_id,
+                        action=action_choice.action,
+                        target=action_choice.target or "",
+                        observation=obs_text,
+                        surprise_level=surprise_assessment.level,
+                        explanation=surprise_assessment.explanation,
+                    )
+                    step_surprises.append(surprise_record)
+                    self.surprise_moments.append(surprise_record)
+
+        # Record frame - CRITICAL: This must succeed for every step to appear in video
+        obs = self.env.get_observations()
+        agent_uid_int = int(agent_uid)
+
+        # Debug: Log observation keys on first few steps
+        if self.step_count < 3:
+            rgb_keys = [k for k in obs.keys() if 'rgb' in k.lower()] if obs else []
+            print(f"[HabitatExplorer] Step {self.step_count + 1} observation RGB keys: {rgb_keys}")
+
+        frame_recorded = self._record_frame(obs, {agent_uid_int: (action_choice.action, action_choice.target or "")})
+
+        # If frame recording failed, try with agent 0's action format as fallback
+        if not frame_recorded:
+            print(f"[HabitatExplorer] Frame recording failed for step {self.step_count + 1}, trying fallback...")
+            try:
+                # Try recording with empty actions (just capture the scene)
+                obs = self.env.get_observations()
+                frame_recorded = self._record_frame(obs, {0: (action_choice.action, action_choice.target or "")})
+                if not frame_recorded:
+                    print(f"[HabitatExplorer] ERROR: Frame recording failed with fallback")
+                    if obs:
+                        print(f"  Available keys: {[k for k in obs.keys() if 'rgb' in k.lower()]}")
+            except Exception as e:
+                print(f"[HabitatExplorer] ERROR: Frame fallback failed: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Get current inventory for logging
+        state = self.game_manager.get_state()
+        world_objects = getattr(state, 'world_objects', {})
+        agent_inv = state.agent_inventory.get(agent_id, [])
+        inv_names = []
+        for item_id in agent_inv:
+            if item_id in world_objects:
+                inv_names.append(world_objects[item_id].get("name", item_id))
+            else:
+                inv_names.append(item_id)
+
+        # Log step for this single agent
+        self.logger.log_step(
+            step=self.step_count,
+            agent_actions={
+                agent_id: {
+                    "action": action_choice.action,
+                    "target": action_choice.target,
+                    "reasoning": action_choice.reasoning,
+                }
+            },
+            effects=[],
+            observations={
+                agent_id: result.get("observation", "")
+            },
+            surprises=step_surprises,
+            inventory={agent_id: inv_names if inv_names else []},
+        )
+
+        return {
+            "action_choice": action_choice,
+            "result": result,
+            "surprises": step_surprises,
+        }
+
     def _run_step(self) -> HabitatStepResult:
-        """Execute a single exploration step."""
+        """Execute a single exploration step for ALL agents (legacy method).
+
+        Note: The new round-robin execution uses _run_single_agent_step instead.
+        This method is kept for backward compatibility.
+        """
         agent_actions: Dict[str, ActionChoice] = {}
         action_results: Dict[str, Any] = {}
         step_surprises: List[SurpriseRecord] = []
@@ -511,14 +759,25 @@ class HabitatExplorer:
         )
 
     def _build_world_description(self, agent_id: str) -> str:
-        """Build a text description of the world from Habitat state."""
+        """Build a text description of the world from Habitat state.
+
+        Uses per-agent world adapters to ensure each agent gets their own
+        perspective of the world (partial observability).
+
+        IMPORTANT: Lists are shuffled to encourage different exploration paths
+        each time. This prevents the LLM from always picking the first item.
+        """
         lines = []
 
-        location = self.world_adapter.get_agent_location(agent_id)
+        # Get agent-specific world adapter for partial observability
+        agent_uid = int(agent_id.split("_")[-1]) if "_" in agent_id else 0
+        adapter = self.world_adapters.get(agent_uid, self.world_adapter)
+
+        location = adapter.get_agent_location(agent_id)
         if location:
             lines.append(f"You are in {location}.")
 
-        entities = self.world_adapter.get_interactable_entities()
+        entities = adapter.get_interactable_entities()
         furniture = [e for e in entities if e["type"] == "furniture"]
         objects = [e for e in entities if e["type"] == "object"]
 
@@ -535,14 +794,20 @@ class HabitatExplorer:
             virtual_objects.append({"name": obj_name, "location": obj_location})
             objects.append({"name": obj_name, "location": obj_location})
 
+        # Shuffle furniture to encourage different exploration order each time
         if furniture:
-            furniture_names = [f["name"] for f in furniture[:10]]
+            furniture_shuffled = furniture.copy()
+            random.shuffle(furniture_shuffled)
+            furniture_names = [f["name"] for f in furniture_shuffled[:10]]
             lines.append(f"Furniture: {', '.join(furniture_names)}")
 
+        # Shuffle objects to encourage different exploration order each time
         if objects:
+            objects_shuffled = objects.copy()
+            random.shuffle(objects_shuffled)
             # Show objects with their locations for spawned items
             object_descriptions = []
-            for o in objects[:10]:
+            for o in objects_shuffled[:10]:
                 name = o["name"] if isinstance(o, dict) else o
                 loc = o.get("location") if isinstance(o, dict) else None
                 if loc:
@@ -554,9 +819,12 @@ class HabitatExplorer:
         # Note: virtual objects (like the key) are already included in the objects list above
         # Don't highlight them specially - let the agent discover them naturally through exploration
 
-        rooms = self.world_adapter.get_room_ids()
+        # Shuffle rooms to encourage different exploration order each time
+        rooms = adapter.get_room_ids()
         if rooms:
-            lines.append(f"Rooms you can go to: {', '.join(rooms)}")
+            rooms_shuffled = rooms.copy()
+            random.shuffle(rooms_shuffled)
+            lines.append(f"Rooms you can go to: {', '.join(rooms_shuffled)}")
 
         # Show agent inventory
         inventory = state.agent_inventory.get(agent_id, [])
@@ -573,11 +841,19 @@ class HabitatExplorer:
         return "\n".join(lines)
 
     def _get_available_actions(self, agent_id: str) -> List[Dict[str, Any]]:
-        """Get available actions based on Habitat environment."""
+        """Get available actions based on Habitat environment.
+
+        IMPORTANT: Targets are shuffled to encourage different exploration paths
+        each time. This prevents the LLM from always picking the first item.
+        """
         actions = []
 
-        rooms = self.world_adapter.get_room_ids()
-        entities = self.world_adapter.get_interactable_entities()
+        # Get agent-specific world adapter
+        agent_uid = int(agent_id.split("_")[-1]) if "_" in agent_id else 0
+        adapter = self.world_adapters.get(agent_uid, self.world_adapter)
+
+        rooms = adapter.get_room_ids()
+        entities = adapter.get_interactable_entities()
 
         # Include spawned world objects (like the key on a table)
         state = self.game_manager.get_state()
@@ -599,8 +875,21 @@ class HabitatExplorer:
         articulated = [f for f in furniture if f.get("is_articulated")]
         objects = [e for e in entities if e["type"] == "object"]
 
+        # Shuffle all lists to encourage variety
+        rooms_shuffled = rooms.copy()
+        random.shuffle(rooms_shuffled)
+        furniture_shuffled = furniture.copy()
+        random.shuffle(furniture_shuffled)
+        articulated_shuffled = articulated.copy()
+        random.shuffle(articulated_shuffled)
+        objects_shuffled = objects.copy()
+        random.shuffle(objects_shuffled)
+        entities_shuffled = entities.copy()
+        random.shuffle(entities_shuffled)
+
         # Navigation
-        nav_targets = rooms[:5] + [f["name"] for f in furniture[:5]]
+        nav_targets = rooms_shuffled[:5] + [f["name"] for f in furniture_shuffled[:5]]
+        random.shuffle(nav_targets)
         if nav_targets:
             actions.append({
                 "name": "Navigate",
@@ -609,15 +898,15 @@ class HabitatExplorer:
             })
 
         # Explore
-        if rooms:
+        if rooms_shuffled:
             actions.append({
                 "name": "Explore",
                 "description": "Search a room by visiting receptacles",
-                "targets": rooms[:5],
+                "targets": rooms_shuffled[:5],
             })
 
         # Open/Close
-        open_targets = [f["name"] for f in articulated[:10]]
+        open_targets = [f["name"] for f in articulated_shuffled[:10]]
         if open_targets:
             actions.append({
                 "name": "Open",
@@ -631,7 +920,7 @@ class HabitatExplorer:
             })
 
         # Pick
-        pick_targets = [obj["name"] for obj in objects[:10]]
+        pick_targets = [obj["name"] for obj in objects_shuffled[:10]]
         if pick_targets:
             actions.append({
                 "name": "Pick",
@@ -641,7 +930,7 @@ class HabitatExplorer:
 
         # Custom EMTOM actions
         for action_name in EMTOM_ACTIONS.keys():
-            targets = [e["name"] for e in entities[:10]]
+            targets = [e["name"] for e in entities_shuffled[:10]]
             actions.append({
                 "name": action_name,
                 "description": f"Custom EMTOM action: {action_name}",
@@ -724,8 +1013,14 @@ class HabitatExplorer:
                             obs = self.env.get_observations()
                             self._record_frame(obs, {agent_uid: (action_name, target)})
                 except Exception as e:
-                    # If navigation fails, continue with the blocked response
+                    # If navigation fails, still record a frame
                     print(f"[HabitatExplorer] Navigation to blocked target failed: {e}")
+                    obs = self.env.get_observations()
+                    self._record_frame(obs, {agent_uid: (action_name, target)})
+            else:
+                # No navigation available, still record a frame
+                obs = self.env.get_observations()
+                self._record_frame(obs, {agent_uid: (action_name, target)})
 
             return {
                 "success": False,
@@ -744,6 +1039,9 @@ class HabitatExplorer:
         if action_name in EMTOM_ACTIONS:
             # Apply custom action to game state
             state, custom_result = self.game_manager.apply_action(action_name, agent_id, target)
+            # Record frame for custom action
+            obs = self.env.get_observations()
+            self._record_frame(obs, {agent_uid: (action_name, target)})
             return {
                 "success": custom_result.success,
                 "observation": mechanic_observation or custom_result.observation,
@@ -785,6 +1083,9 @@ class HabitatExplorer:
                 if matches_virtual_object(actual_target, obj_id, obj_info):
                     # Check if already picked up
                     if obj_id in state.agent_inventory.get(agent_id, []):
+                        # Record frame even for already-picked-up items
+                        obs = self.env.get_observations()
+                        self._record_frame(obs, {agent_uid: ("Pick", actual_target)})
                         return {
                             "success": False,
                             "observation": f"You already have the {obj_name}.",
@@ -838,6 +1139,9 @@ class HabitatExplorer:
                                     self._record_frame(obs, {agent_uid: ("Pick", actual_target)})
                         except Exception as e:
                             print(f"[HabitatExplorer] Navigation to key location failed: {e}")
+                            # Still record a frame
+                            obs = self.env.get_observations()
+                            self._record_frame(obs, {agent_uid: ("Pick", actual_target)})
 
                     # Add to inventory
                     import copy
@@ -850,6 +1154,10 @@ class HabitatExplorer:
                     new_state.agent_inventory[agent_id].append(obj_id)
                     self.game_manager.set_state(new_state)
 
+                    # Record frame after successful pickup
+                    obs = self.env.get_observations()
+                    self._record_frame(obs, {agent_uid: ("Pick", actual_target)})
+
                     return {
                         "success": True,
                         "observation": f"\033[92m✓ You pick up the {obj_name} from {location}. It's now in your inventory.\033[0m",
@@ -857,6 +1165,10 @@ class HabitatExplorer:
 
             # If we're looking for a key but didn't find it, provide helpful error
             if "key" in actual_target.lower():
+                # Record frame for failed key pickup
+                obs = self.env.get_observations()
+                self._record_frame(obs, {agent_uid: ("Pick", actual_target)})
+
                 # List available keys
                 available_keys = [
                     obj_info.get("name", oid)
@@ -877,12 +1189,18 @@ class HabitatExplorer:
 
         # Partnr tools - execute in Habitat
         if agent is None:
+            # Still record a frame even if no agent
+            obs = self.env.get_observations()
+            self._record_frame(obs, {agent_uid: (action_name, target)})
             return {
                 "success": False,
                 "observation": f"No agent configured for {agent_id}. Cannot execute {action_name}[{target}].",
             }
 
         if actual_action and actual_action not in agent.tools:
+            # Still record a frame even if tool not available
+            obs = self.env.get_observations()
+            self._record_frame(obs, {agent_uid: (action_name, target)})
             return {
                 "success": False,
                 "observation": f"Tool '{actual_action}' not available for {agent_id}.",
@@ -896,6 +1214,8 @@ class HabitatExplorer:
 
         if low_level_action is None:
             obs_text = response
+            # Record frame even when no low-level action
+            self._record_frame(obs, {agent_uid: (actual_action, actual_target)})
         else:
             # Execute motor skill
             skill_steps = 0
@@ -966,21 +1286,37 @@ class HabitatExplorer:
             "surprise": surprise_trigger,
         }
 
-    def _record_frame(self, obs: Dict[str, Any], actions: Dict[int, Any]) -> None:
-        """Record a video frame with step counter and inventory overlays."""
+    def _record_frame(self, obs: Dict[str, Any], actions: Dict[int, Any]) -> bool:
+        """Record a video frame with step counter and inventory overlays.
+
+        Returns:
+            True if frame was recorded successfully, False otherwise.
+        """
         import cv2
+
+        recorded = False
 
         if self._dvu:
             try:
+                # Track frame count before and after
+                frames_before = len(self._dvu.frames) if self._dvu.frames else 0
+
                 self._dvu._store_for_video(obs, actions, popup_images={})
 
-                # Add step counter and inventory overlays to the last frame
-                if self._dvu.frames:
+                frames_after = len(self._dvu.frames) if self._dvu.frames else 0
+
+                # Verify frame was actually added
+                if frames_after > frames_before:
+                    recorded = True
+
+                    # Add step counter and inventory overlays to the last frame
                     frame = self._dvu.frames[-1]
                     h, w = frame.shape[:2]
 
-                    # Step counter (top right)
-                    step_text = f"Step: {self.step_count + 1}/{self.config.max_steps}"
+                    # Step counter (top right) - show global step / total steps
+                    n_agents = len(self.config.agent_ids)
+                    total_steps = n_agents * self.config.max_steps
+                    step_text = f"Step: {self.step_count + 1}/{total_steps}"
                     text_size = cv2.getTextSize(step_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
                     x_pos = w - text_size[0] - 20
                     cv2.putText(
@@ -1024,35 +1360,92 @@ class HabitatExplorer:
                         (255, 255, 255),
                         2,
                     )
-            except Exception:
-                pass
+                else:
+                    # Frame wasn't added - track this
+                    if not hasattr(self, '_frame_skip_count'):
+                        self._frame_skip_count = 0
+                    self._frame_skip_count += 1
+                    if self._frame_skip_count <= 5:
+                        print(f"[HabitatExplorer] Warning: Frame not added (skip #{self._frame_skip_count})")
+
+            except Exception as e:
+                # Track error count instead of just logging first error
+                if not hasattr(self, '_frame_error_count'):
+                    self._frame_error_count = 0
+                self._frame_error_count += 1
+                # Log first 5 errors and then every 100th error
+                if self._frame_error_count <= 5 or self._frame_error_count % 100 == 0:
+                    print(f"[HabitatExplorer] Warning: Frame recording error #{self._frame_error_count}: {e}")
+                    # Show observation keys to help debug
+                    if obs:
+                        rgb_keys = [k for k in obs.keys() if 'rgb' in k.lower()]
+                        print(f"  Available RGB observation keys: {rgb_keys}")
+                    if self._frame_error_count == 1:
+                        import traceback
+                        traceback.print_exc()
 
         if self._fpv_recorder:
             try:
-                self._fpv_recorder.record_frame(obs)
-            except Exception:
-                pass
+                self._fpv_recorder.record_step(obs)
+            except Exception as e:
+                if not hasattr(self, '_fpv_error_count'):
+                    self._fpv_error_count = 0
+                self._fpv_error_count += 1
+                if self._fpv_error_count <= 3:
+                    print(f"[HabitatExplorer] Warning: FPV recording error #{self._fpv_error_count}: {e}")
+
+        return recorded
 
     def _save_videos(self) -> Dict[str, str]:
         """Save recorded videos and return paths."""
         video_paths = {}
 
-        if self._dvu and self._dvu.frames:
-            try:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                self._dvu._make_video(play=False, postfix=f"exploration_{timestamp}")
-                # Video is saved to {output_dir}/videos/video-exploration_{timestamp}-{ms}.mp4
-                video_paths["third_person"] = f"{self.config.log_path}/videos/"
-            except Exception as e:
-                print(f"[HabitatExplorer] Failed to save third-person video: {e}")
+        # Print video statistics
+        n_agents = len(self.config.agent_ids)
+        total_steps = n_agents * self.config.max_steps
+        fps = getattr(self.config, 'video_fps', 30)
 
-        if self._fpv_recorder and self._fpv_recorder._frames:
-            try:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                fpv_paths = self._fpv_recorder.save(postfix=timestamp)
-                video_paths.update(fpv_paths)
-            except Exception as e:
-                print(f"[HabitatExplorer] Failed to save FPV video: {e}")
+        print(f"\n[HabitatExplorer] Video recording summary:")
+        print(f"  - Total high-level steps completed: {self.step_count}/{total_steps}")
+        print(f"  - Per-agent steps: {dict(self.agent_step_counts)}")
+
+        # Report any recording errors
+        if hasattr(self, '_frame_error_count') and self._frame_error_count > 0:
+            print(f"  - WARNING: {self._frame_error_count} frame recording errors occurred!")
+        if hasattr(self, '_frame_skip_count') and self._frame_skip_count > 0:
+            print(f"  - WARNING: {self._frame_skip_count} frames were skipped!")
+
+        if self._dvu:
+            frame_count = len(self._dvu.frames) if self._dvu.frames else 0
+            print(f"  - Third-person frames recorded: {frame_count}")
+
+            if frame_count > 0:
+                try:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    # Pass fps to ensure correct video timing
+                    self._dvu._make_video(play=False, postfix=f"exploration_{timestamp}", fps=fps)
+                    # Video is saved to {output_dir}/videos/video-exploration_{timestamp}-{ms}.mp4
+                    video_paths["third_person"] = f"{self.config.log_path}/videos/"
+                    duration = frame_count / fps
+                    print(f"  - Video duration: {duration:.1f}s @ {fps} FPS")
+                except Exception as e:
+                    print(f"[HabitatExplorer] Failed to save third-person video: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print(f"  - WARNING: No frames recorded for third-person video!")
+
+        if self._fpv_recorder:
+            fpv_frame_count = sum(len(frames) for frames in self._fpv_recorder._frames.values()) if self._fpv_recorder._frames else 0
+            print(f"  - FPV frames recorded: {fpv_frame_count}")
+
+            if fpv_frame_count > 0:
+                try:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    fpv_paths = self._fpv_recorder.save(postfix=timestamp)
+                    video_paths.update(fpv_paths)
+                except Exception as e:
+                    print(f"[HabitatExplorer] Failed to save FPV video: {e}")
 
         return video_paths
 

@@ -52,25 +52,84 @@ class DebugVideoUtil:
         :param batch: A dict mapping observation names to values.
         :return: The composite image as a numpy array.
         """
-        # Extract first agent frame
+        # Extract agent frames from third_rgb observations
         images = []
-        for obs_name, obs_value in batch.items():
-            if "third_rgb" in obs_name:
-                if self.num_agents == 1:
-                    if "0" in obs_name or "main_agent" in obs_name:
-                        images.append(obs_value)
-                else:
+        third_rgb_keys = [k for k in batch.keys() if "third_rgb" in k]
+
+        for obs_name in sorted(third_rgb_keys):  # Sort for consistent ordering
+            obs_value = batch[obs_name]
+            if self.num_agents == 1:
+                if "0" in obs_name or "main_agent" in obs_name:
                     images.append(obs_value)
+            else:
+                images.append(obs_value)
+
+        # Handle case where no images found
+        if not images:
+            # Try to find ANY rgb observation as fallback
+            rgb_keys = [k for k in batch.keys() if "rgb" in k.lower()]
+            for obs_name in sorted(rgb_keys):
+                obs_value = batch[obs_name]
+                if hasattr(obs_value, 'shape'):
+                    images.append(obs_value)
+                    if len(images) >= self.num_agents:
+                        break
+
+            if not images:
+                raise ValueError(
+                    f"No third_rgb observations found in batch. "
+                    f"Available keys: {list(batch.keys())}, num_agents={self.num_agents}"
+                )
 
         # Extract dimensions of the first image
-        height, width = images[0].shape[1:3]
+        # Handle different tensor formats (batch, channels, height, width) vs (height, width, channels)
+        first_img = images[0]
+        if hasattr(first_img, 'cpu'):
+            first_img = first_img.cpu()
+        if hasattr(first_img, 'numpy'):
+            first_img = first_img.numpy()
+
+        # Determine shape based on format
+        if len(first_img.shape) == 4:
+            # Batched: (batch, height, width, channels) or (batch, channels, height, width)
+            height, width = first_img.shape[1:3]
+        elif len(first_img.shape) == 3:
+            # Single: (height, width, channels) or (channels, height, width)
+            if first_img.shape[0] in (3, 4):  # channels first
+                height, width = first_img.shape[1:3]
+            else:  # channels last
+                height, width = first_img.shape[0:2]
+        else:
+            raise ValueError(f"Unexpected image shape: {first_img.shape}")
 
         # Create an empty canvas to hold the concatenated images
         concat_image = np.zeros((height, width * len(images), 3), dtype=np.uint8)
 
         # Iterate through the images and concatenate them horizontally
         for i, image in enumerate(images):
-            concat_image[:, i * width : (i + 1) * width] = image.cpu()
+            if hasattr(image, 'cpu'):
+                image = image.cpu()
+            if hasattr(image, 'numpy'):
+                image = image.numpy()
+
+            # Handle different formats
+            if len(image.shape) == 4:
+                image = image[0]  # Remove batch dimension
+            if image.shape[0] in (3, 4) and len(image.shape) == 3:
+                image = np.transpose(image, (1, 2, 0))  # CHW -> HWC
+
+            # Ensure uint8
+            if image.dtype != np.uint8:
+                if image.max() <= 1.0:
+                    image = (image * 255).astype(np.uint8)
+                else:
+                    image = image.astype(np.uint8)
+
+            # Take only RGB channels
+            if image.shape[-1] > 3:
+                image = image[..., :3]
+
+            concat_image[:, i * width : (i + 1) * width] = image
 
         return concat_image
 
@@ -134,30 +193,34 @@ class DebugVideoUtil:
         self.frames.append(frames_concat)
         return
 
-    def _make_video(self, play: bool = True, postfix: str = "") -> None:
+    def _make_video(self, play: bool = True, postfix: str = "", fps: int = 30) -> None:
         """
         Makes a video from a pre-processed set of frames using imageio and saves it to the output directory.
 
         :param play: Whether or not to play the video immediately.
         :param postfix: An optional postfix for the video file name.
+        :param fps: Frames per second for the video (default 30).
         """
         if not self.frames:
             print("No frames to write; skipping video.")
             return
         frames = list(self.frames)
+        print(f"[DebugVideoUtil] Total frames to write: {len(frames)}")
         if len(frames) == 1:
-            frames = frames * 30  # pad to ~1s @30fps so the video isn't empty
+            frames = frames * fps  # pad to ~1s so the video isn't empty
         extra = f"-{postfix}" if postfix else ""
         if self.unique_postfix:
             extra = f"{extra}-{int(time.time()*1000)}"
         out_file = f"{self.output_dir}/videos/video{extra}.mp4"
-        print(f"Saving video to {out_file}")
+        print(f"Saving video to {out_file} ({len(frames)} frames @ {fps} FPS)")
         os.makedirs(f"{self.output_dir}/videos", exist_ok=True)
-        writer = imageio.get_writer(out_file, fps=30, quality=4)
+        writer = imageio.get_writer(out_file, fps=fps, quality=4)
         for frame in frames:
             writer.append_data(frame)
 
         writer.close()
+        duration = len(frames) / fps
+        print(f"[DebugVideoUtil] Video saved: {duration:.1f}s duration")
         if play:
             print("     ...playing video, press 'q' to continue...")
             self.play_video(out_file)

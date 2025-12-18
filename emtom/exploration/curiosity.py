@@ -9,6 +9,7 @@ Uses YAML config for prompts (like the benchmark) for consistency and scalabilit
 
 from __future__ import annotations
 
+import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,8 @@ class CuriosityModel:
     about how the world works, particularly to discover unexpected behaviors.
 
     Uses YAML config for prompts (matching benchmark structure) for consistency.
+
+    IMPORTANT: Each agent gets its own LLM client to ensure independent API calls.
     """
 
     # Default config path relative to habitat_llm/conf/instruct/
@@ -50,11 +53,12 @@ class CuriosityModel:
         Initialize the curiosity model.
 
         Args:
-            llm_client: LLM client with generate(prompt) method
+            llm_client: LLM client (kept for backward compatibility, but not used)
             instruct_config: Optional instruct config (OmegaConf). If None, loads default.
             llm_config: Optional LLM config with system_tag, user_tag, etc.
         """
-        self.llm = llm_client
+        # Per-agent LLM clients (each agent gets independent API calls with different temperatures)
+        self._agent_llms: Dict[str, Any] = {}
 
         # Load instruct config if not provided
         if instruct_config is not None:
@@ -92,6 +96,80 @@ class CuriosityModel:
             )
 
         return OmegaConf.load(config_path)
+
+    def _get_agent_llm(self, agent_id: str) -> Any:
+        """
+        Get or create an LLM client for the given agent.
+
+        Each agent gets its own independent LLM client to ensure separate API calls.
+        This prevents agents from sharing conversation history or cached responses.
+
+        Temperature is randomized per agent AND per run to ensure different exploration
+        paths each time the simulation runs (for models that support it).
+
+        Args:
+            agent_id: The agent identifier (e.g., "agent_0")
+
+        Returns:
+            LLM client for this agent
+        """
+        if agent_id not in self._agent_llms:
+            # Create a new LLM client for this agent
+            from habitat_llm.llm import instantiate_llm
+
+            # Use different temperature for each agent to encourage diverse exploration
+            agent_uid = int(agent_id.split("_")[-1]) if "_" in agent_id else 0
+
+            # Base temperature per agent (higher values = more random)
+            # Agent 0: 0.7, Agent 1: 0.8, Agent 2: 0.9, etc.
+            base_temperature = 0.7 + (agent_uid * 0.1)
+
+            # Add random offset per run to ensure different paths each simulation
+            # Random offset between -0.1 and +0.1
+            random_offset = random.uniform(-0.1, 0.1)
+            temperature = base_temperature + random_offset
+
+            # Clamp temperature between 0.5 and 1.0 for good randomness
+            temperature = max(0.5, min(temperature, 1.0))
+
+            self._agent_llms[agent_id] = instantiate_llm(
+                "openai_chat",
+                generation_params={"temperature": temperature},
+            )
+
+            # Check if model supports temperature (o1, o3, gpt-5 don't)
+            model_name = self._agent_llms[agent_id].generation_params.model.lower()
+            fixed_temp_models = ["o1", "o3", "gpt-5"]
+            uses_fixed_temp = any(m in model_name for m in fixed_temp_models)
+
+            # Color code: agent in color, temperature in red
+            agent_color = self._get_agent_color(agent_uid)
+            if uses_fixed_temp:
+                print(f"[CuriosityModel] Created independent LLM client for {agent_color}{agent_id}\033[0m (model={model_name} uses fixed temperature=1)")
+            else:
+                print(f"[CuriosityModel] Created independent LLM client for {agent_color}{agent_id}\033[0m (temperature=\033[91m{temperature:.3f}\033[0m)")
+
+        return self._agent_llms[agent_id]
+
+    @staticmethod
+    def _get_agent_color(agent_uid: int) -> str:
+        """Get ANSI color code for an agent.
+
+        Args:
+            agent_uid: Agent UID (0, 1, 2, ...)
+
+        Returns:
+            ANSI escape code for the agent's color
+        """
+        colors = [
+            "\033[94m",  # Blue - Agent 0
+            "\033[92m",  # Green - Agent 1
+            "\033[93m",  # Yellow - Agent 2
+            "\033[95m",  # Magenta - Agent 3
+            "\033[96m",  # Cyan - Agent 4
+            "\033[91m",  # Red - Agent 5
+        ]
+        return colors[agent_uid % len(colors)]
 
     def set_tool_descriptions(self, tool_descriptions: str):
         """Set the tool descriptions to use in prompts."""
@@ -151,9 +229,12 @@ class CuriosityModel:
                 input=task,
             )
 
-        # Generate response using this agent's prompt
+        # Get this agent's dedicated LLM client (ensures independent API calls)
+        agent_llm = self._get_agent_llm(agent_id)
+
+        # Generate response using this agent's prompt and LLM
         curr_prompt = self.agent_prompts[agent_id]
-        response = self.llm.generate(curr_prompt, self.stopword)
+        response = agent_llm.generate(curr_prompt, self.stopword)
 
         # Parse response - fail explicitly if it doesn't match expected format
         action_choice = self._parse_response(response, agent_uid)

@@ -34,7 +34,8 @@ generation_params:
 
   # Sampling temperature between 0 and 2. Higher values will make the output more random,
   # while lower values like 0.2 will make it more focused and deterministic.
-  temperature   : 0
+  # NOTE: Default is 0.7 for exploration diversity. Set to 0 for deterministic behavior.
+  temperature   : 0.7
 
   # An alternative to temperature, nucleus sampling. The model considers the results
   # of the toklen with top_p probability mass. So 0.1 means only the tokens comprising

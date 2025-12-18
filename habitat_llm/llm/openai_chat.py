@@ -100,9 +100,27 @@ class OpenAIChat(BaseLLM):
             image_detail = "low"  # high/low/auto
             messages.append(generate_message(prompt, image_detail=image_detail))
 
-        text_response = self.client.chat.completions.create(
-            model=params["model"], messages=messages
-        )
+        # Pass temperature to ensure non-deterministic exploration
+        # Note: Some models (o1, o3, gpt-5) only support temperature=1
+        model_name = params["model"].lower()
+        temperature = params.get("temperature", 0.7)
+
+        # Models that don't support custom temperature
+        fixed_temp_models = ["o1", "o3", "gpt-5"]
+        uses_fixed_temp = any(m in model_name for m in fixed_temp_models)
+
+        if uses_fixed_temp:
+            # These models only support temperature=1, don't pass it
+            text_response = self.client.chat.completions.create(
+                model=params["model"],
+                messages=messages,
+            )
+        else:
+            text_response = self.client.chat.completions.create(
+                model=params["model"],
+                messages=messages,
+                temperature=temperature,
+            )
         text_response = text_response.choices[0].message.content
         self.response = text_response
 
