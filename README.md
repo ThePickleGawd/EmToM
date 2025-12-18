@@ -22,7 +22,7 @@ See [Installation.md](INSTALLATION.md) for conda setup.
 **Quick Start:**
 ```bash
 ./emtom/run_emtom.sh exploration      # Step 1
-./emtom/run_emtom.sh generate-agentic # Step 2
+./emtom/run_emtom.sh generate # Step 2
 ./emtom/run_emtom.sh benchmark        # Step 3
 ```
 
@@ -165,7 +165,7 @@ emtom/
 ./emtom/run_emtom.sh exploration --steps 50 --num-agents 2
 
 # Task Generation
-./emtom/run_emtom.sh generate-agentic --num-tasks 10
+./emtom/run_emtom.sh generate --num-tasks 10
 
 # Benchmark
 ./emtom/run_emtom.sh benchmark --max-sim-steps 2000
