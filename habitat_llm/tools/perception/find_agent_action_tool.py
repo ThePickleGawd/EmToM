@@ -57,18 +57,28 @@ class FindAgentActionTool(PerceptionTool):
         return self.skill_config.description
 
     def _get_state_history(self) -> str:
-        """Method to get state history of the other agent"""
+        """Method to get state history of all other agents (supports N agents)"""
 
-        # Set other agent id - assumes there are only two agents named 0 and 1
-        other_agent_id = 1 - self.agent_uid
+        # Get all agent UIDs and filter out the current agent
+        all_agent_uids = self.env_interface.get_all_agent_uids()
+        other_agent_ids = [uid for uid in all_agent_uids if uid != self.agent_uid]
 
-        if len(self.env_interface.agent_state_history[other_agent_id]) == 0:
+        if not other_agent_ids:
             return None
 
-        history_elements = self.env_interface.agent_state_history[other_agent_id]
-        states = [el.state for el in history_elements]
-        # Construct the state history
-        return ", ".join(states)
+        # Collect state histories from all other agents
+        all_states = []
+        for other_agent_id in other_agent_ids:
+            history_elements = self.env_interface.agent_state_history[other_agent_id]
+            if history_elements:
+                agent_states = [f"Agent {other_agent_id}: {el.state}" for el in history_elements]
+                all_states.extend(agent_states)
+
+        if not all_states:
+            return None
+
+        # Construct the combined state history
+        return ", ".join(all_states)
 
     def process_high_level_action(
         self, input_query: str, observations: dict

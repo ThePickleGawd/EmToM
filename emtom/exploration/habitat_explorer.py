@@ -290,17 +290,9 @@ class HabitatExplorer:
         obs = self.env.get_observations()
         self._record_frame(obs, {})
 
-        # Main exploration loop
-        while self._is_running and self.step_count < self.config.max_steps and not self._episode_done:
+        # Main exploration loop - run until max_steps reached
+        while self._is_running and self.step_count < self.config.max_steps:
             step_result = self._run_step()
-
-            if step_result.is_terminal and self.config.stop_on_terminal:
-                break
-
-            if self._episode_done:
-                print("\n[HabitatExplorer] Episode ended early - stopping exploration")
-                break
-
             self.step_count += 1
 
         # Save videos

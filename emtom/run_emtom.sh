@@ -18,6 +18,8 @@ TASK_FILE=""
 LLM_AGENTS=""
 NUM_TASKS=1
 MODEL="gpt-5"
+NUM_AGENTS=2
+AGENT_TYPE="robot"  # robot or human
 
 print_usage() {
     echo "EMTOM Benchmark Pipeline"
@@ -30,6 +32,10 @@ print_usage() {
     echo "  benchmark   Run benchmark with generated tasks"
     echo "  test        Human-in-the-loop testing mode (manual command input)"
     echo "  all         Run full pipeline: explore -> generate -> benchmark"
+    echo ""
+    echo "Agent Options:"
+    echo "  --num-agents N       Number of agents (default: $NUM_AGENTS)"
+    echo "  --agent-type TYPE    Agent type: human or robot (default: $AGENT_TYPE)"
     echo ""
     echo "Exploration Options:"
     echo "  --steps N            Number of exploration steps (default: $EXPLORATION_STEPS)"
@@ -49,11 +55,46 @@ print_usage() {
     echo ""
     echo "Examples:"
     echo "  ./emtom/run_emtom.sh explore --steps 30"
+    echo "  ./emtom/run_emtom.sh explore --num-agents 3 --agent-type human"
     echo "  ./emtom/run_emtom.sh generate --num-tasks 5"
     echo "  ./emtom/run_emtom.sh generate --model gpt-5-mini"
     echo "  ./emtom/run_emtom.sh all"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
+    echo "  ./emtom/run_emtom.sh benchmark --num-agents 4"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
+}
+
+# Get config name based on number of agents and type
+get_agent_config() {
+    local num_agents=$1
+    local agent_type=$2
+
+    if [ "$agent_type" = "human" ]; then
+        case $num_agents in
+            2) echo "examples/emtom_two_humans" ;;
+            3) echo "examples/emtom_3_humans" ;;
+            4) echo "examples/emtom_4_humans" ;;
+            5) echo "examples/emtom_5_humans" ;;
+            *)
+                echo "Error: --num-agents must be 2, 3, 4, or 5 for humanoid agents" >&2
+                echo "To add more agents, create a new config file in habitat_llm/conf/examples/" >&2
+                exit 1
+                ;;
+        esac
+    else
+        # Robot configs
+        case $num_agents in
+            2) echo "examples/emtom_two_robots" ;;
+            3) echo "examples/emtom_3_robots" ;;
+            4) echo "examples/emtom_4_robots" ;;
+            5) echo "examples/emtom_5_robots" ;;
+            *)
+                echo "Error: --num-agents must be 2, 3, 4, or 5 for robot agents" >&2
+                echo "To add more agents, create a new config file in habitat_llm/conf/examples/" >&2
+                exit 1
+                ;;
+        esac
+    fi
 }
 
 run_exploration() {
@@ -62,13 +103,16 @@ run_exploration() {
     echo "=============================================="
     echo "Mode: LLM-guided"
     echo "Steps: $EXPLORATION_STEPS"
+    echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
     echo "=============================================="
     echo ""
 
+    # Get the appropriate config for the number of agents
+    CONFIG_NAME=$(get_agent_config $NUM_AGENTS $AGENT_TYPE)
+
     # Use Hydra config system - pass parameters as config overrides
-    # Override output dir to include "exploration" in the name
     python emtom/examples/run_habitat_exploration.py \
-        --config-name examples/planner_multi_agent_demo_config \
+        --config-name $CONFIG_NAME \
         +exploration_steps=$EXPLORATION_STEPS \
         evaluation.save_video=true \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-exploration"
@@ -96,14 +140,22 @@ run_benchmark() {
     echo "=============================================="
     echo "Max simulation steps: $MAX_SIM_STEPS"
     echo "Max LLM calls per agent: $MAX_LLM_CALLS"
+    echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
     echo "=============================================="
 
-    # Override output dir to include "benchmark" in the name
+    # Get the appropriate config for the number of agents
+    CONFIG_NAME=$(get_agent_config $NUM_AGENTS $AGENT_TYPE)
+
+    # Build replanning threshold overrides for all agents
+    REPLANNING_OVERRIDES=""
+    for ((i=0; i<NUM_AGENTS; i++)); do
+        REPLANNING_OVERRIDES="$REPLANNING_OVERRIDES ++evaluation.agents.agent_${i}.planner.plan_config.replanning_threshold=$MAX_LLM_CALLS"
+    done
+
     python emtom/examples/run_habitat_benchmark.py \
-        --config-name examples/emtom_two_robots \
+        --config-name $CONFIG_NAME \
         habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
-        evaluation.agents.agent_0.planner.plan_config.replanning_threshold=$MAX_LLM_CALLS \
-        evaluation.agents.agent_1.planner.plan_config.replanning_threshold=$MAX_LLM_CALLS \
+        $REPLANNING_OVERRIDES \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-benchmark"
 }
 
@@ -114,12 +166,16 @@ run_test() {
     echo "Mechanics: ${MECHANICS:-from task file or default}"
     echo "Task file: ${TASK_FILE:-none}"
     echo "LLM agents: ${LLM_AGENTS:-none (all human-controlled)}"
+    echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
     echo "=============================================="
     echo ""
     echo "Actions: Navigate[target], Open[target], Close[target], Pick[target], Place[target]"
     echo "         Use[target], Inspect[target], Communicate[message]"
     echo "Commands: status, mechanics, history, skip, quit, help"
     echo ""
+
+    # Get the appropriate config for the number of agents
+    CONFIG_NAME=$(get_agent_config $NUM_AGENTS $AGENT_TYPE)
 
     # Build command arguments
     CMD_ARGS=""
@@ -133,9 +189,8 @@ run_test() {
         CMD_ARGS="$CMD_ARGS --llm-agents $LLM_AGENTS"
     fi
 
-    # Use same config as benchmark (emtom_two_robots has planner config)
     python emtom/examples/run_human_test.py \
-        --config-name examples/emtom_two_robots \
+        --config-name $CONFIG_NAME \
         $CMD_ARGS \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-human_test"
 }
@@ -175,6 +230,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --model)
             MODEL=$2
+            shift 2
+            ;;
+        --num-agents)
+            NUM_AGENTS=$2
+            shift 2
+            ;;
+        --agent-type)
+            AGENT_TYPE=$2
+            if [[ "$AGENT_TYPE" != "human" && "$AGENT_TYPE" != "robot" ]]; then
+                echo "Error: --agent-type must be 'human' or 'robot'"
+                exit 1
+            fi
             shift 2
             ;;
         --mechanics)
