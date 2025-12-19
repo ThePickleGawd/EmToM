@@ -254,6 +254,292 @@ class DebugVideoUtil:
         cv2.destroyAllWindows()
 
 
+class PerAgentThirdPersonRecorder:
+    """
+    Records separate third-person POV videos for each agent.
+
+    Unlike DebugVideoUtil which creates a combined split-screen view,
+    this class records each agent's third_rgb observation separately,
+    allowing them to be stitched together in a specific order later.
+    """
+
+    def __init__(
+        self,
+        output_dir: str,
+        agent_ids: List[str],
+        fps: int = 30,
+    ) -> None:
+        """
+        Initialize the per-agent third-person video recorder.
+
+        Args:
+            output_dir: Directory to save videos to
+            agent_ids: List of agent IDs (e.g., ["agent_0", "agent_1", "agent_2"])
+            fps: Frames per second for output videos
+        """
+        self.output_dir = output_dir
+        self.agent_ids = agent_ids
+        self.fps = fps
+        self._frames: Dict[str, List[np.ndarray]] = {aid: [] for aid in agent_ids}
+        self._current_actions: Dict[str, Tuple[str, str]] = {}
+
+    @staticmethod
+    def _to_uint8(frame: Any) -> np.ndarray:
+        """Convert a tensor/array frame to channel-last uint8."""
+        if hasattr(frame, "detach"):
+            frame = frame.detach()
+        if hasattr(frame, "cpu"):
+            frame = frame.cpu()
+        frame_np = np.array(frame)
+
+        # Remove batch dimension if present
+        if frame_np.ndim == 4 and frame_np.shape[0] == 1:
+            frame_np = frame_np[0]
+
+        # Convert channels-first to channels-last
+        if frame_np.ndim == 3 and frame_np.shape[0] in (3, 4):
+            frame_np = np.transpose(frame_np, (1, 2, 0))
+
+        # Convert to uint8
+        if frame_np.dtype != np.uint8:
+            frame_np = np.clip(frame_np, 0, 255)
+            if frame_np.max() <= 1.0:
+                frame_np = frame_np * 255.0
+            frame_np = frame_np.astype(np.uint8)
+
+        if frame_np.ndim != 3 or frame_np.shape[2] < 3:
+            raise ValueError(f"Frame has invalid shape for video: {frame_np.shape}")
+
+        return np.ascontiguousarray(frame_np[:, :, :3])
+
+    def _get_agent_third_rgb_key(self, agent_id: str) -> str:
+        """Get the third_rgb observation key for an agent."""
+        # Extract agent number
+        agent_num = agent_id.split("_")[-1] if "_" in agent_id else agent_id
+        return f"agent_{agent_num}_third_rgb"
+
+    def record_frame(
+        self,
+        agent_id: str,
+        observations: Dict[str, Any],
+        action: Optional[Tuple[str, str]] = None,
+        step_info: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        Record a single frame for a specific agent.
+
+        Args:
+            agent_id: The agent to record for (e.g., "agent_0")
+            observations: Dict of observations from the environment
+            action: Optional (action_name, target) tuple to overlay
+            step_info: Optional dict with step number, inventory, etc. for overlay
+
+        Returns:
+            True if frame was recorded successfully
+        """
+        if agent_id not in self._frames:
+            print(f"[PerAgentThirdPersonRecorder] Unknown agent: {agent_id}")
+            return False
+
+        # Get the third_rgb observation key for this agent
+        obs_key = self._get_agent_third_rgb_key(agent_id)
+
+        # Try to find the observation
+        frame_data = None
+        if obs_key in observations:
+            frame_data = observations[obs_key]
+        else:
+            # Fallback: search for any third_rgb key containing the agent number
+            agent_num = agent_id.split("_")[-1] if "_" in agent_id else agent_id
+            for key in observations:
+                if "third_rgb" in key and agent_num in key:
+                    frame_data = observations[key]
+                    break
+
+        if frame_data is None:
+            # Last resort: use any third_rgb
+            for key in sorted(observations.keys()):
+                if "third_rgb" in key:
+                    frame_data = observations[key]
+                    break
+
+        if frame_data is None:
+            return False
+
+        try:
+            frame = self._to_uint8(frame_data)
+
+            # Add overlays
+            if action or step_info:
+                frame = self._add_overlays(frame, agent_id, action, step_info)
+
+            self._frames[agent_id].append(frame)
+            return True
+
+        except Exception as e:
+            print(f"[PerAgentThirdPersonRecorder] Error recording frame for {agent_id}: {e}")
+            return False
+
+    def _add_overlays(
+        self,
+        frame: np.ndarray,
+        agent_id: str,
+        action: Optional[Tuple[str, str]] = None,
+        step_info: Optional[Dict[str, Any]] = None,
+    ) -> np.ndarray:
+        """Add text overlays to a frame."""
+        frame = np.ascontiguousarray(frame)
+        h, w = frame.shape[:2]
+
+        # Agent label and action (top left)
+        agent_num = agent_id.split("_")[-1] if "_" in agent_id else agent_id
+        agent_label = f"Agent {agent_num}"
+        if action:
+            action_text = f"{action[0]}[{action[1]}]" if action[1] else action[0]
+            agent_label = f"{agent_label}: {action_text}"
+
+        cv2.putText(
+            frame,
+            agent_label,
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2,
+        )
+
+        # Step info (top right)
+        if step_info and "step" in step_info:
+            step_text = f"Step: {step_info['step']}"
+            if "total_steps" in step_info:
+                step_text = f"Step: {step_info['step']}/{step_info['total_steps']}"
+            text_size = cv2.getTextSize(step_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+            x_pos = w - text_size[0] - 20
+            cv2.putText(
+                frame,
+                step_text,
+                (x_pos, 35),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2,
+            )
+
+        # Inventory (bottom right)
+        if step_info and "inventory" in step_info:
+            inv_items = step_info.get("inventory", [])
+            if inv_items:
+                inv_text = f"Inventory: {', '.join(inv_items)}"
+            else:
+                inv_text = "Inventory: (empty)"
+            text_size = cv2.getTextSize(inv_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+            x_pos = w - text_size[0] - 20
+            y_pos = h - 20
+            cv2.putText(
+                frame,
+                inv_text,
+                (x_pos, y_pos),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2,
+            )
+
+        return frame
+
+    def save_individual_videos(self, postfix: str = "") -> Dict[str, str]:
+        """
+        Save individual videos for each agent.
+
+        Returns:
+            Dict mapping agent_id to video path
+        """
+        video_dir = os.path.join(self.output_dir, "videos")
+        os.makedirs(video_dir, exist_ok=True)
+
+        paths: Dict[str, str] = {}
+
+        for agent_id, frames in self._frames.items():
+            if not frames:
+                print(f"[PerAgentThirdPersonRecorder] No frames for {agent_id}")
+                continue
+
+            filename = f"third_person_{agent_id}"
+            if postfix:
+                filename += f"_{postfix}"
+            video_path = os.path.join(video_dir, f"{filename}.mp4")
+
+            # Pad single frame to make valid video
+            if len(frames) == 1:
+                frames = frames * self.fps
+
+            imageio.mimwrite(video_path, frames, fps=self.fps)
+            paths[agent_id] = video_path
+            print(f"[PerAgentThirdPersonRecorder] Saved {agent_id}: {len(frames)} frames -> {video_path}")
+
+        return paths
+
+    def stitch_videos_round_robin(self, postfix: str = "") -> Optional[str]:
+        """
+        Stitch all agent videos together in round-robin order.
+
+        The resulting video shows: agent_0 frame 1, agent_1 frame 1, agent_2 frame 1,
+        agent_0 frame 2, agent_1 frame 2, agent_2 frame 2, etc.
+
+        Returns:
+            Path to the stitched video, or None if no frames
+        """
+        # Check if we have frames for all agents
+        if not any(self._frames.values()):
+            print("[PerAgentThirdPersonRecorder] No frames to stitch")
+            return None
+
+        # Find the maximum number of frames across all agents
+        max_frames = max(len(frames) for frames in self._frames.values())
+
+        if max_frames == 0:
+            return None
+
+        # Build stitched video in round-robin order
+        stitched_frames: List[np.ndarray] = []
+
+        for frame_idx in range(max_frames):
+            for agent_id in self.agent_ids:
+                frames = self._frames.get(agent_id, [])
+                if frame_idx < len(frames):
+                    stitched_frames.append(frames[frame_idx])
+                elif frames:
+                    # Repeat last frame if this agent has fewer frames
+                    stitched_frames.append(frames[-1])
+
+        if not stitched_frames:
+            return None
+
+        # Save stitched video
+        video_dir = os.path.join(self.output_dir, "videos")
+        os.makedirs(video_dir, exist_ok=True)
+
+        filename = "third_person_stitched"
+        if postfix:
+            filename += f"_{postfix}"
+        video_path = os.path.join(video_dir, f"{filename}.mp4")
+
+        imageio.mimwrite(video_path, stitched_frames, fps=self.fps)
+
+        print(f"[PerAgentThirdPersonRecorder] Stitched video: {len(stitched_frames)} frames -> {video_path}")
+        print(f"  Round-robin order: {' -> '.join(self.agent_ids)} -> {self.agent_ids[0]}...")
+
+        return video_path
+
+    def get_frame_counts(self) -> Dict[str, int]:
+        """Get frame count for each agent."""
+        return {aid: len(frames) for aid, frames in self._frames.items()}
+
+    def clear(self) -> None:
+        """Clear all recorded frames."""
+        self._frames = {aid: [] for aid in self.agent_ids}
+
+
 class FirstPersonVideoRecorder:
     """
     Minimal helper to write first-person videos that mirror the trajectory logger
