@@ -12,10 +12,13 @@ Design principles:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 from enum import Enum
 import json
 import copy
+
+if TYPE_CHECKING:
+    from emtom.state.items import ItemDefinition
 
 
 class GoalStatus(Enum):
@@ -159,6 +162,10 @@ class EMTOMGameState:
     mechanic_bindings: List[Dict[str, Any]] = field(default_factory=list)
     active_mechanics: List[str] = field(default_factory=list)
 
+    # === Item definitions (from task definition) ===
+    # Maps item_id -> ItemDefinition dict (stored as dict for serialization)
+    item_definitions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
     def get_object_property(self, obj_id: str, prop: str, default: Any = None) -> Any:
         """Get a custom property for an object."""
         return self.object_properties.get(obj_id, {}).get(prop, default)
@@ -269,6 +276,8 @@ class EMTOMGameState:
             ],
             "completed_goals": list(self.completed_goals),
             "active_mechanics": self.active_mechanics,
+            "item_definitions": self.item_definitions,
+            "agent_inventory": self.agent_inventory,
         }
 
     @classmethod
@@ -308,6 +317,8 @@ class EMTOMGameState:
         ]
         state.completed_goals = set(data.get("completed_goals", []))
         state.active_mechanics = data.get("active_mechanics", [])
+        state.item_definitions = data.get("item_definitions", {})
+        state.agent_inventory = data.get("agent_inventory", {})
         return state
 
     def to_json(self) -> str:

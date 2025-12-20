@@ -284,6 +284,16 @@ class LLMPlanner(Planner):
             )
             params["world_description"] = world_description
 
+        if "{inventory}" in self.prompt:
+            # Inventory text can be passed via kwargs or retrieved from game_manager
+            if "inventory" in kwargs:
+                params["inventory"] = kwargs["inventory"]
+            elif hasattr(self, 'game_manager') and self.game_manager:
+                agent_id = f"agent_{self.agents[0].uid}"
+                params["inventory"] = self.game_manager.get_inventory_text(agent_id)
+            else:
+                params["inventory"] = "Your inventory is empty."
+
         if "should_format" in kwargs and not kwargs["should_format"]:
             # In some cases a subclass may want to fill the extra arguments here, so we don't format
             # because those arguments would be missing.

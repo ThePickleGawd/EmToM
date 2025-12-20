@@ -33,6 +33,12 @@ from emtom.state.manager import (
     ActionExecutionResult,
 )
 
+from emtom.state.items import (
+    ItemType,
+    ItemDefinition,
+    InventoryItem,
+)
+
 __all__ = [
     # Core state
     "EMTOMGameState",
@@ -45,4 +51,8 @@ __all__ = [
     # Manager
     "GameStateManager",
     "ActionExecutionResult",
+    # Items
+    "ItemType",
+    "ItemDefinition",
+    "InventoryItem",
 ]

@@ -44,6 +44,85 @@ from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 from emtom import list_mechanics
 
 
+def print_bindings_pretty(bindings: Dict[str, Any]) -> None:
+    """Pretty print auto-bound mechanics for human readability."""
+    cprint("\n╔══════════════════════════════════════════════════════════════╗", "green")
+    cprint("║                    AUTO-BOUND MECHANICS                       ║", "green")
+    cprint("╚══════════════════════════════════════════════════════════════╝", "green")
+
+    # Standard mechanics
+    mechanics_printed = False
+    for mech in ["inverse_state", "remote_control", "counting_state",
+                 "delayed_effect", "state_mirroring", "conditional_unlock"]:
+        if mech in bindings:
+            if not mechanics_printed:
+                cprint("\nMechanics:", "blue")
+                mechanics_printed = True
+            info = bindings[mech]
+            if mech == "inverse_state":
+                cprint(f"   - Inverse State: {info.get('target')}", "gray")
+            elif mech == "remote_control":
+                cprint(f"   - Remote Control: {info.get('trigger')} -> {info.get('target')}", "gray")
+            elif mech == "counting_state":
+                cprint(f"   - Counting State: {info.get('target')} (need {info.get('required_count')} interactions)", "gray")
+            elif mech == "delayed_effect":
+                cprint(f"   - Delayed Effect: {info.get('target')} (delay: {info.get('delay_steps')} steps)", "gray")
+            elif mech == "state_mirroring":
+                pair = info.get('pair', [])
+                cprint(f"   - State Mirroring: {pair[0] if pair else '?'} <-> {pair[1] if len(pair) > 1 else '?'}", "gray")
+            elif mech == "conditional_unlock":
+                cprint(f"   - Conditional Unlock: {info.get('prerequisite')} unlocks -> {info.get('target')}", "gray")
+
+    # Scenario info
+    if "scenario" in bindings:
+        s = bindings["scenario"]
+        cprint("\nScenario:", "blue")
+        cprint(f"   Title: {s.get('title', 'Unknown')}", "yellow")
+        cprint(f"   Theme: {s.get('theme', 'Unknown')}", "gray")
+        cprint(f"   Collaboration Required: {'Yes' if s.get('requires_collaboration') else 'No'}", "gray")
+
+    # Story context
+    if "story_context" in bindings:
+        cprint("\nStory Context:", "blue")
+        story = bindings["story_context"]
+        # Format story nicely - wrap at ~70 chars
+        for paragraph in story.strip().split('\n\n'):
+            wrapped = paragraph.replace('\n', ' ').strip()
+            # Simple word wrap
+            words = wrapped.split()
+            line = "   "
+            for word in words:
+                if len(line) + len(word) + 1 > 70:
+                    cprint(line, "gray")
+                    line = "   " + word
+                else:
+                    line += " " + word if line != "   " else word
+            if line.strip():
+                cprint(line, "gray")
+            print()  # blank line between paragraphs
+
+    # Hidden items
+    if "hidden_items" in bindings:
+        cprint("Hidden Items:", "blue")
+        for container, item in bindings["hidden_items"].items():
+            item_name = bindings.get("item_definitions", {}).get(item, item)
+            cprint(f"   - {item_name} hidden in {container}", "gray")
+
+    # Clues
+    if "clues" in bindings:
+        cprint("\nClues:", "blue")
+        for i, clue in enumerate(bindings["clues"], 1):
+            clue_type = clue.get("type", "unknown").capitalize()
+            cprint(f"   {i}. [{clue_type}] \"{clue.get('text', '')}\"", "gray")
+
+    # Suggested locations
+    if "suggested_locations" in bindings:
+        locs = bindings["suggested_locations"]
+        cprint(f"\nSuggested Locations: {', '.join(locs)}", "blue")
+
+    cprint("\n" + "-" * 66, "green")
+
+
 def load_task(task_file: str) -> Optional[Dict[str, Any]]:
     """Load task from JSON file."""
     with open(task_file) as f:
@@ -203,9 +282,10 @@ def main(config: DictConfig):
     if not (extra_args and extra_args.task and task_info and task_info.get("mechanic_bindings")):
         state, bindings = runner.game_manager.auto_bind_mechanics()
         if bindings:
-            cprint(f"Auto-bound mechanics: {bindings}", "green")
+            print_bindings_pretty(bindings)
 
-    cprint(f"Active mechanics: {runner.game_manager.get_debug_info()['active_mechanics']}", "green")
+    active = runner.game_manager.get_debug_info()['active_mechanics']
+    cprint(f"⚙️  Active mechanics: {', '.join(active)}", "green")
 
     # Build instruction
     if task_info:
