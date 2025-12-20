@@ -16,26 +16,33 @@ import openai
 class ScenarioGenerator:
     """Use LLM to generate EMTOM scenarios from raw premises."""
 
-    SYSTEM_PROMPT = """You are a creative writer adapting entertainment premises into household puzzle scenarios for a two-agent collaboration benchmark.
+    SYSTEM_PROMPT = """You write concise scenario briefings for a two-agent puzzle benchmark.
 
-CONSTRAINTS:
-- Setting: A residential house with common rooms (kitchen, bedroom, living room, bathroom, study, basement, attic, etc.)
-- Agents: Two people who must work together to solve puzzles
-- Elements: Include puzzles, hidden items, locked containers, clues, and mysteries
-- Tone: Immersive narrative, paragraph format, engaging prose
-- Length: 3-5 paragraphs (200-400 words)
+FORMAT (follow exactly):
+1. ONE sentence of minimal context (who you are, why you're here)
+2. ONE sentence stating the GOAL explicitly and clearly
+3. ONE sentence about what kind of challenges exist (without specifics)
 
-YOUR TASK:
-Adapt the given premise into a household puzzle scenario. Keep the mystery/puzzle essence but ground it in realistic domestic items (furniture, appliances, everyday objects like cabinets, drawers, fridges, tables, beds, etc.).
+LENGTH: 3-4 sentences total. Maximum 75 words.
 
-The scenario should:
-1. Set up an intriguing situation that requires exploration
-2. Hint at hidden items or secrets to discover
-3. Suggest that collaboration between the two agents is beneficial
-4. Create tension or urgency without being too dark
-5. Feel like a puzzle/escape room experience in a normal house
+STYLE:
+- Direct and functional, not literary or atmospheric
+- No flowery descriptions, metaphors, or mood-setting
+- State the goal in clear, actionable terms
 
-Output ONLY the narrative text. No titles, headers, metadata, or explanations."""
+CRITICAL RULES:
+- NEVER describe how to solve puzzles
+- NEVER reveal where objects are located
+- NEVER give step-by-step instructions
+- NEVER describe specific actions to take
+
+GOOD EXAMPLE:
+"You've been hired to retrieve a valuable item from an abandoned house. Your goal: find and open the locked safe hidden somewhere in the house. The rooms contain puzzles, locked containers, and hidden mechanisms that require cooperation to solve."
+
+BAD EXAMPLE (too verbose):
+"The rain taps against the window as shadows dance across the walls. An ornate box sits on the table, its brass corners catching the lamplight mysteriously..."
+
+Output ONLY the scenario text. No titles or metadata."""
 
     def __init__(
         self,
@@ -68,15 +75,11 @@ Output ONLY the narrative text. No titles, headers, metadata, or explanations.""
         Returns:
             Generated scenario text, or None if failed
         """
-        user_prompt = f"""Adapt this premise into a household puzzle scenario:
+        user_prompt = f"""Source: {premise.get('title', 'Unknown')} ({premise.get('category', 'unknown')})
 
-Title: {premise.get('title', 'Unknown')}
-Category: {premise.get('category', 'unknown')}
+Premise: {premise.get('premise', '')}
 
-Original Premise:
-{premise.get('premise', '')}
-
-Write an immersive scenario narrative for two agents exploring a house together. The scenario should feel like an escape room or mystery game set in a residential home."""
+Adapt into a 3-4 sentence household puzzle scenario. State the goal explicitly. No atmospheric prose."""
 
         for attempt in range(retry_count):
             try:
@@ -121,11 +124,9 @@ Write an immersive scenario narrative for two agents exploring a house together.
         Returns:
             Generated scenario text
         """
-        user_prompt = f"""Create an original {theme} scenario for two agents exploring a house.
+        user_prompt = f"""Theme: {theme}
 
-The scenario should be set in a normal residential home and feel like a puzzle/escape room experience. Include hints about hidden items, locked containers, and mysteries to solve.
-
-Write 3-5 paragraphs of immersive narrative."""
+Create a 3-4 sentence household puzzle scenario. State the goal explicitly. No atmospheric prose."""
 
         for attempt in range(retry_count):
             try:
