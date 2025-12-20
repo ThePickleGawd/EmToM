@@ -85,6 +85,9 @@ class CuriosityModel:
         # Tool descriptions (set by explorer)
         self._tool_descriptions: Optional[str] = None
 
+        # Story context from scenario system (set by explorer)
+        self._story_context: Optional[str] = None
+
     def _load_default_config(self) -> Any:
         """Load the default exploration YAML config."""
         config_path = Path(__file__).parent.parent.parent / "habitat_llm" / "conf" / "instruct" / f"{self.DEFAULT_CONFIG}.yaml"
@@ -174,6 +177,10 @@ class CuriosityModel:
     def set_tool_descriptions(self, tool_descriptions: str):
         """Set the tool descriptions to use in prompts."""
         self._tool_descriptions = tool_descriptions
+
+    def set_story_context(self, story_context: str):
+        """Set the story context from scenario system to use in prompts."""
+        self._story_context = story_context
 
     def reset(self, agent_id: Optional[str] = None):
         """Reset the conversation state for a new episode.
@@ -273,8 +280,15 @@ class CuriosityModel:
         world_description: str,
         exploration_history: List[Dict[str, Any]],
     ) -> str:
-        """Build a task description from current world state."""
-        parts = ["Explore the house and discover interesting object behaviors."]
+        """Build a task description from current world state and story context."""
+        parts = []
+
+        # Use story context if available, otherwise fall back to generic exploration
+        if self._story_context:
+            parts.append(self._story_context)
+        else:
+            parts.append("Explore the house and discover interesting object behaviors.")
+
         parts.append(f"\nCurrent state: {world_description}")
 
         if exploration_history:

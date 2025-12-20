@@ -21,6 +21,7 @@ from emtom.state.game_state import (
     Goal,
     GoalStatus,
 )
+from emtom.state.items import ItemDefinition, ItemType
 from emtom.mechanics.handlers import (
     apply_mechanics,
     HandlerResult,
@@ -68,6 +69,10 @@ class GameStateManager:
         """
         self.env = env_interface
         self.state = EMTOMGameState()
+
+        # Story context from scenario system (for prompts)
+        self._story_context: Optional[str] = None
+        self._bindings_info: Optional[Dict[str, Any]] = None
 
     def initialize_from_task(self, task_data: Dict[str, Any]) -> EMTOMGameState:
         """
@@ -120,6 +125,17 @@ class GameStateManager:
                 status=GoalStatus.PENDING,
             )
             state.goals.append(goal)
+
+        # Load item definitions
+        items_data = task_data.get("items", [])
+        for item_data in items_data:
+            item_id = item_data.get("item_id")
+            if item_id:
+                state.item_definitions[item_id] = item_data
+                # If item is hidden_in a container, set up the hidden_inside property
+                hidden_in = item_data.get("hidden_in")
+                if hidden_in:
+                    state = state.set_object_property(hidden_in, "hidden_inside", item_id)
 
         self.state = state
         return state
@@ -343,23 +359,119 @@ class GameStateManager:
                     new_state.object_properties.setdefault(prereq, {})["unlocks"] = target
                     bindings_info["conditional_unlock"] = {"prerequisite": prereq, "target": target}
 
-        # Set up hidden items for Shake action (use synthetic items not in world graph)
+        # Set up scenario-based items for Shake/Search action
         if shakeable:
-            # Pick a shakeable item that's not already used by other mechanics
-            container = None
-            for s in shakeable:
-                if s not in new_state.inverse_objects and s not in new_state.remote_mappings:
-                    container = s
-                    break
-            if container:
-                # Use synthetic hidden items (keys, notes, etc.) not in world graph
-                hidden_items_pool = ["hidden_key", "secret_note", "small_coin", "tiny_gem", "old_map"]
-                hidden_item = random.choice(hidden_items_pool)
-                new_state = new_state.set_object_property(container, "hidden_inside", hidden_item)
-                bindings_info["hidden_items"] = {container: hidden_item}
+            # Load scenario system
+            from emtom.task_gen.scenario_system import get_compatible_scenario, ScenarioInstantiator
+            from emtom.task_gen.clue_generator import ClueGenerator
+            from emtom.state.item_catalog import get_random_small_keys, get_big_key, get_radio
+
+            # Get a scenario compatible with active mechanics
+            scenario = get_compatible_scenario(state.active_mechanics)
+
+            if scenario:
+                bindings_info["scenario"] = {
+                    "id": scenario.id,
+                    "theme": scenario.theme,
+                    "title": scenario.title_template,
+                    "requires_collaboration": scenario.requires_collaboration,
+                }
+
+                # Get available containers (not used by other mechanics)
+                available_containers = [
+                    s for s in shakeable
+                    if s not in new_state.inverse_objects and s not in new_state.remote_mappings
+                ]
+
+                if available_containers:
+                    # Bind items based on scenario requirements
+                    item_locations = {}
+                    hidden_items = {}
+
+                    for i, item_needed in enumerate(scenario.items_needed):
+                        if i >= len(available_containers):
+                            break
+
+                        container = available_containers[i]
+
+                        # Get the appropriate item from catalog
+                        if item_needed == "small_key":
+                            items = get_random_small_keys(1)
+                            if items:
+                                item = items[0]
+                                item.item_id = f"small_key_{i+1}"
+                        elif item_needed == "big_key":
+                            item = get_big_key()
+                        elif item_needed == "radio":
+                            item = get_radio()
+                        else:
+                            # Default to small key for unknown items
+                            items = get_random_small_keys(1)
+                            item = items[0] if items else None
+
+                        if item:
+                            # Register item definition in state
+                            new_state.item_definitions[item.item_id] = item.to_dict()
+                            # Set hidden_inside property on container
+                            new_state = new_state.set_object_property(
+                                container, "hidden_inside", item.item_id
+                            )
+                            item_locations[item.item_id] = container
+                            hidden_items[container] = item.item_id
+
+                    # Generate clues for item locations
+                    clue_gen = ClueGenerator()
+                    clues = []
+                    for item_id, container in item_locations.items():
+                        # Determine room (simplified - use first room or generic)
+                        room = "this area"
+                        container_clues = clue_gen.generate_all_clues(container, room)
+                        clues.extend(container_clues)
+
+                    # Build scene inventory for instantiation
+                    scene_inventory = {
+                        "furniture": furniture,
+                        "objects": objects,
+                        "rooms": ["room"],  # Would need scene graph for real rooms
+                    }
+
+                    # Instantiate scenario
+                    instantiator = ScenarioInstantiator(clue_gen)
+                    instantiated = instantiator.instantiate(
+                        scenario,
+                        scene_inventory,
+                        item_locations,
+                        primary_room="this area",
+                    )
+
+                    # Store all scenario info in bindings
+                    bindings_info["hidden_items"] = hidden_items
+                    bindings_info["item_locations"] = item_locations
+                    bindings_info["item_definitions"] = {
+                        item_id: new_state.item_definitions[item_id].get("name", item_id)
+                        for item_id in item_locations
+                    }
+                    bindings_info["clues"] = clues
+                    bindings_info["story_context"] = instantiated.story_context
+                    bindings_info["suggested_locations"] = instantiated.suggested_locations
+                    if instantiated.agent_secrets:
+                        bindings_info["agent_secrets"] = instantiated.agent_secrets
 
         self.state = new_state
+
+        # Store bindings for later retrieval (e.g., by exploration prompts)
+        self._bindings_info = bindings_info
+        self._story_context = bindings_info.get("story_context")
+
         return new_state, bindings_info
+
+    def get_story_context(self) -> Optional[str]:
+        """Get the story context from the current scenario (if any)."""
+        return self._story_context
+
+    def get_bindings_info(self) -> Optional[Dict[str, Any]]:
+        """Get the full bindings info from auto_bind_mechanics."""
+        return self._bindings_info
 
     def apply_action(
         self,
@@ -432,19 +544,19 @@ class GameStateManager:
         if action_name == "Shake" and target:
             hidden = state.get_object_property(target, "hidden_inside")
             if hidden:
-                # Add hidden item to agent's inventory
-                new_state = copy.copy(state)
-                if agent_id not in new_state.agent_inventory:
-                    new_state.agent_inventory[agent_id] = []
-                new_state.agent_inventory[agent_id].append(hidden)
-
+                # Grant item through inventory system
+                new_state, success, msg = self.grant_item(agent_id, hidden, source=f"Shake:{target}", state=state)
                 # Clear the hidden item from container
                 new_state = new_state.set_object_property(target, "hidden_inside", None)
+
+                # Get item name for observation
+                item_def = self.get_item_definition(hidden)
+                item_name = item_def.name if item_def else hidden
 
                 return new_state, HandlerResult(
                     applies=True,
                     state=new_state,
-                    observation=f"You shake {target}. A {hidden} falls out and you pick it up!",
+                    observation=f"You shake {target}. A {item_name} falls out! {msg}",
                     success=True,
                     effects=[f"found={hidden}", f"inventory+={hidden}"],
                 )
@@ -570,12 +682,9 @@ class GameStateManager:
 
             elif goal.goal_type == "change_state":
                 if goal.target and goal.target_state:
-                    obj_states = state.object_states.get(goal.target, {})
-                    obj_props = state.object_properties.get(goal.target, {})
-                    all_states = {**obj_states, **obj_props}
-                    completed = all(
-                        all_states.get(k) == v
-                        for k, v in goal.target_state.items()
+                    completed = self._check_required_states(
+                        [{"entity": goal.target, **goal.target_state}],
+                        state
                     )
 
             if completed:
@@ -587,9 +696,79 @@ class GameStateManager:
         self.state = state
         return newly_completed
 
+    def _check_required_states(
+        self,
+        required_states: List[Dict[str, Any]],
+        state: EMTOMGameState,
+    ) -> bool:
+        """
+        Check if all required states are satisfied.
+
+        Supports:
+        - entity object states (is_open, is_on, etc.)
+        - agent inventory checks (property="has_item")
+
+        Args:
+            required_states: List of {entity, property, value} dicts
+            state: Game state to check
+
+        Returns:
+            True if all required states are satisfied
+        """
+        for req in required_states:
+            entity = req.get("entity")
+            prop = req.get("property")
+            value = req.get("value")
+
+            # Check if this is an inventory check
+            if prop == "has_item":
+                # Entity should be agent_id (e.g., "agent_0")
+                if not self.agent_has_item(entity, value):
+                    return False
+
+            else:
+                # Standard object state check
+                obj_states = state.object_states.get(entity, {})
+                obj_props = state.object_properties.get(entity, {})
+                all_states = {**obj_states, **obj_props}
+
+                if all_states.get(prop) != value:
+                    return False
+
+        return True
+
+    def check_success_condition(
+        self,
+        success_condition: Dict[str, Any],
+        state: Optional[EMTOMGameState] = None,
+    ) -> bool:
+        """
+        Check if a task's success condition is met.
+
+        Args:
+            success_condition: Dict with "required_states" key
+            state: Game state to check
+
+        Returns:
+            True if success condition is satisfied
+        """
+        if state is None:
+            state = self.state
+
+        required_states = success_condition.get("required_states", [])
+        return self._check_required_states(required_states, state)
+
     def get_debug_info(self) -> Dict[str, Any]:
         """Get debug information about current state."""
         state = self.state
+
+        # Collect hidden items (container -> item mappings)
+        hidden_items = {}
+        for obj_id, props in state.object_properties.items():
+            hidden = props.get("hidden_inside")
+            if hidden:
+                hidden_items[obj_id] = hidden
+
         return {
             "current_step": state.current_step,
             "active_mechanics": state.active_mechanics,
@@ -602,6 +781,9 @@ class GameStateManager:
             "pending_effects": len(state.pending_effects),
             "spawned_items": [s.item_id for s in state.spawned_items],
             "hidden_objects": list(state.hidden_objects),
+            "hidden_items": hidden_items,  # container -> item_id mappings
+            "item_definitions": state.item_definitions,  # item definitions from task
+            "agent_inventory": state.agent_inventory,  # per-agent inventory
             "goals": [
                 {"id": g.goal_id, "status": g.status.value}
                 for g in state.goals
@@ -615,3 +797,169 @@ class GameStateManager:
     def set_state(self, state: EMTOMGameState) -> None:
         """Set current game state."""
         self.state = state
+
+    # ========== Inventory Methods ==========
+
+    def get_item_definition(self, item_id: str) -> Optional[ItemDefinition]:
+        """
+        Get the ItemDefinition for an item.
+
+        Args:
+            item_id: The item ID to look up
+
+        Returns:
+            ItemDefinition or None if not found
+        """
+        item_data = self.state.item_definitions.get(item_id)
+        if item_data:
+            return ItemDefinition.from_dict(item_data)
+        return None
+
+    def grant_item(
+        self,
+        agent_id: str,
+        item_id: str,
+        source: Optional[str] = None,
+        state: Optional[EMTOMGameState] = None,
+    ) -> Tuple[EMTOMGameState, bool, str]:
+        """
+        Grant an item to an agent's inventory.
+
+        Args:
+            agent_id: Agent receiving the item
+            item_id: Item ID to grant
+            source: What granted this item (object, mechanic, etc.)
+            state: State to modify (uses self.state if None)
+
+        Returns:
+            (new_state, success, message)
+        """
+        if state is None:
+            state = self.state
+
+        # Check if item is defined
+        item_def = self.get_item_definition(item_id)
+        item_name = item_def.name if item_def else item_id
+
+        # Add to inventory
+        new_state = copy.copy(state)
+        new_inv = copy.copy(state.agent_inventory)
+        if agent_id not in new_inv:
+            new_inv[agent_id] = []
+        else:
+            new_inv[agent_id] = list(new_inv[agent_id])
+
+        if item_id not in new_inv[agent_id]:
+            new_inv[agent_id].append(item_id)
+            new_state.agent_inventory = new_inv
+            self.state = new_state
+            return new_state, True, f"Obtained {item_name}!"
+        else:
+            return state, False, f"Already have {item_name}."
+
+    def remove_item(
+        self,
+        agent_id: str,
+        item_id: str,
+        state: Optional[EMTOMGameState] = None,
+    ) -> Tuple[EMTOMGameState, bool, str]:
+        """
+        Remove an item from an agent's inventory.
+
+        Args:
+            agent_id: Agent to remove item from
+            item_id: Item ID to remove
+            state: State to modify (uses self.state if None)
+
+        Returns:
+            (new_state, success, message)
+        """
+        if state is None:
+            state = self.state
+
+        new_state = copy.copy(state)
+        new_inv = copy.copy(state.agent_inventory)
+
+        if agent_id not in new_inv or item_id not in new_inv[agent_id]:
+            item_def = self.get_item_definition(item_id)
+            item_name = item_def.name if item_def else item_id
+            return state, False, f"Don't have {item_name}."
+
+        new_inv[agent_id] = [i for i in new_inv[agent_id] if i != item_id]
+        new_state.agent_inventory = new_inv
+
+        self.state = new_state
+        item_def = self.get_item_definition(item_id)
+        item_name = item_def.name if item_def else item_id
+        return new_state, True, f"Removed {item_name}."
+
+    def agent_has_item(self, agent_id: str, item_id: str) -> bool:
+        """
+        Check if an agent has a specific item.
+
+        Args:
+            agent_id: Agent to check
+            item_id: Item to check for
+
+        Returns:
+            True if agent has the item
+        """
+        return item_id in self.state.agent_inventory.get(agent_id, [])
+
+    def get_agent_inventory(self, agent_id: str) -> List[ItemDefinition]:
+        """
+        Get all ItemDefinitions for items in agent's inventory.
+
+        Args:
+            agent_id: Agent to get inventory for
+
+        Returns:
+            List of ItemDefinition objects
+        """
+        item_ids = self.state.agent_inventory.get(agent_id, [])
+        items = []
+        for item_id in item_ids:
+            item_def = self.get_item_definition(item_id)
+            if item_def:
+                items.append(item_def)
+        return items
+
+    def get_inventory_text(self, agent_id: str) -> str:
+        """
+        Format agent's inventory as text for prompt templating.
+
+        Args:
+            agent_id: Agent to format inventory for
+
+        Returns:
+            Formatted inventory string
+        """
+        items = self.get_agent_inventory(agent_id)
+        if not items:
+            return "Your inventory is empty."
+
+        lines = ["Your inventory:"]
+        for item in items:
+            line = f"- {item.name}: {item.description}"
+            if item.item_type == ItemType.TOOL and item.grants_action:
+                line += f" (enables {item.grants_action} action)"
+            if item.consumable and item.uses_remaining is not None:
+                line += f" [{item.uses_remaining} uses remaining]"
+            lines.append(line)
+
+        return "\n".join(lines)
+
+    def _check_has_item(self, entity: str, value: str) -> bool:
+        """
+        Check if an entity (agent) has an item.
+
+        Used for success criteria checking with property="has_item".
+
+        Args:
+            entity: Agent ID (e.g., "agent_0")
+            value: Item ID to check for
+
+        Returns:
+            True if agent has the item
+        """
+        return self.agent_has_item(entity, value)

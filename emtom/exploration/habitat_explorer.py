@@ -234,6 +234,11 @@ class HabitatExplorer:
             self._tool_descriptions = first_agent.tool_descriptions
             self.curiosity.set_tool_descriptions(self._tool_descriptions)
 
+        # Pass story context from scenario system to curiosity model
+        story_context = self.game_manager.get_story_context()
+        if story_context:
+            self.curiosity.set_story_context(story_context)
+
     def _setup_video_recording(self) -> None:
         """Initialize video recording utilities."""
         if not self.config.save_video:
@@ -410,6 +415,17 @@ class HabitatExplorer:
             counts = debug_info["interaction_counts"]
             self.logger.log_message(f"Counting state targets: {counts}")
             bindings["counting_state"] = {"targets": counts}
+
+        if debug_info.get("hidden_items"):
+            hidden = debug_info["hidden_items"]
+            self.logger.log_message(f"Hidden items: {hidden}")
+            bindings["hidden_items"] = hidden
+
+        if debug_info.get("item_definitions"):
+            bindings["item_definitions"] = debug_info["item_definitions"]
+
+        if debug_info.get("agent_inventory"):
+            bindings["agent_inventory"] = debug_info["agent_inventory"]
 
         # Save bindings to trajectory (critical for task generation!)
         self.logger.set_mechanic_bindings(bindings)
