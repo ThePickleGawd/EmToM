@@ -8,12 +8,52 @@ and having it create tasks that leverage the discovered mechanics.
 from __future__ import annotations
 
 import json
+import random
 import uuid
 from dataclasses import dataclass, field, asdict
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from emtom.task_gen.trajectory_analyzer import TrajectoryAnalysis
+
+
+def load_scenario_inspirations(
+    directory: str = "data/emtom/scenarios/scraped",
+    max_scenarios: int = 10,
+) -> List[str]:
+    """
+    Load scraped scenario briefings to use as creative inspiration.
+
+    Args:
+        directory: Path to directory containing .txt scenario files
+        max_scenarios: Maximum number of scenarios to include
+
+    Returns:
+        List of scenario texts (randomly sampled if more than max)
+    """
+    path = Path(directory)
+    scenarios = []
+
+    if not path.exists():
+        return []
+
+    txt_files = list(path.glob("*.txt"))
+    if not txt_files:
+        return []
+
+    # Randomly sample if we have more than max
+    if len(txt_files) > max_scenarios:
+        txt_files = random.sample(txt_files, max_scenarios)
+
+    for txt_file in txt_files:
+        try:
+            with open(txt_file, encoding="utf-8") as f:
+                scenarios.append(f.read().strip())
+        except Exception:
+            continue
+
+    return scenarios
 
 
 class TaskType(Enum):
@@ -227,6 +267,11 @@ Articulated Furniture (can be opened/closed): {articulated}
 
 ## Surprises Discovered During Exploration
 {surprises}
+
+## Creative Inspiration (from escape room / mystery game scenarios)
+Use these scenario themes as INSPIRATION for the TYPE of puzzle or challenge to create.
+Adapt the themes to work with the ACTUAL objects in the scene inventory above.
+{scenario_inspirations}
 
 ## Task Requirements
 The TYPE of task generated is based on user input:
@@ -454,6 +499,18 @@ class TaskGenerator:
             lines.append("")
         return "\n".join(lines)
 
+    def _format_scenario_inspirations(self, scenarios: List[str]) -> str:
+        """Format scraped scenarios as creative inspiration."""
+        if not scenarios:
+            return "(No scenario inspirations available)"
+
+        lines = []
+        for i, scenario in enumerate(scenarios, 1):
+            lines.append(f"--- Inspiration {i} ---")
+            lines.append(scenario)
+            lines.append("")
+        return "\n".join(lines)
+
     def _generate_single_task(
         self,
         scene_id: str,
@@ -479,12 +536,17 @@ class TaskGenerator:
         objects = ", ".join(scene_inventory.get("objects", [])[:10]) or "unknown"
         articulated = ", ".join(scene_inventory.get("articulated_furniture", [])[:10]) or "unknown"
 
+        # Load scenario inspirations from scraped content
+        scenarios = load_scenario_inspirations(max_scenarios=10)
+        scenario_text = self._format_scenario_inspirations(scenarios)
+
         prompt = TASK_GENERATION_PROMPT.format(
             rooms=rooms,
             furniture=furniture,
             objects=objects,
             articulated=articulated,
             surprises=surprises,
+            scenario_inspirations=scenario_text,
             num_agents=num_agents,
             task_type=task_type_str,
         )
