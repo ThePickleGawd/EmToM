@@ -8,6 +8,13 @@ prompt: |-
         Note that many actions take time and will not immediately succeed, try waiting if you expect an action to take time.
         Ground every action in what you currently see; do not hallucinate objects or motion. If you cannot visually confirm something, ask your teammate or move to verify before acting, and briefly cite the visual evidence that justifies your action.
 
+        RESPONSE FORMAT (follow EXACTLY):
+        Thought: [Write 1-2 sentences of reasoning BEFORE stating your action. Explain WHY you are taking this action.]
+        Agent_{id}_Action: ActionName[target]
+        Assigned!
+
+        CRITICAL: The "Thought:" line MUST contain actual reasoning text, not just the action. Bad example: "Thought:Open[fridge]" - Good example: "Thought: I see a fridge that might contain interesting items. Let me open it to investigate."
+
         {tool_descriptions}
         {eot_tag}
 

@@ -235,7 +235,7 @@ class HabitatExplorer:
             self._tool_descriptions = first_agent.tool_descriptions
             self.curiosity.set_tool_descriptions(self._tool_descriptions)
 
-        # Pass story context from scenario system to curiosity model
+        # Pass story context for atmosphere/setting (but exploration is still free-form)
         story_context = self.game_manager.get_story_context()
         if story_context:
             self.curiosity.set_story_context(story_context)

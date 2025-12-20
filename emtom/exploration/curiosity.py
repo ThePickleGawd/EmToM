@@ -297,15 +297,20 @@ class CuriosityModel:
         """
         parts = []
 
-        # Use story context if available, otherwise generate agent-specific directive
+        # Extract agent UID
+        agent_uid = int(agent_id.split("_")[-1]) if "_" in agent_id else 0
+
+        # Story context provides atmosphere/setting (not a task)
         if self._story_context:
+            parts.append("== SCENARIO ==")
             parts.append(self._story_context)
-        else:
-            # Extract agent UID for assigning unique exploration focus
-            agent_uid = int(agent_id.split("_")[-1]) if "_" in agent_id else 0
-            # Generate unique exploration directive for each agent
-            exploration_directive = self._get_agent_exploration_directive(agent_uid, world_description)
-            parts.append(exploration_directive)
+            parts.append("")
+
+        # Always include free exploration instructions
+        parts.append("== YOUR MISSION ==")
+        parts.append(f"You are Agent {agent_uid}. Explore this house freely - visit ALL rooms and interact with objects.")
+        parts.append("There is no specific task. Discover interesting behaviors, hidden items, and unusual mechanics.")
+        parts.append("Use random action selection to ensure broad coverage of the environment.")
 
         parts.append(f"\nCurrent state: {world_description}")
 
