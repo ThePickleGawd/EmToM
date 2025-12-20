@@ -202,11 +202,19 @@ def handle_remote_control(
     The physical action is executed on the original target in Habitat.
     The remote effect is applied to game state (changes remote target's property).
 
+    Only triggers on state-changing actions (Open, Close, etc.), not Navigate, Pick, etc.
+
     Setup in state:
         state.remote_mappings = {"switch_1": ("light_1", "is_open")}
         - When you interact with switch_1, light_1's is_open property toggles
     """
     if not target or target not in state.remote_mappings:
+        return no_effect(state)
+
+    # Only trigger on state-changing actions, not movement/manipulation
+    action_lower = action_name.lower()
+    state_changing_actions = {"open", "close", "turn_on", "turn_off", "lock", "unlock", "use"}
+    if action_lower not in state_changing_actions:
         return no_effect(state)
 
     remote_target, remote_property = state.remote_mappings[target]
