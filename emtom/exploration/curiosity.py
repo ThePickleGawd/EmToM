@@ -488,11 +488,8 @@ class CuriosityModel:
 
         # Print colorful VS distribution header
         print(f"\n{agent_color}{bold}{'─'*70}{reset}")
-        print(f"{agent_color}{bold}[VS] PROBABILITY DISTRIBUTION FOR {agent_id.upper()}{reset}")
+        print(f"{agent_color}{bold}[VS] {agent_id.upper()} - {len(distribution.actions)} actions{reset}")
         print(f"{agent_color}{bold}{'─'*70}{reset}")
-        print(f"{cyan}  (Each agent gets their OWN distribution based on their current state){reset}")
-        print(f"{cyan}  Location-dependent: probabilities change based on what agent sees{reset}")
-        print(f"{agent_color}  Total actions in distribution: {len(distribution.actions)}{reset}\n")
 
         # Print each action with colored probability bar
         for a in sorted_actions:
@@ -514,8 +511,7 @@ class CuriosityModel:
             else:
                 print(f"  {a.probability:.3f} [{bar_color}{bar:50s}{reset}] {a.full_action}")
 
-        print(f"\n{agent_color}{bold}[VS] {agent_id} EXECUTES: {sampled.full_action}{reset}")
-        print(f"{cyan}  (Only {agent_id} performs this action - other agents act independently){reset}")
+        print(f"\n{agent_color}{bold}[VS] {agent_id} → {sampled.full_action}{reset}")
         print(f"{agent_color}{'─'*70}{reset}\n")
 
         # Build reasoning that includes distribution info
