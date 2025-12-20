@@ -478,9 +478,46 @@ class GameStateManager:
 
         # Store bindings for later retrieval (e.g., by exploration prompts)
         self._bindings_info = bindings_info
-        self._story_context = bindings_info.get("story_context")
+
+        # Load story context from scenario OR from scraped .txt files
+        story_context = bindings_info.get("story_context")
+        if not story_context:
+            # Fall back to scraped scenarios if no YAML scenario was loaded
+            story_context = self._load_random_scraped_scenario()
+            if story_context:
+                bindings_info["story_context"] = story_context
+                bindings_info["story_source"] = "scraped"
+
+        self._story_context = story_context
 
         return new_state, bindings_info
+
+    def _load_random_scraped_scenario(self) -> Optional[str]:
+        """Load a random scenario from scraped .txt files."""
+        import random
+        import time
+        from pathlib import Path
+
+        scenarios_dir = Path(__file__).parent.parent.parent / "data" / "emtom" / "scenarios" / "scraped"
+        if not scenarios_dir.exists():
+            return None
+
+        txt_files = list(scenarios_dir.glob("*.txt"))
+        if not txt_files:
+            return None
+
+        # Use time-based randomness to avoid being affected by fixed seeds
+        rng = random.Random(time.time_ns())
+        chosen_file = rng.choice(txt_files)
+
+        try:
+            with open(chosen_file, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            print(f"[GameStateManager] Loaded scenario: {chosen_file.name}")
+            return content
+        except Exception as e:
+            print(f"[GameStateManager] Error loading scenario {chosen_file}: {e}")
+            return None
 
     def get_story_context(self) -> Optional[str]:
         """Get the story context from the current scenario (if any)."""
