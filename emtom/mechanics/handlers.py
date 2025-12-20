@@ -70,9 +70,9 @@ MECHANIC_INFO = {
         "setup_keys": ["trigger_object", "decay_steps"],
     },
     "conditional_unlock": {
-        "description": "Object only works after prerequisite action",
+        "description": "Object only works after prerequisite action or having an item",
         "category": "conditional",
-        "setup_keys": ["trigger_object", "prerequisite_object", "prerequisite_action"],
+        "setup_keys": ["trigger_object", "prerequisite_object", "prerequisite_action", "requires_item"],
     },
     "state_mirroring": {
         "description": "Two objects always have the same state",
@@ -408,18 +408,53 @@ def handle_conditional_unlock(
     state: EMTOMGameState,
 ) -> HandlerResult:
     """
-    Conditional Unlock: Object only works after prerequisite action.
+    Conditional Unlock: Object only works after prerequisite action or item.
 
-    Setup in state:
+    Setup in state (object prerequisite - must interact with prereq first):
         state.object_properties["chest_1"]["prerequisite"] = "lever_1"
         state.object_properties["lever_1"]["unlocks"] = "chest_1"
+
+    Setup in state (item prerequisite - must have item in inventory):
+        state.object_properties["door_1"]["requires_item"] = "magic_orb_1"
+        When agent with magic_orb_1 interacts, door_1 unlocks.
     """
     if not target:
         return no_effect(state)
 
     action_lower = action_name.lower()
 
-    # Check if target is locked by prerequisite
+    # Check if target is locked by item prerequisite (must have item in inventory)
+    required_item = state.get_object_property(target, "requires_item")
+    if required_item and target not in state.unlocked_targets:
+        # Check if agent has the required item
+        agent_inventory = state.agent_inventory.get(agent_id, [])
+        if required_item not in agent_inventory:
+            return HandlerResult(
+                applies=True,
+                state=state,
+                observation=f"You try to {action_lower} {target}, but it won't budge. You sense you need something special.",
+                success=False,
+                effects=[],
+                surprise_trigger=f"{target} requires a special item",
+                blocked=True,
+            )
+        else:
+            # Agent has the item - unlock the target
+            new_unlocked = copy.copy(state.unlocked_targets)
+            new_unlocked.add(target)
+            new_state = copy.copy(state)
+            new_state.unlocked_targets = new_unlocked
+
+            return HandlerResult(
+                applies=True,
+                state=new_state,
+                observation=f"The {required_item} glows and {target} unlocks!",
+                success=True,
+                effects=[f"item_unlocked={target}"],
+                surprise_trigger=f"{required_item} unlocked {target}",
+            )
+
+    # Check if target is locked by object prerequisite (must interact with prereq first)
     prerequisite = state.get_object_property(target, "prerequisite")
     if prerequisite and target not in state.unlocked_targets:
         return HandlerResult(
@@ -429,7 +464,7 @@ def handle_conditional_unlock(
             success=False,
             effects=[],
             surprise_trigger=f"{target} is locked by unknown prerequisite",
-            blocked=True,  # Don't execute in Habitat
+            blocked=True,
         )
 
     # Check if this action unlocks something

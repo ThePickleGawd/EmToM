@@ -305,26 +305,41 @@ class SearchAction(EMTOMAction):
             )
 
         state = self._game_manager.get_state()
-        hidden = state.get_object_property(target, "hidden_inside")
 
-        if hidden:
-            # Grant item through inventory system
-            new_state, success, msg = self._game_manager.grant_item(
-                agent_id, hidden, source=f"Search:{target}"
+        # Fix 2: Check if container is locked before searching
+        is_locked = state.get_object_property(target, "is_locked", False)
+        if is_locked:
+            return ActionResult(
+                success=False,
+                observation=f"You try to search {target}, but it's locked. Unlock it first.",
             )
-            # Clear the hidden item from container
-            new_state = new_state.set_object_property(target, "hidden_inside", None)
+
+        hidden_items = state.get_object_property(target, "hidden_items", [])
+
+        if hidden_items:
+            new_state = state
+            found_names = []
+            spawned = []
+
+            for item_id in hidden_items:
+                new_state, success, msg = self._game_manager.grant_item(
+                    agent_id, item_id, source=f"Search:{target}", state=new_state
+                )
+                item_def = self._game_manager.get_item_definition(item_id)
+                item_name = item_def.name if item_def else item_id
+                found_names.append(item_name)
+                spawned.append(item_id)
+
+            # Clear hidden items from container
+            new_state = new_state.set_object_property(target, "hidden_items", [])
             self._game_manager.set_state(new_state)
 
-            # Get item name for observation
-            item_def = self._game_manager.get_item_definition(hidden)
-            item_name = item_def.name if item_def else hidden
-
+            items_text = ", ".join(found_names)
             return ActionResult(
                 success=True,
-                observation=f"You search {target} carefully. You find a {item_name}! {msg}",
-                effect=f"found_item={hidden}",
-                spawned_items=[hidden],
+                observation=f"You search {target} carefully. You find: {items_text}!",
+                effect=f"found_items={','.join(spawned)}",
+                spawned_items=spawned,
             )
 
         return ActionResult(

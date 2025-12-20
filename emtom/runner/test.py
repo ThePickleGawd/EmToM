@@ -52,7 +52,11 @@ class HumanTestRunner(EMTOMBaseRunner):
             human_agents: List of agent IDs to be human-controlled (default: all)
         """
         self.task_info = task_info
-        super().setup(env_interface, task_data, output_dir)
+
+        # Get agent_actions from task_info if available
+        agent_actions = task_info.get("agent_actions") if task_info else None
+
+        super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions)
 
         # Determine which agents are human vs LLM
         all_agent_ids = {f"agent_{uid}" for uid in self.agents.keys()}

@@ -55,7 +55,10 @@ class BenchmarkRunner(EMTOMBaseRunner):
         if task and not task_data:
             task_data = self._task_to_mechanics_dict(task)
 
-        super().setup(env_interface, task_data, output_dir)
+        # Get agent_actions from task if available
+        agent_actions = task.agent_actions if task else None
+
+        super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions)
         self._setup_planners()
 
     def _task_to_mechanics_dict(self, task: "GeneratedTask") -> Dict[str, Any]:

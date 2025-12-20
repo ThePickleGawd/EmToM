@@ -63,6 +63,7 @@ class EMTOMBaseRunner(ABC):
         env_interface: "EnvironmentInterface",
         task_data: Optional[Dict[str, Any]] = None,
         output_dir: Optional[str] = None,
+        agent_actions: Optional[Dict[str, List[str]]] = None,
     ) -> None:
         """
         Full setup sequence. Call before run().
@@ -71,12 +72,18 @@ class EMTOMBaseRunner(ABC):
             env_interface: Initialized EnvironmentInterface
             task_data: Optional task data with mechanics/bindings
             output_dir: Output directory for videos/logs
+            agent_actions: Optional dict mapping agent_id to list of allowed actions.
+                           If None, all actions are available to all agents.
+                           Example: {"agent_0": ["Navigate", "Open", "Communicate"], "agent_1": ["Navigate"]}
         """
         self.env_interface = env_interface
         self.output_dir = output_dir or getattr(
             self.config.paths, 'results_dir', 'outputs/emtom'
         )
         os.makedirs(self.output_dir, exist_ok=True)
+
+        # Store agent actions for tool setup
+        self._agent_actions = agent_actions
 
         self._setup_game_manager(task_data)
         self._setup_agents()
@@ -193,33 +200,50 @@ class EMTOMBaseRunner(ABC):
             print(f"[EMTOMBaseRunner] Created {agent_name} (uid={uid}) with tools: {list(agent.tools.keys())}")
 
     def _setup_tools(self) -> None:
-        """Inject EMTOM tools (Use, Inspect) and Communicate into agents."""
+        """Inject EMTOM tools and Communicate into agents based on allowed actions."""
         from emtom.actions import get_emtom_tools
         from emtom.actions.tool_wrapper import wrap_habitat_tools
         from habitat_llm.tools.perception.communication_tool import CommunicationTool
 
         for uid, agent in self.agents.items():
-            # Add EMTOM tools
+            agent_id = f"agent_{uid}"
+
+            # Get allowed actions for this agent (None means all allowed)
+            allowed_actions = None
+            if self._agent_actions is not None:
+                allowed_actions = self._agent_actions.get(agent_id, [])
+
+            def is_allowed(action_name: str) -> bool:
+                """Check if action is allowed for this agent."""
+                if allowed_actions is None:
+                    return True  # No restrictions
+                return action_name in allowed_actions
+
+            # Add EMTOM tools (Use, Search, Inspect) if allowed
             emtom_tools = get_emtom_tools(agent_uid=uid)
             for tool_name, tool in emtom_tools.items():
-                tool.set_environment(self.env_interface)
-                tool.set_game_manager(self.game_manager)
-                agent.tools[tool_name] = tool
+                if is_allowed(tool_name):
+                    tool.set_environment(self.env_interface)
+                    tool.set_game_manager(self.game_manager)
+                    agent.tools[tool_name] = tool
 
-            # Add Communicate tool
-            comm_config = OmegaConf.create({
-                "name": "Communicate",
-                "description": "Send a message to the other agent. Usage: Communicate[your message]. Keep messages on a single line."
-            })
-            comm_tool = CommunicationTool(comm_config)
-            comm_tool.agent_uid = uid
-            comm_tool.set_environment(self.env_interface)
-            agent.tools["Communicate"] = comm_tool
+            # Add Communicate tool if allowed
+            if is_allowed("Communicate"):
+                comm_config = OmegaConf.create({
+                    "name": "Communicate",
+                    "description": "Send a message to the other agent. Usage: Communicate[your message]. Keep messages on a single line."
+                })
+                comm_tool = CommunicationTool(comm_config)
+                comm_tool.agent_uid = uid
+                comm_tool.set_environment(self.env_interface)
+                agent.tools["Communicate"] = comm_tool
 
             # Wrap Habitat tools with EMTOM condition checks (locks, etc.)
-            wrap_habitat_tools(agent, self.game_manager)
+            # This also filters based on allowed_actions
+            wrap_habitat_tools(agent, self.game_manager, allowed_actions)
 
-            print(f"[EMTOMBaseRunner] Injected EMTOM tools into agent_{uid}")
+            tools_added = list(agent.tools.keys())
+            print(f"[EMTOMBaseRunner] Agent_{uid} tools: {tools_added}")
 
     def inject_tool_from_item(self, uid: int, item_id: str) -> bool:
         """

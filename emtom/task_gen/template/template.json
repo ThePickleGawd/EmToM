@@ -1,0 +1,66 @@
+{
+  "task_id": "task_template",
+  "title": "Template Task - Replace This",
+  "story": "Atmospheric narrative that sets up the puzzle. Describe the setting and why agents are here.",
+  "public_goal": "Describe what both agents need to accomplish together",
+  "public_context": "Optional background context that both agents know",
+  "theory_of_mind_required": true,
+  "category": "knowledge_asymmetry",
+  "scene_id": "FROM_TRAJECTORY_metadata.scene_id",
+  "episode_id": "FROM_TRAJECTORY_episode_id",
+  "active_mechanics": ["inverse_state"],
+  "mechanic_bindings": [
+    {
+      "mechanic_type": "inverse_state",
+      "trigger_object": "object_id_from_trajectory",
+      "target_object": null,
+      "target_state": null,
+      "count": null
+    }
+  ],
+  "agent_secrets": {
+    "agent_0": [
+      "Secret knowledge about the mechanics that only agent_0 knows",
+      "For example: 'The fridge opens backwards - the close action actually opens it'"
+    ],
+    "agent_1": []
+  },
+  "agent_roles": {
+    "agent_0": "Expert who discovered the strange mechanics during exploration",
+    "agent_1": "Novice who must learn through collaboration and communication"
+  },
+  "agent_actions": {
+    "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Search", "Communicate"],
+    "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
+  },
+  "success_condition": {
+    "description": "Describe what success looks like in plain English",
+    "required_states": [
+      {
+        "entity": "object_id_from_scene_inventory",
+        "property": "location",
+        "value": "target_location"
+      }
+    ],
+    "time_limit": null,
+    "all_agents_must_survive": true
+  },
+  "failure_conditions": [
+    {
+      "description": "Too many failed attempts",
+      "failure_states": [],
+      "max_failed_attempts": 10
+    }
+  ],
+  "initial_world_state": {
+    "objects": ["list_of_relevant_objects_from_scene_inventory"],
+    "agent_positions": {
+      "agent_0": "room_from_scene_inventory",
+      "agent_1": "different_room_from_scene_inventory"
+    }
+  },
+  "num_agents": 2,
+  "difficulty": 3,
+  "subtasks": [],
+  "source_trajectory": "trajectory_episode_id"
+}

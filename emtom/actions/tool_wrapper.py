@@ -101,15 +101,30 @@ def wrap_tool(tool, game_manager, agent_uid: int = 0) -> None:
     tool._emtom_wrapped = True  # Mark as wrapped
 
 
-def wrap_habitat_tools(agent, game_manager) -> None:
+def wrap_habitat_tools(
+    agent,
+    game_manager,
+    allowed_actions: Optional[List[str]] = None,
+) -> None:
     """
-    Wrap all relevant Habitat tools for an agent.
+    Wrap all relevant Habitat tools for an agent and filter by allowed actions.
 
     Args:
         agent: The Agent instance with tools dict
         game_manager: GameStateManager for condition checks
+        allowed_actions: Optional list of allowed action names. If provided,
+                        tools not in this list will be removed.
     """
     agent_uid = getattr(agent, 'uid', 0)
+
+    # If allowed_actions specified, remove tools not in the list
+    if allowed_actions is not None:
+        tools_to_remove = [
+            name for name in agent.tools.keys()
+            if name not in allowed_actions
+        ]
+        for name in tools_to_remove:
+            del agent.tools[name]
 
     for tool_name, tool in agent.tools.items():
         # Skip already wrapped tools

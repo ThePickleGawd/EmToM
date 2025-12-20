@@ -114,7 +114,7 @@ class EMTOMGameState:
     entities: List[Dict[str, Any]] = field(default_factory=list)
 
     # === Our overlay (custom properties) ===
-    # Custom properties per object (hidden_inside, inverse, linked_to, etc.)
+    # Custom properties per object (hidden_items, is_locked, inverse, linked_to, etc.)
     object_properties: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     # Items spawned by actions (Shake reveals key, etc.)
     spawned_items: List[SpawnedItem] = field(default_factory=list)

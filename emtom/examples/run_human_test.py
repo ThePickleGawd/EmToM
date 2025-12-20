@@ -241,6 +241,17 @@ def main(config: DictConfig):
         if task_info:
             cprint(f"Loaded task: {task_info.get('title', 'N/A')}", "green")
 
+            # Reset environment to the correct episode for this task
+            task_episode_id = task_info.get("episode_id")
+            if task_episode_id and task_episode_id != "unknown":
+                cprint(f"Resetting environment to episode: {task_episode_id}", "blue")
+                try:
+                    env_interface.reset_environment(episode_id=task_episode_id)
+                    cprint(f"Successfully loaded episode {task_episode_id}", "green")
+                except (ValueError, IndexError) as e:
+                    cprint(f"Warning: Could not load episode {task_episode_id}: {e}", "yellow")
+                    cprint("Continuing with current episode...", "yellow")
+
             # Use mechanics from task
             if task_info.get("mechanic_bindings"):
                 task_data["mechanics"] = task_info["mechanic_bindings"]

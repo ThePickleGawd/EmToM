@@ -107,11 +107,22 @@ class GameStateManager:
             if isinstance(binding, dict):
                 self._setup_mechanic_state(state, mech_type, binding)
 
-        # Set up hidden items (for Shake action)
+        # Set up hidden items (for Search/Shake action)
+        # Supports both single item (legacy) and list of items
         hidden_items = task_data.get("hidden_items", {})
         for obj_id, hidden_info in hidden_items.items():
-            contains = hidden_info.get("contains") if isinstance(hidden_info, dict) else hidden_info
-            state = state.set_object_property(obj_id, "hidden_inside", contains)
+            if isinstance(hidden_info, dict):
+                contains = hidden_info.get("contains")
+            elif isinstance(hidden_info, list):
+                contains = hidden_info
+            else:
+                contains = hidden_info
+
+            # Normalize to list format
+            if isinstance(contains, str):
+                contains = [contains]
+            if contains:
+                state = state.set_object_property(obj_id, "hidden_items", contains)
 
         # Set up goals
         goals_data = task_data.get("goals", [])
@@ -132,10 +143,15 @@ class GameStateManager:
             item_id = item_data.get("item_id")
             if item_id:
                 state.item_definitions[item_id] = item_data
-                # If item is hidden_in a container, set up the hidden_inside property
+                # If item is hidden_in a container, add to hidden_items list
                 hidden_in = item_data.get("hidden_in")
                 if hidden_in:
-                    state = state.set_object_property(hidden_in, "hidden_inside", item_id)
+                    current = state.get_object_property(hidden_in, "hidden_items", [])
+                    if not isinstance(current, list):
+                        current = [current] if current else []
+                    if item_id not in current:
+                        current = current + [item_id]
+                    state = state.set_object_property(hidden_in, "hidden_items", current)
 
         self.state = state
         return state
@@ -412,12 +428,16 @@ class GameStateManager:
                         if item:
                             # Register item definition in state
                             new_state.item_definitions[item.item_id] = item.to_dict()
-                            # Set hidden_inside property on container
+                            # Add to hidden_items list on container
+                            current = new_state.get_object_property(container, "hidden_items", [])
+                            if not isinstance(current, list):
+                                current = [current] if current else []
+                            current = current + [item.item_id]
                             new_state = new_state.set_object_property(
-                                container, "hidden_inside", item.item_id
+                                container, "hidden_items", current
                             )
                             item_locations[item.item_id] = container
-                            hidden_items[container] = item.item_id
+                            hidden_items[container] = current
 
                     # Generate clues for item locations
                     clue_gen = ClueGenerator()
@@ -596,23 +616,31 @@ class GameStateManager:
         """Apply built-in action effects (Shake, Hide, etc.)."""
 
         if action_name == "Shake" and target:
-            hidden = state.get_object_property(target, "hidden_inside")
-            if hidden:
-                # Grant item through inventory system
-                new_state, success, msg = self.grant_item(agent_id, hidden, source=f"Shake:{target}", state=state)
-                # Clear the hidden item from container
-                new_state = new_state.set_object_property(target, "hidden_inside", None)
+            hidden_items = state.get_object_property(target, "hidden_items", [])
 
-                # Get item name for observation
-                item_def = self.get_item_definition(hidden)
-                item_name = item_def.name if item_def else hidden
+            if hidden_items:
+                new_state = state
+                found_names = []
+                effects = []
 
+                for item_id in hidden_items:
+                    new_state, success, msg = self.grant_item(agent_id, item_id, source=f"Shake:{target}", state=new_state)
+                    item_def = self.get_item_definition(item_id)
+                    item_name = item_def.name if item_def else item_id
+                    found_names.append(item_name)
+                    effects.append(f"found={item_id}")
+                    effects.append(f"inventory+={item_id}")
+
+                # Clear hidden items from container
+                new_state = new_state.set_object_property(target, "hidden_items", [])
+
+                items_text = ", ".join(found_names)
                 return new_state, HandlerResult(
                     applies=True,
                     state=new_state,
-                    observation=f"You shake {target}. A {item_name} falls out! {msg}",
+                    observation=f"You shake {target}. {items_text} fall{'s' if len(found_names) == 1 else ''} out!",
                     success=True,
-                    effects=[f"found={hidden}", f"inventory+={hidden}"],
+                    effects=effects,
                 )
             else:
                 return state, HandlerResult(
@@ -819,9 +847,9 @@ class GameStateManager:
         # Collect hidden items (container -> item mappings)
         hidden_items = {}
         for obj_id, props in state.object_properties.items():
-            hidden = props.get("hidden_inside")
-            if hidden:
-                hidden_items[obj_id] = hidden
+            items = props.get("hidden_items", [])
+            if items:
+                hidden_items[obj_id] = items
 
         return {
             "current_step": state.current_step,

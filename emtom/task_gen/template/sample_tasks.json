@@ -1,0 +1,82 @@
+{
+  "description": "Sample EMTOM tasks for testing and development",
+  "tasks": [
+    {
+      "task_id": "sample_inverted_drawer",
+      "title": "Inverted Drawer - Retrieve the Kettle",
+      "story": "In this strange kitchen, some furniture behaves unexpectedly. The drawers and cabinets seem to have a mind of their own...",
+      "public_goal": "Retrieve the kettle and place it on the table so both agents can use it.",
+      "public_context": "Some furniture in the kitchen behaves oddly. Agents should collaborate to get the kettle to the table.",
+      "theory_of_mind_required": true,
+      "category": "knowledge_asymmetry",
+      "scene_id": "sample_scene",
+      "episode_id": "0",
+      "active_mechanics": ["inverse_state"],
+      "mechanic_bindings": [
+        {
+          "mechanic_type": "inverse_state",
+          "trigger_object": "chest_of_drawers_54",
+          "target_object": null,
+          "target_state": null,
+          "count": null
+        }
+      ],
+      "agent_secrets": {
+        "agent_0": [
+          "chest_of_drawers_54 behaves with inverse_state: the 'open' action produces the opposite effect.",
+          "To reveal contents, you must send the 'close' action."
+        ],
+        "agent_1": []
+      },
+      "agent_roles": {
+        "agent_0": "Informed explorer who discovered the furniture quirks.",
+        "agent_1": "Unaware helper who does not know about the strange mechanics."
+      },
+      "agent_actions": {
+        "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Communicate", "Search"],
+        "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
+      },
+      "success_condition": {
+        "description": "Kettle is placed on the table.",
+        "required_states": [],
+        "time_limit": null,
+        "all_agents_must_survive": true
+      },
+      "num_agents": 2,
+      "difficulty": 2
+    },
+    {
+      "task_id": "sample_locked_chest",
+      "title": "Locked Chest - Find the Key",
+      "story": "A mysterious chest sits in the corner of the room, firmly locked. The key must be hidden somewhere nearby...",
+      "public_goal": "Find the key hidden in the drawer and use it to unlock the chest.",
+      "public_context": "The chest is locked. Search the room for a key.",
+      "theory_of_mind_required": false,
+      "category": "puzzle",
+      "scene_id": "sample_scene",
+      "episode_id": "0",
+      "active_mechanics": [],
+      "mechanic_bindings": [],
+      "agent_secrets": {
+        "agent_0": ["The key is hidden in the drawer."],
+        "agent_1": []
+      },
+      "agent_roles": {
+        "agent_0": "Explorer",
+        "agent_1": "Helper"
+      },
+      "agent_actions": {
+        "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Search", "Communicate"],
+        "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
+      },
+      "success_condition": {
+        "description": "Chest is unlocked.",
+        "required_states": [],
+        "time_limit": null,
+        "all_agents_must_survive": true
+      },
+      "num_agents": 2,
+      "difficulty": 1
+    }
+  ]
+}

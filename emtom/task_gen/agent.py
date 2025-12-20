@@ -110,17 +110,30 @@ class TaskGeneratorAgent:
             self.task_file.unlink()
             self._log(f"Cleaned up previous {self.task_file}")
 
+        # Load scenario inspirations for creative story ideas
+        from emtom.task_gen.task_generator import load_scenario_inspirations
+        scenarios = load_scenario_inspirations(max_scenarios=5)
+        scenario_text = ""
+        if scenarios:
+            scenario_text = "\n\n## Escape Room Inspirations (use these themes for your story!)\n"
+            for i, s in enumerate(scenarios, 1):
+                # Truncate long scenarios
+                truncated = s[:500] + "..." if len(s) > 500 else s
+                scenario_text += f"\n--- Theme {i} ---\n{truncated}\n"
+
         # Initialize conversation
         self.messages = [
             {"role": "system", "content": SYSTEM_PROMPT}
         ]
 
-        # Initial user message
+        # Initial user message with scenario inspirations
         user_msg = f"""Create {num_tasks_target} quality benchmark tasks.
 
 Available trajectories are in: {self.trajectory_dir}
 Template is at: {self.template_file}
 Edit this file for testing: {self.task_file}
+{scenario_text}
+IMPORTANT: Use the escape room themes above to inspire your story field! The story should be atmospheric and reference REAL object IDs from the trajectory's scene_inventory.
 
 Start by exploring the available trajectories with bash."""
 
@@ -428,7 +441,7 @@ Start by exploring the available trajectories with bash."""
     def _validate_task_structure(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """Validate task JSON structure without running benchmark."""
         required_fields = [
-            "task_id", "title", "public_goal", "category",
+            "task_id", "title", "story", "episode_id", "public_goal", "category",
             "mechanic_bindings", "agent_secrets", "agent_roles",
             "agent_actions", "success_condition"
         ]
@@ -439,6 +452,27 @@ Start by exploring the available trajectories with bash."""
                 "valid": False,
                 "error": f"Missing required fields: {missing}",
                 "summary": "Task validation failed"
+            }
+
+        # Check story is not empty
+        if not task_data.get("story") or len(task_data.get("story", "")) < 20:
+            return {
+                "valid": False,
+                "error": "story field must be at least 20 characters of atmospheric narrative",
+                "summary": "Task validation failed"
+            }
+
+        # Check story is grounded in real objects (must contain at least one object ID pattern)
+        story = task_data.get("story", "")
+        # Look for patterns like "table_59", "chest_of_drawers_54", "kettle_3"
+        import re
+        object_pattern = r'\b[a-z_]+_\d+\b'
+        object_refs = re.findall(object_pattern, story)
+        if not object_refs:
+            return {
+                "valid": False,
+                "error": "story must reference real object IDs from scene_inventory (e.g., 'chest_of_drawers_54', 'table_59'). Do not use generic descriptions like 'a drawer' or 'the table'.",
+                "summary": "Task validation failed - story not grounded"
             }
 
         # Check mechanic_bindings structure

@@ -172,8 +172,12 @@ class GeneratedTask:
 
     # SCENE & ENVIRONMENT
     scene_id: str
+    episode_id: str
     active_mechanics: List[str]
     mechanic_bindings: List[MechanicBinding]
+
+    # NARRATIVE
+    story: Optional[str]  # Atmospheric narrative setting up the puzzle
 
     # PUBLIC (shared, no secrets)
     public_goal: str
@@ -234,8 +238,10 @@ class GeneratedTask:
             title=data["title"],
             category=TaskCategory(data["category"]),
             scene_id=data.get("scene_id", "unknown"),
+            episode_id=data.get("episode_id", "unknown"),
             active_mechanics=data.get("active_mechanics", []),
             mechanic_bindings=bindings,
+            story=data.get("story"),
             public_goal=data["public_goal"],
             public_context=data.get("public_context"),
             agent_secrets=data.get("agent_secrets", {}),
@@ -252,80 +258,109 @@ class GeneratedTask:
         )
 
 
-TASK_GENERATION_PROMPT = '''You are a task designer for a multi-agent collaboration benchmark in a simulated home environment.
+TASK_GENERATION_PROMPT = '''You are a creative puzzle designer for an escape-room style multi-agent collaboration game.
 
-## CRITICAL CONSTRAINT - READ CAREFULLY
-You MUST ONLY use objects and furniture that exist in the scene inventory below.
-DO NOT invent or hallucinate objects like "device", "key", "battery", "PIN", "box", etc.
-The task must be completable using ONLY the real objects and furniture listed.
+## YOUR MISSION
+Create an engaging, atmospheric MULTI-STEP puzzle scenario inspired by the escape room themes below.
+The puzzle should feel like a mystery to solve with 3-5 steps of progression, not a single action.
 
-## Scene Inventory (ONLY use these)
+## Creative Inspiration (IMPORTANT - base your scenario on these themes!)
+{scenario_inspirations}
+
+## Scene Inventory (you MUST only use these objects)
 Rooms: {rooms}
 Furniture (can navigate to, some can be opened): {furniture}
 Objects (can be picked up, hidden, inspected): {objects}
 Articulated Furniture (can be opened/closed): {articulated}
 
-## Surprises Discovered During Exploration
+## Discovered Mechanics (hidden connections between objects)
 {surprises}
 
-## Creative Inspiration (from escape room / mystery game scenarios)
-Use these scenario themes as INSPIRATION for the TYPE of puzzle or challenge to create.
-Adapt the themes to work with the ACTUAL objects in the scene inventory above.
-{scenario_inspirations}
+## CRITICAL CONSTRAINTS
+- ONLY use objects/furniture from the Scene Inventory above
+- DO NOT invent objects like "device", "key", "battery", "PIN", "box"
+- Adapt the escape room themes to work with the REAL objects listed
+- Create MULTI-STEP puzzles (3-5 steps) where each step unlocks the next
 
-## Task Requirements
-The TYPE of task generated is based on user input:
-- If user selects 1: Generate Theory of Mind tasks
-- If user selects 2: Generate Regular tasks
+## MULTI-STEP PUZZLE DESIGN
+Design puzzles where progress is GATED by previous steps:
+- Step 1: Search a drawer to find a key
+- Step 2: Use key to unlock a cabinet
+- Step 3: Search the cabinet to find another key
+- Step 4: Use that key to unlock a chest
+- Step 5: Retrieve the goal item from the chest
 
-Selected task type: {task_type}
+Use these mechanics to create chains:
+- "hidden_items": Items hidden inside furniture (found via Search action)
+- "is_locked": Locked containers (use Use[key, container] to unlock)
+- Locked containers block Search until unlocked
+- Keys are consumed when used
 
-### THEORY OF MIND TASKS (option 1):
-- Design a task for {num_agents} agents working together
-- Use ONLY objects/furniture from the Scene Inventory above
-- The task should leverage the discovered mechanics (surprising behaviors)
-- agent_0 knows about the mechanics (gets secrets), agent_1 does not (theory of mind)
-- Agents must communicate and coordinate to succeed
+## Task Type: {task_type}
 
-### REGULAR TASKS (option 2):
-- Design simple, everyday household tasks for {num_agents} agent(s)
-- Use ONLY objects/furniture from the Scene Inventory above
-- Tasks should be straightforward actions like moving objects, opening/closing furniture
+### THEORY OF MIND TASKS:
+- {num_agents} agents work together on a puzzle
+- agent_0 has discovered the hidden mechanics through exploration
+- agent_1 does NOT know about the mechanics (creates theory of mind challenge)
+- Agents must communicate and reason about each other's knowledge
+- The narrative should make the asymmetric knowledge feel natural
+
+### REGULAR TASKS:
+- Simple collaborative tasks for {num_agents} agent(s)
+- Use scene objects for everyday actions
 
 ## Output Format
-Respond with a JSON object:
+Create an immersive MULTI-STEP puzzle scenario. The "story" field is REQUIRED.
+
 {{
-    "title": "Short descriptive title (max 10 words)",
-    "category": "knowledge_asymmetry",
-    "public_goal": "Simple imperative goal shared by all agents (e.g., 'Place phone_stand_2 on table_10')",
-    "public_context": "Optional shared context without secrets (e.g., 'Some items may be hidden in furniture')",
+    "title": "Evocative puzzle title (e.g., 'The Mirrored Cabinet', 'Echoes in the Kitchen')",
+    "story": "2-3 sentences of atmospheric narrative setting up the puzzle. Draw from the escape room inspiration above.",
+    "public_goal": "Clear objective using REAL object names (e.g., 'Find the hidden artifact and place it on the table')",
+    "public_context": "What both agents know about the situation (no secrets here)",
     "initial_world_state": {{
         "objects": ["REAL objects from inventory"],
-        "agent_positions": {{"agent_0": "REAL_room_name", "agent_1": "REAL_room_name"}}
+        "agent_positions": {{"agent_0": "REAL_room", "agent_1": "REAL_room"}},
+        "hidden_items": {{
+            "drawer_1": ["small_key_1"],
+            "cabinet_2": ["small_key_2"],
+            "chest_3": ["goal_item"]
+        }},
+        "locked_containers": {{
+            "cabinet_2": "small_key",
+            "chest_3": "small_key"
+        }}
     }},
     "agent_secrets": {{
-        "agent_0": ["Secret knowledge only agent_0 knows (e.g., 'Opening fridge_58 also opens chest_of_drawers_52')"],
+        "agent_0": ["The hidden knowledge agent_0 has discovered (mechanics, connections, where keys are hidden)"],
         "agent_1": []
     }},
     "agent_roles": {{
-        "agent_0": "Expert who discovered the mechanics",
-        "agent_1": "Novice who must learn through collaboration"
+        "agent_0": "The one who knows the house's secrets",
+        "agent_1": "The one who must follow strange instructions on faith"
     }},
     "agent_actions": {{
-        "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Communicate"],
+        "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Search", "Communicate"],
         "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
     }},
+    "subtasks": [
+        "Step 1: Search drawer_1 to find small_key_1",
+        "Step 2: Use small_key_1 to unlock cabinet_2",
+        "Step 3: Search cabinet_2 to find small_key_2",
+        "Step 4: Use small_key_2 to unlock chest_3",
+        "Step 5: Retrieve goal_item from chest_3 and place on table"
+    ],
     "success_condition": {{
-        "description": "What success looks like using REAL object names",
-        "required_states": [{{"entity": "REAL_object_name", "property": "location", "value": "REAL_target"}}]
+        "description": "What success looks like",
+        "required_states": [{{"entity": "REAL_object", "property": "location", "value": "REAL_target"}}]
     }},
     "failure_conditions": [
         {{"description": "What causes failure"}}
     ],
-    "difficulty": 3
+    "difficulty": 4,
+    "category": "knowledge_asymmetry"
 }}
 
-Generate the task JSON (remember: ONLY use objects from the Scene Inventory):'''
+Generate an engaging MULTI-STEP puzzle scenario with 3-5 chained steps (remember: use the escape room inspiration, but ONLY reference real objects from the inventory):'''
 
 
 class TaskGenerator:
@@ -642,8 +677,10 @@ class TaskGenerator:
             title=data.get("title", "Untitled Task"),
             category=TaskCategory(data.get("category", "coordination")),
             scene_id=scene_id,
+            episode_id=episode_id,
             active_mechanics=mechanics or [],
             mechanic_bindings=mechanic_bindings or [],  # From trajectory exploration
+            story=data.get("story"),
             public_goal=data.get("public_goal", ""),
             public_context=data.get("public_context"),
             agent_secrets=data.get("agent_secrets", {}),
