@@ -214,6 +214,7 @@ class HabitatExplorer:
         # Video recording
         self._dvu = None
         self._fpv_recorder = None
+        self._per_agent_recorder = None  # Per-agent third-person recorder
         self._setup_video_recording()
 
         # State
@@ -248,10 +249,12 @@ class HabitatExplorer:
             from habitat_llm.examples.example_utils import (
                 DebugVideoUtil,
                 FirstPersonVideoRecorder,
+                PerAgentThirdPersonRecorder,
             )
 
             os.makedirs(self.config.log_path, exist_ok=True)
 
+            # Legacy combined view recorder (kept for backwards compatibility)
             self._dvu = DebugVideoUtil(
                 self.env,
                 self.config.log_path,
@@ -261,7 +264,14 @@ class HabitatExplorer:
             # Override num_agents to match our exploration config
             # This ensures all agents' views are included in the video
             self._dvu.num_agents = len(self.config.agent_ids)
-            print(f"[HabitatExplorer] Video recording initialized for {self._dvu.num_agents} agents")
+
+            # NEW: Per-agent third-person recorder for separate videos + stitching
+            self._per_agent_recorder = PerAgentThirdPersonRecorder(
+                output_dir=self.config.log_path,
+                agent_ids=self.config.agent_ids,
+                fps=self.config.video_fps,
+            )
+            print(f"[HabitatExplorer] Per-agent video recording initialized for {len(self.config.agent_ids)} agents")
 
             if self.config.save_fpv:
                 try:
@@ -309,6 +319,8 @@ class HabitatExplorer:
             self._dvu.frames.clear()
         if self._fpv_recorder:
             self._fpv_recorder._frames = {}
+        if self._per_agent_recorder:
+            self._per_agent_recorder.clear()
 
         # Log mechanic bindings
         self._log_mechanic_bindings()
@@ -323,11 +335,13 @@ class HabitatExplorer:
         print(f"[HabitatExplorer] Initial observation RGB keys: {rgb_keys}")
         print(f"[HabitatExplorer] DebugVideoUtil num_agents: {self._dvu.num_agents if self._dvu else 'N/A'}")
 
-        initial_recorded = self._record_frame(obs, {})
+        # Record initial frame for all agents
+        for init_agent_id in self.config.agent_ids:
+            initial_recorded = self._record_frame(obs, {}, current_agent_id=init_agent_id)
         if not initial_recorded:
             print(f"[HabitatExplorer] WARNING: Initial frame recording failed!")
         else:
-            print(f"[HabitatExplorer] Initial frame recorded successfully")
+            print(f"[HabitatExplorer] Initial frame recorded successfully for all agents")
 
         n_agents = len(self.config.agent_ids)
         total_steps = n_agents * self.config.max_steps
@@ -578,7 +592,11 @@ class HabitatExplorer:
             rgb_keys = [k for k in obs.keys() if 'rgb' in k.lower()] if obs else []
             print(f"[HabitatExplorer] Step {self.step_count + 1} observation RGB keys: {rgb_keys}")
 
-        frame_recorded = self._record_frame(obs, {agent_uid_int: (action_choice.action, action_choice.target or "")})
+        frame_recorded = self._record_frame(
+            obs,
+            {agent_uid_int: (action_choice.action, action_choice.target or "")},
+            current_agent_id=agent_id,
+        )
 
         # If frame recording failed, try with agent 0's action format as fallback
         if not frame_recorded:
@@ -586,7 +604,11 @@ class HabitatExplorer:
             try:
                 # Try recording with empty actions (just capture the scene)
                 obs = self.env.get_observations()
-                frame_recorded = self._record_frame(obs, {0: (action_choice.action, action_choice.target or "")})
+                frame_recorded = self._record_frame(
+                    obs,
+                    {0: (action_choice.action, action_choice.target or "")},
+                    current_agent_id=agent_id,
+                )
                 if not frame_recorded:
                     print(f"[HabitatExplorer] ERROR: Frame recording failed with fallback")
                     if obs:
@@ -724,12 +746,14 @@ class HabitatExplorer:
                     step_surprises.append(surprise_record)
                     self.surprise_moments.append(surprise_record)
 
-        # Record frame
+        # Record frame for each agent (for per-agent video recording)
         obs = self.env.get_observations()
         actions_for_video = {}
         for i, (aid, ac) in enumerate(agent_actions.items()):
             actions_for_video[i] = (ac.action, ac.target or "")
-        self._record_frame(obs, actions_for_video)
+        # Record for each agent separately for per-agent videos
+        for aid in agent_actions.keys():
+            self._record_frame(obs, actions_for_video, current_agent_id=aid)
 
         # Get current inventory for logging
         state = self.game_manager.get_state()
@@ -780,14 +804,19 @@ class HabitatExplorer:
         Uses per-agent world adapters to ensure each agent gets their own
         perspective of the world (partial observability).
 
-        IMPORTANT: Lists are shuffled to encourage different exploration paths
-        each time. This prevents the LLM from always picking the first item.
+        IMPORTANT: Lists are shuffled using agent-specific random seeds to ensure
+        each agent sees a DIFFERENT ordering of items. This prevents all agents
+        from picking the same "first" item and encourages independent exploration.
         """
         lines = []
 
         # Get agent-specific world adapter for partial observability
         agent_uid = int(agent_id.split("_")[-1]) if "_" in agent_id else 0
         adapter = self.world_adapters.get(agent_uid, self.world_adapter)
+
+        # Create agent-specific random generator to ensure different shuffles per agent
+        # The seed combines agent_uid with step_count so ordering changes over time
+        agent_random = random.Random(agent_uid * 1000 + self.step_count + hash(agent_id) % 1000)
 
         location = adapter.get_agent_location(agent_id)
         if location:
@@ -810,17 +839,17 @@ class HabitatExplorer:
             virtual_objects.append({"name": obj_name, "location": obj_location})
             objects.append({"name": obj_name, "location": obj_location})
 
-        # Shuffle furniture to encourage different exploration order each time
+        # Shuffle furniture using AGENT-SPECIFIC random to ensure different orderings
         if furniture:
             furniture_shuffled = furniture.copy()
-            random.shuffle(furniture_shuffled)
+            agent_random.shuffle(furniture_shuffled)
             furniture_names = [f["name"] for f in furniture_shuffled[:10]]
             lines.append(f"Furniture: {', '.join(furniture_names)}")
 
-        # Shuffle objects to encourage different exploration order each time
+        # Shuffle objects using AGENT-SPECIFIC random to ensure different orderings
         if objects:
             objects_shuffled = objects.copy()
-            random.shuffle(objects_shuffled)
+            agent_random.shuffle(objects_shuffled)
             # Show objects with their locations for spawned items
             object_descriptions = []
             for o in objects_shuffled[:10]:
@@ -835,11 +864,11 @@ class HabitatExplorer:
         # Note: virtual objects (like the key) are already included in the objects list above
         # Don't highlight them specially - let the agent discover them naturally through exploration
 
-        # Shuffle rooms to encourage different exploration order each time
+        # Shuffle rooms using AGENT-SPECIFIC random to ensure different orderings
         rooms = adapter.get_room_ids()
         if rooms:
             rooms_shuffled = rooms.copy()
-            random.shuffle(rooms_shuffled)
+            agent_random.shuffle(rooms_shuffled)
             lines.append(f"Rooms you can go to: {', '.join(rooms_shuffled)}")
 
         # Show agent inventory
@@ -859,14 +888,18 @@ class HabitatExplorer:
     def _get_available_actions(self, agent_id: str) -> List[Dict[str, Any]]:
         """Get available actions based on Habitat environment.
 
-        IMPORTANT: Targets are shuffled to encourage different exploration paths
-        each time. This prevents the LLM from always picking the first item.
+        IMPORTANT: Targets are shuffled using agent-specific random to ensure
+        each agent sees DIFFERENT action orderings. This prevents all agents
+        from converging on the same targets.
         """
         actions = []
 
         # Get agent-specific world adapter
         agent_uid = int(agent_id.split("_")[-1]) if "_" in agent_id else 0
         adapter = self.world_adapters.get(agent_uid, self.world_adapter)
+
+        # Create agent-specific random generator for consistent but different shuffles
+        agent_random = random.Random(agent_uid * 1000 + self.step_count + hash(agent_id) % 1000)
 
         rooms = adapter.get_room_ids()
         entities = adapter.get_interactable_entities()
@@ -891,21 +924,21 @@ class HabitatExplorer:
         articulated = [f for f in furniture if f.get("is_articulated")]
         objects = [e for e in entities if e["type"] == "object"]
 
-        # Shuffle all lists to encourage variety
+        # Shuffle all lists using AGENT-SPECIFIC random for different orderings per agent
         rooms_shuffled = rooms.copy()
-        random.shuffle(rooms_shuffled)
+        agent_random.shuffle(rooms_shuffled)
         furniture_shuffled = furniture.copy()
-        random.shuffle(furniture_shuffled)
+        agent_random.shuffle(furniture_shuffled)
         articulated_shuffled = articulated.copy()
-        random.shuffle(articulated_shuffled)
+        agent_random.shuffle(articulated_shuffled)
         objects_shuffled = objects.copy()
-        random.shuffle(objects_shuffled)
+        agent_random.shuffle(objects_shuffled)
         entities_shuffled = entities.copy()
-        random.shuffle(entities_shuffled)
+        agent_random.shuffle(entities_shuffled)
 
         # Navigation
         nav_targets = rooms_shuffled[:5] + [f["name"] for f in furniture_shuffled[:5]]
-        random.shuffle(nav_targets)
+        agent_random.shuffle(nav_targets)
         if nav_targets:
             actions.append({
                 "name": "Navigate",
@@ -1004,7 +1037,7 @@ class HabitatExplorer:
                                     break
                                 raise
                             parsed_obs = self.env.parse_observations(raw_obs)
-                            self._record_frame(parsed_obs, {agent_uid: (action_name, target)})
+                            self._record_frame(parsed_obs, {agent_uid: (action_name, target)}, current_agent_id=agent_id)
                             skill_steps += 1
 
                             if done:
@@ -1027,16 +1060,16 @@ class HabitatExplorer:
                         # Record a few extra frames at the blocked door for visual clarity
                         for _ in range(5):
                             obs = self.env.get_observations()
-                            self._record_frame(obs, {agent_uid: (action_name, target)})
+                            self._record_frame(obs, {agent_uid: (action_name, target)}, current_agent_id=agent_id)
                 except Exception as e:
                     # If navigation fails, still record a frame
                     print(f"[HabitatExplorer] Navigation to blocked target failed: {e}")
                     obs = self.env.get_observations()
-                    self._record_frame(obs, {agent_uid: (action_name, target)})
+                    self._record_frame(obs, {agent_uid: (action_name, target)}, current_agent_id=agent_id)
             else:
                 # No navigation available, still record a frame
                 obs = self.env.get_observations()
-                self._record_frame(obs, {agent_uid: (action_name, target)})
+                self._record_frame(obs, {agent_uid: (action_name, target)}, current_agent_id=agent_id)
 
             return {
                 "success": False,
@@ -1057,7 +1090,7 @@ class HabitatExplorer:
             state, custom_result = self.game_manager.apply_action(action_name, agent_id, target)
             # Record frame for custom action
             obs = self.env.get_observations()
-            self._record_frame(obs, {agent_uid: (action_name, target)})
+            self._record_frame(obs, {agent_uid: (action_name, target)}, current_agent_id=agent_id)
             return {
                 "success": custom_result.success,
                 "observation": mechanic_observation or custom_result.observation,
@@ -1101,7 +1134,7 @@ class HabitatExplorer:
                     if obj_id in state.agent_inventory.get(agent_id, []):
                         # Record frame even for already-picked-up items
                         obs = self.env.get_observations()
-                        self._record_frame(obs, {agent_uid: ("Pick", actual_target)})
+                        self._record_frame(obs, {agent_uid: ("Pick", actual_target)}, current_agent_id=agent_id)
                         return {
                             "success": False,
                             "observation": f"You already have the {obj_name}.",
@@ -1129,7 +1162,7 @@ class HabitatExplorer:
                                             break
                                         raise
                                     parsed_obs = self.env.parse_observations(raw_obs)
-                                    self._record_frame(parsed_obs, {agent_uid: ("Pick", actual_target)})
+                                    self._record_frame(parsed_obs, {agent_uid: ("Pick", actual_target)}, current_agent_id=agent_id)
                                     skill_steps += 1
 
                                     if done:
@@ -1152,12 +1185,12 @@ class HabitatExplorer:
                                 # Record a few extra frames at the pickup location
                                 for _ in range(3):
                                     obs = self.env.get_observations()
-                                    self._record_frame(obs, {agent_uid: ("Pick", actual_target)})
+                                    self._record_frame(obs, {agent_uid: ("Pick", actual_target)}, current_agent_id=agent_id)
                         except Exception as e:
                             print(f"[HabitatExplorer] Navigation to key location failed: {e}")
                             # Still record a frame
                             obs = self.env.get_observations()
-                            self._record_frame(obs, {agent_uid: ("Pick", actual_target)})
+                            self._record_frame(obs, {agent_uid: ("Pick", actual_target)}, current_agent_id=agent_id)
 
                     # Add to inventory
                     import copy
@@ -1172,7 +1205,7 @@ class HabitatExplorer:
 
                     # Record frame after successful pickup
                     obs = self.env.get_observations()
-                    self._record_frame(obs, {agent_uid: ("Pick", actual_target)})
+                    self._record_frame(obs, {agent_uid: ("Pick", actual_target)}, current_agent_id=agent_id)
 
                     return {
                         "success": True,
@@ -1183,7 +1216,7 @@ class HabitatExplorer:
             if "key" in actual_target.lower():
                 # Record frame for failed key pickup
                 obs = self.env.get_observations()
-                self._record_frame(obs, {agent_uid: ("Pick", actual_target)})
+                self._record_frame(obs, {agent_uid: ("Pick", actual_target)}, current_agent_id=agent_id)
 
                 # List available keys
                 available_keys = [
@@ -1207,7 +1240,7 @@ class HabitatExplorer:
         if agent is None:
             # Still record a frame even if no agent
             obs = self.env.get_observations()
-            self._record_frame(obs, {agent_uid: (action_name, target)})
+            self._record_frame(obs, {agent_uid: (action_name, target)}, current_agent_id=agent_id)
             return {
                 "success": False,
                 "observation": f"No agent configured for {agent_id}. Cannot execute {action_name}[{target}].",
@@ -1216,7 +1249,7 @@ class HabitatExplorer:
         if actual_action and actual_action not in agent.tools:
             # Still record a frame even if tool not available
             obs = self.env.get_observations()
-            self._record_frame(obs, {agent_uid: (action_name, target)})
+            self._record_frame(obs, {agent_uid: (action_name, target)}, current_agent_id=agent_id)
             return {
                 "success": False,
                 "observation": f"Tool '{actual_action}' not available for {agent_id}.",
@@ -1231,7 +1264,7 @@ class HabitatExplorer:
         if low_level_action is None:
             obs_text = response
             # Record frame even when no low-level action
-            self._record_frame(obs, {agent_uid: (actual_action, actual_target)})
+            self._record_frame(obs, {agent_uid: (actual_action, actual_target)}, current_agent_id=agent_id)
         else:
             # Execute motor skill
             skill_steps = 0
@@ -1248,7 +1281,7 @@ class HabitatExplorer:
                         break
                     raise
                 parsed_obs = self.env.parse_observations(raw_obs)
-                self._record_frame(parsed_obs, {agent_uid: (actual_action, actual_target)})
+                self._record_frame(parsed_obs, {agent_uid: (actual_action, actual_target)}, current_agent_id=agent_id)
                 skill_steps += 1
 
                 # Check if episode ended
@@ -1302,8 +1335,18 @@ class HabitatExplorer:
             "surprise": surprise_trigger,
         }
 
-    def _record_frame(self, obs: Dict[str, Any], actions: Dict[int, Any]) -> bool:
+    def _record_frame(
+        self,
+        obs: Dict[str, Any],
+        actions: Dict[int, Any],
+        current_agent_id: Optional[str] = None,
+    ) -> bool:
         """Record a video frame with step counter and inventory overlays.
+
+        Args:
+            obs: Observations from the environment
+            actions: Dict mapping agent UID to (action_name, target) tuple
+            current_agent_id: The agent currently taking action (for per-agent recording)
 
         Returns:
             True if frame was recorded successfully, False otherwise.
@@ -1312,6 +1355,51 @@ class HabitatExplorer:
 
         recorded = False
 
+        # Get step info for overlays
+        n_agents = len(self.config.agent_ids)
+        total_steps = n_agents * self.config.max_steps
+        state = self.game_manager.get_state()
+        world_objects = getattr(state, 'world_objects', {})
+
+        # NEW: Record to per-agent third-person recorder
+        if self._per_agent_recorder and current_agent_id:
+            try:
+                # Get action for this agent
+                agent_uid = int(current_agent_id.split("_")[-1]) if "_" in current_agent_id else 0
+                action = actions.get(agent_uid)
+
+                # Get inventory for this agent
+                agent_inv = state.agent_inventory.get(current_agent_id, [])
+                inv_names = []
+                for item_id in agent_inv:
+                    if item_id in world_objects:
+                        inv_names.append(world_objects[item_id].get("name", item_id))
+                    else:
+                        inv_names.append(item_id)
+
+                step_info = {
+                    "step": self.step_count + 1,
+                    "total_steps": total_steps,
+                    "inventory": inv_names,
+                }
+
+                per_agent_recorded = self._per_agent_recorder.record_frame(
+                    agent_id=current_agent_id,
+                    observations=obs,
+                    action=action,
+                    step_info=step_info,
+                )
+                if per_agent_recorded:
+                    recorded = True
+
+            except Exception as e:
+                if not hasattr(self, '_per_agent_error_count'):
+                    self._per_agent_error_count = 0
+                self._per_agent_error_count += 1
+                if self._per_agent_error_count <= 5:
+                    print(f"[HabitatExplorer] Per-agent recording error #{self._per_agent_error_count}: {e}")
+
+        # Legacy: Also record to combined view (DebugVideoUtil) for backwards compatibility
         if self._dvu:
             try:
                 # Track frame count before and after
@@ -1330,8 +1418,6 @@ class HabitatExplorer:
                     h, w = frame.shape[:2]
 
                     # Step counter (top right) - show global step / total steps
-                    n_agents = len(self.config.agent_ids)
-                    total_steps = n_agents * self.config.max_steps
                     step_text = f"Step: {self.step_count + 1}/{total_steps}"
                     text_size = cv2.getTextSize(step_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
                     x_pos = w - text_size[0] - 20
@@ -1346,9 +1432,6 @@ class HabitatExplorer:
                     )
 
                     # Inventory (bottom right)
-                    state = self.game_manager.get_state()
-                    world_objects = getattr(state, 'world_objects', {})
-
                     # Collect inventory items for all agents
                     inv_items = []
                     for agent_id in self.config.agent_ids:
@@ -1430,26 +1513,59 @@ class HabitatExplorer:
             print(f"  - WARNING: {self._frame_error_count} frame recording errors occurred!")
         if hasattr(self, '_frame_skip_count') and self._frame_skip_count > 0:
             print(f"  - WARNING: {self._frame_skip_count} frames were skipped!")
+        if hasattr(self, '_per_agent_error_count') and self._per_agent_error_count > 0:
+            print(f"  - WARNING: {self._per_agent_error_count} per-agent recording errors occurred!")
 
-        if self._dvu:
-            frame_count = len(self._dvu.frames) if self._dvu.frames else 0
-            print(f"  - Third-person frames recorded: {frame_count}")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-            if frame_count > 0:
+        # NEW: Save per-agent third-person videos and stitch them together
+        if self._per_agent_recorder:
+            frame_counts = self._per_agent_recorder.get_frame_counts()
+            total_per_agent_frames = sum(frame_counts.values())
+            print(f"  - Per-agent third-person frames: {frame_counts}")
+
+            if total_per_agent_frames > 0:
                 try:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    # Pass fps to ensure correct video timing
-                    self._dvu._make_video(play=False, postfix=f"exploration_{timestamp}", fps=fps)
-                    # Video is saved to {output_dir}/videos/video-exploration_{timestamp}-{ms}.mp4
-                    video_paths["third_person"] = f"{self.config.log_path}/videos/"
-                    duration = frame_count / fps
-                    print(f"  - Video duration: {duration:.1f}s @ {fps} FPS")
+                    # Save individual videos for each agent
+                    individual_paths = self._per_agent_recorder.save_individual_videos(postfix=timestamp)
+                    for agent_id, path in individual_paths.items():
+                        video_paths[f"third_person_{agent_id}"] = path
+
+                    # Stitch videos together in round-robin order (agent 0 -> agent 1 -> agent 2 -> agent 0...)
+                    stitched_path = self._per_agent_recorder.stitch_videos_round_robin(postfix=timestamp)
+                    if stitched_path:
+                        video_paths["third_person_stitched"] = stitched_path
+                        print(f"  - Stitched video (round-robin): {stitched_path}")
+
+                        # Calculate total duration
+                        total_stitched_frames = sum(frame_counts.values())
+                        duration = total_stitched_frames / fps
+                        print(f"  - Stitched video duration: {duration:.1f}s @ {fps} FPS")
+
                 except Exception as e:
-                    print(f"[HabitatExplorer] Failed to save third-person video: {e}")
+                    print(f"[HabitatExplorer] Failed to save per-agent videos: {e}")
                     import traceback
                     traceback.print_exc()
             else:
-                print(f"  - WARNING: No frames recorded for third-person video!")
+                print(f"  - WARNING: No frames recorded for per-agent videos!")
+
+        # Legacy: Also save combined view video (DebugVideoUtil) for backwards compatibility
+        if self._dvu:
+            frame_count = len(self._dvu.frames) if self._dvu.frames else 0
+            print(f"  - Legacy combined view frames: {frame_count}")
+
+            if frame_count > 0:
+                try:
+                    # Pass fps to ensure correct video timing
+                    self._dvu._make_video(play=False, postfix=f"exploration_{timestamp}", fps=fps)
+                    # Video is saved to {output_dir}/videos/video-exploration_{timestamp}-{ms}.mp4
+                    video_paths["third_person_combined"] = f"{self.config.log_path}/videos/"
+                    duration = frame_count / fps
+                    print(f"  - Legacy combined video duration: {duration:.1f}s @ {fps} FPS")
+                except Exception as e:
+                    print(f"[HabitatExplorer] Failed to save legacy third-person video: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         if self._fpv_recorder:
             fpv_frame_count = sum(len(frames) for frames in self._fpv_recorder._frames.values()) if self._fpv_recorder._frames else 0
@@ -1457,7 +1573,6 @@ class HabitatExplorer:
 
             if fpv_frame_count > 0:
                 try:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     fpv_paths = self._fpv_recorder.save(postfix=timestamp)
                     video_paths.update(fpv_paths)
                 except Exception as e:

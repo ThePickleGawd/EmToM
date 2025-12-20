@@ -225,8 +225,8 @@ class CuriosityModel:
                 "Tool descriptions not set. Call set_tool_descriptions() or pass tool_descriptions parameter."
             )
 
-        # Build task description from world state
-        task = self._build_task_description(world_description, exploration_history or [])
+        # Build task description from world state (with agent-specific exploration focus)
+        task = self._build_task_description(agent_id, world_description, exploration_history or [])
 
         # Build initial prompt if this is the first action for this agent
         if agent_id not in self.agent_prompts or not self.agent_prompts[agent_id]:
@@ -277,17 +277,35 @@ class CuriosityModel:
 
     def _build_task_description(
         self,
+        agent_id: str,
         world_description: str,
         exploration_history: List[Dict[str, Any]],
     ) -> str:
-        """Build a task description from current world state and story context."""
+        """Build a task description from current world state and story context.
+
+        IMPORTANT: Each agent gets a unique exploration directive to ensure
+        they explore different parts of the environment independently.
+        This prevents all agents from converging on the same objects.
+
+        Args:
+            agent_id: The agent identifier (e.g., "agent_0")
+            world_description: Text description of the world state
+            exploration_history: Recent actions for context
+
+        Returns:
+            Task description string for the LLM prompt
+        """
         parts = []
 
-        # Use story context if available, otherwise fall back to generic exploration
+        # Use story context if available, otherwise generate agent-specific directive
         if self._story_context:
             parts.append(self._story_context)
         else:
-            parts.append("Explore the house and discover interesting object behaviors.")
+            # Extract agent UID for assigning unique exploration focus
+            agent_uid = int(agent_id.split("_")[-1]) if "_" in agent_id else 0
+            # Generate unique exploration directive for each agent
+            exploration_directive = self._get_agent_exploration_directive(agent_uid, world_description)
+            parts.append(exploration_directive)
 
         parts.append(f"\nCurrent state: {world_description}")
 
@@ -304,6 +322,91 @@ class CuriosityModel:
                     parts.append(f"  - {action}: {obs_short}")
 
         return "\n".join(parts)
+
+    def _get_agent_exploration_directive(self, agent_uid: int, world_description: str) -> str:
+        """
+        Generate a unique exploration directive for each agent.
+
+        This is CRITICAL for ensuring agents explore independently rather than
+        converging on the same objects. Each agent gets:
+        1. Their actual spawn room location
+        2. Instructions to use random sampling for action selection
+        3. A unique exploration focus area
+
+        Args:
+            agent_uid: The agent's numeric ID (0, 1, 2, ...)
+            world_description: The world state description (to extract room/location info)
+
+        Returns:
+            A unique exploration directive string
+        """
+        # Extract current location from world description
+        current_room = "unknown"
+        if "You are in " in world_description:
+            # Extract room name from "You are in <room>."
+            start = world_description.find("You are in ") + len("You are in ")
+            end = world_description.find(".", start)
+            if end > start:
+                current_room = world_description[start:end].strip()
+
+        # Extract available rooms from world description
+        rooms = []
+        if "Rooms you can go to:" in world_description:
+            rooms_line = world_description.split("Rooms you can go to:")[1].split("\n")[0]
+            rooms = [r.strip() for r in rooms_line.split(",")]
+
+        # Extract furniture from world description for action targets
+        furniture = []
+        if "Furniture:" in world_description:
+            furniture_line = world_description.split("Furniture:")[1].split("\n")[0]
+            furniture = [f.strip() for f in furniture_line.split(",")]
+
+        # Define the available actions for random sampling
+        available_actions = [
+            "Navigate[<room or furniture>]",
+            "Open[<furniture>]",
+            "Close[<furniture>]",
+            "Explore[<room>]",
+            "Pick[<object>]",
+            "Place[<object>, <receptacle>]",
+            "FindObjectTool[<query>]",
+            "FindReceptacleTool[<query>]",
+            "FindRoomTool[<query>]",
+        ]
+
+        # Build the directive with spawn location and RNG instructions
+        directive = f"""You are Agent {agent_uid}. You have SPAWNED in: {current_room}.
+
+CRITICAL - RANDOM ACTION SELECTION:
+You MUST use random sampling (RNG) to select your actions. Do NOT always pick the "most logical" or "first" option.
+To decide what to do:
+1. Mentally list all valid actions: {', '.join(available_actions)}
+2. Randomly pick ONE action type (imagine rolling a dice)
+3. Randomly pick a target from the available options (imagine rolling another dice)
+4. Execute that randomly selected action
+
+Available action types to randomly sample from:
+- Navigate: Go to a room or furniture piece
+- Open/Close: Interact with openable furniture (cabinets, drawers, fridges, etc.)
+- Explore: Search a room thoroughly
+- Pick/Place: Pick up or put down objects
+- FindObjectTool/FindReceptacleTool/FindRoomTool: Search for objects
+
+Your current location: {current_room}
+Rooms you can randomly navigate to: {', '.join(rooms) if rooms else 'use FindRoomTool to discover'}
+Furniture you can randomly interact with: {', '.join(furniture[:8]) if furniture else 'use FindReceptacleTool to discover'}
+
+EXPLORATION GOAL: Discover interesting and unexpected object behaviors (surprises).
+When something unexpected happens, note it with "Surprise:" in your Thought.
+
+IMPORTANT RULES:
+- Use RNG mentally to pick actions - do NOT always choose the same things
+- Each turn, genuinely randomize your choice from valid options
+- Do NOT repeat the same action on the same target consecutively
+- Explore DIFFERENT areas (rooms) than your recent history shows
+- In every room that you are in, look around at object you think could result in generating a "suprise" """
+
+        return directive
 
     def _parse_response(self, response: str, agent_uid: str) -> ActionChoice:
         """
