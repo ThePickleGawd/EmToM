@@ -162,16 +162,17 @@ class UseAction(EMTOMAction):
     """
     Use an item or interact with an object.
 
-    This is the generic interaction action. What happens depends on the item's
-    defined behavior (to be configured separately).
+    Supports two formats:
+    - Use[item]: Use an item from inventory (generic interaction)
+    - Use[key, target]: Use a key to unlock a locked container
 
     Can be affected by mechanics (inverse_state, remote_control, etc.)
     """
 
     action_name = "Use"
     action_description = (
-        "Use[object]: Use an item or interact with an object. "
-        "The effect depends on what the item does. Example: Use[key_1]"
+        "Use[item] or Use[key, target]: Use an item or unlock something. "
+        "To unlock a locked container, use: Use[small_key_1, cabinet_42]"
     )
 
     @property
@@ -190,25 +191,153 @@ class UseAction(EMTOMAction):
                 observation="You need to specify what to use.",
             )
 
+        # Check for "key, target" format (unlock action)
+        if "," in target:
+            return self._handle_unlock(agent_id, target, world_state)
+
+        # Check if target is a key in inventory (might want to use on something)
+        if self._game_manager and self._game_manager.agent_has_item(agent_id, target):
+            item_def = self._game_manager.get_item_definition(target)
+            if item_def and "key" in item_def.item_id.lower():
+                return ActionResult(
+                    success=False,
+                    observation=f"To use {item_def.name} on something, specify the target: Use[{target}, <container>]",
+                )
+            # Generic item use
+            return ActionResult(
+                success=True,
+                observation=f"You use the {item_def.name if item_def else target}.",
+                effect=f"used={target}",
+            )
+
+        # Target is not in inventory - check if it's an entity in the world
         entities = world_state.get("entities", [])
         entity_names = [e.get("name", e.get("id")) for e in entities]
         if target not in entity_names:
             return ActionResult(
                 success=False,
-                observation=f"You don't see {target} here.",
+                observation=f"You don't have {target} and don't see it here.",
             )
 
-        # TODO: Look up item behavior definition and execute accordingly
-        observation = f"You use {target}."
-
+        # Generic world object interaction
         return ActionResult(
             success=True,
-            observation=observation,
+            observation=f"You interact with {target}.",
             effect=f"used={target}",
+        )
+
+    def _handle_unlock(
+        self,
+        agent_id: str,
+        target: str,
+        world_state: Dict[str, Any],
+    ) -> ActionResult:
+        """Handle Use[key, container] unlock action."""
+        parts = [p.strip() for p in target.split(",", 1)]
+        if len(parts) != 2:
+            return ActionResult(
+                success=False,
+                observation="Invalid format. Use: Use[key, target]",
+            )
+
+        key_id, container = parts
+
+        if not self._game_manager:
+            return ActionResult(
+                success=False,
+                observation="Cannot unlock: game manager not available.",
+            )
+
+        # Use the unlock helper
+        from emtom.actions.tool_wrapper import try_unlock_with_key
+        success, message = try_unlock_with_key(
+            self._game_manager, agent_id, key_id, container
+        )
+
+        return ActionResult(
+            success=success,
+            observation=message,
+            effect=f"unlock={container}" if success else None,
         )
 
     def get_available_targets(self, world_state: Dict[str, Any]) -> List[str]:
         targets = [e.get("name", e.get("id")) for e in world_state.get("entities", [])]
+        return targets[:10]
+
+
+@register_action("Search")
+class SearchAction(EMTOMAction):
+    """
+    Search a location or container for hidden items.
+
+    Unlike Shake (which may require physical interaction), Search is a careful
+    examination that can find hidden items within furniture or containers.
+
+    Adds found items to the agent's inventory.
+    """
+
+    action_name = "Search"
+    action_description = (
+        "Search[target]: Carefully search a location or container for hidden items. "
+        "May find items that aren't visible at first glance. Example: Search[cabinet_57]"
+    )
+
+    @property
+    def argument_types(self) -> List[str]:
+        return ["FURNITURE_INSTANCE", "OBJECT_INSTANCE"]
+
+    def execute(
+        self,
+        agent_id: str,
+        target: Optional[str],
+        world_state: Dict[str, Any],
+    ) -> ActionResult:
+        if not target:
+            return ActionResult(
+                success=False,
+                observation="You need to specify what to search.",
+            )
+
+        if not self._game_manager:
+            return ActionResult(
+                success=False,
+                observation="Cannot search: no game manager available.",
+            )
+
+        state = self._game_manager.get_state()
+        hidden = state.get_object_property(target, "hidden_inside")
+
+        if hidden:
+            # Grant item through inventory system
+            new_state, success, msg = self._game_manager.grant_item(
+                agent_id, hidden, source=f"Search:{target}"
+            )
+            # Clear the hidden item from container
+            new_state = new_state.set_object_property(target, "hidden_inside", None)
+            self._game_manager.set_state(new_state)
+
+            # Get item name for observation
+            item_def = self._game_manager.get_item_definition(hidden)
+            item_name = item_def.name if item_def else hidden
+
+            return ActionResult(
+                success=True,
+                observation=f"You search {target} carefully. You find a {item_name}! {msg}",
+                effect=f"found_item={hidden}",
+                spawned_items=[hidden],
+            )
+
+        return ActionResult(
+            success=True,
+            observation=f"You search {target} carefully but find nothing hidden.",
+        )
+
+    def get_available_targets(self, world_state: Dict[str, Any]) -> List[str]:
+        targets = [
+            e.get("name", e.get("id"))
+            for e in world_state.get("entities", [])
+            if e.get("type") in ("furniture", "FURNITURE") or "cabinet" in e.get("name", "").lower()
+        ]
         return targets[:10]
 
 
@@ -274,6 +403,127 @@ class InspectAction(EMTOMAction):
     def get_available_targets(self, world_state: Dict[str, Any]) -> List[str]:
         targets = [e.get("name", e.get("id")) for e in world_state.get("entities", [])]
         return targets[:10]
+
+
+class DynamicItemTool(EMTOMAction):
+    """
+    A tool dynamically created from an inventory item.
+
+    TOOL-type items grant new actions when obtained. This class creates
+    those actions based on the item definition.
+
+    Not registered in the action registry since these are created dynamically.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        item_id: str,
+        argument_types: Optional[List[str]] = None,
+        consumable: bool = False,
+        agent_uid: int = 0,
+    ):
+        self.action_name = name
+        self.action_description = description
+        self._item_id = item_id
+        self._argument_types = argument_types or ["OBJECT_INSTANCE", "FURNITURE_INSTANCE"]
+        self._consumable = consumable
+        super().__init__(agent_uid)
+
+    @property
+    def argument_types(self) -> List[str]:
+        return self._argument_types
+
+    def execute(
+        self,
+        agent_id: str,
+        target: Optional[str],
+        world_state: Dict[str, Any],
+    ) -> ActionResult:
+        if not self._game_manager:
+            return ActionResult(
+                success=False,
+                observation="Tool not properly configured.",
+            )
+
+        # Check agent still has the item
+        if not self._game_manager.agent_has_item(agent_id, self._item_id):
+            item_def = self._game_manager.get_item_definition(self._item_id)
+            item_name = item_def.name if item_def else self._item_id
+            return ActionResult(
+                success=False,
+                observation=f"You no longer have the {item_name}.",
+            )
+
+        # Execute the tool's effect
+        result = self._execute_tool_effect(agent_id, target, world_state)
+
+        # If consumable and success, decrement uses
+        if self._consumable and result.success:
+            self._decrement_uses(agent_id)
+
+        return result
+
+    def _execute_tool_effect(
+        self,
+        agent_id: str,
+        target: Optional[str],
+        world_state: Dict[str, Any],
+    ) -> ActionResult:
+        """
+        Execute tool-specific effect based on action name.
+
+        Currently supported:
+        - Communicate: Send a message via radio to other agents
+        """
+        item_def = self._game_manager.get_item_definition(self._item_id)
+        item_name = item_def.name if item_def else self._item_id
+        action = self.action_name
+
+        if not target:
+            return ActionResult(
+                success=False,
+                observation=f"You need to specify a message for {action}.",
+            )
+
+        # Communicate: Send a radio message to other agents
+        if action == "Communicate":
+            return ActionResult(
+                success=True,
+                observation=f"You speak into the radio: \"{target}\"",
+                effect=f"communicated={target}",
+            )
+
+        # Default fallback for unknown tool types
+        return ActionResult(
+            success=True,
+            observation=f"You use the {item_name}: {target}",
+            effect=f"used_{self._item_id}",
+        )
+
+    def _decrement_uses(self, agent_id: str) -> None:
+        """Decrement remaining uses of a consumable item."""
+        item_def = self._game_manager.get_item_definition(self._item_id)
+        if not item_def or item_def.uses_remaining is None:
+            return
+
+        # Update uses in item definition
+        item_data = self._game_manager.state.item_definitions.get(self._item_id, {})
+        uses = item_data.get("uses_remaining", 1)
+        new_uses = uses - 1
+
+        if new_uses <= 0:
+            # Remove item from inventory when uses exhausted
+            self._game_manager.remove_item(agent_id, self._item_id)
+        else:
+            # Update remaining uses
+            import copy
+            new_state = copy.copy(self._game_manager.state)
+            new_defs = copy.copy(new_state.item_definitions)
+            new_defs[self._item_id] = {**item_data, "uses_remaining": new_uses}
+            new_state.item_definitions = new_defs
+            self._game_manager.set_state(new_state)
 
 
 def get_all_actions() -> Dict[str, EMTOMAction]:

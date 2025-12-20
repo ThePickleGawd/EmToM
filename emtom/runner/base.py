@@ -114,7 +114,56 @@ class EMTOMBaseRunner(ABC):
         if not (task_data and task_data.get("mechanics")):
             state, bindings = self.game_manager.auto_bind_mechanics()
             if bindings:
-                print(f"[EMTOMBaseRunner] Auto-bound mechanics: {bindings}")
+                self._print_bindings(bindings)
+
+    def _print_bindings(self, bindings: dict) -> None:
+        """Pretty print auto-bound mechanics."""
+        print("\n[EMTOMBaseRunner] Auto-bound mechanics:")
+
+        # Mechanics
+        for mech in ["inverse_state", "remote_control", "counting_state",
+                     "delayed_effect", "state_mirroring", "conditional_unlock"]:
+            if mech in bindings:
+                info = bindings[mech]
+                if mech == "inverse_state":
+                    print(f"  • {mech}: {info.get('target')}")
+                elif mech == "remote_control":
+                    print(f"  • {mech}: {info.get('trigger')} → {info.get('target')}")
+                elif mech == "counting_state":
+                    print(f"  • {mech}: {info.get('target')} (count={info.get('required_count')})")
+                elif mech == "delayed_effect":
+                    print(f"  • {mech}: {info.get('target')} (delay={info.get('delay_steps')})")
+                elif mech == "state_mirroring":
+                    pair = info.get('pair', [])
+                    print(f"  • {mech}: {pair[0] if pair else '?'} ↔ {pair[1] if len(pair) > 1 else '?'}")
+                elif mech == "conditional_unlock":
+                    print(f"  • {mech}: {info.get('prerequisite')} unlocks {info.get('target')}")
+
+        # Scenario
+        if "scenario" in bindings:
+            s = bindings["scenario"]
+            print(f"\n  Scenario: {s.get('id')} ({s.get('theme')})")
+            print(f"  Title: {s.get('title')}")
+
+        # Hidden items
+        if "hidden_items" in bindings:
+            print(f"\n  Hidden items:")
+            for container, item in bindings["hidden_items"].items():
+                item_name = bindings.get("item_definitions", {}).get(item, item)
+                print(f"    • {item_name} in {container}")
+
+        # Locked containers
+        if "locked_containers" in bindings:
+            print(f"\n  Locked containers:")
+            for container, key_type in bindings["locked_containers"].items():
+                print(f"    • {container} (requires {key_type})")
+
+        # Suggested locations
+        if "suggested_locations" in bindings:
+            locs = bindings["suggested_locations"]
+            print(f"\n  Suggested locations: {', '.join(locs)}")
+
+        print()
 
     def _setup_agents(self) -> None:
         """Create Agent instances from config."""
@@ -146,6 +195,7 @@ class EMTOMBaseRunner(ABC):
     def _setup_tools(self) -> None:
         """Inject EMTOM tools (Use, Inspect) and Communicate into agents."""
         from emtom.actions import get_emtom_tools
+        from emtom.actions.tool_wrapper import wrap_habitat_tools
         from habitat_llm.tools.perception.communication_tool import CommunicationTool
 
         for uid, agent in self.agents.items():
@@ -166,7 +216,73 @@ class EMTOMBaseRunner(ABC):
             comm_tool.set_environment(self.env_interface)
             agent.tools["Communicate"] = comm_tool
 
+            # Wrap Habitat tools with EMTOM condition checks (locks, etc.)
+            wrap_habitat_tools(agent, self.game_manager)
+
             print(f"[EMTOMBaseRunner] Injected EMTOM tools into agent_{uid}")
+
+    def inject_tool_from_item(self, uid: int, item_id: str) -> bool:
+        """
+        Inject a tool action from an inventory item into an agent's toolset.
+
+        Called when an agent obtains a TOOL-type item that grants a new action.
+
+        Args:
+            uid: Agent UID
+            item_id: Item ID that was obtained
+
+        Returns:
+            True if a tool was injected, False otherwise
+        """
+        from emtom.state.items import ItemType
+        from emtom.actions.custom_actions import DynamicItemTool
+
+        if uid not in self.agents:
+            return False
+
+        item_def = self.game_manager.get_item_definition(item_id)
+        if not item_def or item_def.item_type != ItemType.TOOL:
+            return False
+
+        if not item_def.grants_action:
+            return False
+
+        agent = self.agents[uid]
+
+        # Skip if agent already has this tool
+        if item_def.grants_action in agent.tools:
+            return False
+
+        # Create the dynamic tool
+        tool = DynamicItemTool(
+            name=item_def.grants_action,
+            description=item_def.action_description or f"Use {item_def.name}",
+            item_id=item_id,
+            argument_types=item_def.action_targets or ["OBJECT_INSTANCE", "FURNITURE_INSTANCE"],
+            consumable=item_def.consumable,
+            agent_uid=uid,
+        )
+        tool.set_environment(self.env_interface)
+        tool.set_game_manager(self.game_manager)
+
+        agent.tools[item_def.grants_action] = tool
+        print(f"[EMTOMBaseRunner] Injected {item_def.grants_action} tool from {item_def.name} for agent_{uid}")
+        return True
+
+    def check_and_inject_item_tools(self, uid: int) -> None:
+        """
+        Check agent's inventory and inject any tools from TOOL-type items.
+
+        Called after item grants to ensure tools are available.
+
+        Args:
+            uid: Agent UID to check
+        """
+        agent_id = f"agent_{uid}"
+        inventory = self.game_manager.state.agent_inventory.get(agent_id, [])
+
+        for item_id in inventory:
+            self.inject_tool_from_item(uid, item_id)
 
     def _setup_video(self) -> None:
         """Initialize video recording utilities."""

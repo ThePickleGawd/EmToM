@@ -444,6 +444,21 @@ class GameStateManager:
                         primary_room="this area",
                     )
 
+                    # Lock some containers (creates key puzzles)
+                    locked_containers = {}
+                    available_for_locking = [
+                        f for f in articulated
+                        if f not in hidden_items  # Don't lock containers with hidden items
+                    ]
+                    if available_for_locking and item_locations:
+                        # Lock 1-2 containers
+                        num_to_lock = min(2, len(available_for_locking))
+                        containers_to_lock = random.sample(available_for_locking, num_to_lock)
+                        for container in containers_to_lock:
+                            new_state = new_state.set_object_property(container, "is_locked", True)
+                            new_state = new_state.set_object_property(container, "required_key", "small_key")
+                            locked_containers[container] = "small_key"
+
                     # Store all scenario info in bindings
                     bindings_info["hidden_items"] = hidden_items
                     bindings_info["item_locations"] = item_locations
@@ -454,6 +469,8 @@ class GameStateManager:
                     bindings_info["clues"] = clues
                     bindings_info["story_context"] = instantiated.story_context
                     bindings_info["suggested_locations"] = instantiated.suggested_locations
+                    if locked_containers:
+                        bindings_info["locked_containers"] = locked_containers
                     if instantiated.agent_secrets:
                         bindings_info["agent_secrets"] = instantiated.agent_secrets
 
