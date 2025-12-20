@@ -16,6 +16,12 @@ from emtom.exploration.trajectory_logger import (
     StepRecord,
     TrajectoryLogger,
 )
+from emtom.exploration.verbalized_sampling import (
+    ActionProbability,
+    VerbalizedDistribution,
+    VerbalizedSampler,
+    create_verbalized_sampler,
+)
 
 # Habitat-integrated exploration
 from emtom.exploration.habitat_explorer import (
@@ -48,6 +54,11 @@ __all__ = [
     # Curiosity
     "ActionChoice",
     "CuriosityModel",
+    # Verbalized Sampling
+    "ActionProbability",
+    "VerbalizedDistribution",
+    "VerbalizedSampler",
+    "create_verbalized_sampler",
     # Habitat Explorer
     "HabitatExplorationConfig",
     "HabitatExplorer",
