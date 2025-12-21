@@ -10,10 +10,10 @@ Based on: https://arxiv.org/abs/2411.00081 (Section A.5)
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from enum import Enum
 
-from emtom.state.game_state import EMTOMGameState, ActionRecord
+from emtom.state.game_state import EMTOMGameState
 
 
 class ConstraintType(Enum):
@@ -21,6 +21,83 @@ class ConstraintType(Enum):
     BEFORE = "before"  # A must happen before B
     AFTER = "after"    # A must happen after B
     DURING = "during"  # A must happen while B is true
+
+
+@dataclass
+class Milestone:
+    """
+    An intermediate checkpoint that SHOULD be reached during task execution.
+
+    Milestones help track partial progress and debug agent behavior.
+    Unlike required_states, milestones don't affect success - they're informational.
+
+    Example:
+        {"id": "found_key", "entity": "agent_0", "property": "has_item", "value": "key_1"}
+    """
+    milestone_id: str
+    entity: str
+    property: str
+    value: Any
+    description: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Milestone":
+        return cls(
+            milestone_id=data.get("id", f"{data['entity']}_{data['property']}"),
+            entity=data["entity"],
+            property=data["property"],
+            value=data["value"],
+            description=data.get("description"),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.milestone_id,
+            "entity": self.entity,
+            "property": self.property,
+            "value": self.value,
+            "description": self.description,
+        }
+
+
+@dataclass
+class Minefield:
+    """
+    A failure condition that should NEVER be triggered during task execution.
+
+    Minefields catch bad agent behavior (breaking things, wrong actions).
+    If triggered, they're recorded but don't necessarily fail the task.
+
+    Example:
+        {"id": "broke_vase", "entity": "vase_1", "property": "is_broken", "value": True}
+    """
+    minefield_id: str
+    entity: str
+    property: str
+    value: Any
+    description: Optional[str] = None
+    fails_task: bool = False  # If True, triggering this fails the entire task
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Minefield":
+        return cls(
+            minefield_id=data.get("id", f"{data['entity']}_{data['property']}"),
+            entity=data["entity"],
+            property=data["property"],
+            value=data["value"],
+            description=data.get("description"),
+            fails_task=data.get("fails_task", False),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.minefield_id,
+            "entity": self.entity,
+            "property": self.property,
+            "value": self.value,
+            "description": self.description,
+            "fails_task": self.fails_task,
+        }
 
 
 @dataclass
@@ -100,6 +177,8 @@ class EvaluationResult:
         proposition_status: Dict mapping prop_id -> satisfied (bool)
         constraint_status: Dict mapping constraint description -> satisfied (bool)
         satisfied_at_step: Dict mapping prop_id -> step when first satisfied
+        milestones_reached: Dict mapping milestone_id -> step when reached (None if not reached)
+        minefields_triggered: Dict mapping minefield_id -> step when triggered (None if not triggered)
     """
     percent_complete: float
     success: bool
@@ -107,6 +186,8 @@ class EvaluationResult:
     proposition_status: Dict[str, bool] = field(default_factory=dict)
     constraint_status: Dict[str, bool] = field(default_factory=dict)
     satisfied_at_step: Dict[str, Optional[int]] = field(default_factory=dict)
+    milestones_reached: Dict[str, Optional[int]] = field(default_factory=dict)
+    minefields_triggered: Dict[str, Optional[int]] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -116,7 +197,29 @@ class EvaluationResult:
             "proposition_status": self.proposition_status,
             "constraint_status": self.constraint_status,
             "satisfied_at_step": self.satisfied_at_step,
+            "milestones_reached": self.milestones_reached,
+            "minefields_triggered": self.minefields_triggered,
         }
+
+    @property
+    def milestones_summary(self) -> str:
+        """Human-readable summary of milestone progress."""
+        reached = sum(1 for v in self.milestones_reached.values() if v is not None)
+        total = len(self.milestones_reached)
+        if total == 0:
+            return "No milestones defined"
+        return f"{reached}/{total} milestones reached"
+
+    @property
+    def minefields_summary(self) -> str:
+        """Human-readable summary of minefield status."""
+        triggered = sum(1 for v in self.minefields_triggered.values() if v is not None)
+        total = len(self.minefields_triggered)
+        if total == 0:
+            return "No minefields defined"
+        if triggered == 0:
+            return f"0/{total} minefields triggered (clean run)"
+        return f"{triggered}/{total} minefields triggered"
 
 
 class TaskEvaluator:
@@ -158,6 +261,16 @@ class TaskEvaluator:
         self.constraints: List[TemporalConstraint] = []
         for constraint_data in success_condition.get("temporal_constraints", []):
             self.constraints.append(TemporalConstraint.from_dict(constraint_data))
+
+        # Parse milestones (intermediate checkpoints)
+        self.milestones: List[Milestone] = []
+        for milestone_data in success_condition.get("milestones", []):
+            self.milestones.append(Milestone.from_dict(milestone_data))
+
+        # Parse minefields (failure conditions)
+        self.minefields: List[Minefield] = []
+        for minefield_data in success_condition.get("minefields", []):
+            self.minefields.append(Minefield.from_dict(minefield_data))
 
     def check_proposition(
         self,
@@ -222,6 +335,58 @@ class TaskEvaluator:
         """Find the step at which a proposition was first satisfied."""
         for i, state in enumerate(state_history):
             if self.check_proposition(prop, state):
+                return i
+        return None
+
+    def check_milestone(
+        self,
+        milestone: Milestone,
+        state: EMTOMGameState,
+    ) -> bool:
+        """Check if a milestone is reached in the given state."""
+        # Reuse proposition checking logic
+        prop = Proposition(
+            prop_id=milestone.milestone_id,
+            entity=milestone.entity,
+            property=milestone.property,
+            value=milestone.value,
+        )
+        return self.check_proposition(prop, state)
+
+    def find_milestone_step(
+        self,
+        milestone: Milestone,
+        state_history: List[EMTOMGameState],
+    ) -> Optional[int]:
+        """Find the step at which a milestone was first reached."""
+        for i, state in enumerate(state_history):
+            if self.check_milestone(milestone, state):
+                return i
+        return None
+
+    def check_minefield(
+        self,
+        minefield: Minefield,
+        state: EMTOMGameState,
+    ) -> bool:
+        """Check if a minefield is triggered in the given state."""
+        # Reuse proposition checking logic
+        prop = Proposition(
+            prop_id=minefield.minefield_id,
+            entity=minefield.entity,
+            property=minefield.property,
+            value=minefield.value,
+        )
+        return self.check_proposition(prop, state)
+
+    def find_minefield_step(
+        self,
+        minefield: Minefield,
+        state_history: List[EMTOMGameState],
+    ) -> Optional[int]:
+        """Find the step at which a minefield was first triggered."""
+        for i, state in enumerate(state_history):
+            if self.check_minefield(minefield, state):
                 return i
         return None
 
@@ -333,8 +498,26 @@ class TaskEvaluator:
             )
             all_constraints_met = False
 
-        # Success requires all propositions satisfied AND all constraints met
-        success = (percent_complete == 1.0) and all_constraints_met
+        # Check milestones (informational, doesn't affect success)
+        milestones_reached: Dict[str, Optional[int]] = {}
+        for milestone in self.milestones:
+            step = self.find_milestone_step(milestone, state_history)
+            milestones_reached[milestone.milestone_id] = step
+
+        # Check minefields (failure conditions)
+        minefields_triggered: Dict[str, Optional[int]] = {}
+        minefield_failed = False
+        for minefield in self.minefields:
+            step = self.find_minefield_step(minefield, state_history)
+            minefields_triggered[minefield.minefield_id] = step
+            if step is not None:
+                desc = minefield.description or f"{minefield.entity}.{minefield.property}={minefield.value}"
+                failure_explanations.append(f"Minefield triggered at step {step}: {desc}")
+                if minefield.fails_task:
+                    minefield_failed = True
+
+        # Success requires all propositions satisfied AND all constraints met AND no fatal minefields
+        success = (percent_complete == 1.0) and all_constraints_met and not minefield_failed
 
         return EvaluationResult(
             percent_complete=percent_complete,
@@ -343,6 +526,8 @@ class TaskEvaluator:
             proposition_status=prop_status,
             constraint_status=constraint_status,
             satisfied_at_step=satisfied_at,
+            milestones_reached=milestones_reached,
+            minefields_triggered=minefields_triggered,
         )
 
     def _explain_proposition_failure(

@@ -50,6 +50,32 @@
         "then": "retrieve_item"
       }
     ],
+    "milestones": [
+      {
+        "id": "found_key",
+        "entity": "agent_0",
+        "property": "has_item",
+        "value": "key_1",
+        "description": "Agent found the hidden key"
+      },
+      {
+        "id": "communicated_secret",
+        "entity": "agent_1",
+        "property": "knows_mechanic",
+        "value": true,
+        "description": "Agent 0 shared the mechanic knowledge with Agent 1"
+      }
+    ],
+    "minefields": [
+      {
+        "id": "broke_container",
+        "entity": "target_container",
+        "property": "is_broken",
+        "value": true,
+        "description": "The container was broken instead of opened properly",
+        "fails_task": true
+      }
+    ],
     "time_limit": null,
     "all_agents_must_survive": true
   },

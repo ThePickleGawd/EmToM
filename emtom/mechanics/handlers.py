@@ -30,6 +30,8 @@ class HandlerResult:
     actual_target: Optional[str] = None
     # Whether the action should be blocked (not executed in Habitat)
     blocked: bool = False
+    # Which mechanic type was applied (for event logging)
+    mechanic_type: Optional[str] = None
 
 
 # Type alias for handler functions

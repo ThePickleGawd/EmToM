@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from omegaconf import DictConfig, OmegaConf
 
+from emtom.tracing import EventLog
+
 if TYPE_CHECKING:
     from habitat_llm.agent.env import EnvironmentInterface
     from habitat_llm.agent import Agent
@@ -57,6 +59,9 @@ class EMTOMBaseRunner(ABC):
         self._step_count = 0
         self._action_history: List[Dict[str, Any]] = []
         self._episode_done = False
+
+        # Causal event log (ARE-style tracing)
+        self.event_log = EventLog()
 
     def setup(
         self,
@@ -385,6 +390,15 @@ class EMTOMBaseRunner(ABC):
 
         # 2. If mechanic blocked the action, return early WITHOUT executing in Habitat
         if mech_result.blocked:
+            # Log blocked action
+            self.event_log.log_action(
+                step=self._step_count,
+                agent_id=agent_id,
+                action=action_name,
+                target=target,
+                result=mech_result.observation,
+                success=False,
+            )
             return {
                 "success": False,
                 "observation": mech_result.observation,
@@ -465,6 +479,15 @@ class EMTOMBaseRunner(ABC):
         )
 
         if habitat_failed:
+            # Log failed action
+            self.event_log.log_action(
+                step=self._step_count,
+                agent_id=agent_id,
+                action=action_name,
+                target=target,
+                result=obs_text,
+                success=False,
+            )
             # Habitat action failed - don't apply mechanics, return failure
             return {
                 "success": False,
@@ -472,8 +495,26 @@ class EMTOMBaseRunner(ABC):
             }
 
         # 5. Habitat action succeeded - now apply mechanic state changes
+        # Log the successful action
+        action_event = self.event_log.log_action(
+            step=self._step_count,
+            agent_id=agent_id,
+            action=action_name,
+            target=target,
+            result=obs_text,
+            success=True,
+        )
+
         if mech_result.applies:
             state, result = self.game_manager.apply_action(action_name, agent_id, target)
+            # Log mechanic effect
+            self.event_log.log_mechanic(
+                step=self._step_count,
+                mechanic=mech_result.mechanic_type or "unknown",
+                trigger=target,
+                effect=mechanic_observation or result.observation,
+                caused_by=action_event.event_id,
+            )
             # Append mechanic observation to Habitat observation
             if mechanic_observation:
                 obs_text = f"{obs_text} {mechanic_observation}"
@@ -525,11 +566,58 @@ class EMTOMBaseRunner(ABC):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = os.path.join(self.output_dir, "planner-log", f"planner-log-{timestamp}.json")
 
+        # Include event trace summary
+        data["event_trace"] = self.event_log.get_summary()
+
         with open(log_file, "w") as f:
             json.dump(data, f, indent=2, default=str)
 
         print(f"[EMTOMBaseRunner] Saved planner log: {log_file}")
         return log_file
+
+    def save_event_log(self, suffix: str = "") -> str:
+        """
+        Save the full causal event log.
+
+        Args:
+            suffix: Optional suffix for the filename
+
+        Returns:
+            Path to the saved file
+        """
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        trace_dir = os.path.join(self.output_dir, "traces")
+        os.makedirs(trace_dir, exist_ok=True)
+
+        filename = f"event-trace-{timestamp}"
+        if suffix:
+            filename = f"{filename}-{suffix}"
+        filepath = os.path.join(trace_dir, f"{filename}.json")
+
+        self.event_log.save(filepath)
+        print(f"[EMTOMBaseRunner] Saved event trace: {filepath}")
+
+        # Also save narrative version for human reading
+        narrative_path = os.path.join(trace_dir, f"{filename}-narrative.txt")
+        with open(narrative_path, "w") as f:
+            f.write(self.event_log.to_narrative())
+        print(f"[EMTOMBaseRunner] Saved event narrative: {narrative_path}")
+
+        return filepath
+
+    def get_causal_chain(self, event_id: str) -> list:
+        """
+        Get the causal chain leading to an event.
+
+        Useful for debugging "why did this happen?"
+
+        Args:
+            event_id: Event ID to trace back from
+
+        Returns:
+            List of events in chronological order
+        """
+        return self.event_log.get_causal_chain(event_id)
 
     def save_prompts(self, prompts: Dict[str, str], traces: Optional[Dict[str, str]] = None) -> None:
         """

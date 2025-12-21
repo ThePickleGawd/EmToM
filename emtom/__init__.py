@@ -31,7 +31,14 @@ from emtom.evaluation import (
     EvaluationResult,
     TemporalConstraint,
     Proposition,
+    Milestone,
+    Minefield,
     evaluate_task,
+)
+from emtom.tracing import (
+    Event,
+    EventType,
+    EventLog,
 )
 
 __all__ = [
@@ -50,5 +57,11 @@ __all__ = [
     "EvaluationResult",
     "TemporalConstraint",
     "Proposition",
+    "Milestone",
+    "Minefield",
     "evaluate_task",
+    # Tracing (ARE-style)
+    "Event",
+    "EventType",
+    "EventLog",
 ]

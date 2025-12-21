@@ -23,6 +23,15 @@ from emtom.actions.custom_actions import (
     get_all_actions,
     get_emtom_tools,
 )
+from emtom.actions.schema import (
+    tool,
+    ToolSchema,
+    ToolRegistry,
+    get_tool_schemas,
+    get_openai_tools,
+    schemas_to_prompt,
+    get_global_registry,
+)
 
 __all__ = [
     # Registry
@@ -41,4 +50,12 @@ __all__ = [
     "EMTOM_ACTIONS",
     "get_all_actions",
     "get_emtom_tools",
+    # Tool schema generation (ARE-style)
+    "tool",
+    "ToolSchema",
+    "ToolRegistry",
+    "get_tool_schemas",
+    "get_openai_tools",
+    "schemas_to_prompt",
+    "get_global_registry",
 ]
