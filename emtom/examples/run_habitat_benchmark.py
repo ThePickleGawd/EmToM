@@ -114,48 +114,34 @@ def main(config: DictConfig) -> None:
 
     cprint("Environment initialized!", "green")
 
-    # Load EMTOM tasks
-    # Priority order:
-    # 1. curated tasks (data/emtom/tasks/curated) - user-created
-    # 2. working task (data/emtom/tasks/working_task.json) - current task
-    # 3. sample tasks (emtom/task_gen/template/) - checked into git as defaults
-    curated_dir = Path("data/emtom/tasks/curated")
-    tasks_dir = Path("data/emtom/tasks")
-    sample_dir = Path(__file__).parent.parent / "task_gen" / "template"  # emtom/task_gen/template/
+    # Load EMTOM task from curated directory
+    # Uses most recently modified task file if multiple exist
+    task_dir = Path("data/emtom/tasks/curated")
 
-    tasks = []
-
-    # Try curated directory first
-    if curated_dir.exists():
-        tasks = load_all_tasks_from_dir(curated_dir)
-        if tasks:
-            cprint(f"Loaded {len(tasks)} tasks from curated directory", "blue")
-
-    # Fall back to working task
-    if not tasks and tasks_dir.exists():
-        working_task = tasks_dir / "working_task.json"
-        if working_task.exists():
-            tasks = load_tasks(str(working_task))
-            cprint(f"Loaded task from {working_task}", "blue")
-
-    # Fall back to sample tasks (checked into git)
-    if not tasks and sample_dir.exists():
-        tasks = load_all_tasks_from_dir(sample_dir)
-        if tasks:
-            cprint(f"Loaded {len(tasks)} sample tasks from {sample_dir}", "blue")
-
-    if not tasks:
-        cprint(f"ERROR: No tasks found in any location", "red")
-        cprint("Expected locations:", "yellow")
-        cprint(f"  - {curated_dir}", "yellow")
-        cprint(f"  - {tasks_dir}/working_task.json", "yellow")
-        cprint(f"  - {sample_dir}", "yellow")
+    if not task_dir.exists():
+        cprint(f"ERROR: Task directory not found: {task_dir}", "red")
+        cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
         sys.exit(1)
 
-    cprint(f"Loaded {len(tasks)} EMTOM tasks", "green")
+    # Find all task JSON files and sort by modification time (most recent first)
+    task_files = list(task_dir.glob("*.json"))
+    if not task_files:
+        cprint(f"ERROR: No task files found in {task_dir}", "red")
+        cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
+        sys.exit(1)
 
-    # Run first task
+    task_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    most_recent_file = task_files[0]
+
+    cprint(f"Loading most recent task: {most_recent_file.name}", "blue")
+    tasks = load_tasks(str(most_recent_file))
+
+    if not tasks:
+        cprint(f"ERROR: Failed to parse task file: {most_recent_file}", "red")
+        sys.exit(1)
+
     task = tasks[0]
+    cprint(f"Loaded task: {task.title}", "green")
     output_dir = config.paths.results_dir
 
     # Reset environment to the correct episode for this task
