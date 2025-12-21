@@ -174,14 +174,20 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 observations = self.get_observations()
                 self.record_frame(observations)
 
+        # Evaluate task with PARTNR-style metrics
+        evaluation = {}
+        if self.game_manager:
+            evaluation = self.game_manager.evaluate_task()
+
         # Save outputs
-        self._save_outputs(instruction)
+        self._save_outputs(instruction, evaluation)
 
         return {
             "steps": self._step_count,
             "done": done or all_planners_done,
             "episode_over": self._episode_done,
             "action_history": self._action_history,
+            "evaluation": evaluation,
         }
 
     def _extract_high_level_action(self, planner_info: Dict, uid: int) -> Optional[str]:
@@ -205,7 +211,11 @@ class BenchmarkRunner(EMTOMBaseRunner):
             pass
         return None
 
-    def _save_outputs(self, instruction: Dict[str, str]) -> None:
+    def _save_outputs(
+        self,
+        instruction: Dict[str, str],
+        evaluation: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Save video and planner log."""
         # Save video
         task_id = self.task.task_id if self.task else "unknown"
@@ -222,6 +232,13 @@ class BenchmarkRunner(EMTOMBaseRunner):
             "episode_over": self._episode_done,
             "action_history": self._action_history,
         }
+
+        # Include PARTNR-style evaluation metrics
+        if evaluation:
+            log_data["evaluation"] = evaluation
+            log_data["percent_complete"] = evaluation.get("percent_complete", 0.0)
+            log_data["success"] = evaluation.get("success", False)
+            log_data["failure_explanations"] = evaluation.get("failure_explanations", [])
 
         # Include mechanic bindings if from task
         if self.task and self.task.mechanic_bindings:

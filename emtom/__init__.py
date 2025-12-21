@@ -26,6 +26,13 @@ from emtom.mechanics import (
     HandlerResult,
     MECHANIC_INFO,
 )
+from emtom.evaluation import (
+    TaskEvaluator,
+    EvaluationResult,
+    TemporalConstraint,
+    Proposition,
+    evaluate_task,
+)
 
 __all__ = [
     # State (primary interface)
@@ -38,4 +45,10 @@ __all__ = [
     "get_mechanic_info",
     "HandlerResult",
     "MECHANIC_INFO",
+    # Evaluation (PARTNR-style)
+    "TaskEvaluator",
+    "EvaluationResult",
+    "TemporalConstraint",
+    "Proposition",
+    "evaluate_task",
 ]

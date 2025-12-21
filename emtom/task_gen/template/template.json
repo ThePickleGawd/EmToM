@@ -37,9 +37,17 @@
     "description": "Describe what success looks like in plain English",
     "required_states": [
       {
+        "prop_id": "item_placed",
         "entity": "object_id_from_scene_inventory",
         "property": "location",
         "value": "target_location"
+      }
+    ],
+    "temporal_constraints": [
+      {
+        "type": "before",
+        "first": "unlock_container",
+        "then": "retrieve_item"
       }
     ],
     "time_limit": null,

@@ -152,8 +152,14 @@ Action: bash[cat > data/emtom/tasks/working_task.json << 'EOF'
     "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
   },
   "success_condition": {
-    "description": "kettle_3 is placed on table_59",
-    "required_states": [{"entity": "kettle_3", "property": "location", "value": "table_59"}],
+    "description": "kettle_3 is placed on table_59 after unlocking the chest",
+    "required_states": [
+      {"prop_id": "chest_unlocked", "entity": "chest_of_drawers_54", "property": "is_unlocked", "value": true},
+      {"prop_id": "kettle_placed", "entity": "kettle_3", "property": "location", "value": "table_59"}
+    ],
+    "temporal_constraints": [
+      {"type": "before", "first": "chest_unlocked", "then": "kettle_placed"}
+    ],
     "time_limit": null,
     "all_agents_must_survive": true
   },
@@ -233,7 +239,13 @@ TASK_TEMPLATE = """{
   },
   "success_condition": {
     "description": "What success looks like",
-    "required_states": [{"entity": "object_id", "property": "property_name", "value": "target_value"}],
+    "required_states": [
+      {"prop_id": "step_1_done", "entity": "object_id", "property": "property_name", "value": "target_value"},
+      {"prop_id": "step_2_done", "entity": "another_object", "property": "property_name", "value": "target_value"}
+    ],
+    "temporal_constraints": [
+      {"type": "before", "first": "step_1_done", "then": "step_2_done"}
+    ],
     "time_limit": null,
     "all_agents_must_survive": true
   },

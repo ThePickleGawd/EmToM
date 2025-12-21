@@ -74,6 +74,10 @@ class GameStateManager:
         self._story_context: Optional[str] = None
         self._bindings_info: Optional[Dict[str, Any]] = None
 
+        # State history for temporal evaluation (PARTNR-style)
+        self._state_history: List[EMTOMGameState] = []
+        self._success_condition: Optional[Dict[str, Any]] = None
+
     def initialize_from_task(self, task_data: Dict[str, Any]) -> EMTOMGameState:
         """
         Initialize game state from a task definition.
@@ -154,6 +158,13 @@ class GameStateManager:
                     state = state.set_object_property(hidden_in, "hidden_items", current)
 
         self.state = state
+
+        # Store success condition for evaluation
+        self._success_condition = task_data.get("success_condition")
+
+        # Reset state history and record initial state
+        self._state_history = [copy.deepcopy(state)]
+
         return state
 
     def _setup_mechanic_state(
@@ -603,6 +614,10 @@ class GameStateManager:
         )
 
         self.state = state
+
+        # Record state snapshot for temporal evaluation
+        self._state_history.append(copy.deepcopy(state))
+
         return state, result
 
     def _apply_builtin_action(
@@ -1045,3 +1060,53 @@ class GameStateManager:
             True if agent has the item
         """
         return self.agent_has_item(entity, value)
+
+    # ========== PARTNR-style Evaluation ==========
+
+    def evaluate_task(
+        self,
+        success_condition: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Evaluate task completion with PARTNR-style metrics.
+
+        Returns percent_complete, success, and failure_explanations.
+        Uses temporal constraints to verify ordering of accomplishments.
+
+        Args:
+            success_condition: Task's success condition dict. If None, uses
+                              the one stored from initialize_from_task().
+
+        Returns:
+            Dict with:
+                - percent_complete: float (0.0 to 1.0)
+                - success: bool
+                - failure_explanations: List[str]
+                - proposition_status: Dict[str, bool]
+                - constraint_status: Dict[str, bool]
+                - satisfied_at_step: Dict[str, Optional[int]]
+        """
+        from emtom.evaluation import TaskEvaluator
+
+        condition = success_condition or self._success_condition
+        if not condition:
+            return {
+                "percent_complete": 0.0,
+                "success": False,
+                "failure_explanations": ["No success condition defined"],
+                "proposition_status": {},
+                "constraint_status": {},
+                "satisfied_at_step": {},
+            }
+
+        evaluator = TaskEvaluator(condition)
+        result = evaluator.evaluate(self.state, self._state_history)
+        return result.to_dict()
+
+    def get_state_history(self) -> List[EMTOMGameState]:
+        """Get the full state history for temporal analysis."""
+        return self._state_history
+
+    def clear_state_history(self) -> None:
+        """Clear state history (useful for resetting)."""
+        self._state_history = [copy.deepcopy(self.state)]
