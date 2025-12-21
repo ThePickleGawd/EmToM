@@ -18,6 +18,9 @@ TASK_FILE=""
 LLM_AGENTS=""
 NUM_TASKS=1
 MODEL="gpt-5"
+DIFFICULTY=3
+MIN_SUBTASKS=3
+MAX_SUBTASKS=5
 NUM_AGENTS=2
 AGENT_TYPE="robot"  # robot or human
 
@@ -43,6 +46,9 @@ print_usage() {
     echo "Generation Options:"
     echo "  --num-tasks N        Number of tasks to generate (default: 1)"
     echo "  --model MODEL        LLM model for the agent (default: gpt-5)"
+    echo "  --difficulty N       Task difficulty 1-5 (default: 3)"
+    echo "  --min-subtasks N     Minimum subtasks/steps (default: 3)"
+    echo "  --max-subtasks N     Maximum subtasks/steps (default: 5)"
     echo ""
     echo "Benchmark Options:"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
@@ -124,6 +130,8 @@ run_generate() {
     echo "=============================================="
     echo "Target tasks: $NUM_TASKS"
     echo "Model: $MODEL"
+    echo "Difficulty: $DIFFICULTY"
+    echo "Subtasks: $MIN_SUBTASKS-$MAX_SUBTASKS"
     echo "=============================================="
     echo ""
     # Use Hydra config system with custom overrides
@@ -131,6 +139,9 @@ run_generate() {
         --config-name examples/emtom_two_robots \
         +num_tasks=$NUM_TASKS \
         +model=$MODEL \
+        +difficulty=$DIFFICULTY \
+        +min_subtasks=$MIN_SUBTASKS \
+        +max_subtasks=$MAX_SUBTASKS \
         +trajectory_dir=data/emtom/trajectories \
         +output_dir=data/emtom/tasks/curated \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-generate"
@@ -232,6 +243,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --model)
             MODEL=$2
+            shift 2
+            ;;
+        --difficulty)
+            DIFFICULTY=$2
+            shift 2
+            ;;
+        --min-subtasks)
+            MIN_SUBTASKS=$2
+            shift 2
+            ;;
+        --max-subtasks)
+            MAX_SUBTASKS=$2
             shift 2
             ;;
         --num-agents)

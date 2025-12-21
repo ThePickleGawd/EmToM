@@ -272,7 +272,14 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
     instructions = {}
 
     for agent_id in task.agent_roles.keys():
-        parts = [f"Goal: {task.public_goal}"]
+        parts = []
+
+        # Add atmospheric story first (sets the scene)
+        if task.story:
+            parts.append(task.story)
+            parts.append("")  # blank line
+
+        parts.append(f"Goal: {task.public_goal}")
 
         if task.public_context:
             parts.append(task.public_context)

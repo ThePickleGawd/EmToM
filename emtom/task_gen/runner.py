@@ -35,6 +35,9 @@ def main(config: DictConfig) -> None:
     output_dir = config.get("output_dir", "data/emtom/tasks/curated")
     max_iterations = config.get("max_iterations", 100)
     quiet = config.get("quiet", False)
+    difficulty = config.get("difficulty", 3)
+    min_subtasks = config.get("min_subtasks", 3)
+    max_subtasks = config.get("max_subtasks", 5)
 
     # Setup config (registers Habitat plugins, sets seed, etc.)
     fix_config(config)
@@ -87,6 +90,9 @@ def main(config: DictConfig) -> None:
         output_dir=output_dir,
         max_iterations=max_iterations,
         verbose=not quiet,
+        difficulty=difficulty,
+        min_subtasks=min_subtasks,
+        max_subtasks=max_subtasks,
     )
 
     # Run agent

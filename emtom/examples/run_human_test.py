@@ -143,7 +143,14 @@ def task_to_instruction(task_info: Dict[str, Any]) -> Dict[str, str]:
         agent_roles = {"agent_0": "Agent 0", "agent_1": "Agent 1"}
 
     for agent_id in agent_roles.keys():
-        parts = [f"Goal: {task_info.get('public_goal', 'Complete the task')}"]
+        parts = []
+
+        # Add atmospheric story first (sets the scene)
+        if task_info.get("story"):
+            parts.append(task_info["story"])
+            parts.append("")  # blank line
+
+        parts.append(f"Goal: {task_info.get('public_goal', 'Complete the task')}")
 
         if task_info.get("public_context"):
             parts.append(task_info["public_context"])

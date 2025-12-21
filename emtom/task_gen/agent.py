@@ -45,6 +45,9 @@ class TaskGeneratorAgent:
         output_dir: str = "data/emtom/tasks/curated",
         max_iterations: int = 100,
         verbose: bool = True,
+        difficulty: int = 3,
+        min_subtasks: int = 3,
+        max_subtasks: int = 5,
     ):
         """
         Initialize the agent.
@@ -57,11 +60,17 @@ class TaskGeneratorAgent:
             output_dir: Directory for curated output tasks
             max_iterations: Max ReAct iterations before stopping
             verbose: Print agent thoughts and actions
+            difficulty: Target difficulty level 1-5
+            min_subtasks: Minimum number of subtasks/steps
+            max_subtasks: Maximum number of subtasks/steps
         """
         self.llm = llm_client
         self.config = config
         self.working_dir = Path(working_dir)
         self.trajectory_dir = Path(trajectory_dir)
+        self.difficulty = difficulty
+        self.min_subtasks = min_subtasks
+        self.max_subtasks = max_subtasks
         self.output_dir = Path(output_dir)
         self.max_iterations = max_iterations
         self.verbose = verbose
@@ -128,6 +137,11 @@ class TaskGeneratorAgent:
 
         # Initial user message with scenario inspirations
         user_msg = f"""Create {num_tasks_target} quality benchmark tasks.
+
+## Task Requirements
+- **Difficulty**: {self.difficulty}/5
+- **Subtasks**: {self.min_subtasks}-{self.max_subtasks} steps per task
+- Each subtask should be a distinct action that gates progress to the next
 
 Available trajectories are in: {self.trajectory_dir}
 Template is at: {self.template_file}
