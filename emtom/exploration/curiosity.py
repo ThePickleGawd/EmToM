@@ -17,6 +17,11 @@ from typing import Any, Dict, List, Optional
 
 from omegaconf import OmegaConf
 
+from emtom.exploration.verbalized_sampling import (
+    VerbalizedSampler,
+    VerbalizedDistribution,
+)
+
 
 @dataclass
 class ActionChoice:
@@ -26,6 +31,7 @@ class ActionChoice:
     target: Optional[str]
     reasoning: str
     surprise: Optional[str] = None  # If LLM detected something unexpected
+    vs_distribution: Optional[VerbalizedDistribution] = None  # Verbalized sampling distribution
 
 
 class CuriosityModel:
@@ -43,11 +49,15 @@ class CuriosityModel:
     # Default config path relative to habitat_llm/conf/instruct/
     DEFAULT_CONFIG = "emtom_exploration"
 
+    # Config for verbalized sampling prompt
+    VS_CONFIG = "emtom_verbalized_sampling"
+
     def __init__(
         self,
         llm_client: Any,
         instruct_config: Optional[Any] = None,
         llm_config: Optional[Any] = None,
+        use_verbalized_sampling: bool = True,
     ):
         """
         Initialize the curiosity model.
@@ -56,15 +66,27 @@ class CuriosityModel:
             llm_client: LLM client (kept for backward compatibility, but not used)
             instruct_config: Optional instruct config (OmegaConf). If None, loads default.
             llm_config: Optional LLM config with system_tag, user_tag, etc.
+            use_verbalized_sampling: If True, use Verbalized Sampling (VS) for action selection.
+                                    VS prompts the LLM to output probability distributions
+                                    over actions, then samples from them programmatically.
         """
         # Per-agent LLM clients (each agent gets independent API calls with different temperatures)
         self._agent_llms: Dict[str, Any] = {}
+
+        # Verbalized Sampling settings
+        self.use_verbalized_sampling = use_verbalized_sampling
+        self._vs_sampler = VerbalizedSampler() if use_verbalized_sampling else None
+        self._agent_rngs: Dict[str, random.Random] = {}  # Per-agent RNGs for sampling
 
         # Load instruct config if not provided
         if instruct_config is not None:
             self.instruct = instruct_config
         else:
-            self.instruct = self._load_default_config()
+            # Load VS config if using verbalized sampling, otherwise default
+            if use_verbalized_sampling:
+                self.instruct = self._load_vs_config()
+            else:
+                self.instruct = self._load_default_config()
 
         # Extract prompt template and other settings
         self.prompt_template = self.instruct.prompt
@@ -88,6 +110,12 @@ class CuriosityModel:
         # Story context from scenario system (set by explorer)
         self._story_context: Optional[str] = None
 
+        # Available actions cache (set by explorer for VS)
+        self._available_actions: Optional[List[Dict[str, Any]]] = None
+
+        if use_verbalized_sampling:
+            print("[CuriosityModel] Using Verbalized Sampling (VS) for action selection")
+
     def _load_default_config(self) -> Any:
         """Load the default exploration YAML config."""
         config_path = Path(__file__).parent.parent.parent / "habitat_llm" / "conf" / "instruct" / f"{self.DEFAULT_CONFIG}.yaml"
@@ -99,6 +127,47 @@ class CuriosityModel:
             )
 
         return OmegaConf.load(config_path)
+
+    def _load_vs_config(self) -> Any:
+        """Load the Verbalized Sampling YAML config."""
+        config_path = Path(__file__).parent.parent.parent / "habitat_llm" / "conf" / "instruct" / f"{self.VS_CONFIG}.yaml"
+
+        if not config_path.exists():
+            print(f"[CuriosityModel] VS config not found at {config_path}, falling back to default")
+            return self._load_default_config()
+
+        return OmegaConf.load(config_path)
+
+    def _get_agent_rng(self, agent_id: str) -> random.Random:
+        """
+        Get or create an RNG for the given agent.
+
+        Each agent gets a unique RNG seeded by their ID to ensure
+        reproducible but different sampling behavior.
+
+        Args:
+            agent_id: The agent identifier (e.g., "agent_0")
+
+        Returns:
+            random.Random instance for this agent
+        """
+        if agent_id not in self._agent_rngs:
+            # Create agent-specific seed from agent_id
+            agent_uid = int(agent_id.split("_")[-1]) if "_" in agent_id else 0
+            # Use current time + agent_uid for unique but reproducible seed per run
+            import time
+            seed = int(time.time() * 1000) + agent_uid * 12345
+            self._agent_rngs[agent_id] = random.Random(seed)
+            print(f"[CuriosityModel] Created RNG for {agent_id} with seed {seed}")
+        return self._agent_rngs[agent_id]
+
+    def set_available_actions(self, actions: List[Dict[str, Any]]):
+        """Set the available actions for Verbalized Sampling.
+
+        Args:
+            actions: List of action dictionaries with 'name' and 'targets' keys
+        """
+        self._available_actions = actions
 
     def _get_agent_llm(self, agent_id: str) -> Any:
         """
@@ -199,15 +268,22 @@ class CuriosityModel:
         world_description: str,
         exploration_history: Optional[List[Dict[str, Any]]] = None,
         tool_descriptions: Optional[str] = None,
+        available_actions: Optional[List[Dict[str, Any]]] = None,
     ) -> ActionChoice:
         """
         Select an action based on curiosity.
+
+        When use_verbalized_sampling is True, uses Verbalized Sampling (VS):
+        1. Prompts the LLM to output a probability distribution over actions
+        2. Parses the distribution
+        3. Samples from it using the agent's RNG
 
         Args:
             agent_id: ID of the agent selecting
             world_description: Text description of current world state
             exploration_history: Recent action history for context
             tool_descriptions: Optional tool descriptions (uses stored if not provided)
+            available_actions: Optional list of available actions for VS (uses stored if not provided)
 
         Returns:
             ActionChoice with selected action, reasoning, and optional surprise
@@ -215,6 +291,17 @@ class CuriosityModel:
         Raises:
             ValueError: If the LLM response doesn't match expected ReACT format
         """
+        # Use Verbalized Sampling if enabled
+        if self.use_verbalized_sampling:
+            return self._select_action_vs(
+                agent_id=agent_id,
+                world_description=world_description,
+                exploration_history=exploration_history,
+                tool_descriptions=tool_descriptions,
+                available_actions=available_actions,
+            )
+
+        # --- Original logic (non-VS) ---
         # Extract agent UID (e.g., "agent_0" -> "0")
         agent_uid = agent_id.split("_")[-1] if "_" in agent_id else agent_id
 
@@ -274,6 +361,230 @@ class CuriosityModel:
             Dict mapping agent_id to their full prompt/conversation history
         """
         return self.agent_prompts.copy()
+
+    def _select_action_vs(
+        self,
+        agent_id: str,
+        world_description: str,
+        exploration_history: Optional[List[Dict[str, Any]]] = None,
+        tool_descriptions: Optional[str] = None,
+        available_actions: Optional[List[Dict[str, Any]]] = None,
+    ) -> ActionChoice:
+        """
+        Select an action using Verbalized Sampling (VS).
+
+        This method:
+        1. Prompts the LLM to output a probability distribution over actions
+        2. Parses the distribution from the response
+        3. Samples from it using the agent's dedicated RNG
+
+        Args:
+            agent_id: ID of the agent selecting
+            world_description: Text description of current world state
+            exploration_history: Recent action history for context
+            tool_descriptions: Optional tool descriptions
+            available_actions: List of available actions with targets
+
+        Returns:
+            ActionChoice with selected action, reasoning, distribution, and optional surprise
+        """
+        agent_uid = agent_id.split("_")[-1] if "_" in agent_id else agent_id
+        agent_uid_int = int(agent_uid) if agent_uid.isdigit() else 0
+        agent_color = self._get_agent_color(agent_uid_int)
+        reset = "\033[0m"
+
+        # Use provided tool descriptions or stored ones
+        tools_desc = tool_descriptions or self._tool_descriptions
+        if not tools_desc:
+            raise ValueError(
+                "Tool descriptions not set. Call set_tool_descriptions() or pass tool_descriptions parameter."
+            )
+
+        # Use provided actions or stored ones
+        actions = available_actions or self._available_actions
+        if not actions:
+            # Build default action list from world description
+            actions = self._build_default_actions(world_description)
+
+        # Get this agent's dedicated LLM client and RNG
+        agent_llm = self._get_agent_llm(agent_id)
+        agent_rng = self._get_agent_rng(agent_id)
+
+        # Build the VS prompt
+        vs_prompt = self._vs_sampler.build_distribution_prompt(
+            available_actions=actions,
+            world_description=world_description,
+            exploration_history=exploration_history,
+            agent_id=agent_id,
+        )
+
+        # Add story context if available
+        if self._story_context:
+            vs_prompt = f"== SCENARIO ==\n{self._story_context}\n\n{vs_prompt}"
+
+        # Store prompt for logging
+        if agent_id not in self.agent_prompts or not self.agent_prompts[agent_id]:
+            self.agent_prompts[agent_id] = vs_prompt
+
+        # Generate distribution from LLM
+        response = agent_llm.generate(vs_prompt, stop=None)
+
+        # Parse the distribution
+        distribution = self._vs_sampler.parse_distribution(response)
+
+        # Handle empty distribution (fallback with varied probabilities)
+        if not distribution.actions:
+            print(f"{agent_color}[VS]{reset} Warning: Could not parse distribution, using varied fallback")
+            from emtom.exploration.verbalized_sampling import ActionProbability
+            fallback_actions = []
+
+            # Generate varied probabilities for 25 actions
+            # Higher probabilities for first actions (more promising), lower for later ones
+            varied_probs = [
+                0.11, 0.10, 0.09, 0.08, 0.07,  # High priority (5)
+                0.06, 0.06, 0.05, 0.05, 0.05,  # Medium priority (5)
+                0.04, 0.04, 0.03, 0.03, 0.03,  # Lower priority (5)
+                0.02, 0.02, 0.02, 0.02, 0.02,  # Low priority (5)
+                0.01, 0.01, 0.01, 0.01, 0.01,  # Tail (5)
+            ]
+
+            prob_idx = 0
+            for action in actions:
+                name = action.get("name", "Navigate")
+                targets = action.get("targets", [])
+                if targets:
+                    for target in targets[:3]:  # Add up to 3 targets per action type
+                        if prob_idx < 25:
+                            fallback_actions.append(ActionProbability(
+                                action=name,
+                                target=target,
+                                probability=varied_probs[prob_idx],
+                            ))
+                            prob_idx += 1
+                if prob_idx >= 25:
+                    break
+            distribution.actions = fallback_actions
+
+        # Normalize probabilities to sum to 1.0 (preserves relative proportions)
+        # This ensures sampling is PROPORTIONAL to LLM's output probabilities
+        # e.g., if LLM outputs 0.15 for action A and 0.04 for action C,
+        # A gets picked ~15% of the time, C gets picked ~4% of the time
+        distribution.normalize()
+
+        # Sample from the distribution using agent's RNG
+        # Sampling is PROPORTIONAL to probabilities - if action has 0.15 prob, it's picked 15% of time
+        # Even low-probability "tail" actions can be sampled
+        sampled = distribution.sample(rng=agent_rng)
+
+        # Sort actions by probability for display
+        sorted_actions = sorted(distribution.actions, key=lambda a: a.probability, reverse=True)
+
+        # Color codes for probability bars
+        green = "\033[92m"
+        yellow = "\033[93m"
+        cyan = "\033[96m"
+        magenta = "\033[95m"
+        bold = "\033[1m"
+
+        # Print colorful VS distribution header
+        print(f"\n{agent_color}{bold}{'─'*70}{reset}")
+        print(f"{agent_color}{bold}[VS] {agent_id.upper()} - {len(distribution.actions)} actions{reset}")
+        print(f"{agent_color}{bold}{'─'*70}{reset}")
+
+        # Print each action with colored probability bar
+        for a in sorted_actions:
+            bar_len = int(a.probability * 50)  # Scale bar to 50 chars for better visibility
+
+            # Color the bar based on probability level
+            if a.probability >= 0.10:
+                bar_color = green
+            elif a.probability >= 0.05:
+                bar_color = yellow
+            else:
+                bar_color = cyan
+
+            bar = "█" * bar_len
+
+            # Highlight the sampled action with bold and different formatting
+            if a.action == sampled.action and a.target == sampled.target:
+                print(f"  {agent_color}{bold}{a.probability:.3f}{reset} [{bar_color}{bar:50s}{reset}] {agent_color}{bold}{a.full_action}{reset} {magenta}◄── SAMPLED{reset}")
+            else:
+                print(f"  {a.probability:.3f} [{bar_color}{bar:50s}{reset}] {a.full_action}")
+
+        print(f"\n{agent_color}{bold}[VS] {agent_id} → {sampled.full_action}{reset}")
+        print(f"{agent_color}{'─'*70}{reset}\n")
+
+        # Build reasoning that includes distribution info
+        top_actions = sorted_actions[:5]
+        dist_summary = " | ".join(f"{a.full_action}:{a.probability:.2f}" for a in top_actions)
+
+        # Build full reasoning
+        reasoning = distribution.reasoning if distribution.reasoning else "Exploring the environment."
+        full_reasoning = f"{reasoning} [VS: {dist_summary}] -> Sampled: {sampled.full_action}"
+
+        # Check for surprise in the reasoning
+        surprise = self._extract_surprise(reasoning)
+
+        # Append to conversation for logging
+        action_line = f"\nAgent_{agent_uid}_Action: {sampled.full_action}\nAssigned!\n"
+        self.agent_prompts[agent_id] += f"\n{response}{action_line}"
+
+        return ActionChoice(
+            action=sampled.action,
+            target=sampled.target,
+            reasoning=full_reasoning,
+            surprise=surprise,
+            vs_distribution=distribution,
+        )
+
+    def _build_default_actions(self, world_description: str) -> List[Dict[str, Any]]:
+        """Build a default action list from world description for VS fallback.
+
+        Args:
+            world_description: Text description of the world state
+
+        Returns:
+            List of action dictionaries with 'name' and 'targets' keys
+        """
+        actions = []
+
+        # Extract rooms
+        rooms = []
+        if "Rooms you can go to:" in world_description:
+            rooms_line = world_description.split("Rooms you can go to:")[1].split("\n")[0]
+            rooms = [r.strip() for r in rooms_line.split(",")]
+
+        # Extract furniture
+        furniture = []
+        if "Furniture:" in world_description:
+            furniture_line = world_description.split("Furniture:")[1].split("\n")[0]
+            furniture = [f.strip() for f in furniture_line.split(",")]
+
+        # Extract objects
+        objects = []
+        if "Objects:" in world_description:
+            objects_line = world_description.split("Objects:")[1].split("\n")[0]
+            objects = [o.strip().split(" (")[0] for o in objects_line.split(",")]  # Remove location info
+
+        # Build action list
+        if rooms:
+            actions.append({"name": "Navigate", "targets": rooms[:5]})
+            actions.append({"name": "Explore", "targets": rooms[:3]})
+
+        if furniture:
+            actions.append({"name": "Navigate", "targets": furniture[:5]})
+            actions.append({"name": "Open", "targets": furniture[:5]})
+            actions.append({"name": "Close", "targets": furniture[:3]})
+
+        if objects:
+            actions.append({"name": "Pick", "targets": objects[:5]})
+
+        # Always include search tools
+        actions.append({"name": "FindRoomTool", "targets": ["all rooms"]})
+        actions.append({"name": "FindReceptacleTool", "targets": ["furniture", "openable furniture"]})
+        actions.append({"name": "FindObjectTool", "targets": ["small objects", "interesting objects"]})
+
+        return actions
 
     def _build_task_description(
         self,

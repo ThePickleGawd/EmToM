@@ -516,12 +516,18 @@ class HabitatExplorer:
         world_text = self._build_world_description(agent_id)
         recent_history = self.logger.get_recent_actions(agent_id, n=5)
 
+        # Get available actions for Verbalized Sampling
+        available_actions = self._get_available_actions(agent_id)
+
         # Select action via curiosity model (uses agent's own LLM client)
+        # If VS is enabled, this will prompt the LLM for a probability distribution
+        # and sample from it using the agent's RNG
         action_choice = self.curiosity.select_action(
             agent_id=agent_id,
             world_description=world_text,
             exploration_history=recent_history,
             tool_descriptions=self._tool_descriptions,
+            available_actions=available_actions,
         )
 
         print(f"Thought: {action_choice.reasoning}")
@@ -676,12 +682,16 @@ class HabitatExplorer:
             world_text = self._build_world_description(agent_id)
             recent_history = self.logger.get_recent_actions(agent_id, n=5)
 
+            # Get available actions for Verbalized Sampling
+            available_actions = self._get_available_actions(agent_id)
+
             # Select action via curiosity model
             action_choice = self.curiosity.select_action(
                 agent_id=agent_id,
                 world_description=world_text,
                 exploration_history=recent_history,
                 tool_descriptions=self._tool_descriptions,
+                available_actions=available_actions,
             )
             agent_actions[agent_id] = action_choice
 
