@@ -204,10 +204,14 @@ def main(config: DictConfig) -> None:
     for uid, agent in runner.agents.items():
         cprint(f"  agent_{uid} tools: {list(agent.tools.keys())}", "blue")
 
+    # Get max steps from config (set via --max-sim-steps or Hydra)
+    max_steps = config.habitat.environment.get("max_episode_steps", 2000)
+    cprint(f"\nMax simulation steps: {max_steps}", "blue")
+
     # Run benchmark
     try:
-        cprint("\nStarting task execution with LLM planners...", "blue")
-        results = runner.run(instruction=instruction)
+        cprint("Starting task execution with LLM planners...", "blue")
+        results = runner.run(instruction=instruction, max_steps=max_steps)
 
         cprint("\nTask execution completed!", "green")
         print(f"Steps: {results['steps']}")
