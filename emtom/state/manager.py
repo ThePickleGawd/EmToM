@@ -31,6 +31,7 @@ from emtom.mechanics.handlers import (
 
 if TYPE_CHECKING:
     from habitat_llm.agent.env import EnvironmentInterface
+    from emtom.task_gen.dag import DAGProgress
 
 
 @dataclass
@@ -78,6 +79,10 @@ class GameStateManager:
         # State history for temporal evaluation (PARTNR-style)
         self._state_history: List[EMTOMGameState] = []
         self._success_condition: Optional[Dict[str, Any]] = None
+
+        # DAG progress tracking for subtask completion
+        self._dag_progress: Optional["DAGProgress"] = None
+        self._subtasks: List[Any] = []  # Store subtasks for reference
 
     def initialize_from_task(self, task_data: Dict[str, Any]) -> EMTOMGameState:
         """
@@ -1176,3 +1181,80 @@ class GameStateManager:
     def clear_state_history(self) -> None:
         """Clear state history (useful for resetting)."""
         self._state_history = [copy.deepcopy(self.state)]
+
+    # =========================================================================
+    # DAG Progress Tracking
+    # =========================================================================
+
+    def initialize_dag_progress(self, subtasks: List[Any]) -> None:
+        """
+        Initialize DAG progress tracking from task subtasks.
+
+        Args:
+            subtasks: List of Subtask objects with success_conditions
+        """
+        from emtom.task_gen.dag import DAGProgress
+
+        self._subtasks = subtasks
+        if subtasks:
+            self._dag_progress = DAGProgress.from_subtasks(subtasks)
+
+    def update_dag_progress(self) -> Dict[str, Any]:
+        """
+        Update DAG progress by checking subtask conditions against current state.
+
+        Should be called after each action to latch completed subtasks.
+
+        Returns:
+            Dict with completed, newly_completed, percent_complete, success
+        """
+        if not self._dag_progress:
+            return {
+                "completed": [],
+                "newly_completed": [],
+                "percent_complete": 0.0,
+                "success": False,
+                "error": "No DAG progress initialized",
+            }
+
+        def check_condition(subtask) -> bool:
+            """Check if a subtask's success_condition is satisfied."""
+            from emtom.evaluation import evaluate_task, EvaluationResult
+
+            condition = subtask.success_condition
+            if not condition:
+                return False
+
+            # Wrap single condition in required_states format
+            success_cond = {
+                "description": subtask.description,
+                "required_states": [condition],
+            }
+
+            if not self.env:
+                return False
+
+            try:
+                sim = self.env.sim
+                result = evaluate_task(success_cond, sim)
+                return result.success
+            except Exception:
+                return False
+
+        return self._dag_progress.update(check_condition)
+
+    def get_dag_status(self) -> Dict[str, Any]:
+        """Get current DAG progress status without updating."""
+        if not self._dag_progress:
+            return {
+                "completed": [],
+                "percent_complete": 0.0,
+                "success": False,
+                "remaining": [],
+            }
+        return self._dag_progress.get_status()
+
+    def reset_dag_progress(self) -> None:
+        """Reset DAG progress (clear all completed subtasks)."""
+        if self._dag_progress:
+            self._dag_progress.reset()

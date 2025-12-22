@@ -1,7 +1,7 @@
 {
   "task_id": "task_template",
   "title": "Template Task - Replace This",
-  "story": "NEUTRAL narrative with motivation for the goal. E.g., 'Guests are arriving for tea. One of you organized this kitchen before.' NO mechanic hints.",
+  "story": "NEUTRAL narrative with motivation for the goal. E.g., 'Guests are arriving for tea. One of you organized this kitchen before.' NO mechanic hints. Must reference real object IDs.",
   "public_goal": "Describe what both agents need to accomplish together",
   "public_context": "Optional background context that both agents know",
   "theory_of_mind_required": true,
@@ -20,64 +20,55 @@
   ],
   "agent_secrets": {
     "agent_0": [
-      "Secret knowledge about the mechanics that only agent_0 knows",
-      "For example: 'The fridge opens backwards - the close action actually opens it'"
+      "UNIQUE knowledge for agent_0 (e.g., how a mechanic works)"
     ],
-    "agent_1": []
+    "agent_1": [
+      "UNIQUE knowledge for agent_1 (e.g., where an object is located)"
+    ]
   },
   "agent_roles": {
-    "agent_0": "Expert who discovered the strange mechanics during exploration",
-    "agent_1": "Novice who must learn through collaboration and communication"
+    "agent_0": "Role with unique knowledge/capability that agent_1 lacks",
+    "agent_1": "Role with unique knowledge/capability that agent_0 lacks"
   },
   "agent_actions": {
-    "agent_0": ["CHOOSE_BASED_ON_TASK"],
-    "agent_1": ["CHOOSE_BASED_ON_TASK_WITH_ASYMMETRY"]
+    "agent_0": ["CHOOSE_DIFFERENT_ACTIONS_FOR_CAPABILITY_ASYMMETRY"],
+    "agent_1": ["CHOOSE_DIFFERENT_ACTIONS_TO_FORCE_COORDINATION"]
   },
-  "success_condition": {
-    "description": "Describe what success looks like in plain English",
-    "required_states": [
-      {
+  "subtasks": [
+    {
+      "id": "step_1",
+      "description": "First step - describe what needs to happen",
+      "success_condition": {
+        "entity": "object_id",
+        "property": "is_open",
+        "value": true
+      },
+      "depends_on": [],
+      "assigned_agent": null
+    },
+    {
+      "id": "step_2",
+      "description": "Second step - depends on step_1",
+      "success_condition": {
+        "entity": "object_id",
+        "property": "is_held_by",
+        "target": "agent_1"
+      },
+      "depends_on": ["step_1"],
+      "assigned_agent": "agent_1"
+    },
+    {
+      "id": "final_step",
+      "description": "Final outcome - the terminal node",
+      "success_condition": {
         "entity": "object_id",
         "property": "is_on_top",
         "target": "furniture_id"
-      }
-    ],
-    "temporal_constraints": [
-      {
-        "type": "before",
-        "first": "unlock_container",
-        "then": "retrieve_item"
-      }
-    ],
-    "milestones": [
-      {
-        "id": "found_key",
-        "entity": "agent_0",
-        "property": "has_item",
-        "value": "key_1",
-        "description": "Agent found the hidden key"
       },
-      {
-        "id": "communicated_secret",
-        "entity": "agent_1",
-        "property": "knows_mechanic",
-        "value": true,
-        "description": "Agent 0 shared the mechanic knowledge with Agent 1"
-      }
-    ],
-    "minefields": [
-      {
-        "id": "broke_container",
-        "entity": "target_container",
-        "property": "is_broken",
-        "value": true,
-        "description": "The container was broken instead of opened properly",
-        "fails_task": true
-      }
-    ],
-    "time_limit": null,
-    "all_agents_must_survive": true
-  },
+      "depends_on": ["step_2"],
+      "assigned_agent": "agent_1"
+    }
+  ],
   "failure_conditions": [
     {
       "description": "Too many failed attempts",
@@ -94,6 +85,10 @@
   },
   "num_agents": 2,
   "difficulty": 3,
-  "subtasks": [],
-  "source_trajectory": "trajectory_episode_id"
+  "source_trajectory": "trajectory_episode_id",
+  "golden_trajectory": [
+    {"agent": "agent_0", "action": "Communicate", "message": "Share agent_0's unique knowledge"},
+    {"agent": "agent_1", "action": "Communicate", "message": "Share agent_1's unique knowledge"},
+    {"agent": "agent_X", "action": "ACTION", "target": "object_or_room_id"}
+  ]
 }

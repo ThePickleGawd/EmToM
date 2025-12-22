@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from emtom.task_gen.trajectory_analyzer import TrajectoryAnalysis
 
@@ -76,7 +76,14 @@ class TaskCategory(Enum):
 
 @dataclass
 class Subtask:
-    """A subtask within a larger challenge."""
+    """
+    A subtask within a larger challenge (node in task DAG).
+
+    Subtasks form a DAG where:
+    - Each node has a success_condition (PARTNR predicate)
+    - Edges are defined by depends_on
+    - Terminal nodes (no dependents) define task success
+    """
 
     subtask_id: str
     description: str
@@ -85,12 +92,25 @@ class Subtask:
     depends_on: List[str] = field(default_factory=list)
     hints: List[str] = field(default_factory=list)
 
+    @property
+    def id(self) -> str:
+        """Alias for subtask_id for cleaner access."""
+        return self.subtask_id
+
+    def has_valid_condition(self) -> bool:
+        """Check if success_condition is properly defined."""
+        if not self.success_condition or not isinstance(self.success_condition, dict):
+            return False
+        return "entity" in self.success_condition and "property" in self.success_condition
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Subtask":
+        # Support both 'id' and 'subtask_id' fields
+        subtask_id = data.get("subtask_id") or data.get("id", "unknown")
         return cls(
-            subtask_id=data["subtask_id"],
-            description=data["description"],
-            success_condition=data["success_condition"],
+            subtask_id=subtask_id,
+            description=data.get("description", ""),
+            success_condition=data.get("success_condition", {}),
             assigned_agent=data.get("assigned_agent"),
             depends_on=data.get("depends_on", []),
             hints=data.get("hints", []),
@@ -189,7 +209,8 @@ class GeneratedTask:
     agent_actions: Dict[str, List[str]]
 
     # INTERNAL (not shown to agents)
-    success_condition: SuccessCondition
+    # success_condition is optional - derived from terminal subtasks if not provided
+    success_condition: Optional[SuccessCondition]
     failure_conditions: List[FailureCondition]
     initial_world_state: Dict[str, Any]
 
@@ -247,7 +268,7 @@ class GeneratedTask:
             agent_secrets=data.get("agent_secrets", {}),
             agent_roles=data.get("agent_roles", {}),
             agent_actions=data.get("agent_actions", {}),
-            success_condition=SuccessCondition.from_dict(data["success_condition"]),
+            success_condition=SuccessCondition.from_dict(data["success_condition"]) if "success_condition" in data else None,
             failure_conditions=[FailureCondition.from_dict(f) for f in data.get("failure_conditions", [])],
             initial_world_state=data.get("initial_world_state", {}),
             num_agents=data.get("num_agents", 2),
@@ -256,6 +277,55 @@ class GeneratedTask:
             subtasks=subtasks,
             source_trajectory=data.get("source_trajectory"),
         )
+
+    # DAG-related methods
+
+    def get_terminal_subtasks(self) -> List[Subtask]:
+        """Get terminal subtasks (nodes with no dependents)."""
+        from .dag import find_terminal_nodes
+        return find_terminal_nodes(self.subtasks)
+
+    def get_terminal_conditions(self) -> List[Dict[str, Any]]:
+        """Get success conditions from terminal subtasks."""
+        terminals = self.get_terminal_subtasks()
+        return [s.success_condition for s in terminals if s.has_valid_condition()]
+
+    def get_effective_success_condition(self) -> Optional[SuccessCondition]:
+        """
+        Get the effective success condition.
+
+        If success_condition is explicitly set, return it.
+        Otherwise, derive from terminal subtasks.
+        """
+        if self.success_condition:
+            return self.success_condition
+
+        # Derive from terminal subtasks
+        terminal_conditions = self.get_terminal_conditions()
+        if not terminal_conditions:
+            return None
+
+        return SuccessCondition(
+            description=f"Complete all {len(terminal_conditions)} terminal subtask(s)",
+            required_states=terminal_conditions,
+        )
+
+    def validate_subtask_dag(self) -> Tuple[bool, List[str]]:
+        """Validate the subtask DAG structure."""
+        from .dag import validate_dag
+        return validate_dag(self.subtasks)
+
+    def create_dag_progress(self):
+        """Create a DAGProgress tracker for this task."""
+        from .dag import DAGProgress
+        return DAGProgress.from_subtasks(self.subtasks)
+
+    def has_valid_dag(self) -> bool:
+        """Check if task has a valid subtask DAG."""
+        if not self.subtasks:
+            return False
+        is_valid, _ = self.validate_subtask_dag()
+        return is_valid
 
 
 TASK_GENERATION_PROMPT = '''You are a creative puzzle designer for an escape-room style multi-agent collaboration game.

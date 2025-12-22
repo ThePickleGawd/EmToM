@@ -15,6 +15,13 @@ from emtom.task_gen.task_generator import (
     TaskCategory,
     TaskGenerator,
 )
+from emtom.task_gen.dag import (
+    DAGProgress,
+    find_root_nodes,
+    find_terminal_nodes,
+    topological_sort,
+    validate_dag,
+)
 from emtom.task_gen.agent import TaskGeneratorAgent
 
 __all__ = [
@@ -31,6 +38,12 @@ __all__ = [
     "SuccessCondition",
     "TaskCategory",
     "TaskGenerator",
+    # DAG utilities
+    "DAGProgress",
+    "find_root_nodes",
+    "find_terminal_nodes",
+    "topological_sort",
+    "validate_dag",
     # Agentic generator
     "TaskGeneratorAgent",
 ]

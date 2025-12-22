@@ -82,6 +82,7 @@ class TaskGeneratorAgent:
         self.submitted_tasks: List[str] = []
         self.messages: List[Dict[str, str]] = []
         self.iteration_count = 0
+        self.last_verify_passed = False  # Track if golden trajectory verified
 
         # Whitelisted bash commands (for safety)
         self.allowed_commands = [
@@ -320,13 +321,18 @@ Start by exploring the available trajectories with bash."""
         self._log(f"Executing: {tool}[{args[:100]}...]")
 
         if tool == "bash":
+            # Reset verification on any bash edit to task file
+            if "working_task.json" in args and (">" in args or "cat" in args):
+                self.last_verify_passed = False
             return self._bash(args)
         elif tool == "test_task":
             return self._test_task()
+        elif tool == "verify_golden_trajectory":
+            return self._verify_golden_trajectory()
         elif tool == "submit_task":
             return self._submit_task()
         else:
-            return f"Unknown tool: {tool}. Available tools: bash, test_task, submit_task"
+            return f"Unknown tool: {tool}. Available tools: bash, test_task, verify_golden_trajectory, submit_task"
 
     def _bash(self, command: str) -> str:
         """
@@ -452,10 +458,10 @@ Start by exploring the available trajectories with bash."""
 
     def _validate_task_structure(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """Validate task JSON structure without running benchmark."""
+        # Core required fields (success_condition is optional if subtasks have valid DAG)
         required_fields = [
             "task_id", "title", "story", "episode_id", "public_goal", "category",
-            "mechanic_bindings", "agent_secrets", "agent_roles",
-            "agent_actions", "success_condition"
+            "mechanic_bindings", "agent_secrets", "agent_roles", "agent_actions"
         ]
 
         missing = [f for f in required_fields if f not in task_data]
@@ -465,6 +471,35 @@ Start by exploring the available trajectories with bash."""
                 "error": f"Missing required fields: {missing}",
                 "summary": "Task validation failed"
             }
+
+        # Validate success condition OR subtasks DAG
+        has_success_condition = "success_condition" in task_data and task_data["success_condition"]
+        has_subtasks = "subtasks" in task_data and task_data["subtasks"]
+
+        if not has_success_condition and not has_subtasks:
+            return {
+                "valid": False,
+                "error": "Task must have either 'success_condition' or 'subtasks' with valid DAG",
+                "summary": "Task validation failed"
+            }
+
+        # If using subtasks, validate DAG structure
+        if has_subtasks:
+            from emtom.task_gen.dag import validate_dag
+            from emtom.task_gen import Subtask
+
+            subtasks = []
+            for s in task_data["subtasks"]:
+                if isinstance(s, dict):
+                    subtasks.append(Subtask.from_dict(s))
+
+            is_valid, errors = validate_dag(subtasks)
+            if not is_valid:
+                return {
+                    "valid": False,
+                    "error": f"Invalid subtask DAG: {'; '.join(errors)}",
+                    "summary": "Task validation failed"
+                }
 
         # Check story is not empty
         if not task_data.get("story") or len(task_data.get("story", "")) < 20:
@@ -541,7 +576,7 @@ Start by exploring the available trajectories with bash."""
             from emtom.runner import BenchmarkRunner
             from emtom.runner.benchmark import task_to_instruction
             from emtom.task_gen import GeneratedTask
-            from habitat_llm.agent.env import register_actions, register_measures, register_sensors
+            from habitat_llm.agent.env import register_actions, register_measures, register_sensors, remove_visual_sensors
             from habitat_llm.agent.env.dataset import CollaborationDatasetV0
             from habitat_llm.agent.env.environment_interface import EnvironmentInterface
         except ImportError as e:
@@ -570,6 +605,10 @@ Start by exploring the available trajectories with bash."""
         os.makedirs(output_dir, exist_ok=True)
 
         try:
+            # Remove visual sensors since we don't need them for task testing
+            # This prevents KeyError on agent_0_third_rgb when sensors aren't available
+            remove_visual_sensors(self.config)
+
             # Register components
             register_sensors(self.config)
             register_actions(self.config)
@@ -596,6 +635,7 @@ Start by exploring the available trajectories with bash."""
                 task_data=task_mechanics,
                 output_dir=output_dir,
                 task=task,
+                save_video=False,  # Disable video during task generation
             )
 
             # Generate instruction
@@ -604,7 +644,7 @@ Start by exploring the available trajectories with bash."""
             # Run benchmark (limited steps for testing)
             results = runner.run(
                 instruction=instruction,
-                max_steps=100,  # Cap at 100 for quick testing
+                max_steps=20000,  # Allow full episode length
             )
 
             runner.cleanup()
@@ -625,12 +665,212 @@ Start by exploring the available trajectories with bash."""
                 "summary": f"Benchmark error: {e}"
             }
 
+    def _verify_golden_trajectory(self) -> str:
+        """
+        Execute golden_trajectory step-by-step to prove task is completable.
+
+        This runs each action in the golden trajectory sequentially and
+        verifies the success condition is met at the end.
+        """
+        # Check task file exists
+        if not self.task_file.exists():
+            return json.dumps({
+                "valid": False,
+                "error": "working_task.json does not exist. Create it first with bash."
+            })
+
+        # Load task
+        try:
+            with open(self.task_file) as f:
+                task_data = json.load(f)
+        except json.JSONDecodeError as e:
+            return json.dumps({
+                "valid": False,
+                "error": f"Invalid JSON in working_task.json: {e}"
+            })
+
+        # Check golden_trajectory exists
+        golden = task_data.get("golden_trajectory", [])
+        if not golden:
+            return json.dumps({
+                "valid": False,
+                "error": "No golden_trajectory found in task. Add a golden_trajectory field with the expected action sequence."
+            })
+
+        self._log(f"Verifying golden trajectory: {len(golden)} steps")
+
+        # Import dependencies
+        try:
+            from emtom.runner.verification import VerificationRunner
+            from emtom.task_gen import GeneratedTask
+            from habitat_llm.agent.env import register_actions, register_measures, register_sensors
+            from habitat_llm.agent.env.dataset import CollaborationDatasetV0
+            from habitat_llm.agent.env.environment_interface import EnvironmentInterface
+        except ImportError as e:
+            return json.dumps({
+                "valid": False,
+                "error": f"Import error: {e}",
+                "summary": "Could not import benchmark dependencies"
+            })
+
+        # Convert task_data to GeneratedTask
+        try:
+            task = GeneratedTask.from_dict(task_data)
+        except Exception as e:
+            return json.dumps({
+                "valid": False,
+                "error": f"Invalid task format: {e}"
+            })
+
+        # Setup environment
+        output_dir = f"outputs/emtom/verify_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        os.makedirs(output_dir, exist_ok=True)
+
+        try:
+            # NOTE: Don't remove visual sensors for verification - skills need them
+            # (e.g., explore_skill needs articulated_agent_arm_depth and rgb)
+
+            # Register components
+            register_sensors(self.config)
+            register_actions(self.config)
+            register_measures(self.config)
+
+            # Create environment
+            dataset = CollaborationDatasetV0(self.config.habitat.dataset)
+            env_interface = EnvironmentInterface(self.config, dataset=dataset, init_wg=False)
+            env_interface.initialize_perception_and_world_graph()
+
+            # Create runner (use VerificationRunner - doesn't create LLM planners)
+            runner = VerificationRunner(self.config)
+
+            # Convert task to mechanics dict
+            task_mechanics = {
+                "mechanics": [
+                    {"mechanic_type": b.mechanic_type, **b.to_dict()}
+                    for b in task.mechanic_bindings
+                ]
+            } if task.mechanic_bindings else None
+
+            runner.setup(
+                env_interface=env_interface,
+                task_data=task_mechanics,
+                output_dir=output_dir,
+                task=task,
+                save_video=False,  # Disable video during task generation
+            )
+
+            # Execute each step in golden_trajectory
+            executed_steps = []
+            for i, step in enumerate(golden):
+                agent_str = step.get("agent", "agent_0")
+                agent_id = int(agent_str.split("_")[1])
+                action = step.get("action")
+                target = step.get("target")
+                message = step.get("message")
+
+                self._log(f"  Step {i+1}: {agent_str} {action}({target or message})")
+
+                # Skip Communicate actions (no physical execution needed)
+                if action == "Communicate":
+                    executed_steps.append({
+                        "step": i,
+                        "agent": agent_str,
+                        "action": action,
+                        "message": message,
+                        "success": True,
+                        "skipped": True
+                    })
+                    continue
+
+                # Execute action
+                try:
+                    result = runner.execute_action(
+                        uid=agent_id,
+                        action_name=action,
+                        target=target
+                    )
+
+                    success = result.get("success", False)
+                    executed_steps.append({
+                        "step": i,
+                        "agent": agent_str,
+                        "action": action,
+                        "target": target,
+                        "success": success,
+                        "observation": result.get("observation", "")[:200]
+                    })
+
+                    if not success:
+                        runner.cleanup()
+                        return json.dumps({
+                            "valid": False,
+                            "failed_step": i,
+                            "action": f"{agent_str}: {action}({target})",
+                            "error": result.get("observation", "Action failed"),
+                            "executed_steps": executed_steps,
+                            "summary": f"Golden trajectory failed at step {i+1}"
+                        }, indent=2)
+
+                except Exception as e:
+                    runner.cleanup()
+                    return json.dumps({
+                        "valid": False,
+                        "failed_step": i,
+                        "action": f"{agent_str}: {action}({target})",
+                        "error": str(e),
+                        "executed_steps": executed_steps,
+                        "summary": f"Golden trajectory failed at step {i+1}: {e}"
+                    }, indent=2)
+
+            # All steps executed, now evaluate success condition
+            try:
+                evaluation = runner.evaluate_task()
+                success_met = evaluation.get("success", False)
+            except Exception as e:
+                evaluation = {"error": str(e)}
+                success_met = False
+
+            runner.cleanup()
+
+            if not success_met:
+                return json.dumps({
+                    "valid": False,
+                    "error": "Golden trajectory completed but success_condition not met",
+                    "evaluation": evaluation,
+                    "executed_steps": executed_steps,
+                    "summary": "All actions succeeded but goal not reached"
+                }, indent=2)
+
+            # Success!
+            self.last_verify_passed = True
+            return json.dumps({
+                "valid": True,
+                "steps_executed": len(golden),
+                "success_condition_met": True,
+                "executed_steps": executed_steps,
+                "summary": f"Golden trajectory verified: {len(golden)} steps, goal reached"
+            }, indent=2)
+
+        except Exception as e:
+            return json.dumps({
+                "valid": False,
+                "error": str(e),
+                "summary": f"Verification error: {e}"
+            }, indent=2)
+
     def _submit_task(self) -> str:
         """
         Copy working task to output directory.
 
         Called when the agent determines task quality is good.
+        Requires verify_golden_trajectory[] to pass first.
         """
+        if not self.last_verify_passed:
+            return json.dumps({
+                "error": "Must run verify_golden_trajectory[] first and pass before submitting.",
+                "hint": "Run verify_golden_trajectory[] to prove the golden trajectory works."
+            })
+
         if not self.task_file.exists():
             return "Error: working_task.json does not exist. Create and test it first."
 

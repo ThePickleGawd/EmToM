@@ -39,6 +39,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         task_data: Optional[Dict[str, Any]] = None,
         output_dir: Optional[str] = None,
         task: Optional["GeneratedTask"] = None,
+        save_video: Optional[bool] = None,
     ) -> None:
         """
         Setup benchmark runner.
@@ -48,6 +49,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
             task_data: Task data with mechanics/bindings (can be from task.to_mechanics_dict())
             output_dir: Output directory
             task: Optional GeneratedTask object for full task info
+            save_video: Whether to save video. If None, uses config.evaluation.save_video
         """
         self.task = task
 
@@ -58,7 +60,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         # Get agent_actions from task if available
         agent_actions = task.agent_actions if task else None
 
-        super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions)
+        super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions, save_video=save_video)
         self._setup_planners()
 
     def _task_to_mechanics_dict(self, task: "GeneratedTask") -> Dict[str, Any]:

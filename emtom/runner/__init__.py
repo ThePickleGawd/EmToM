@@ -6,10 +6,12 @@ from .base import EMTOMBaseRunner
 from .exploration import ExplorationRunner
 from .benchmark import BenchmarkRunner
 from .test import HumanTestRunner
+from .verification import VerificationRunner
 
 __all__ = [
     "EMTOMBaseRunner",
     "ExplorationRunner",
     "BenchmarkRunner",
     "HumanTestRunner",
+    "VerificationRunner",
 ]

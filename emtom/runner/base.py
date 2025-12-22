@@ -54,6 +54,7 @@ class EMTOMBaseRunner(ABC):
         # Video recording
         self._dvu = None
         self._fpv_recorder = None
+        self._save_video_override: Optional[bool] = None
 
         # State tracking
         self._step_count = 0
@@ -69,6 +70,7 @@ class EMTOMBaseRunner(ABC):
         task_data: Optional[Dict[str, Any]] = None,
         output_dir: Optional[str] = None,
         agent_actions: Optional[Dict[str, List[str]]] = None,
+        save_video: Optional[bool] = None,
     ) -> None:
         """
         Full setup sequence. Call before run().
@@ -80,6 +82,7 @@ class EMTOMBaseRunner(ABC):
             agent_actions: Optional dict mapping agent_id to list of allowed actions.
                            If None, all actions are available to all agents.
                            Example: {"agent_0": ["Navigate", "Open", "Communicate"], "agent_1": ["Navigate"]}
+            save_video: Whether to save video. If None, uses config.evaluation.save_video
         """
         self.env_interface = env_interface
         self.output_dir = output_dir or getattr(
@@ -89,6 +92,7 @@ class EMTOMBaseRunner(ABC):
 
         # Store agent actions for tool setup
         self._agent_actions = agent_actions
+        self._save_video_override = save_video  # Override for video saving
 
         self._setup_game_manager(task_data)
         self._setup_agents()
@@ -315,9 +319,13 @@ class EMTOMBaseRunner(ABC):
 
     def _setup_video(self) -> None:
         """Initialize video recording utilities."""
-        save_video = True
-        if hasattr(self.config, 'evaluation') and hasattr(self.config.evaluation, 'save_video'):
+        # Check override first, then config, default to True
+        if self._save_video_override is not None:
+            save_video = self._save_video_override
+        elif hasattr(self.config, 'evaluation') and hasattr(self.config.evaluation, 'save_video'):
             save_video = self.config.evaluation.save_video
+        else:
+            save_video = True
 
         if not save_video:
             return
