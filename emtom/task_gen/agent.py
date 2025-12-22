@@ -192,7 +192,9 @@ Start by reading the template, then create a task using the scene data above."""
                 self._log(f"\nReached max iterations ({self.max_iterations})")
                 break
 
-            self._log(f"\n--- Iteration {self.iteration_count} ---")
+            self._log(f"\n{'='*40}")
+            self._log(f"Iteration {self.iteration_count}/{self.max_iterations} | Submitted: {len(self.submitted_tasks)}/{num_tasks_target}")
+            self._log(f"{'='*40}")
 
             # Get LLM response
             try:
@@ -222,13 +224,14 @@ Start by reading the template, then create a task using the scene data above."""
 
             # Execute action and get observation
             tool, args = action
+            self._log(f"Action: {tool}[{args[:80]}{'...' if len(args) > 80 else ''}]")
             observation = self._execute_action(tool, args)
 
             # Add to conversation
             self.messages.append({"role": "assistant", "content": response})
             self.messages.append({"role": "user", "content": f"Observation: {observation}"})
 
-            self._log(f"Observation: {observation[:500]}...")
+            self._log(f"Observation: {observation[:300]}...")
 
         self._log(f"\n{'='*60}")
         self._log(f"Agent finished. Submitted {len(self.submitted_tasks)} tasks:")
@@ -862,7 +865,7 @@ Start by reading the template, then create a task using the scene data above."""
 
         # Print to terminal if verbose
         if self.verbose:
-            print(message)
+            print(message, flush=True)
 
     def close(self) -> None:
         """Close log file handle."""

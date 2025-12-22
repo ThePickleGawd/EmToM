@@ -410,12 +410,13 @@ class CuriosityModel:
         agent_llm = self._get_agent_llm(agent_id)
         agent_rng = self._get_agent_rng(agent_id)
 
-        # Build the VS prompt
+        # Build the VS prompt - pass tool descriptions for discovery-based exploration
         vs_prompt = self._vs_sampler.build_distribution_prompt(
-            available_actions=actions,
+            available_actions=actions,  # Not used, kept for backwards compat
             world_description=world_description,
             exploration_history=exploration_history,
             agent_id=agent_id,
+            tool_descriptions=tools_desc,  # Pass tool descriptions for discovery
         )
 
         # Add story context if available
@@ -538,7 +539,9 @@ class CuriosityModel:
         )
 
     def _build_default_actions(self, world_description: str) -> List[Dict[str, Any]]:
-        """Build a default action list from world description for VS fallback.
+        """Build a default action list prioritizing discovery tools.
+
+        The agent should use perception tools to discover objects before interacting.
 
         Args:
             world_description: Text description of the world state
@@ -548,41 +551,25 @@ class CuriosityModel:
         """
         actions = []
 
-        # Extract rooms
+        # PRIORITY 1: Discovery tools - agent must use these first
+        actions.append({"name": "FindObjectTool", "targets": ["small objects", "containers", "interesting items"]})
+        actions.append({"name": "FindReceptacleTool", "targets": ["openable furniture", "cabinets", "drawers"]})
+        actions.append({"name": "FindRoomTool", "targets": ["all rooms", "bedrooms", "kitchen"]})
+
+        # Extract rooms for navigation (rooms are visible without discovery)
         rooms = []
         if "Rooms you can go to:" in world_description:
             rooms_line = world_description.split("Rooms you can go to:")[1].split("\n")[0]
             rooms = [r.strip() for r in rooms_line.split(",")]
 
-        # Extract furniture
-        furniture = []
-        if "Furniture:" in world_description:
-            furniture_line = world_description.split("Furniture:")[1].split("\n")[0]
-            furniture = [f.strip() for f in furniture_line.split(",")]
-
-        # Extract objects
-        objects = []
-        if "Objects:" in world_description:
-            objects_line = world_description.split("Objects:")[1].split("\n")[0]
-            objects = [o.strip().split(" (")[0] for o in objects_line.split(",")]  # Remove location info
-
-        # Build action list
         if rooms:
             actions.append({"name": "Navigate", "targets": rooms[:5]})
             actions.append({"name": "Explore", "targets": rooms[:3]})
 
-        if furniture:
-            actions.append({"name": "Navigate", "targets": furniture[:5]})
-            actions.append({"name": "Open", "targets": furniture[:5]})
-            actions.append({"name": "Close", "targets": furniture[:3]})
-
-        if objects:
-            actions.append({"name": "Pick", "targets": objects[:5]})
-
-        # Always include search tools
-        actions.append({"name": "FindRoomTool", "targets": ["all rooms"]})
-        actions.append({"name": "FindReceptacleTool", "targets": ["furniture", "openable furniture"]})
-        actions.append({"name": "FindObjectTool", "targets": ["small objects", "interesting objects"]})
+        # Motor skills require discovered targets (agent should find these first)
+        actions.append({"name": "Open", "targets": ["<discovered furniture>"]})
+        actions.append({"name": "Close", "targets": ["<discovered furniture>"]})
+        actions.append({"name": "Pick", "targets": ["<discovered object>"]})
 
         return actions
 

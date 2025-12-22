@@ -146,30 +146,24 @@ class VerbalizedSampler:
         world_description: str,
         exploration_history: Optional[List[Dict[str, Any]]] = None,
         agent_id: str = "agent_0",
+        tool_descriptions: Optional[str] = None,
     ) -> str:
         """
         Build a prompt that asks the LLM to output a probability distribution.
 
+        The agent must use perception tools (FindObjectTool, FindReceptacleTool, etc.)
+        to discover what objects/furniture exist before interacting with them.
+
         Args:
-            available_actions: List of available actions with their targets
+            available_actions: List of available actions (NOT used - for backwards compat)
             world_description: Current world state description
             exploration_history: Recent action history
             agent_id: The agent ID
+            tool_descriptions: Tool descriptions from PARTNR (required for discovery-based exploration)
 
         Returns:
             Prompt string asking for probability distribution
         """
-        # Format available actions - include more targets for diversity
-        action_list = []
-        for action in available_actions:
-            name = action.get("name", "Unknown")
-            targets = action.get("targets", [])
-            if targets:
-                for target in targets[:8]:  # Include more targets for uniform distribution
-                    action_list.append(f"{name}[{target}]")
-            else:
-                action_list.append(name)
-
         # Format history
         history_text = ""
         if exploration_history:
@@ -186,34 +180,69 @@ class VerbalizedSampler:
         # Extract agent number for display
         agent_num = agent_id.split("_")[-1] if "_" in agent_id else agent_id
 
-        prompt = f"""You are Agent {agent_num} exploring an environment. Generate candidate actions with probabilities you assign based on how promising each action is for discovering interesting behaviors.
+        # Use tool descriptions if provided, otherwise use default action descriptions
+        if tool_descriptions:
+            tools_section = f"""AVAILABLE TOOLS:
+{tool_descriptions}
+
+HOW TO EXPLORE:
+1. Use perception tools to DISCOVER what exists:
+   - FindObjectTool[query]: Find objects matching a description (e.g., "small objects", "containers")
+   - FindReceptacleTool[query]: Find furniture/receptacles (e.g., "openable furniture", "tables")
+   - FindRoomTool[query]: Find rooms (e.g., "all rooms", "bedrooms")
+
+2. Once you discover specific objects, use motor skills:
+   - Navigate[target]: Go to a room or furniture
+   - Open[furniture]: Open articulated furniture (cabinets, drawers, fridges)
+   - Close[furniture]: Close articulated furniture
+   - Pick[object]: Pick up an object
+   - Place[object, on, furniture, None, None]: Place an object on furniture
+
+IMPORTANT: You must use FindObjectTool/FindReceptacleTool to discover objects before interacting with them!"""
+        else:
+            tools_section = """AVAILABLE TOOLS:
+- FindObjectTool[query]: Discover objects matching a description
+- FindReceptacleTool[query]: Discover furniture/receptacles
+- FindRoomTool[query]: Discover rooms
+- Navigate[target]: Go to a room or furniture piece
+- Open[furniture]: Open articulated furniture (cabinets, drawers, etc.)
+- Close[furniture]: Close articulated furniture
+- Pick[object]: Pick up an object
+- Explore[room]: Search a room thoroughly
+
+IMPORTANT: Use FindObjectTool/FindReceptacleTool to discover specific object names before using Pick/Open!"""
+
+        prompt = f"""You are Agent {agent_num} exploring an environment. Your goal is to DISCOVER interesting behaviors and hidden mechanics.
 
 CURRENT STATE:
 {world_description}
 
 {history_text}
 
-AVAILABLE ACTIONS:
-{chr(10).join(f"  - {a}" for a in action_list[:40])}
+{tools_section}
 
 VERBALIZED SAMPLING TASK:
-Generate 25 candidate actions, each with a probability YOU assign based on your judgment of how likely it is to lead to an interesting discovery. The system will randomly sample ONE action from your distribution.
+Generate 5 candidate actions, each with a probability YOU assign based on how promising each action is for discovering interesting behaviors. The system will randomly sample ONE action from your distribution.
 
 Assign probabilities based on:
-- Your assessment of which areas/objects are most promising
-- What you haven't explored yet vs. what you've already seen
-- Which furniture might have hidden mechanics
+- Using perception tools (FindObjectTool, FindReceptacleTool) to discover what exists
+- Exploring rooms you haven't visited
+- Interacting with furniture that might have hidden mechanics
 - Your intuition about where surprises might be found
 
-FORMAT (generate 25 responses):
+FORMAT (generate 5 responses):
 <response>
 <action>ActionName[target]</action>
 <probability>your_assigned_probability</probability>
 </response>
 
-The probabilities you assign should reflect YOUR judgment - give higher probability to actions you think are more promising, lower to less promising ones. Probabilities should sum to approximately 1.0.
+Example actions:
+- FindObjectTool[containers] (discover container objects)
+- FindReceptacleTool[openable furniture] (find things to open)
+- Navigate[kitchen_1] (go to a room)
+- Open[cabinet_36] (open specific furniture you discovered)
 
-Generate your 25 candidate actions with probabilities now:"""
+Generate your 5 candidate actions with probabilities now:"""
 
         return prompt
 

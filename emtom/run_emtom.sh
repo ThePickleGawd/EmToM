@@ -19,6 +19,7 @@ LLM_AGENTS=""
 NUM_TASKS=1
 MODEL="gpt-5"
 SUBTASKS=3
+MAX_ITERATIONS=100
 NUM_AGENTS=2
 AGENT_TYPE="robot"  # robot or human
 
@@ -46,6 +47,7 @@ print_usage() {
     echo "  --num-tasks N        Number of tasks to generate (default: 1)"
     echo "  --model MODEL        LLM model for the agent (default: gpt-5)"
     echo "  --subtasks N         Exact number of subtasks/steps per task (default: 3)"
+    echo "  --max-iterations N   Max agent iterations before stopping (default: 100)"
     echo ""
     echo "Benchmark Options:"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
@@ -129,6 +131,7 @@ run_generate() {
     echo "Target tasks: $NUM_TASKS"
     echo "Model: $MODEL"
     echo "Subtasks: $SUBTASKS"
+    echo "Max iterations: $MAX_ITERATIONS"
     echo "(Loads random scene from PARTNR dataset)"
     echo "=============================================="
     echo ""
@@ -139,6 +142,7 @@ run_generate() {
         +num_tasks=$NUM_TASKS \
         +model=$MODEL \
         +subtasks=$SUBTASKS \
+        +max_iterations=$MAX_ITERATIONS \
         +output_dir=data/emtom/tasks/curated \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-generate"
 }
@@ -243,6 +247,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --subtasks)
             SUBTASKS=$2
+            shift 2
+            ;;
+        --max-iterations)
+            MAX_ITERATIONS=$2
             shift 2
             ;;
         --num-agents)
