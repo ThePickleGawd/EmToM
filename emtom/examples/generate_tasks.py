@@ -212,13 +212,6 @@ def main():
         action="store_true",
         help="Print generated tasks to console",
     )
-    parser.add_argument(
-        "--task-type",
-        type=int,
-        choices=[1, 2],
-        default=1,
-        help="Type of task to generate: 1 = Theory of Mind tasks, 2 = Regular tasks (default: 1)",
-    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -242,10 +235,7 @@ def main():
         sys.exit(1)
 
     print(f"\nFound {len(trajectory_files)} trajectory file(s)")
-
-    # Display task type selection
-    task_type_name = "Theory of Mind" if args.task_type == 1 else "Regular"
-    print(f"\nTask Type: {task_type_name} (option {args.task_type})")
+    print(f"\nTask Type: Theory of Mind (ToM tasks only)")
 
     # Process each trajectory
     all_tasks = []
@@ -258,7 +248,7 @@ def main():
                 llm_client=llm_client,
                 num_agents=args.num_agents,
                 max_tasks=args.max_tasks,
-                task_type=args.task_type,
+                task_type=1,  # Always generate Theory of Mind tasks
             )
             all_tasks.extend(tasks)
 
