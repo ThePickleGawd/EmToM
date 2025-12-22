@@ -206,7 +206,16 @@ Action: bash[cat > data/emtom/tasks/working_task.json << 'EOF'
   "num_agents": 2,
   "difficulty": 3,
   "subtasks": [],
-  "source_trajectory": "trajectory_abc123"
+  "source_trajectory": "trajectory_abc123",
+  "golden_trajectory": [
+    {"agent": "agent_0", "action": "Navigate", "target": "kitchen_1"},
+    {"agent": "agent_0", "action": "Communicate", "message": "The main drawer works backwards here - you need to close it to open it, and the kettle is inside."},
+    {"agent": "agent_1", "action": "Navigate", "target": "kitchen_1"},
+    {"agent": "agent_1", "action": "Close", "target": "chest_of_drawers_54"},
+    {"agent": "agent_1", "action": "Pick", "target": "kettle_3"},
+    {"agent": "agent_1", "action": "Navigate", "target": "table_59"},
+    {"agent": "agent_1", "action": "Place", "target": "table_59"}
+  ]
 }
 EOF]
 ```
@@ -237,6 +246,20 @@ The story should be NEUTRAL and COHESIVE with the goal:
 - DO NOT hint at strangeness, quirks, or unusual behavior
 - DO NOT use words like: strange, backwards, quirks, unusual, mysterious, defies logic
 - Mechanic details belong ONLY in agent_secrets for agent_0
+
+## Golden Trajectory
+Each task MUST include a `golden_trajectory` - the optimal sequence of actions that:
+1. Demonstrates theory of mind (agent_0 sharing knowledge with agent_1)
+2. Successfully completes the task (reaches success_condition)
+3. Uses ONLY actions from each agent's `agent_actions` list
+
+When generating the trajectory, mentally trace through the expected state changes after each action to ensure the sequence is valid and achieves the goal. However, only output the actions themselves (not the expected states).
+
+**Format for each step:**
+- `agent`: "agent_0" or "agent_1"
+- `action`: One of [Navigate, Open, Close, Pick, Place, Use, Inspect, Search, Communicate]
+- `target`: object_id or room_id (required for Navigate, Open, Close, Pick, Place, Use, Inspect, Search)
+- `message`: string (required ONLY for Communicate action, omit target for Communicate)
 
 **Story-Goal Coherence Examples:**
 - Goal: "Place kettle on dining table"
@@ -302,5 +325,10 @@ TASK_TEMPLATE = """{
   "num_agents": 2,
   "difficulty": 3,
   "subtasks": [],
-  "source_trajectory": "trajectory_id"
+  "source_trajectory": "trajectory_id",
+  "golden_trajectory": [
+    {"agent": "agent_0", "action": "ACTION", "target": "object_or_room_id"},
+    {"agent": "agent_0", "action": "Communicate", "message": "Share mechanic knowledge with agent_1"},
+    {"agent": "agent_1", "action": "ACTION", "target": "object_or_room_id"}
+  ]
 }"""
