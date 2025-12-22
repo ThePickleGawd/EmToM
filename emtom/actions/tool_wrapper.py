@@ -179,6 +179,9 @@ def try_unlock_with_key(
     """
     Try to unlock a target using a key.
 
+    Uses the item's can_unlock() method and consumable property
+    instead of hardcoded key type checks.
+
     Args:
         game_manager: GameStateManager
         agent_id: The agent trying to unlock
@@ -199,25 +202,31 @@ def try_unlock_with_key(
     if not game_manager.agent_has_item(agent_id, key_id):
         return False, f"You don't have {key_id}."
 
-    # Check if key type matches
+    # Get the item instance
+    item = game_manager.get_item(key_id)
+    if not item:
+        return False, f"Unknown item: {key_id}"
+
+    # Check if key type matches using item's can_unlock() method
+    from emtom.state.item_registry import ItemRegistry
     required_key = state.get_object_property(target, "required_key", "small_key")
-    key_def = game_manager.get_item_definition(key_id)
+    key_base = ItemRegistry.get_base_id(key_id)
 
-    # Extract base key type from instance ID (e.g., "small_key_1" -> "small_key")
-    key_base = key_id.rsplit("_", 1)[0] if "_" in key_id else key_id
-
+    # First check base type, then ask item
     if key_base != required_key:
         return False, f"This lock requires a {required_key}, not a {key_base}."
+
+    if not item.can_unlock(target):
+        return False, f"This key cannot unlock {target}."
 
     # Unlock the container
     unlock_container(game_manager, target)
 
-    # Consume the key (small keys are single-use)
-    if key_base == "small_key":
-        game_manager.remove_item(agent_id, key_id)
-        key_name = key_def.name if key_def else key_id
-        return True, f"You unlock {target} with the {key_name}. The key crumbles to dust."
+    # Use the item (handles consumption via item's on_use and consumable flag)
+    success, use_message = game_manager.use_item(agent_id, key_id, target)
+
+    key_name = item.name
+    if item.consumable:
+        return True, f"You unlock {target} with the {key_name}. {use_message}"
     else:
-        # Big key is not consumed
-        key_name = key_def.name if key_def else key_id
         return True, f"You unlock {target} with the {key_name}."

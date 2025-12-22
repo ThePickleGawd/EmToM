@@ -197,17 +197,18 @@ class UseAction(EMTOMAction):
 
         # Check if target is a key in inventory (might want to use on something)
         if self._game_manager and self._game_manager.agent_has_item(agent_id, target):
-            item_def = self._game_manager.get_item_definition(target)
-            if item_def and "key" in item_def.item_id.lower():
+            item = self._game_manager.get_item(target)
+            if item and "key" in item.instance_id.lower():
                 return ActionResult(
                     success=False,
-                    observation=f"To use {item_def.name} on something, specify the target: Use[{target}, <container>]",
+                    observation=f"To use {item.name} on something, specify the target: Use[{target}, <container>]",
                 )
-            # Generic item use
+            # Generic item use - delegate to manager's use_item
+            success, msg = self._game_manager.use_item(agent_id, target)
             return ActionResult(
-                success=True,
-                observation=f"You use the {item_def.name if item_def else target}.",
-                effect=f"used={target}",
+                success=success,
+                observation=msg,
+                effect=f"used={target}" if success else None,
             )
 
         # Target is not in inventory - check if it's an entity in the world
@@ -325,8 +326,8 @@ class SearchAction(EMTOMAction):
                 new_state, success, msg = self._game_manager.grant_item(
                     agent_id, item_id, source=f"Search:{target}", state=new_state
                 )
-                item_def = self._game_manager.get_item_definition(item_id)
-                item_name = item_def.name if item_def else item_id
+                item = self._game_manager.get_item(item_id)
+                item_name = item.name if item else item_id
                 found_names.append(item_name)
                 spawned.append(item_id)
 
@@ -464,8 +465,8 @@ class DynamicItemTool(EMTOMAction):
 
         # Check agent still has the item
         if not self._game_manager.agent_has_item(agent_id, self._item_id):
-            item_def = self._game_manager.get_item_definition(self._item_id)
-            item_name = item_def.name if item_def else self._item_id
+            item = self._game_manager.get_item(self._item_id)
+            item_name = item.name if item else self._item_id
             return ActionResult(
                 success=False,
                 observation=f"You no longer have the {item_name}.",
@@ -492,8 +493,8 @@ class DynamicItemTool(EMTOMAction):
         Currently supported:
         - Communicate: Send a message via radio to other agents
         """
-        item_def = self._game_manager.get_item_definition(self._item_id)
-        item_name = item_def.name if item_def else self._item_id
+        item = self._game_manager.get_item(self._item_id)
+        item_name = item.name if item else self._item_id
         action = self.action_name
 
         if not target:
@@ -519,26 +520,19 @@ class DynamicItemTool(EMTOMAction):
 
     def _decrement_uses(self, agent_id: str) -> None:
         """Decrement remaining uses of a consumable item."""
-        item_def = self._game_manager.get_item_definition(self._item_id)
-        if not item_def or item_def.uses_remaining is None:
+        item = self._game_manager.get_item(self._item_id)
+        if not item or item.uses_remaining is None:
             return
 
-        # Update uses in item definition
-        item_data = self._game_manager.state.item_definitions.get(self._item_id, {})
-        uses = item_data.get("uses_remaining", 1)
-        new_uses = uses - 1
+        new_uses = item.uses_remaining - 1
 
         if new_uses <= 0:
             # Remove item from inventory when uses exhausted
             self._game_manager.remove_item(agent_id, self._item_id)
         else:
-            # Update remaining uses
-            import copy
-            new_state = copy.copy(self._game_manager.state)
-            new_defs = copy.copy(new_state.item_definitions)
-            new_defs[self._item_id] = {**item_data, "uses_remaining": new_uses}
-            new_state.item_definitions = new_defs
-            self._game_manager.set_state(new_state)
+            # Update remaining uses in state
+            item.uses_remaining = new_uses
+            self._game_manager.state.item_definitions[self._item_id] = item.to_dict()
 
 
 def get_all_actions() -> Dict[str, EMTOMAction]:

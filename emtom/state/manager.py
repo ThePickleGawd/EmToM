@@ -21,7 +21,8 @@ from emtom.state.game_state import (
     Goal,
     GoalStatus,
 )
-from emtom.state.items import ItemDefinition, ItemType
+from emtom.state.items import ItemDefinition, ItemType, BaseItem
+from emtom.state.item_registry import ItemRegistry
 from emtom.mechanics.handlers import (
     apply_mechanics,
     HandlerResult,
@@ -391,7 +392,6 @@ class GameStateManager:
             # Load scenario system
             from emtom.task_gen.scenario_system import get_compatible_scenario, ScenarioInstantiator
             from emtom.task_gen.clue_generator import ClueGenerator
-            from emtom.state.item_catalog import get_random_small_keys, get_big_key, get_radio
 
             # Get a scenario compatible with active mechanics
             scenario = get_compatible_scenario(state.active_mechanics)
@@ -421,33 +421,26 @@ class GameStateManager:
 
                         container = available_containers[i]
 
-                        # Get the appropriate item from catalog
-                        if item_needed == "small_key":
-                            items = get_random_small_keys(1)
-                            if items:
-                                item = items[0]
-                                item.item_id = f"small_key_{i+1}"
-                        elif item_needed == "big_key":
-                            item = get_big_key()
-                        elif item_needed == "radio":
-                            item = get_radio()
+                        # Get the appropriate item from registry
+                        item = None
+                        if ItemRegistry.is_registered(item_needed):
+                            item = ItemRegistry.instantiate(item_needed, i + 1)
                         else:
                             # Default to small key for unknown items
-                            items = get_random_small_keys(1)
-                            item = items[0] if items else None
+                            item = ItemRegistry.instantiate("small_key", i + 1)
 
                         if item:
                             # Register item definition in state
-                            new_state.item_definitions[item.item_id] = item.to_dict()
+                            new_state.item_definitions[item.instance_id] = item.to_dict()
                             # Add to hidden_items list on container
                             current = new_state.get_object_property(container, "hidden_items", [])
                             if not isinstance(current, list):
                                 current = [current] if current else []
-                            current = current + [item.item_id]
+                            current = current + [item.instance_id]
                             new_state = new_state.set_object_property(
                                 container, "hidden_items", current
                             )
-                            item_locations[item.item_id] = container
+                            item_locations[item.instance_id] = container
                             hidden_items[container] = current
 
                     # Generate clues for item locations
@@ -900,25 +893,30 @@ class GameStateManager:
         if state is None:
             state = self.state
 
-        # Check if item is defined
-        item_def = self.get_item_definition(item_id)
-        item_name = item_def.name if item_def else item_id
+        # Get item info (from state definitions or registry)
+        item = self.get_item(item_id)
+        item_name = item.name if item else item_id
 
-        # Add to inventory
-        new_state = copy.copy(state)
-        new_inv = copy.copy(state.agent_inventory)
-        if agent_id not in new_inv:
-            new_inv[agent_id] = []
-        else:
-            new_inv[agent_id] = list(new_inv[agent_id])
-
-        if item_id not in new_inv[agent_id]:
-            new_inv[agent_id].append(item_id)
-            new_state.agent_inventory = new_inv
-            self.state = new_state
-            return new_state, True, f"Obtained {item_name}!"
-        else:
+        # Check if already have
+        if item_id in state.agent_inventory.get(agent_id, set()):
             return state, False, f"Already have {item_name}."
+
+        # Add to inventory (using sets for O(1) lookup)
+        new_state = copy.copy(state)
+        new_inv = {k: set(v) for k, v in state.agent_inventory.items()}
+        if agent_id not in new_inv:
+            new_inv[agent_id] = set()
+        new_inv[agent_id].add(item_id)
+        new_state.agent_inventory = new_inv
+
+        self.state = new_state
+
+        # Call item's on_acquire hook if available
+        if item and hasattr(item, 'on_acquire'):
+            msg = item.on_acquire(self, agent_id)
+            return new_state, True, msg
+
+        return new_state, True, f"Obtained {item_name}!"
 
     def remove_item(
         self,
@@ -940,25 +938,28 @@ class GameStateManager:
         if state is None:
             state = self.state
 
-        new_state = copy.copy(state)
-        new_inv = copy.copy(state.agent_inventory)
-
-        if agent_id not in new_inv or item_id not in new_inv[agent_id]:
-            item_def = self.get_item_definition(item_id)
-            item_name = item_def.name if item_def else item_id
+        # Check if agent has item
+        if agent_id not in state.agent_inventory or item_id not in state.agent_inventory[agent_id]:
+            item = self.get_item(item_id)
+            item_name = item.name if item else item_id
             return state, False, f"Don't have {item_name}."
 
-        new_inv[agent_id] = [i for i in new_inv[agent_id] if i != item_id]
+        # Remove from inventory
+        new_state = copy.copy(state)
+        new_inv = {k: set(v) for k, v in state.agent_inventory.items()}
+        new_inv[agent_id].discard(item_id)
         new_state.agent_inventory = new_inv
 
         self.state = new_state
-        item_def = self.get_item_definition(item_id)
-        item_name = item_def.name if item_def else item_id
+        item = self.get_item(item_id)
+        item_name = item.name if item else item_id
         return new_state, True, f"Removed {item_name}."
 
     def agent_has_item(self, agent_id: str, item_id: str) -> bool:
         """
         Check if an agent has a specific item.
+
+        O(1) lookup using sets.
 
         Args:
             agent_id: Agent to check
@@ -967,24 +968,68 @@ class GameStateManager:
         Returns:
             True if agent has the item
         """
-        return item_id in self.state.agent_inventory.get(agent_id, [])
+        return item_id in self.state.agent_inventory.get(agent_id, set())
 
-    def get_agent_inventory(self, agent_id: str) -> List[ItemDefinition]:
+    def get_item(self, item_id: str) -> Optional[BaseItem]:
         """
-        Get all ItemDefinitions for items in agent's inventory.
+        Get a BaseItem instance for an item ID.
+
+        First checks state definitions, then falls back to registry.
+
+        Args:
+            item_id: The item instance ID (e.g., "small_key_1")
+
+        Returns:
+            BaseItem instance or None
+        """
+        # Check if defined in state
+        item_data = self.state.item_definitions.get(item_id)
+        if item_data:
+            return BaseItem.from_dict(item_data)
+
+        # Try to get from registry by base ID
+        item_cls = ItemRegistry.get_by_instance_id(item_id)
+        if item_cls:
+            instance = item_cls()
+            instance.instance_id = item_id
+            instance.base_id = ItemRegistry.get_base_id(item_id)
+            return instance
+
+        return None
+
+    def get_item_definition(self, item_id: str) -> Optional[ItemDefinition]:
+        """
+        Get the ItemDefinition for an item.
+
+        DEPRECATED: Use get_item() instead for new code.
+
+        Args:
+            item_id: The item ID to look up
+
+        Returns:
+            ItemDefinition or None if not found
+        """
+        item_data = self.state.item_definitions.get(item_id)
+        if item_data:
+            return ItemDefinition.from_dict(item_data)
+        return None
+
+    def get_agent_inventory(self, agent_id: str) -> List[BaseItem]:
+        """
+        Get all items in agent's inventory.
 
         Args:
             agent_id: Agent to get inventory for
 
         Returns:
-            List of ItemDefinition objects
+            List of BaseItem objects
         """
-        item_ids = self.state.agent_inventory.get(agent_id, [])
+        item_ids = self.state.agent_inventory.get(agent_id, set())
         items = []
-        for item_id in item_ids:
-            item_def = self.get_item_definition(item_id)
-            if item_def:
-                items.append(item_def)
+        for item_id in sorted(item_ids):  # Sort for consistent ordering
+            item = self.get_item(item_id)
+            if item:
+                items.append(item)
         return items
 
     def get_inventory_text(self, agent_id: str) -> str:
@@ -1011,6 +1056,50 @@ class GameStateManager:
             lines.append(line)
 
         return "\n".join(lines)
+
+    def use_item(
+        self,
+        agent_id: str,
+        item_id: str,
+        target: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """
+        Use an item from the agent's inventory.
+
+        Calls the item's on_use() method and handles consumable items.
+
+        Args:
+            agent_id: Agent using the item
+            item_id: Item to use
+            target: Optional target for the use action
+
+        Returns:
+            (success, message) tuple
+        """
+        # Check if agent has item
+        if not self.agent_has_item(agent_id, item_id):
+            return False, f"You don't have that item."
+
+        # Get item instance
+        item = self.get_item(item_id)
+        if not item:
+            return False, f"Unknown item: {item_id}"
+
+        # Call item's on_use method
+        success, message = item.on_use(self, agent_id, target)
+
+        # Handle consumable items
+        if success and item.consumable:
+            if item.uses_remaining is not None and item.uses_remaining > 1:
+                # Decrement uses
+                item.uses_remaining -= 1
+                # Update in state
+                self.state.item_definitions[item_id] = item.to_dict()
+            else:
+                # Single use or last use - remove item
+                self.remove_item(agent_id, item_id)
+
+        return success, message
 
     def _check_has_item(self, entity: str, value: str) -> bool:
         """

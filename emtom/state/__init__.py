@@ -16,6 +16,20 @@ Usage:
         state, result = manager.apply_action("open", "agent_0", "door_1")
         state = manager.tick()
         completed = manager.check_goals()
+
+Creating custom items:
+    from emtom.state import register_item, BaseItem, ItemType
+
+    @register_item("magic_wand")
+    class MagicWand(BaseItem):
+        name = "Magic Wand"
+        description = "A wand that casts spells."
+        item_type = ItemType.TOOL
+        consumable = True
+        uses = 3
+
+        def on_use(self, game_manager, agent_id, target):
+            return True, "You cast a spell!"
 """
 
 from emtom.state.game_state import (
@@ -35,9 +49,19 @@ from emtom.state.manager import (
 
 from emtom.state.items import (
     ItemType,
-    ItemDefinition,
-    InventoryItem,
+    BaseItem,
+    ItemDefinition,  # Legacy, for backward compatibility
 )
+
+from emtom.state.item_registry import (
+    register_item,
+    ItemRegistry,
+    clear_registry,
+    get_registry,
+)
+
+# Import builtin items to trigger registration
+import emtom.state.builtin_items  # noqa: F401
 
 __all__ = [
     # Core state
@@ -51,8 +75,13 @@ __all__ = [
     # Manager
     "GameStateManager",
     "ActionExecutionResult",
-    # Items
+    # Items - new system
     "ItemType",
+    "BaseItem",
+    "register_item",
+    "ItemRegistry",
+    "clear_registry",
+    "get_registry",
+    # Items - legacy (deprecated)
     "ItemDefinition",
-    "InventoryItem",
 ]

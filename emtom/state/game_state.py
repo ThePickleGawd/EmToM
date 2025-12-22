@@ -148,7 +148,8 @@ class EMTOMGameState:
     # Per-agent observation history
     agent_observations: Dict[str, List[str]] = field(default_factory=dict)
     # Per-agent inventory (items collected, not in world graph)
-    agent_inventory: Dict[str, List[str]] = field(default_factory=dict)
+    # Uses Set for O(1) lookup
+    agent_inventory: Dict[str, Set[str]] = field(default_factory=dict)
 
     # === Timeline ===
     current_step: int = 0
@@ -277,7 +278,11 @@ class EMTOMGameState:
             "completed_goals": list(self.completed_goals),
             "active_mechanics": self.active_mechanics,
             "item_definitions": self.item_definitions,
-            "agent_inventory": self.agent_inventory,
+            # Convert sets to lists for JSON serialization
+            "agent_inventory": {
+                agent_id: list(items)
+                for agent_id, items in self.agent_inventory.items()
+            },
         }
 
     @classmethod
@@ -318,7 +323,11 @@ class EMTOMGameState:
         state.completed_goals = set(data.get("completed_goals", []))
         state.active_mechanics = data.get("active_mechanics", [])
         state.item_definitions = data.get("item_definitions", {})
-        state.agent_inventory = data.get("agent_inventory", {})
+        # Convert lists back to sets
+        state.agent_inventory = {
+            agent_id: set(items)
+            for agent_id, items in data.get("agent_inventory", {}).items()
+        }
         return state
 
     def to_json(self) -> str:
