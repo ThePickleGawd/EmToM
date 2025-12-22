@@ -1,7 +1,7 @@
 {
   "task_id": "task_template",
   "title": "Template Task - Replace This",
-  "story": "Atmospheric narrative that sets up the puzzle. Describe the setting and why agents are here.",
+  "story": "NEUTRAL narrative with motivation for the goal. E.g., 'Guests are arriving for tea. One of you organized this kitchen before.' NO mechanic hints.",
   "public_goal": "Describe what both agents need to accomplish together",
   "public_context": "Optional background context that both agents know",
   "theory_of_mind_required": true,
@@ -30,17 +30,16 @@
     "agent_1": "Novice who must learn through collaboration and communication"
   },
   "agent_actions": {
-    "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Search", "Communicate"],
-    "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
+    "agent_0": ["CHOOSE_BASED_ON_TASK"],
+    "agent_1": ["CHOOSE_BASED_ON_TASK_WITH_ASYMMETRY"]
   },
   "success_condition": {
     "description": "Describe what success looks like in plain English",
     "required_states": [
       {
-        "prop_id": "item_placed",
-        "entity": "object_id_from_scene_inventory",
-        "property": "location",
-        "value": "target_location"
+        "entity": "object_id",
+        "property": "is_on_top",
+        "target": "furniture_id"
       }
     ],
     "temporal_constraints": [

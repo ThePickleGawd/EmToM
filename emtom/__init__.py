@@ -29,10 +29,8 @@ from emtom.mechanics import (
 from emtom.evaluation import (
     TaskEvaluator,
     EvaluationResult,
-    TemporalConstraint,
-    Proposition,
-    Milestone,
-    Minefield,
+    EMTOMPredicates,
+    PropositionResult,
     evaluate_task,
 )
 from emtom.tracing import (
@@ -55,10 +53,8 @@ __all__ = [
     # Evaluation (PARTNR-style)
     "TaskEvaluator",
     "EvaluationResult",
-    "TemporalConstraint",
-    "Proposition",
-    "Milestone",
-    "Minefield",
+    "EMTOMPredicates",
+    "PropositionResult",
     "evaluate_task",
     # Tracing (ARE-style)
     "Event",

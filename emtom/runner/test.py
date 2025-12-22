@@ -168,6 +168,15 @@ class HumanTestRunner(EMTOMBaseRunner):
                         "mode": "human" if agent_id in self.human_agents else "llm",
                     })
 
+                    # Check for task completion after each action
+                    eval_result = self._check_task_completion()
+                    if eval_result and eval_result.get("success"):
+                        print(f"\n{'='*60}")
+                        print("🎉 TASK COMPLETE! 🎉")
+                        print(f"{'='*60}")
+                        done = True
+                        break
+
             if not done and not self._episode_done:
                 observations = self.get_observations()
                 self.record_frame(observations)
@@ -175,10 +184,31 @@ class HumanTestRunner(EMTOMBaseRunner):
         # Save outputs
         self._save_outputs()
 
+        # Final evaluation
+        eval_result = self._check_task_completion()
+
         return {
             "steps": self._step_count,
             "action_history": self._action_history,
+            "evaluation": eval_result,
+            "success": eval_result.get("success", False) if eval_result else False,
         }
+
+    def _check_task_completion(self) -> Optional[Dict[str, Any]]:
+        """
+        Check if the task is complete using PARTNR predicates.
+
+        Returns:
+            Evaluation result dict or None if no success_condition defined
+        """
+        if not self.task_info:
+            return None
+
+        success_condition = self.task_info.get("success_condition")
+        if not success_condition:
+            return None
+
+        return self.evaluate_task(success_condition)
 
     def _print_header(self) -> None:
         """Print task header with story."""

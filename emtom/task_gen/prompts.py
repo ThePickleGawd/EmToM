@@ -55,11 +55,30 @@ Like PARTNR's simulation-in-the-loop approach, you MUST:
 
 NOTE: If benchmark_error is present but valid=true, you can still submit the task.
 
+## Supported Predicates for success_condition
+Use these PARTNR predicate names directly in `required_states`:
+
+| Predicate | Type | Format |
+|-----------|------|--------|
+| is_on_top | spatial | `{"entity": "obj", "property": "is_on_top", "target": "furniture"}` |
+| is_inside | spatial | `{"entity": "obj", "property": "is_inside", "target": "container"}` |
+| is_in_room | spatial | `{"entity": "obj", "property": "is_in_room", "target": "room_id"}` |
+| is_on_floor | spatial | `{"entity": "obj", "property": "is_on_floor"}` |
+| is_next_to | spatial | `{"entity": "obj", "property": "is_next_to", "target": "other_obj"}` |
+| is_open | state | `{"entity": "container", "property": "is_open"}` |
+| is_closed | state | `{"entity": "container", "property": "is_closed"}` |
+| is_clean | state | `{"entity": "obj", "property": "is_clean"}` |
+| is_dirty | state | `{"entity": "obj", "property": "is_dirty"}` |
+| is_filled | state | `{"entity": "obj", "property": "is_filled"}` |
+| is_empty | state | `{"entity": "obj", "property": "is_empty"}` |
+| is_powered_on | state | `{"entity": "obj", "property": "is_powered_on"}` |
+| is_powered_off | state | `{"entity": "obj", "property": "is_powered_off"}` |
+
 ## Task Structure
 A task JSON has these key fields:
 - `task_id`: Unique identifier
 - `title`: Evocative puzzle title (e.g., "The Mirrored Cabinet", "Echoes in the Kitchen")
-- `story`: **REQUIRED** - 2-3 sentences of atmospheric narrative. MUST reference REAL objects from scene_inventory and REAL mechanics from the trajectory. No fictional objects!
+- `story`: 2-3 sentences of neutral atmospheric narrative. Set the scene (location, why agents are here) but give NO hints about mechanics. The story should read like a normal task setup - agents discover mechanics on their own.
 - `episode_id`: Episode ID from trajectory (for scene loading)
 - `public_goal`: What both agents know they need to do
 - `public_context`: Optional shared background info
@@ -67,8 +86,26 @@ A task JSON has these key fields:
 - `mechanic_bindings`: List of game mechanics (from trajectory)
 - `agent_secrets`: Per-agent secret knowledge (agent_0 knows mechanics, agent_1 doesn't)
 - `agent_roles`: Role descriptions for each agent
-- `agent_actions`: Available actions per agent
+- `agent_actions`: Available actions per agent (choose based on task needs - see below)
 - `source_trajectory`: Which trajectory this task is based on
+
+## Available Agent Actions
+Choose actions based on what the task requires. Don't copy the template blindly.
+
+{action_descriptions}
+
+**For ToM (Theory of Mind) tasks:**
+- agent_0 (expert): Gets actions needed to demonstrate/guide (often includes Use, Inspect)
+- agent_1 (novice): Gets LIMITED actions to create asymmetry (often excludes Use, Inspect)
+- The asymmetry forces agent_0 to communicate knowledge to agent_1
+
+**Example reasoning:**
+- Task: "Retrieve kettle from drawer, place on table"
+- agent_0 needs: Navigate, Open, Close, Pick, Place, Communicate (to guide)
+- agent_1 needs: Navigate, Open, Close, Pick, Place, Communicate (to execute)
+- If drawer has inverse_state mechanic and only agent_0 knows:
+  - agent_0 also gets: Use, Inspect (to discover/verify mechanics)
+  - agent_1 does NOT get Use/Inspect (must trust agent_0's instructions)
 
 ## Process
 1. Use bash to explore available trajectories
@@ -110,15 +147,15 @@ Action: bash[cat data/emtom/trajectories/trajectory_abc123.json | jq '{mechanic_
 ```
 
 ```
-Thought: The scene has rooms=[kitchen_1, bedroom_1, ...], furniture=[chest_of_drawers_54, table_59, cabinet_39, ...], objects=[kettle_3, ...]. The mechanic_bindings show inverse_state on chest_of_drawers_54 and remote_control linking chest_of_drawers_52 to table_59. Let me create a grounded story using these REAL objects.
+Thought: The scene has rooms=[kitchen_1, bedroom_1, ...], furniture=[chest_of_drawers_54, table_59, cabinet_39, ...], objects=[kettle_3, ...]. The mechanic_bindings show inverse_state on chest_of_drawers_54 and remote_control linking chest_of_drawers_52 to table_59. Let me create a neutral story that sets up the task without any hints about mechanics.
 Action: bash[cat > data/emtom/tasks/working_task.json << 'EOF'
 {
   "task_id": "task_001",
   "title": "The Inverted Drawer",
-  "story": "The kitchen's chest_of_drawers_54 defies logic—closing it reveals the kettle_3 hidden inside. Meanwhile, chest_of_drawers_52 is mysteriously linked to table_59 across the room. One agent discovered these quirks; the other must trust instructions that seem backwards.",
+  "story": "Guests are arriving soon and you need to prepare tea. The kettle is stored in the kitchen. One of you organized the kitchen last week, the other is helping out for the first time.",
   "episode_id": "0",
   "public_goal": "Retrieve kettle_3 and place it on table_59",
-  "public_context": "Some furniture in the kitchen behaves strangely.",
+  "public_context": "The kettle should be in one of the kitchen drawers.",
   "theory_of_mind_required": true,
   "category": "knowledge_asymmetry",
   "scene_id": "102344280",
@@ -144,21 +181,17 @@ Action: bash[cat > data/emtom/tasks/working_task.json << 'EOF'
     "agent_1": []
   },
   "agent_roles": {
-    "agent_0": "Explorer who mapped the furniture's strange behavior",
-    "agent_1": "Helper who must follow counterintuitive instructions"
+    "agent_0": "Organized the kitchen last week, knows where things are",
+    "agent_1": "Helping for the first time, follows instructions"
   },
   "agent_actions": {
-    "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Search", "Communicate"],
+    "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Communicate"],
     "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
   },
   "success_condition": {
-    "description": "kettle_3 is placed on table_59 after unlocking the chest",
+    "description": "kettle_3 is placed on table_59",
     "required_states": [
-      {"prop_id": "chest_unlocked", "entity": "chest_of_drawers_54", "property": "is_unlocked", "value": true},
-      {"prop_id": "kettle_placed", "entity": "kettle_3", "property": "location", "value": "table_59"}
-    ],
-    "temporal_constraints": [
-      {"type": "before", "first": "chest_unlocked", "then": "kettle_placed"}
+      {"entity": "kettle_3", "property": "is_on_top", "target": "table_59"}
     ],
     "time_limit": null,
     "all_agents_must_survive": true
@@ -191,27 +224,41 @@ Action: submit_task[]
 ## Important Notes
 - ALWAYS use real objects from the trajectory's scene_inventory
 - ALWAYS copy mechanic_bindings from the trajectory (these make mechanics work)
-- ALWAYS ground the story in REAL objects and mechanics (e.g., "the chest_of_drawers_54 opens backwards" not "a mysterious box")
-- agent_0 should have secret knowledge about the mechanics
+- agent_0 should have secret knowledge about the mechanics (in agent_secrets)
 - agent_1 should NOT have access to Inspect or Use tools (creates asymmetry)
 - Test before submitting to validate the structure
 - If valid=true, you can submit even if benchmark couldn't run (benchmark_error)
 
 ## Story Guidelines
-The story MUST be grounded in the actual task:
-- Reference real object IDs from scene_inventory (e.g., "cabinet_39", "fridge_58")
-- Describe the actual mechanics discovered (e.g., "opens when you close it", "controls something across the room")
-- Don't invent objects that don't exist in the scene
-- Example: "The kitchen's chest_of_drawers_54 defies logic—closing it reveals what's inside. Meanwhile, chest_of_drawers_52 seems linked to table_59 across the room. One agent mapped these quirks; the other must trust backwards instructions."
+The story should be NEUTRAL and COHESIVE with the goal:
+- DO set up WHY agents need to accomplish the goal (motivation)
+- DO explain agent roles and why they're working together
+- DO make the story logically lead to the public_goal
+- DO NOT hint at strangeness, quirks, or unusual behavior
+- DO NOT use words like: strange, backwards, quirks, unusual, mysterious, defies logic
+- Mechanic details belong ONLY in agent_secrets for agent_0
+
+**Story-Goal Coherence Examples:**
+- Goal: "Place kettle on dining table"
+  → Story: "Guests are arriving for tea. One of you knows where the kettle is stored, the other will set the table."
+- Goal: "Move the toy airplane to the bedroom shelf"
+  → Story: "It's cleanup time. One of you organized this room before and knows where things go."
+- Goal: "Open the cabinet and retrieve the phone stand"
+  → Story: "You need the phone stand for a video call. One agent remembers where it was put away."
+
+**BAD Examples:**
+- "Something is wrong with this kitchen" (hints at mechanics)
+- "The furniture behaves strangely" (hints at mechanics)
+- "Retrieve the kettle" with no context (no motivation, not cohesive)
 """
 
 TASK_TEMPLATE = """{
   "task_id": "task_XXX",
   "title": "Evocative Puzzle Title",
-  "story": "2-3 sentences referencing REAL objects and mechanics from the trajectory. Example: 'The kitchen's chest_of_drawers_54 works backwards—closing reveals what's inside. And chest_of_drawers_52 is somehow linked to table_59 across the room. One agent mapped these quirks; the other must trust counterintuitive instructions.'",
+  "story": "2-3 sentences of NEUTRAL narrative that leads to the goal. Give motivation for why agents are doing this. No hints about mechanics.",
   "episode_id": "FROM_TRAJECTORY",
   "public_goal": "What both agents need to accomplish",
-  "public_context": "Optional shared background context",
+  "public_context": "Optional shared background context (no mechanic hints)",
   "theory_of_mind_required": true,
   "category": "knowledge_asymmetry",
   "scene_id": "FROM_TRAJECTORY",
@@ -226,25 +273,21 @@ TASK_TEMPLATE = """{
     }
   ],
   "agent_secrets": {
-    "agent_0": ["Secret knowledge about the mechanics that only agent_0 knows"],
+    "agent_0": ["Mechanic knowledge - e.g. 'chest_of_drawers_54 is inverted: Close opens it'"],
     "agent_1": []
   },
   "agent_roles": {
-    "agent_0": "Expert who discovered the mechanics",
-    "agent_1": "Novice who must learn through collaboration"
+    "agent_0": "Expert who knows how things work here",
+    "agent_1": "Helper who follows instructions"
   },
   "agent_actions": {
-    "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Search", "Communicate"],
-    "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
+    "agent_0": ["CHOOSE BASED ON TASK - see Available Agent Actions"],
+    "agent_1": ["CHOOSE BASED ON TASK - typically fewer actions for ToM asymmetry"]
   },
   "success_condition": {
     "description": "What success looks like",
     "required_states": [
-      {"prop_id": "step_1_done", "entity": "object_id", "property": "property_name", "value": "target_value"},
-      {"prop_id": "step_2_done", "entity": "another_object", "property": "property_name", "value": "target_value"}
-    ],
-    "temporal_constraints": [
-      {"type": "before", "first": "step_1_done", "then": "step_2_done"}
+      {"entity": "object_id", "property": "is_on_top", "target": "furniture_id"}
     ],
     "time_limit": null,
     "all_agents_must_survive": true

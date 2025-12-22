@@ -1034,10 +1034,9 @@ class GameStateManager:
         success_condition: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Evaluate task completion with PARTNR-style metrics.
+        Evaluate task completion with PARTNR-style predicates.
 
-        Returns percent_complete, success, and failure_explanations.
-        Uses temporal constraints to verify ordering of accomplishments.
+        Uses the actual Habitat simulator state for ground-truth evaluation.
 
         Args:
             success_condition: Task's success condition dict. If None, uses
@@ -1049,10 +1048,8 @@ class GameStateManager:
                 - success: bool
                 - failure_explanations: List[str]
                 - proposition_status: Dict[str, bool]
-                - constraint_status: Dict[str, bool]
-                - satisfied_at_step: Dict[str, Optional[int]]
         """
-        from emtom.evaluation import TaskEvaluator
+        from emtom.evaluation import evaluate_task
 
         condition = success_condition or self._success_condition
         if not condition:
@@ -1061,13 +1058,27 @@ class GameStateManager:
                 "success": False,
                 "failure_explanations": ["No success condition defined"],
                 "proposition_status": {},
-                "constraint_status": {},
-                "satisfied_at_step": {},
             }
 
-        evaluator = TaskEvaluator(condition)
-        result = evaluator.evaluate(self.state, self._state_history)
-        return result.to_dict()
+        if not self.env:
+            return {
+                "percent_complete": 0.0,
+                "success": False,
+                "failure_explanations": ["No environment interface available"],
+                "proposition_status": {},
+            }
+
+        try:
+            sim = self.env.sim
+            result = evaluate_task(condition, sim)
+            return result.to_dict()
+        except Exception as e:
+            return {
+                "percent_complete": 0.0,
+                "success": False,
+                "failure_explanations": [f"Evaluation error: {str(e)}"],
+                "proposition_status": {},
+            }
 
     def get_state_history(self) -> List[EMTOMGameState]:
         """Get the full state history for temporal analysis."""

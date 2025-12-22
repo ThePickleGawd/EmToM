@@ -15,6 +15,18 @@ if TYPE_CHECKING:
 # Global registry of action classes
 _ACTION_REGISTRY: Dict[str, Type["EMTOMAction"]] = {}
 
+# Standard habitat_llm tools that EMTOM uses (not custom actions, but included for completeness)
+# These are described here so prompts can reference all available actions uniformly
+STANDARD_ACTIONS: Dict[str, str] = {
+    "Navigate": "Navigate[target]: Move to a location (room or furniture). Almost always needed for task completion.",
+    "Open": "Open[target]: Open a piece of furniture like a cabinet, drawer, or fridge. Use when task involves accessing contents.",
+    "Close": "Close[target]: Close a piece of furniture. Use when task requires closing things after opening.",
+    "Pick": "Pick[target]: Pick up an object. Use when task involves moving objects around.",
+    "Place": "Place[target, receptacle]: Place an object on a receptacle. Use when task involves putting objects somewhere.",
+    "Wait": "Wait[]: Do nothing for a turn. Use for coordination or waiting for delayed effects.",
+    "Communicate": "Communicate[message]: Send a message to other agents. Essential for multi-agent coordination.",
+}
+
 
 def register_action(name: Optional[str] = None):
     """
@@ -101,6 +113,41 @@ class ActionRegistry:
             desc = info["description"][:60] + "..." if len(info["description"]) > 60 else info["description"]
             lines.append(f"  - {name}: {desc}")
         return "\n".join(lines)
+
+    @staticmethod
+    def get_action_descriptions(include_standard: bool = False) -> str:
+        """
+        Get action descriptions formatted for system prompts.
+
+        Args:
+            include_standard: If True, include standard habitat_llm tools
+
+        Returns a string with each action on a line:
+        - ActionName: Description of the action
+        """
+        lines = []
+
+        # Include standard actions if requested
+        if include_standard:
+            for name in sorted(STANDARD_ACTIONS.keys()):
+                lines.append(f"- {STANDARD_ACTIONS[name]}")
+
+        # Include registered custom actions
+        for name in sorted(_ACTION_REGISTRY.keys()):
+            cls = _ACTION_REGISTRY[name]
+            desc = getattr(cls, "action_description", getattr(cls, "description", ""))
+            lines.append(f"- {name}: {desc}")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def get_all_action_descriptions() -> str:
+        """
+        Get all action descriptions (standard + custom) for prompts.
+
+        Returns a formatted string suitable for injection into system prompts.
+        """
+        return ActionRegistry.get_action_descriptions(include_standard=True)
 
 
 def clear_registry() -> None:

@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from omegaconf import DictConfig
 
 from .prompts import SYSTEM_PROMPT
+from emtom.actions import ActionRegistry
 
 if TYPE_CHECKING:
     from habitat_llm.llm.base_llm import BaseLLM
@@ -124,9 +125,13 @@ class TaskGeneratorAgent:
                 truncated = s[:500] + "..." if len(s) > 500 else s
                 scenario_text += f"\n--- Theme {i} ---\n{truncated}\n"
 
-        # Initialize conversation
+        # Initialize conversation with action descriptions injected
+        system_prompt = SYSTEM_PROMPT.replace(
+            "{action_descriptions}",
+            ActionRegistry.get_all_action_descriptions()
+        )
         self.messages = [
-            {"role": "system", "content": SYSTEM_PROMPT}
+            {"role": "system", "content": system_prompt}
         ]
 
         # Initial user message with scenario inspirations

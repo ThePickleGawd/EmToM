@@ -673,6 +673,48 @@ class EMTOMBaseRunner(ABC):
                 world_graph[uid] = None
         return world_graph
 
+    def evaluate_task(
+        self,
+        success_condition: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Evaluate task completion using PARTNR-style predicates.
+
+        Args:
+            success_condition: Task's success_condition dict. If None, returns empty result.
+
+        Returns:
+            Dict with percent_complete, success, failure_explanations
+        """
+        if success_condition is None:
+            return {
+                "percent_complete": 0.0,
+                "success": False,
+                "failure_explanations": ["No success_condition defined"],
+            }
+
+        try:
+            from emtom.evaluation import evaluate_task
+            sim = self.env_interface.sim
+
+            # Get world graph for name-to-handle resolution
+            # Use first available agent's world graph (all agents share the same entity handles)
+            world_graph = None
+            if hasattr(self.env_interface, 'world_graph') and self.env_interface.world_graph:
+                for uid in self.agents.keys():
+                    if uid in self.env_interface.world_graph:
+                        world_graph = self.env_interface.world_graph[uid]
+                        break
+
+            result = evaluate_task(success_condition, sim, world_graph=world_graph)
+            return result.to_dict()
+        except Exception as e:
+            return {
+                "percent_complete": 0.0,
+                "success": False,
+                "failure_explanations": [f"Evaluation error: {str(e)}"],
+            }
+
     @abstractmethod
     def run(self, **kwargs) -> Dict[str, Any]:
         """
