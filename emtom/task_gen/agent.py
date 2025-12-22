@@ -43,11 +43,11 @@ class TaskGeneratorAgent:
         llm_client: "BaseLLM",
         config: DictConfig,
         working_dir: str = "data/emtom/tasks",
-        trajectory_dir: str = "data/emtom/trajectories",
         output_dir: str = "data/emtom/tasks/curated",
         max_iterations: int = 100,
         verbose: bool = True,
         subtasks: int = 3,
+        scene_data: Optional[Any] = None,
     ):
         """
         Initialize the agent.
@@ -56,20 +56,20 @@ class TaskGeneratorAgent:
             llm_client: LLM client for agent reasoning
             config: Hydra config for BenchmarkRunner
             working_dir: Directory containing working_task.json
-            trajectory_dir: Directory with trajectory JSON files
             output_dir: Directory for curated output tasks
             max_iterations: Max ReAct iterations before stopping
             verbose: Print agent thoughts and actions
             subtasks: Exact number of subtasks/steps per task
+            scene_data: Live scene data from SceneLoader (required)
         """
         self.llm = llm_client
         self.config = config
         self.working_dir = Path(working_dir)
-        self.trajectory_dir = Path(trajectory_dir)
         self.subtasks = subtasks
         self.output_dir = Path(output_dir)
         self.max_iterations = max_iterations
         self.verbose = verbose
+        self.scene_data = scene_data
 
         # Task file paths
         self.task_file = self.working_dir / "working_task.json"
@@ -89,6 +89,13 @@ class TaskGeneratorAgent:
         self.messages: List[Dict[str, str]] = []
         self.iteration_count = 0
         self.last_verify_passed = False  # Track if golden trajectory verified
+
+        # Setup logging to file
+        self.log_dir = self.output_dir / "logs"
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.log_file = self.log_dir / f"task_generator_{timestamp}.log"
+        self._log_handle = open(self.log_file, "w")
 
         # Whitelisted bash commands (for safety)
         self.allowed_commands = [
@@ -112,9 +119,17 @@ class TaskGeneratorAgent:
         self._log(f"\n{'='*60}")
         self._log(f"Starting TaskGeneratorAgent")
         self._log(f"Target: {num_tasks_target} tasks")
-        self._log(f"Trajectories: {self.trajectory_dir}")
         self._log(f"Output: {self.output_dir}")
         self._log(f"{'='*60}\n")
+
+        if not self.scene_data:
+            self._log("ERROR: No scene_data provided!")
+            return []
+
+        self._log(f"Scene: {self.scene_data.scene_id} (episode {self.scene_data.episode_id})")
+        self._log(f"  Rooms: {len(self.scene_data.rooms)}")
+        self._log(f"  Furniture: {len(self.scene_data.furniture)}")
+        self._log(f"  Objects: {len(self.scene_data.objects)}")
 
         # Clean up working_task.json from previous runs
         if self.task_file.exists():
@@ -141,20 +156,31 @@ class TaskGeneratorAgent:
             {"role": "system", "content": system_prompt}
         ]
 
-        # Initial user message with scenario inspirations
+        # Format scene data for the prompt
+        scene_info = self._format_scene_data()
+
+        # Initial user message with scene data
         user_msg = f"""Create {num_tasks_target} quality benchmark tasks.
 
 ## Task Requirements
 - **Subtasks**: Exactly {self.subtasks} steps per task
 - Each subtask should be a distinct action that gates progress to the next
 
-Available trajectories are in: {self.trajectory_dir}
+## Scene Data (from PARTNR dataset - these objects EXIST!)
+Episode ID: {self.scene_data.episode_id}
+Scene ID: {self.scene_data.scene_id}
+
+{scene_info}
+
 Template is at: {self.template_file}
 Edit this file for testing: {self.task_file}
 {scenario_text}
-IMPORTANT: Use the escape room themes above to inspire your story field! The story should be atmospheric and reference REAL object IDs from the trajectory's scene_inventory.
+IMPORTANT:
+- Use ONLY the objects listed above - they are verified to exist in this scene
+- The story should be atmospheric and reference REAL object IDs from the scene
+- Choose mechanics to apply (inverse_state, remote_control, etc.) based on the articulated furniture available
 
-Start by exploring the available trajectories with bash."""
+Start by reading the template, then create a task using the scene data above."""
 
         self.messages.append({"role": "user", "content": user_msg})
 
@@ -787,7 +813,59 @@ Start by exploring the available trajectories with bash."""
 
         return f"Task saved to {output_path}. Total submitted: {len(self.submitted_tasks)}"
 
+    def _format_scene_data(self) -> str:
+        """Format scene data for the LLM prompt."""
+        if not self.scene_data:
+            return "No scene data available."
+
+        lines = []
+
+        # Rooms
+        lines.append("### Rooms")
+        for room in self.scene_data.rooms[:15]:
+            lines.append(f"  - {room}")
+        if len(self.scene_data.rooms) > 15:
+            lines.append(f"  ... and {len(self.scene_data.rooms) - 15} more")
+
+        # Articulated furniture (can open/close - good for mechanics)
+        lines.append("\n### Articulated Furniture (can open/close)")
+        for furn in self.scene_data.articulated_furniture[:20]:
+            lines.append(f"  - {furn}")
+        if len(self.scene_data.articulated_furniture) > 20:
+            lines.append(f"  ... and {len(self.scene_data.articulated_furniture) - 20} more")
+
+        # Other furniture
+        other_furniture = [f for f in self.scene_data.furniture
+                          if f not in self.scene_data.articulated_furniture]
+        lines.append("\n### Other Furniture (tables, counters, etc.)")
+        for furn in other_furniture[:20]:
+            lines.append(f"  - {furn}")
+        if len(other_furniture) > 20:
+            lines.append(f"  ... and {len(other_furniture) - 20} more")
+
+        # Objects (pickable items)
+        lines.append("\n### Objects (can be picked up)")
+        for obj in self.scene_data.objects[:30]:
+            lines.append(f"  - {obj}")
+        if len(self.scene_data.objects) > 30:
+            lines.append(f"  ... and {len(self.scene_data.objects) - 30} more")
+
+        return "\n".join(lines)
+
     def _log(self, message: str) -> None:
-        """Print log message if verbose mode is on."""
+        """Print log message and write to log file."""
+        # Always write to log file
+        if hasattr(self, '_log_handle') and self._log_handle:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            self._log_handle.write(f"[{timestamp}] {message}\n")
+            self._log_handle.flush()
+
+        # Print to terminal if verbose
         if self.verbose:
             print(message)
+
+    def close(self) -> None:
+        """Close log file handle."""
+        if hasattr(self, '_log_handle') and self._log_handle:
+            self._log_handle.close()
+            self._log_handle = None

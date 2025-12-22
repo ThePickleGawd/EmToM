@@ -40,6 +40,7 @@ print_usage() {
     echo ""
     echo "Exploration Options:"
     echo "  --steps N            Number of exploration steps (default: $EXPLORATION_STEPS)"
+    echo "                       (Episodes are always randomly selected for diversity)"
     echo ""
     echo "Generation Options:"
     echo "  --num-tasks N        Number of tasks to generate (default: 1)"
@@ -106,6 +107,7 @@ run_exploration() {
     echo "Mode: LLM-guided"
     echo "Steps: $EXPLORATION_STEPS"
     echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
+    echo "(Episodes randomly selected for diversity)"
     echo "=============================================="
     echo ""
 
@@ -122,20 +124,21 @@ run_exploration() {
 
 run_generate() {
     echo "=============================================="
-    echo "Running EMTOM Task Generation"
+    echo "Running EMTOM Task Generation (Live Scene Mode)"
     echo "=============================================="
     echo "Target tasks: $NUM_TASKS"
     echo "Model: $MODEL"
     echo "Subtasks: $SUBTASKS"
+    echo "(Loads random scene from PARTNR dataset)"
     echo "=============================================="
     echo ""
     # Use Hydra config system with custom overrides
+    # Scene is loaded live from PARTNR dataset - no trajectories needed
     python emtom/task_gen/runner.py \
         --config-name examples/emtom_two_robots \
         +num_tasks=$NUM_TASKS \
         +model=$MODEL \
         +subtasks=$SUBTASKS \
-        +trajectory_dir=data/emtom/trajectories \
         +output_dir=data/emtom/tasks/curated \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-generate"
 }

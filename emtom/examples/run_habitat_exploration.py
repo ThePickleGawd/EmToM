@@ -66,6 +66,14 @@ def main(config: DictConfig):
     print("Creating environment...")
     env_interface = EnvironmentInterface(config, dataset=dataset)
 
+    # Always select a random episode for diversity
+    if dataset and hasattr(dataset, 'episodes') and len(dataset.episodes) > 1:
+        import random as rnd
+        rnd.seed(seed)
+        selected_episode = rnd.choice(dataset.episodes)
+        print(f"Randomly selected episode: {selected_episode.episode_id}")
+        env_interface.reset_environment(episode_id=selected_episode.episode_id)
+
     # Get scene info
     current_episode = env_interface.env.env.env._env.current_episode
     scene_id = getattr(current_episode, 'scene_id', "unknown")

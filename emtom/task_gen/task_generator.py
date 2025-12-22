@@ -191,8 +191,9 @@ class GeneratedTask:
     category: TaskCategory
 
     # SCENE & ENVIRONMENT
-    scene_id: str
-    episode_id: str
+    scene_id: str  # Habitat scene ID (e.g., "102817140")
+    episode_id: str  # Trajectory timestamp (e.g., "20251219_194151")
+    dataset_episode_id: str  # Actual Habitat dataset episode ID (e.g., "1") for loading
     active_mechanics: List[str]
     mechanic_bindings: List[MechanicBinding]
 
@@ -283,6 +284,7 @@ class GeneratedTask:
             category=TaskCategory(data.get("category", "knowledge_asymmetry")),
             scene_id=data.get("scene_id", "unknown"),
             episode_id=data.get("episode_id", "unknown"),
+            dataset_episode_id=data.get("dataset_episode_id", "1"),  # Default to episode 1
             active_mechanics=data.get("active_mechanics", []) if isinstance(data.get("active_mechanics"), list) else [],
             mechanic_bindings=bindings,
             story=data.get("story"),
@@ -521,6 +523,7 @@ class TaskGenerator:
 
         # Get scene info
         scene_id = trajectory.get("metadata", {}).get("scene_id", "unknown")
+        dataset_episode_id = trajectory.get("metadata", {}).get("episode_id", "1")
         mechanics = trajectory.get("mechanics_active", [])
 
         # Get mechanic bindings from trajectory (critical for tasks to work!)
@@ -550,6 +553,7 @@ class TaskGenerator:
                     scene_inventory=scene_inventory,
                     num_agents=num_agents,
                     episode_id=trajectory.get("episode_id", "unknown"),
+                    dataset_episode_id=dataset_episode_id,
                     task_type=task_type,
                     task_type_str=task_type_str,
                     mechanic_bindings=mechanic_bindings,
@@ -647,6 +651,7 @@ class TaskGenerator:
         scene_inventory: Dict[str, List[str]],
         num_agents: int,
         episode_id: str,
+        dataset_episode_id: str,
         task_type: int = 1,
         task_type_str: str = "Theory of Mind (option 1)",
         mechanic_bindings: Optional[List[MechanicBinding]] = None,
@@ -689,7 +694,7 @@ class TaskGenerator:
             if json_match:
                 task_data = json.loads(json_match.group())
                 return self._parse_task_response(
-                    task_data, episode_id, num_agents, task_type,
+                    task_data, episode_id, dataset_episode_id, num_agents, task_type,
                     scene_id=scene_id, mechanics=mechanics,
                     mechanic_bindings=mechanic_bindings,
                 )
@@ -703,6 +708,7 @@ class TaskGenerator:
         self,
         data: Dict[str, Any],
         episode_id: str,
+        dataset_episode_id: str,
         num_agents: int,
         task_type: int = 1,
         scene_id: str = "unknown",
@@ -712,6 +718,8 @@ class TaskGenerator:
         """Parse LLM response into GeneratedTask.
 
         Args:
+            episode_id: Trajectory timestamp (e.g., "20251219_194151")
+            dataset_episode_id: Habitat dataset episode ID (e.g., "1") for loading
             task_type: 1 for Theory of Mind, 2 for Regular tasks
             scene_id: The Habitat scene ID
             mechanics: List of active mechanics for this task
@@ -771,6 +779,7 @@ class TaskGenerator:
             category=TaskCategory(data.get("category", "coordination")),
             scene_id=scene_id,
             episode_id=episode_id,
+            dataset_episode_id=dataset_episode_id,
             active_mechanics=mechanics or [],
             mechanic_bindings=mechanic_bindings or [],  # From trajectory exploration
             story=data.get("story"),

@@ -98,7 +98,11 @@ def main():
 
         dataset = CollaborationDatasetV0(config.habitat.dataset)
         env_interface = EnvironmentInterface(config, dataset=dataset, init_wg=False)
-        env_interface.initialize_perception_and_world_graph()
+
+        # Load the specific episode from the task
+        dataset_episode_id = task.dataset_episode_id
+        print(f"Loading episode: {dataset_episode_id} (scene: {task.scene_id})", file=sys.stderr)
+        env_interface.reset_environment(episode_id=dataset_episode_id)
 
         runner = BenchmarkRunner(config)
 

@@ -6,5 +6,7 @@ defaults:
 
 type: CollaborationDataset-v0
 split: train
-data_path: data/datasets/partnr_episodes/v0_0/ci.json.gz
+# Use train_2k for diverse scenes (2000 episodes, 38 unique scenes)
+# ci.json.gz only has 4 episodes in 2 scenes (for CI testing only)
+data_path: data/datasets/partnr_episodes/v0_0/train_2k.json.gz
 scenes_dir: data/hssd-hab

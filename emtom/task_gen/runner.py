@@ -11,6 +11,7 @@ Or via shell script:
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -20,7 +21,7 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 import hydra
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig
 
 from habitat_llm.utils import cprint, setup_config, fix_config
 
@@ -31,40 +32,51 @@ def main(config: DictConfig) -> None:
     # Extract custom args from config (passed as +arg=value)
     num_tasks = config.get("num_tasks", 1)
     model = config.get("model", "gpt-5")
-    trajectory_dir = config.get("trajectory_dir", "data/emtom/trajectories")
     output_dir = config.get("output_dir", "data/emtom/tasks/curated")
     max_iterations = config.get("max_iterations", 100)
     quiet = config.get("quiet", False)
     subtasks = config.get("subtasks", 3)
+    seed = config.get("seed", None)
 
     # Setup config (registers Habitat plugins, sets seed, etc.)
     fix_config(config)
-    config = setup_config(config, seed=47668090)
+    config = setup_config(config, seed=seed or 47668090)
 
     cprint("=" * 60, "blue")
-    cprint("EMTOM Agentic Task Generator", "blue")
+    cprint("EMTOM Task Generator (Live Scene Mode)", "blue")
     cprint("=" * 60, "blue")
     cprint(f"Target tasks: {num_tasks}", "blue")
     cprint(f"Model: {model}", "blue")
-    cprint(f"Trajectories: {trajectory_dir}", "blue")
     cprint(f"Output: {output_dir}", "blue")
     cprint("=" * 60, "blue")
     print()
 
-    # Check trajectory directory
-    if not Path(trajectory_dir).exists():
-        cprint(f"Error: Trajectory directory not found: {trajectory_dir}", "red")
-        cprint("Run exploration first: ./emtom/run_emtom.sh explore", "yellow")
+    # Load random scene from PARTNR dataset
+    cprint("Loading random scene from PARTNR dataset...", "blue")
+    from emtom.task_gen.scene_loader import load_random_scene
+
+    try:
+        scene_data = load_random_scene(config, seed=seed)
+        cprint(f"Loaded scene {scene_data.scene_id} (episode {scene_data.episode_id})", "green")
+        cprint(f"  Rooms: {len(scene_data.rooms)}", "green")
+        cprint(f"  Furniture: {len(scene_data.furniture)}", "green")
+        cprint(f"  Objects: {len(scene_data.objects)}", "green")
+        cprint(f"  Articulated: {len(scene_data.articulated_furniture)}", "green")
+    except Exception as e:
+        cprint(f"Error loading scene: {e}", "red")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
-    # Check for trajectories
-    trajectories = list(Path(trajectory_dir).glob("*.json"))
-    if not trajectories:
-        cprint(f"Error: No trajectory files found in {trajectory_dir}", "red")
-        cprint("Run exploration first: ./emtom/run_emtom.sh explore", "yellow")
-        sys.exit(1)
+    print()
 
-    cprint(f"Found {len(trajectories)} trajectory files", "green")
+    # Save scene data for task generator
+    working_dir = Path("data/emtom/tasks")
+    working_dir.mkdir(parents=True, exist_ok=True)
+    scene_file = working_dir / "current_scene.json"
+    with open(scene_file, "w") as f:
+        json.dump(scene_data.to_dict(), f, indent=2)
+    cprint(f"Scene data saved to {scene_file}", "green")
     print()
 
     # Initialize LLM
@@ -77,18 +89,18 @@ def main(config: DictConfig) -> None:
         cprint(f"Error initializing LLM: {e}", "red")
         sys.exit(1)
 
-    # Create and run agent
+    # Create and run agent with scene data
     from emtom.task_gen.agent import TaskGeneratorAgent
 
     agent = TaskGeneratorAgent(
         llm_client=llm_client,
         config=config,
         working_dir="data/emtom/tasks",
-        trajectory_dir=trajectory_dir,
         output_dir=output_dir,
         max_iterations=max_iterations,
         verbose=not quiet,
         subtasks=subtasks,
+        scene_data=scene_data,  # Pass live scene data
     )
 
     # Run agent
