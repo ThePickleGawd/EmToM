@@ -1,7 +1,8 @@
 {
+  "_NOTE": "USE OBJECTS FROM YOUR TRAJECTORY's scene_inventory! Look for toy_*, phone_*, cup_*, book_*, lamp_*, vase_*, cushion_*, fruit_*, etc. Create DIVERSE tasks!",
   "task_id": "task_template",
   "title": "Template Task - Replace This",
-  "story": "NEUTRAL narrative with motivation for the goal. E.g., 'Guests are arriving for tea. One of you organized this kitchen before.' NO mechanic hints. Must reference real object IDs.",
+  "story": "NEUTRAL narrative with motivation for the goal. NO mechanic hints. Must reference real object IDs from YOUR scene_inventory.",
   "public_goal": "Describe what both agents need to accomplish together",
   "public_context": "Optional background context that both agents know",
   "theory_of_mind_required": true,
@@ -89,6 +90,10 @@
   "golden_trajectory": [
     {"agent": "agent_0", "action": "Communicate", "message": "Share agent_0's unique knowledge"},
     {"agent": "agent_1", "action": "Communicate", "message": "Share agent_1's unique knowledge"},
-    {"agent": "agent_X", "action": "ACTION", "target": "object_or_room_id"}
+    {"agent": "agent_1", "action": "Navigate", "target": "container_id"},
+    {"agent": "agent_1", "action": "Open", "target": "container_id"},
+    {"agent": "agent_1", "action": "Pick", "target": "object_id"},
+    {"agent": "agent_1", "action": "Navigate", "target": "destination_id"},
+    {"agent": "agent_1", "action": "Place", "target": "object_id, on, destination_id, None, None"}
   ]
 }

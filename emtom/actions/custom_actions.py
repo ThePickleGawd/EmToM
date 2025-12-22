@@ -280,7 +280,7 @@ class SearchAction(EMTOMAction):
     action_name = "Search"
     action_description = (
         "Search[target]: Carefully search a location or container for hidden items. "
-        "May find items that aren't visible at first glance. Example: Search[cabinet_57]"
+        "May find items that aren't visible at first glance."
     )
 
     @property
@@ -371,8 +371,7 @@ class InspectAction(EMTOMAction):
     action_name = "Inspect"
     action_description = (
         "Inspect[object]: Carefully examine an object to learn about its "
-        "properties and current state. Returns detailed information about "
-        "the object. Example: Inspect[cabinet_57]"
+        "properties and current state."
     )
 
     MEANINGFUL_STATES = {"is_open", "is_powered", "is_clean", "is_filled", "is_locked", "is_on"}

@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -77,6 +78,11 @@ class TaskGeneratorAgent:
         # Create directories
         self.working_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy fresh template from source to working directory
+        source_template = Path(__file__).parent / "template" / "template.json"
+        if source_template.exists():
+            shutil.copy(source_template, self.template_file)
 
         # Track state
         self.submitted_tasks: List[str] = []
@@ -567,111 +573,102 @@ Start by exploring the available trajectories with bash."""
 
     def _run_benchmark(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Run the actual benchmark test.
+        Run the actual benchmark test in a subprocess.
 
-        This sets up the Habitat environment, creates agents, and runs the task.
+        Uses subprocess to get a fresh GL context (avoids context corruption
+        when running multiple tests in the same process).
         """
-        # Import here to avoid circular imports and allow running without habitat
-        try:
-            from emtom.runner import BenchmarkRunner
-            from emtom.runner.benchmark import task_to_instruction
-            from emtom.task_gen import GeneratedTask
-            from habitat_llm.agent.env import register_actions, register_measures, register_sensors, remove_visual_sensors
-            from habitat_llm.agent.env.dataset import CollaborationDatasetV0
-            from habitat_llm.agent.env.environment_interface import EnvironmentInterface
-        except ImportError as e:
-            return {
-                "steps": 0,
-                "done": False,
-                "episode_over": True,
-                "error": f"Import error: {e}",
-                "summary": "Could not import benchmark dependencies"
-            }
+        # Write task to temp file for subprocess
+        import tempfile
 
-        # Convert task_data to GeneratedTask
         try:
-            task = GeneratedTask.from_dict(task_data)
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(task_data, f)
+                temp_task_file = f.name
         except Exception as e:
             return {
                 "steps": 0,
                 "done": False,
-                "episode_over": True,
-                "error": f"Invalid task format: {e}",
-                "summary": "Task JSON is malformed"
+                "error": f"Failed to write temp task file: {e}",
+                "summary": f"Setup error: {e}"
             }
 
-        # Setup environment
-        output_dir = f"outputs/emtom/test_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        os.makedirs(output_dir, exist_ok=True)
+        # Run test in subprocess
+        script_path = Path(__file__).parent / "test_task.py"
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--task-file", temp_task_file,
+            "--config-name", "examples/emtom_two_robots",
+            "--max-turns", "20",
+        ]
 
         try:
-            # Remove visual sensors since we don't need them for task testing
-            # This prevents KeyError on agent_0_third_rgb when sensors aren't available
-            remove_visual_sensors(self.config)
-
-            # Register components
-            register_sensors(self.config)
-            register_actions(self.config)
-            register_measures(self.config)
-
-            # Create environment
-            dataset = CollaborationDatasetV0(self.config.habitat.dataset)
-            env_interface = EnvironmentInterface(self.config, dataset=dataset, init_wg=False)
-            env_interface.initialize_perception_and_world_graph()
-
-            # Create runner
-            runner = BenchmarkRunner(self.config)
-
-            # Convert task to mechanics dict for initialization
-            task_mechanics = {
-                "mechanics": [
-                    {"mechanic_type": b.mechanic_type, **b.to_dict()}
-                    for b in task.mechanic_bindings
-                ]
-            } if task.mechanic_bindings else None
-
-            runner.setup(
-                env_interface=env_interface,
-                task_data=task_mechanics,
-                output_dir=output_dir,
-                task=task,
-                save_video=False,  # Disable video during task generation
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minute timeout for LLM agents
             )
 
-            # Generate instruction
-            instruction = task_to_instruction(task)
+            # Clean up temp file
+            try:
+                os.unlink(temp_task_file)
+            except Exception:
+                pass
 
-            # Run benchmark (limited steps for testing)
-            results = runner.run(
-                instruction=instruction,
-                max_steps=20000,  # Allow full episode length
-            )
+            # Parse JSON output
+            output = result.stdout.strip()
+            if not output:
+                return {
+                    "steps": 0,
+                    "done": False,
+                    "error": f"No output from test subprocess. stderr: {result.stderr[:500]}",
+                    "summary": "Subprocess error"
+                }
 
-            runner.cleanup()
+            try:
+                return json.loads(output)
+            except json.JSONDecodeError:
+                return {
+                    "steps": 0,
+                    "done": False,
+                    "error": f"Invalid JSON from subprocess: {output[:200]}",
+                    "summary": "Parse error"
+                }
 
-            return {
-                "steps": results.get("steps", 0),
-                "done": results.get("done", False),
-                "episode_over": results.get("episode_over", False),
-                "summary": f"Task {'completed' if results.get('done') else 'not completed'} in {results.get('steps', 0)} steps"
-            }
-
-        except Exception as e:
+        except subprocess.TimeoutExpired:
+            try:
+                os.unlink(temp_task_file)
+            except Exception:
+                pass
             return {
                 "steps": 0,
                 "done": False,
-                "episode_over": True,
-                "error": str(e),
-                "summary": f"Benchmark error: {e}"
+                "error": "Test timed out after 10 minutes",
+                "summary": "Timeout"
+            }
+        except Exception as e:
+            try:
+                os.unlink(temp_task_file)
+            except Exception:
+                pass
+            return {
+                "steps": 0,
+                "done": False,
+                "error": f"Subprocess error: {e}",
+                "summary": f"Subprocess error: {e}"
             }
 
     def _verify_golden_trajectory(self) -> str:
         """
         Execute golden_trajectory step-by-step to prove task is completable.
 
-        This runs each action in the golden trajectory sequentially and
-        verifies the success condition is met at the end.
+        Runs verification in a subprocess to get a fresh GL context
+        (avoids OpenGL context issues when reusing the main process).
         """
+        import subprocess
+
         # Check task file exists
         if not self.task_file.exists():
             return json.dumps({
@@ -679,7 +676,7 @@ Start by exploring the available trajectories with bash."""
                 "error": "working_task.json does not exist. Create it first with bash."
             })
 
-        # Load task
+        # Load task to check golden_trajectory exists
         try:
             with open(self.task_file) as f:
                 task_data = json.load(f)
@@ -689,7 +686,6 @@ Start by exploring the available trajectories with bash."""
                 "error": f"Invalid JSON in working_task.json: {e}"
             })
 
-        # Check golden_trajectory exists
         golden = task_data.get("golden_trajectory", [])
         if not golden:
             return json.dumps({
@@ -699,164 +695,62 @@ Start by exploring the available trajectories with bash."""
 
         self._log(f"Verifying golden trajectory: {len(golden)} steps")
 
-        # Import dependencies
-        try:
-            from emtom.runner.verification import VerificationRunner
-            from emtom.task_gen import GeneratedTask
-            from habitat_llm.agent.env import register_actions, register_measures, register_sensors
-            from habitat_llm.agent.env.dataset import CollaborationDatasetV0
-            from habitat_llm.agent.env.environment_interface import EnvironmentInterface
-        except ImportError as e:
-            return json.dumps({
-                "valid": False,
-                "error": f"Import error: {e}",
-                "summary": "Could not import benchmark dependencies"
-            })
-
-        # Convert task_data to GeneratedTask
-        try:
-            task = GeneratedTask.from_dict(task_data)
-        except Exception as e:
-            return json.dumps({
-                "valid": False,
-                "error": f"Invalid task format: {e}"
-            })
-
-        # Setup environment
-        output_dir = f"outputs/emtom/verify_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        os.makedirs(output_dir, exist_ok=True)
+        # Run verification in subprocess (fresh GL context)
+        script_path = Path(__file__).parent / "verify_trajectory.py"
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--task-file", str(self.task_file),
+            "--config-name", "examples/emtom_two_robots",
+        ]
 
         try:
-            # NOTE: Don't remove visual sensors for verification - skills need them
-            # (e.g., explore_skill needs articulated_agent_arm_depth and rgb)
-
-            # Register components
-            register_sensors(self.config)
-            register_actions(self.config)
-            register_measures(self.config)
-
-            # Create environment
-            dataset = CollaborationDatasetV0(self.config.habitat.dataset)
-            env_interface = EnvironmentInterface(self.config, dataset=dataset, init_wg=False)
-            env_interface.initialize_perception_and_world_graph()
-
-            # Create runner (use VerificationRunner - doesn't create LLM planners)
-            runner = VerificationRunner(self.config)
-
-            # Convert task to mechanics dict
-            task_mechanics = {
-                "mechanics": [
-                    {"mechanic_type": b.mechanic_type, **b.to_dict()}
-                    for b in task.mechanic_bindings
-                ]
-            } if task.mechanic_bindings else None
-
-            runner.setup(
-                env_interface=env_interface,
-                task_data=task_mechanics,
-                output_dir=output_dir,
-                task=task,
-                save_video=False,  # Disable video during task generation
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
             )
 
-            # Execute each step in golden_trajectory
-            executed_steps = []
-            for i, step in enumerate(golden):
-                agent_str = step.get("agent", "agent_0")
-                agent_id = int(agent_str.split("_")[1])
-                action = step.get("action")
-                target = step.get("target")
-                message = step.get("message")
-
-                self._log(f"  Step {i+1}: {agent_str} {action}({target or message})")
-
-                # Skip Communicate actions (no physical execution needed)
-                if action == "Communicate":
-                    executed_steps.append({
-                        "step": i,
-                        "agent": agent_str,
-                        "action": action,
-                        "message": message,
-                        "success": True,
-                        "skipped": True
-                    })
-                    continue
-
-                # Execute action
-                try:
-                    result = runner.execute_action(
-                        uid=agent_id,
-                        action_name=action,
-                        target=target
-                    )
-
-                    success = result.get("success", False)
-                    executed_steps.append({
-                        "step": i,
-                        "agent": agent_str,
-                        "action": action,
-                        "target": target,
-                        "success": success,
-                        "observation": result.get("observation", "")[:200]
-                    })
-
-                    if not success:
-                        runner.cleanup()
-                        return json.dumps({
-                            "valid": False,
-                            "failed_step": i,
-                            "action": f"{agent_str}: {action}({target})",
-                            "error": result.get("observation", "Action failed"),
-                            "executed_steps": executed_steps,
-                            "summary": f"Golden trajectory failed at step {i+1}"
-                        }, indent=2)
-
-                except Exception as e:
-                    runner.cleanup()
-                    return json.dumps({
-                        "valid": False,
-                        "failed_step": i,
-                        "action": f"{agent_str}: {action}({target})",
-                        "error": str(e),
-                        "executed_steps": executed_steps,
-                        "summary": f"Golden trajectory failed at step {i+1}: {e}"
-                    }, indent=2)
-
-            # All steps executed, now evaluate success condition
-            try:
-                evaluation = runner.evaluate_task()
-                success_met = evaluation.get("success", False)
-            except Exception as e:
-                evaluation = {"error": str(e)}
-                success_met = False
-
-            runner.cleanup()
-
-            if not success_met:
+            # Parse JSON output from subprocess
+            if result.returncode != 0 and not result.stdout.strip():
                 return json.dumps({
                     "valid": False,
-                    "error": "Golden trajectory completed but success_condition not met",
-                    "evaluation": evaluation,
-                    "executed_steps": executed_steps,
-                    "summary": "All actions succeeded but goal not reached"
-                }, indent=2)
+                    "error": f"Verification subprocess failed: {result.stderr[:500]}",
+                    "summary": "Subprocess error"
+                })
 
-            # Success!
-            self.last_verify_passed = True
+            # Parse and return the JSON output from the subprocess
+            output = result.stdout.strip()
+            if not output:
+                return json.dumps({
+                    "valid": False,
+                    "error": "No output from verification subprocess",
+                    "stderr": result.stderr[:500]
+                })
+
+            # Check if verification passed and update flag
+            try:
+                result_data = json.loads(output)
+                if result_data.get("valid", False):
+                    self.last_verify_passed = True
+            except json.JSONDecodeError:
+                pass
+
+            return output
+
+        except subprocess.TimeoutExpired:
             return json.dumps({
-                "valid": True,
-                "steps_executed": len(golden),
-                "success_condition_met": True,
-                "executed_steps": executed_steps,
-                "summary": f"Golden trajectory verified: {len(golden)} steps, goal reached"
-            }, indent=2)
-
+                "valid": False,
+                "error": "Verification timed out after 5 minutes",
+                "summary": "Timeout"
+            })
         except Exception as e:
             return json.dumps({
                 "valid": False,
-                "error": str(e),
-                "summary": f"Verification error: {e}"
-            }, indent=2)
+                "error": f"Verification subprocess error: {e}",
+                "summary": f"Subprocess error: {e}"
+            })
 
     def _submit_task(self) -> str:
         """

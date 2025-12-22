@@ -103,32 +103,39 @@ class BenchmarkRunner(EMTOMBaseRunner):
     def run(
         self,
         instruction: Dict[str, str],
-        max_steps: int = 200,
+        max_steps: int = 20000,
+        max_turns: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Run benchmark task with LLM planners.
 
         Args:
             instruction: Per-agent instruction dict (agent_id -> instruction)
-            max_steps: Maximum simulation steps
+            max_steps: Maximum simulation steps (safety limit)
+            max_turns: Maximum LLM turns per agent (primary limit if set)
 
         Returns:
-            Results dict with steps, success, history
+            Results dict with steps, turns, success, history
         """
         print(f"\n[BenchmarkRunner] Starting benchmark execution...")
-        print(f"[BenchmarkRunner] Max steps: {max_steps}")
+        if max_turns:
+            print(f"[BenchmarkRunner] Max LLM turns: {max_turns}")
 
         observations = self.get_observations()
         self.record_frame(observations)
 
         done = False
         all_planners_done = False
+        turn_count = 0
 
         while self._step_count < max_steps and not done and not self._episode_done:
-            self._step_count += 1
+            # Check turn limit
+            if max_turns and turn_count >= max_turns:
+                print(f"[BenchmarkRunner] Reached max LLM turns ({max_turns})")
+                break
 
-            if self._step_count % 10 == 0:
-                print(f"[BenchmarkRunner] Step {self._step_count}/{max_steps}")
+            self._step_count += 1
+            turn_count += 1
 
             world_graph = self.get_world_graph()
             planner_done_count = 0
@@ -152,6 +159,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     if high_level_action:
                         self._action_history.append({
                             "step": self._step_count,
+                            "turn": turn_count,
                             "agent": agent_id,
                             "action": high_level_action,
                         })
@@ -186,6 +194,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
         return {
             "steps": self._step_count,
+            "turns": turn_count,
             "done": done or all_planners_done,
             "episode_over": self._episode_done,
             "action_history": self._action_history,

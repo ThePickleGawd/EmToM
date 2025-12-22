@@ -125,60 +125,52 @@ Tasks are represented as a DAG (Directed Acyclic Graph) of subtasks:
 - Progress is tracked as % of completed nodes
 
 **Subtask Fields:**
-- `id`: Unique subtask identifier (e.g., "open_drawer", "pick_kettle")
+- `id`: Unique subtask identifier (e.g., "open_container", "retrieve_item")
 - `description`: Human-readable description
 - `success_condition`: PARTNR predicate (entity, property, value/target)
 - `depends_on`: List of subtask IDs that must complete first
 - `assigned_agent`: Optional - which agent should do this
 
-**Example DAG (parallel branches + convergence):**
+**IMPORTANT: Use objects from the trajectory's scene_inventory, NOT from these examples!**
+
+**Example DAG structure (use YOUR scene's objects):**
 ```
-[open_drawer] ──→ [pick_kettle] ──→ [place_kettle]
-                                         ↑
-[prepare_table] ─────────────────────────┘
+[open_container] ──→ [retrieve_item] ──→ [place_item]
+                                              ↑
+[prepare_destination] ────────────────────────┘
 ```
 
 ```json
 "subtasks": [
   {
-    "id": "open_drawer",
-    "description": "Open chest_of_drawers_54 (uses inverse mechanic)",
+    "id": "open_container",
+    "description": "Open <container_from_scene>",
     "success_condition": {
-      "entity": "chest_of_drawers_54",
+      "entity": "<container_id>",
       "property": "is_open",
       "value": true
     },
     "depends_on": []
   },
   {
-    "id": "prepare_table",
-    "description": "Make table_59 ready for placement",
+    "id": "retrieve_item",
+    "description": "Pick up <object_from_scene>",
     "success_condition": {
-      "entity": "table_59",
-      "property": "is_open",
-      "value": true
-    },
-    "depends_on": []
-  },
-  {
-    "id": "pick_kettle",
-    "description": "Pick up kettle_3 from the drawer",
-    "success_condition": {
-      "entity": "kettle_3",
+      "entity": "<object_id>",
       "property": "is_held_by",
       "target": "agent_1"
     },
-    "depends_on": ["open_drawer"]
+    "depends_on": ["open_container"]
   },
   {
-    "id": "place_kettle",
-    "description": "Place kettle_3 on table_59",
+    "id": "place_item",
+    "description": "Place <object> on <destination>",
     "success_condition": {
-      "entity": "kettle_3",
+      "entity": "<object_id>",
       "property": "is_on_top",
-      "target": "table_59"
+      "target": "<destination_id>"
     },
-    "depends_on": ["pick_kettle", "prepare_table"]
+    "depends_on": ["retrieve_item"]
   }
 ]
 ```
@@ -202,14 +194,14 @@ Give each agent a unique set of actions that forces collaboration:
 | Split skills | Navigate, Open, Communicate | Pick, Place, Communicate | 0 opens, 1 retrieves |
 | Specialist | Use, Inspect | Pick, Place, Search | Different expertise |
 
-**Example: Bidirectional ToM Task**
+**Example: Bidirectional ToM Task (use YOUR scene's objects)**
 ```
-Goal: "Get kettle from locked drawer, place on table"
-agent_0: knows drawer is inverted, CANNOT Pick objects
-agent_1: knows kettle is in chest_of_drawers_54, CANNOT Use/Inspect
+Goal: "Get <object> from <container>, place on <furniture>"
+agent_0: knows container uses inverse mechanic, CANNOT Pick objects
+agent_1: knows where object is stored, CANNOT Use/Inspect
 
-→ agent_0 must share: "Close the drawer to open it"
-→ agent_1 must share: "The kettle is in chest_of_drawers_54"
+→ agent_0 must share mechanic knowledge
+→ agent_1 must share location knowledge
 → Both agents model what the other doesn't know
 ```
 
@@ -257,88 +249,50 @@ Action: bash[cat data/emtom/trajectories/trajectory_abc123.json | jq '{mechanic_
 ```
 
 ```
-Thought: The scene has rooms=[kitchen_1, bedroom_1, ...], furniture=[chest_of_drawers_54, table_59, cabinet_39, ...], objects=[kettle_3, ...]. The mechanic_bindings show inverse_state on chest_of_drawers_54 and remote_control linking chest_of_drawers_52 to table_59. Let me create a neutral story that sets up the task without any hints about mechanics.
+Thought: The scene has rooms, furniture, and objects from scene_inventory. The mechanic_bindings show what mechanics are active. I'll create a task using THESE SPECIFIC objects - not copying from examples.
 Action: bash[cat > data/emtom/tasks/working_task.json << 'EOF'
 {
-  "task_id": "task_001",
-  "title": "The Inverted Drawer",
-  "story": "Guests are arriving soon and you need to prepare tea. The kettle is stored in the kitchen. One of you organized the kitchen last week, the other is helping out for the first time.",
-  "episode_id": "0",
-  "public_goal": "Retrieve kettle_3 and place it on table_59",
-  "public_context": "The kettle should be in one of the kitchen drawers.",
+  "task_id": "task_from_trajectory",
+  "title": "<CREATIVE_TITLE_BASED_ON_MECHANICS>",
+  "story": "<NEUTRAL_STORY_USING_REAL_OBJECT_IDS_FROM_THIS_SCENE>",
+  "episode_id": "<FROM_TRAJECTORY>",
+  "public_goal": "<GOAL_USING_OBJECTS_FROM_THIS_SCENE_INVENTORY>",
+  "public_context": "<CONTEXT_WITHOUT_MECHANIC_HINTS>",
   "theory_of_mind_required": true,
   "category": "knowledge_asymmetry",
-  "scene_id": "102344280",
-  "active_mechanics": ["inverse_state", "remote_control"],
-  "mechanic_bindings": [
-    {
-      "mechanic_type": "inverse_state",
-      "trigger_object": "chest_of_drawers_54",
-      "target_object": null,
-      "target_state": null,
-      "count": null
-    },
-    {
-      "mechanic_type": "remote_control",
-      "trigger_object": "chest_of_drawers_52",
-      "target_object": "table_59",
-      "target_state": "is_open",
-      "count": null
-    }
-  ],
+  "scene_id": "<FROM_TRAJECTORY>",
+  "active_mechanics": ["<FROM_TRAJECTORY_mechanic_bindings>"],
+  "mechanic_bindings": "<COPY_EXACTLY_FROM_TRAJECTORY>",
   "agent_secrets": {
-    "agent_0": ["chest_of_drawers_54 is inverted: Close action opens it, Open action closes it."],
-    "agent_1": ["The kettle is stored inside chest_of_drawers_54."]
+    "agent_0": ["<UNIQUE_KNOWLEDGE_ABOUT_MECHANIC>"],
+    "agent_1": ["<UNIQUE_KNOWLEDGE_ABOUT_OBJECT_LOCATION>"]
   },
   "agent_roles": {
-    "agent_0": "Knows how the kitchen furniture works, but forgot where items are stored",
-    "agent_1": "Recently put the kettle away, but unfamiliar with the furniture mechanics"
+    "agent_0": "<ROLE_WITH_MECHANIC_KNOWLEDGE>",
+    "agent_1": "<ROLE_WITH_LOCATION_KNOWLEDGE>"
   },
   "agent_actions": {
-    "agent_0": ["Navigate", "Open", "Close", "Use", "Inspect", "Communicate"],
-    "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
+    "agent_0": ["<ACTIONS_FOR_CAPABILITY_ASYMMETRY>"],
+    "agent_1": ["<DIFFERENT_ACTIONS_TO_FORCE_COORDINATION>"]
   },
   "subtasks": [
     {
-      "id": "open_drawer",
-      "description": "Open chest_of_drawers_54 using inverse mechanic",
-      "success_condition": {"entity": "chest_of_drawers_54", "property": "is_open", "value": true},
+      "id": "<step_id>",
+      "description": "<WHAT_HAPPENS_WITH_REAL_OBJECT_IDS>",
+      "success_condition": {"entity": "<object_from_scene>", "property": "<predicate>", "value/target": "<value>"},
       "depends_on": []
-    },
-    {
-      "id": "pick_kettle",
-      "description": "Pick up kettle_3 from the drawer",
-      "success_condition": {"entity": "kettle_3", "property": "is_held_by", "target": "agent_1"},
-      "depends_on": ["open_drawer"]
-    },
-    {
-      "id": "place_kettle",
-      "description": "Place kettle_3 on table_59",
-      "success_condition": {"entity": "kettle_3", "property": "is_on_top", "target": "table_59"},
-      "depends_on": ["pick_kettle"]
     }
   ],
-  "failure_conditions": [
-    {"description": "Too many failed attempts", "failure_states": [], "max_failed_attempts": 10}
-  ],
-  "initial_world_state": {
-    "objects": ["kettle_3", "chest_of_drawers_54", "chest_of_drawers_52", "table_59"],
-    "agent_positions": {"agent_0": "kitchen_1", "agent_1": "kitchen_1"}
-  },
-  "num_agents": 2,
-  "difficulty": 3,
-  "source_trajectory": "trajectory_abc123",
   "golden_trajectory": [
-    {"agent": "agent_1", "action": "Communicate", "message": "I put the kettle in chest_of_drawers_54 yesterday."},
-    {"agent": "agent_0", "action": "Communicate", "message": "Good to know! That drawer is tricky - you need to Close it to open it, the mechanism is inverted."},
-    {"agent": "agent_1", "action": "Navigate", "target": "chest_of_drawers_54"},
-    {"agent": "agent_1", "action": "Close", "target": "chest_of_drawers_54"},
-    {"agent": "agent_1", "action": "Pick", "target": "kettle_3"},
-    {"agent": "agent_1", "action": "Navigate", "target": "table_59"},
-    {"agent": "agent_1", "action": "Place", "target": "table_59"}
+    {"agent": "agent_X", "action": "Communicate", "message": "<SHARE_UNIQUE_KNOWLEDGE>"},
+    {"agent": "agent_Y", "action": "Navigate", "target": "<object_from_scene>"},
+    {"agent": "agent_Y", "action": "<ACTION>", "target": "<object_from_scene>"}
   ]
 }
 EOF]
+
+**CRITICAL: DO NOT copy object IDs from this template! Use objects from YOUR trajectory's scene_inventory.**
+**Example object types to look for: toy_*, phone_*, cup_*, book_*, lamp_*, vase_*, pillow_*, etc.**
 ```
 
 ```
@@ -390,21 +344,34 @@ The trajectory should show BOTH agents contributing their unique knowledge/capab
 **Format for each step:**
 - `agent`: "agent_0", "agent_1", etc.
 - `action`: One of [Navigate, Open, Close, Pick, Place, Use, Inspect, Search, Communicate, Wait]
-- `target`: object_id or room_id (required for Navigate, Open, Close, Pick, Place, Use, Inspect, Search)
-- `message`: string (required ONLY for Communicate action, omit target for Communicate)
+- `target`: The action argument(s). Format depends on action:
+  - Navigate, Pick, Open, Close: single entity name (e.g., "table_22", "cup_1")
+  - **Place: MUST be 5 comma-separated values** - "object, spatial_relation, furniture, spatial_constraint, reference_object"
+    - Example: "cup_1, on, table_22, None, None"
+    - spatial_relation: "on" or "within"
+    - spatial_constraint: "None" or "next_to"
+    - reference_object: "None" or another object name
+  - Communicate: omit target, use `message` field instead
+  - Wait: empty or omit target
+- `message`: string (required ONLY for Communicate action)
 
-**Story-Goal Coherence Examples:**
-- Goal: "Place kettle on dining table"
-  → Story: "Guests are arriving for tea. One of you knows where the kettle is stored, the other will set the table."
-- Goal: "Move the toy airplane to the bedroom shelf"
-  → Story: "It's cleanup time. One of you organized this room before and knows where things go."
-- Goal: "Open the cabinet and retrieve the phone stand"
-  → Story: "You need the phone stand for a video call. One agent remembers where it was put away."
+## Navigation
+Agents exist in physical space. Use Navigate to move to a location before interacting with objects there. If an agent needs to pick something from a drawer then place it on a table, they'll need to navigate to each location.
+
+**Story-Goal Coherence Examples (use objects from YOUR scene, not these):**
+- Goal: "Retrieve <object> and place it on <furniture>"
+  → Story: "It's time to prepare for [activity]. One of you knows where things are stored."
+- Goal: "Move <object> to <room/furniture>"
+  → Story: "It's cleanup time. One of you organized this room before."
+- Goal: "Find and retrieve <object> from <container>"
+  → Story: "You need <object> for [activity]. One agent remembers where it was put away."
 
 **BAD Examples:**
 - "Something is wrong with this kitchen" (hints at mechanics)
 - "The furniture behaves strangely" (hints at mechanics)
-- "Retrieve the kettle" with no context (no motivation, not cohesive)
+- Generic goal with no context (no motivation, not cohesive)
+
+**Object Variety:** Look in scene_inventory for diverse objects like toy_*, phone_*, cup_*, book_*, lamp_*, vase_*, cushion_*, fruit_*, etc. Don't always use the same objects!
 """
 
 TASK_TEMPLATE = """{
@@ -461,6 +428,10 @@ TASK_TEMPLATE = """{
   "golden_trajectory": [
     {"agent": "agent_1", "action": "Communicate", "message": "Share agent_1's unique knowledge"},
     {"agent": "agent_0", "action": "Communicate", "message": "Share agent_0's unique knowledge"},
-    {"agent": "agent_X", "action": "ACTION", "target": "object_or_room_id"}
+    {"agent": "agent_1", "action": "Navigate", "target": "furniture_id"},
+    {"agent": "agent_1", "action": "Open", "target": "furniture_id"},
+    {"agent": "agent_1", "action": "Pick", "target": "object_id"},
+    {"agent": "agent_1", "action": "Navigate", "target": "destination_furniture"},
+    {"agent": "agent_1", "action": "Place", "target": "object_id, on, destination_furniture, None, None"}
   ]
 }"""

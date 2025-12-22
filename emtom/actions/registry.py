@@ -15,16 +15,43 @@ if TYPE_CHECKING:
 # Global registry of action classes
 _ACTION_REGISTRY: Dict[str, Type["EMTOMAction"]] = {}
 
-# Standard habitat_llm tools that EMTOM uses (not custom actions, but included for completeness)
-# These are described here so prompts can reference all available actions uniformly
+# Standard habitat_llm motor skills that EMTOM uses.
+# These descriptions are copied from the PARTNR YAML configs in habitat_llm/conf/tools/motor_skills/
+# to ensure the task generator uses the exact API format expected by the simulator.
 STANDARD_ACTIONS: Dict[str, str] = {
-    "Navigate": "Navigate[target]: Move to a location (room or furniture). Almost always needed for task completion.",
-    "Open": "Open[target]: Open a piece of furniture like a cabinet, drawer, or fridge. Use when task involves accessing contents.",
-    "Close": "Close[target]: Close a piece of furniture. Use when task requires closing things after opening.",
-    "Pick": "Pick[target]: Pick up an object. Use when task involves moving objects around.",
-    "Place": "Place[target, receptacle]: Place an object on a receptacle. Use when task involves putting objects somewhere.",
-    "Wait": "Wait[]: Do nothing for a turn. Use for coordination or waiting for delayed effects.",
-    "Communicate": "Communicate[message]: Send a message to other agents. Essential for multi-agent coordination.",
+    "Navigate": (
+        "Navigate[target]: Used for navigating to an entity. You must provide the name of the "
+        "entity you want to navigate to. Example: Navigate[counter_22]"
+    ),
+    "Pick": (
+        "Pick[object]: Used for picking up an object. You must provide the name of the object "
+        "to be picked. The agent cannot hold more than one object at a time. Example: Pick[cup_1]"
+    ),
+    "Place": (
+        "Place[object, spatial_relation, furniture, spatial_constraint, reference_object]: "
+        "Used for placing an object on a target location. You need to provide: "
+        "(1) name of the object to be placed, "
+        "(2) spatial relation ('on' or 'within'), "
+        "(3) name of the furniture where it should be placed. "
+        "The object must already be held by the agent. "
+        "Optional: spatial_constraint ('next_to') and reference_object for placing near another object. "
+        "Set spatial_constraint and reference_object to 'None' when not needed. "
+        "Example: Place[cup_1, on, table_22, None, None]"
+    ),
+    "Open": (
+        "Open[furniture]: Used for opening an articulated entity (cabinet, drawer, fridge). "
+        "You must provide the name of the furniture you want to open. Example: Open[chest_of_drawers_1]"
+    ),
+    "Close": (
+        "Close[furniture]: Used for closing an articulated entity. "
+        "You must provide the name of the furniture you want to close. Example: Close[chest_of_drawers_1]"
+    ),
+    "Wait": (
+        "Wait[]: Used to make agent stay idle for some time. Takes no arguments. Example: Wait[]"
+    ),
+    "Communicate": (
+        "Communicate[message]: Send a message to other agents. Example: Communicate[I found the key!]"
+    ),
 }
 
 

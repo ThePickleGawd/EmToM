@@ -238,12 +238,21 @@ class GeneratedTask:
         """Create task from dictionary."""
         # Parse mechanic bindings if present
         bindings = []
-        for b in data.get("mechanic_bindings", []):
-            bindings.append(MechanicBinding.from_dict(b))
+        raw_bindings = data.get("mechanic_bindings", [])
+        # Handle case where LLM copied placeholder string instead of actual bindings
+        if isinstance(raw_bindings, str):
+            raw_bindings = []  # Ignore string placeholders
+        for b in raw_bindings:
+            if isinstance(b, dict):
+                bindings.append(MechanicBinding.from_dict(b))
+            # Skip non-dict entries (strings, etc.)
 
         # Parse subtasks - handle both string and dict formats
         subtasks = []
-        for i, s in enumerate(data.get("subtasks", [])):
+        raw_subtasks = data.get("subtasks", [])
+        if isinstance(raw_subtasks, str):
+            raw_subtasks = []  # Ignore string placeholders
+        for i, s in enumerate(raw_subtasks):
             if isinstance(s, str):
                 # Convert simple string to Subtask
                 subtasks.append(Subtask(
@@ -251,26 +260,40 @@ class GeneratedTask:
                     description=s,
                     success_condition={},
                 ))
-            else:
+            elif isinstance(s, dict):
                 subtasks.append(Subtask.from_dict(s))
 
+        # Parse failure conditions - handle string placeholders
+        failure_conditions = []
+        raw_failures = data.get("failure_conditions", [])
+        if isinstance(raw_failures, list):
+            for f in raw_failures:
+                if isinstance(f, dict):
+                    failure_conditions.append(FailureCondition.from_dict(f))
+
+        # Parse success_condition if present and valid
+        success_condition = None
+        raw_success = data.get("success_condition")
+        if isinstance(raw_success, dict) and "description" in raw_success:
+            success_condition = SuccessCondition.from_dict(raw_success)
+
         return cls(
-            task_id=data["task_id"],
-            title=data["title"],
-            category=TaskCategory(data["category"]),
+            task_id=data.get("task_id", "unknown"),
+            title=data.get("title", "Untitled"),
+            category=TaskCategory(data.get("category", "knowledge_asymmetry")),
             scene_id=data.get("scene_id", "unknown"),
             episode_id=data.get("episode_id", "unknown"),
-            active_mechanics=data.get("active_mechanics", []),
+            active_mechanics=data.get("active_mechanics", []) if isinstance(data.get("active_mechanics"), list) else [],
             mechanic_bindings=bindings,
             story=data.get("story"),
-            public_goal=data["public_goal"],
+            public_goal=data.get("public_goal", ""),
             public_context=data.get("public_context"),
-            agent_secrets=data.get("agent_secrets", {}),
-            agent_roles=data.get("agent_roles", {}),
-            agent_actions=data.get("agent_actions", {}),
-            success_condition=SuccessCondition.from_dict(data["success_condition"]) if "success_condition" in data else None,
-            failure_conditions=[FailureCondition.from_dict(f) for f in data.get("failure_conditions", [])],
-            initial_world_state=data.get("initial_world_state", {}),
+            agent_secrets=data.get("agent_secrets", {}) if isinstance(data.get("agent_secrets"), dict) else {},
+            agent_roles=data.get("agent_roles", {}) if isinstance(data.get("agent_roles"), dict) else {},
+            agent_actions=data.get("agent_actions", {}) if isinstance(data.get("agent_actions"), dict) else {},
+            success_condition=success_condition,
+            failure_conditions=failure_conditions,
+            initial_world_state=data.get("initial_world_state", {}) if isinstance(data.get("initial_world_state"), dict) else {},
             num_agents=data.get("num_agents", 2),
             difficulty=data.get("difficulty", 3),
             theory_of_mind_required=data.get("theory_of_mind_required", False),
