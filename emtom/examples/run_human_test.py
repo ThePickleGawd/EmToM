@@ -73,34 +73,6 @@ def print_bindings_pretty(bindings: Dict[str, Any]) -> None:
             elif mech == "conditional_unlock":
                 cprint(f"   - Conditional Unlock: {info.get('prerequisite')} unlocks -> {info.get('target')}", "gray")
 
-    # Scenario info
-    if "scenario" in bindings:
-        s = bindings["scenario"]
-        cprint("\nScenario:", "blue")
-        cprint(f"   Title: {s.get('title', 'Unknown')}", "yellow")
-        cprint(f"   Theme: {s.get('theme', 'Unknown')}", "gray")
-        cprint(f"   Collaboration Required: {'Yes' if s.get('requires_collaboration') else 'No'}", "gray")
-
-    # Story context
-    if "story_context" in bindings:
-        cprint("\nStory Context:", "blue")
-        story = bindings["story_context"]
-        # Format story nicely - wrap at ~70 chars
-        for paragraph in story.strip().split('\n\n'):
-            wrapped = paragraph.replace('\n', ' ').strip()
-            # Simple word wrap
-            words = wrapped.split()
-            line = "   "
-            for word in words:
-                if len(line) + len(word) + 1 > 70:
-                    cprint(line, "gray")
-                    line = "   " + word
-                else:
-                    line += " " + word if line != "   " else word
-            if line.strip():
-                cprint(line, "gray")
-            print()  # blank line between paragraphs
-
     # Hidden items
     if "hidden_items" in bindings:
         cprint("Hidden Items:", "blue")
@@ -124,13 +96,24 @@ def print_bindings_pretty(bindings: Dict[str, Any]) -> None:
 
 
 def load_task(task_file: str) -> Optional[Dict[str, Any]]:
-    """Load task from JSON file."""
+    """Load task from JSON file.
+
+    Supports two formats:
+    - Bundle format: {"tasks": [task1, task2, ...]}
+    - Single task format: {task_id, title, ...}
+    """
     with open(task_file) as f:
         data = json.load(f)
 
-    tasks = data.get("tasks", [])
-    if tasks:
-        return tasks[0]
+    # Check if it's a bundle (has "tasks" array) or single task
+    if "tasks" in data:
+        tasks = data["tasks"]
+        if tasks:
+            return tasks[0]
+    elif "task_id" in data:
+        # Single task format - return as-is
+        return data
+
     return None
 
 
@@ -161,8 +144,6 @@ def task_to_instruction(task_info: Dict[str, Any]) -> Dict[str, str]:
             parts.append("\nSecret Knowledge:")
             for s in secrets:
                 parts.append(f"- {s}")
-
-        parts.append("\nUse Communicate[message] to coordinate with your teammate.")
 
         instructions[agent_id] = "\n".join(parts)
 
@@ -246,8 +227,6 @@ def main(config: DictConfig):
     if extra_args and extra_args.task:
         task_info = load_task(extra_args.task)
         if task_info:
-            cprint(f"Loaded task: {task_info.get('title', 'N/A')}", "green")
-
             # Reset environment to the correct episode for this task
             task_episode_id = task_info.get("episode_id")
             if task_episode_id and task_episode_id != "unknown":
@@ -267,7 +246,7 @@ def main(config: DictConfig):
                     mech_type = binding.get("mechanic_type", "unknown")
                     trigger = binding.get("trigger_object", "?")
                     target = binding.get("target_object", "self")
-                    cprint(f"    - {mech_type}: {trigger} -> {target}", "cyan")
+                    print(f"    - {mech_type}: {trigger} -> {target}")
 
     elif extra_args and extra_args.mechanics:
         cprint(f"Using mechanics from CLI: {extra_args.mechanics}", "green")

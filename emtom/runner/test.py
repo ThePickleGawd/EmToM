@@ -181,11 +181,14 @@ class HumanTestRunner(EMTOMBaseRunner):
         }
 
     def _print_header(self) -> None:
-        """Print task header."""
+        """Print task header with story."""
         if self.task_info:
             print(f"\n{'='*60}")
             print(f"TASK: {self.task_info.get('title', 'Unknown')}")
             print(f"{'='*60}")
+            # Print story first (sets the scene)
+            if self.task_info.get('story'):
+                print(f"\n{self.task_info['story']}\n")
             print(f"Goal: {self.task_info.get('public_goal', 'N/A')}")
             if self.task_info.get('public_context'):
                 print(f"Context: {self.task_info['public_context']}")

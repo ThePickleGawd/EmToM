@@ -313,9 +313,6 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
             for s in secrets:
                 parts.append(f"- {s}")
 
-        if task.theory_of_mind_required:
-            parts.append("\nUse Communicate[message] to coordinate with your teammate.")
-
         instructions[agent_id] = "\n".join(parts)
 
     return instructions
