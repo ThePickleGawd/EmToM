@@ -1,82 +1,194 @@
 {
-  "description": "Sample EMTOM tasks for testing and development",
-  "tasks": [
+  "task_id": "1512_laptop_on_table_19",
+  "title": "The Evening Transfer",
+  "story": "At dusk you arrive to set up the study for a late meeting. The laptop (laptop_0) needs to be on table_19, but it is tucked away in cabinet_35. You and your partner must coordinate: one of you knows where the laptop is, the other can carry it to the table.",
+  "episode_id": "1512",
+  "dataset_episode_id": "1512",
+  "scene_id": "107734449_176000403",
+  "public_goal": "Retrieve laptop_0 and place it on table_19.",
+  "public_context": "Both agents know the meeting needs the laptop on the table. How you achieve that is up to your coordination.",
+  "theory_of_mind_required": true,
+  "category": "knowledge_asymmetry",
+  "active_mechanics": ["inverse_state"],
+  "mechanic_bindings": [
     {
-      "task_id": "sample_inverted_drawer",
-      "title": "Inverted Drawer - Retrieve the Kettle",
-      "story": "In this strange kitchen, some furniture behaves unexpectedly. The drawers and cabinets seem to have a mind of their own...",
-      "public_goal": "Retrieve the kettle and place it on the table so both agents can use it.",
-      "public_context": "Some furniture in the kitchen behaves oddly. Agents should collaborate to get the kettle to the table.",
-      "theory_of_mind_required": true,
-      "category": "knowledge_asymmetry",
-      "scene_id": "sample_scene",
-      "episode_id": "0",
-      "active_mechanics": ["inverse_state"],
-      "mechanic_bindings": [
-        {
-          "mechanic_type": "inverse_state",
-          "trigger_object": "chest_of_drawers_54",
-          "target_object": null,
-          "target_state": null,
-          "count": null
-        }
-      ],
-      "agent_secrets": {
-        "agent_0": [
-          "chest_of_drawers_54 behaves with inverse_state: the 'open' action produces the opposite effect.",
-          "To reveal contents, you must send the 'close' action."
-        ],
-        "agent_1": []
-      },
-      "agent_roles": {
-        "agent_0": "Informed explorer who discovered the furniture quirks.",
-        "agent_1": "Unaware helper who does not know about the strange mechanics."
-      },
-      "agent_actions": {
-        "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Communicate", "Search"],
-        "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
-      },
+      "mechanic_type": "inverse_state",
+      "trigger_object": "cabinet_35",
+      "target_object": null,
+      "target_state": null,
+      "count": null
+    }
+  ],
+  "agent_secrets": {
+    "agent_0": [
+      "I know the laptop is stored inside cabinet_35."
+    ],
+    "agent_1": [
+      "I can carry the laptop and place it safely on table_19 (I have the carrying skill)."
+    ]
+  },
+  "agent_roles": {
+    "agent_0": "Finder / Opener — can open containers and inspect, but cannot pick up objects.",
+    "agent_1": "Carrier — can navigate, pick up, and place objects, but cannot open containers."
+  },
+  "agent_actions": {
+    "agent_0": [
+      "Communicate",
+      "Inspect",
+      "Open",
+      "Close",
+      "Navigate",
+      "Wait"
+    ],
+    "agent_1": [
+      "Communicate",
+      "Navigate",
+      "Pick",
+      "Place",
+      "Wait"
+    ]
+  },
+  "subtasks": [
+    {
+      "id": "open_cabinet",
+      "description": "Open cabinet_35 so its contents are accessible.",
       "success_condition": {
-        "description": "Kettle is placed on the table.",
-        "required_states": [],
-        "time_limit": null,
-        "all_agents_must_survive": true
+        "entity": "cabinet_35",
+        "property": "is_open",
+        "value": true
       },
-      "num_agents": 2,
-      "difficulty": 2
+      "depends_on": [],
+      "assigned_agent": "agent_0"
     },
     {
-      "task_id": "sample_locked_chest",
-      "title": "Locked Chest - Find the Key",
-      "story": "A mysterious chest sits in the corner of the room, firmly locked. The key must be hidden somewhere nearby...",
-      "public_goal": "Find the key hidden in the drawer and use it to unlock the chest.",
-      "public_context": "The chest is locked. Search the room for a key.",
-      "theory_of_mind_required": false,
-      "category": "puzzle",
-      "scene_id": "sample_scene",
-      "episode_id": "0",
-      "active_mechanics": [],
-      "mechanic_bindings": [],
-      "agent_secrets": {
-        "agent_0": ["The key is hidden in the drawer."],
-        "agent_1": []
-      },
-      "agent_roles": {
-        "agent_0": "Explorer",
-        "agent_1": "Helper"
-      },
-      "agent_actions": {
-        "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Search", "Communicate"],
-        "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
-      },
+      "id": "retrieve_laptop",
+      "description": "Pick up laptop_0 (wherever it is) so it is held by agent_1.",
       "success_condition": {
-        "description": "Chest is unlocked.",
-        "required_states": [],
-        "time_limit": null,
-        "all_agents_must_survive": true
+        "entity": "laptop_0",
+        "property": "is_held_by",
+        "target": "agent_1"
       },
-      "num_agents": 2,
-      "difficulty": 1
+      "depends_on": [
+        "open_cabinet"
+      ],
+      "assigned_agent": "agent_1"
+    },
+    {
+      "id": "place_on_table",
+      "description": "Place laptop_0 on table_19.",
+      "success_condition": {
+        "entity": "laptop_0",
+        "property": "is_on_top",
+        "target": "table_19"
+      },
+      "depends_on": [
+        "retrieve_laptop"
+      ],
+      "assigned_agent": "agent_1"
+    }
+  ],
+  "failure_conditions": [
+    {
+      "description": "Too many failed attempts",
+      "failure_states": [],
+      "max_failed_attempts": 10
+    }
+  ],
+  "initial_world_state": {
+    "objects": [
+      "laptop_0",
+      "candle_1",
+      "spoon_2",
+      "cup_3"
+    ],
+    "agent_positions": {
+      "agent_0": "living_room_1",
+      "agent_1": "hallway_1"
+    }
+  },
+  "num_agents": 2,
+  "difficulty": 3,
+  "source_trajectory": "trajectory_1512",
+  "golden_trajectory": [
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Communicate",
+          "message": "I know the laptop is inside cabinet_35."
+        },
+        {
+          "agent": "agent_1",
+          "action": "Communicate",
+          "message": "I can carry the laptop and place it on table_19 once it's accessible."
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Navigate",
+          "target": "cabinet_35"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Navigate",
+          "target": "laptop_0"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Open",
+          "target": "cabinet_35"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Wait"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Pick",
+          "target": "laptop_0"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Navigate",
+          "target": "table_19"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Place",
+          "target": "laptop_0, on, table_19, None, None"
+        }
+      ]
     }
   ]
 }
