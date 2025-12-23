@@ -942,10 +942,20 @@ Start by reading the template, then create a task using the scene data above."""
         for furn in other_furniture:
             lines.append(f"  - {furn}")
 
-        # Objects (pickable items) - show all
+        # Objects with their locations - show all
         lines.append("\n### Objects (can be picked up)")
+        # Build reverse mapping: object -> furniture it's on
+        obj_locations = {}
+        for furn, objs in self.scene_data.objects_on_furniture.items():
+            for obj in objs:
+                obj_locations[obj] = furn
+
         for obj in self.scene_data.objects:
-            lines.append(f"  - {obj}")
+            location = obj_locations.get(obj)
+            if location:
+                lines.append(f"  - {obj} (on {location})")
+            else:
+                lines.append(f"  - {obj}")
 
         return "\n".join(lines)
 
