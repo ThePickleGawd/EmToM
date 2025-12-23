@@ -10,7 +10,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
 # Default values
-MAX_SIM_STEPS=20000
+MAX_SIM_STEPS=200000
 MAX_LLM_CALLS=20
 EXPLORATION_STEPS=20
 MECHANICS=""
@@ -168,6 +168,7 @@ run_benchmark() {
     python emtom/examples/run_habitat_benchmark.py \
         --config-name $CONFIG_NAME \
         habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
+        +max_turns=$MAX_LLM_CALLS \
         $REPLANNING_OVERRIDES \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-benchmark"
 }

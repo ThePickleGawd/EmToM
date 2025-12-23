@@ -23,8 +23,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
     """
     Runner for benchmark evaluation with LLM planners.
 
-    Each agent gets an LLMPlanner that uses ReAct-style prompting
-    to solve the given task.
+    Each agent gets an EmtomPlanner (from emtom/benchmark/) that uses
+    ReAct-style prompting with exploration-style logging.
     """
 
     def __init__(self, config: DictConfig):
@@ -75,8 +75,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
         return {"mechanics": []}
 
     def _setup_planners(self) -> None:
-        """Initialize LLM planner for each agent."""
+        """Initialize LLM planner for each agent using our custom LLMPlanner."""
         from hydra.utils import instantiate
+        from omegaconf import OmegaConf
+
+        # Use our EmtomPlanner with custom logging
+        from emtom.benchmark import EmtomPlanner
 
         if not hasattr(self.config, 'evaluation') or not hasattr(self.config.evaluation, 'agents'):
             print("[BenchmarkRunner] Warning: No agents in config for planner setup")
@@ -93,8 +97,13 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 print(f"[BenchmarkRunner] Warning: No planner config for agent_{uid}")
                 continue
 
-            # Use Hydra's instantiate pattern (same as DecentralizedEvaluationRunner)
-            planner = instantiate(agent_conf.planner)
+            # Override _target_ to use our EmtomPlanner
+            planner_conf = OmegaConf.to_container(agent_conf.planner, resolve=True)
+            if '_target_' in planner_conf and 'LLMPlanner' in planner_conf['_target_']:
+                # Use our custom EmtomPlanner
+                planner_conf['_target_'] = 'emtom.benchmark.emtom_planner.EmtomPlanner'
+
+            planner = instantiate(OmegaConf.create(planner_conf))
             planner = planner(env_interface=self.env_interface)
             planner.agents = [agent]
             self.planners[uid] = planner
@@ -104,7 +113,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         self,
         instruction: Dict[str, str],
         max_steps: int = 20000,
-        max_turns: Optional[int] = None,
+        max_turns: int = 20,
     ) -> Dict[str, Any]:
         """
         Run benchmark task with LLM planners.
@@ -112,14 +121,18 @@ class BenchmarkRunner(EMTOMBaseRunner):
         Args:
             instruction: Per-agent instruction dict (agent_id -> instruction)
             max_steps: Maximum simulation steps (safety limit)
-            max_turns: Maximum LLM turns per agent (primary limit if set)
+            max_turns: Maximum LLM turns per agent (default: 20)
 
         Returns:
             Results dict with steps, turns, success, history
         """
-        print(f"\n[BenchmarkRunner] Starting benchmark execution...")
-        if max_turns:
-            print(f"[BenchmarkRunner] Max LLM turns: {max_turns}")
+        n_agents = len(self.planners)
+        task_title = self.task.title if self.task else "Unknown Task"
+
+        print(f"\n{'='*60}", flush=True)
+        print(f"BENCHMARK: {task_title}", flush=True)
+        print(f"Agents: {n_agents} | Max turns: {max_turns}", flush=True)
+        print(f"{'='*60}\n", flush=True)
 
         observations = self.get_observations()
         self.record_frame(observations)
@@ -131,11 +144,10 @@ class BenchmarkRunner(EMTOMBaseRunner):
         while self._step_count < max_steps and not done and not self._episode_done:
             # Check turn limit
             if max_turns and turn_count >= max_turns:
-                print(f"[BenchmarkRunner] Reached max LLM turns ({max_turns})")
+                print(f"\n[Benchmark] Reached max LLM turns ({max_turns})", flush=True)
                 break
 
             self._step_count += 1
-            turn_count += 1
 
             world_graph = self.get_world_graph()
             planner_done_count = 0
@@ -145,18 +157,15 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 agent_instruction = instruction.get(agent_id, instruction.get(str(uid), ""))
 
                 try:
-                    # Get action from planner
+                    # Get action from planner (logging is handled by emtom_planner.py)
                     low_level_actions, planner_info, planner_done = planner.get_next_action(
                         agent_instruction, observations, world_graph
                     )
 
-                    if planner_done:
-                        planner_done_count += 1
-                        print(f"[BenchmarkRunner] {agent_id} planner indicates done")
-
-                    # Record high-level action in history
+                    # Track high-level action in history
                     high_level_action = self._extract_high_level_action(planner_info, uid)
                     if high_level_action:
+                        turn_count += 1
                         self._action_history.append({
                             "step": self._step_count,
                             "turn": turn_count,
@@ -164,14 +173,18 @@ class BenchmarkRunner(EMTOMBaseRunner):
                             "action": high_level_action,
                         })
 
+                    if planner_done:
+                        planner_done_count += 1
+                        print(f"[Agent {uid} DONE]", flush=True)
+
                 except AssertionError as e:
                     if "Episode over" in str(e) or "call reset before calling step" in str(e):
-                        print(f"[BenchmarkRunner] Episode ended at step {self._step_count}")
+                        print(f"\n[Benchmark] Episode ended at step {self._step_count}", flush=True)
                         self._episode_done = True
                         break
                     raise
                 except Exception as e:
-                    print(f"[BenchmarkRunner] Error during planner execution for {agent_id}: {e}")
+                    print(f"[Agent {uid} ERROR] {e}", flush=True)
                     continue
 
             # Check if all planners are done
@@ -285,6 +298,22 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
         if prompts:
             self.save_prompts(prompts, traces)
+
+    def get_planner_traces(self) -> Dict[str, str]:
+        """Get the conversation traces from each planner for debugging."""
+        traces = {}
+        for uid, planner in self.planners.items():
+            agent_id = f"agent_{uid}"
+            if hasattr(planner, 'curr_prompt') and planner.curr_prompt:
+                # Extract trace (interaction part after system prompt)
+                prompt = planner.curr_prompt
+                task_marker = "Task:"
+                if task_marker in prompt:
+                    trace_start = prompt.find(task_marker)
+                    traces[agent_id] = prompt[trace_start:]
+                else:
+                    traces[agent_id] = prompt
+        return traces
 
 
 def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:

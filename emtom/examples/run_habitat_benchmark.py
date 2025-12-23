@@ -192,12 +192,17 @@ def main(config: DictConfig) -> None:
 
     # Get max steps from config (set via --max-sim-steps or Hydra)
     max_steps = config.habitat.environment.get("max_episode_steps", 2000)
+
+    # Get max turns from config (set via +max_turns=N)
+    max_turns = config.get("max_turns", 20)
+
     cprint(f"\nMax simulation steps: {max_steps}", "blue")
+    cprint(f"Max LLM turns: {max_turns}", "blue")
 
     # Run benchmark
     try:
         cprint("Starting task execution with LLM planners...", "blue")
-        results = runner.run(instruction=instruction, max_steps=max_steps)
+        results = runner.run(instruction=instruction, max_steps=max_steps, max_turns=max_turns)
 
         cprint("\nTask execution completed!", "green")
         print(f"Steps: {results['steps']}")
