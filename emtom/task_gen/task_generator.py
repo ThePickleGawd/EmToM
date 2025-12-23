@@ -284,7 +284,7 @@ class GeneratedTask:
             category=TaskCategory(data.get("category", "knowledge_asymmetry")),
             scene_id=data.get("scene_id", "unknown"),
             episode_id=data.get("episode_id", "unknown"),
-            dataset_episode_id=data.get("dataset_episode_id", "1"),  # Default to episode 1
+            dataset_episode_id=data.get("dataset_episode_id", ""),  # Required - must be set explicitly
             active_mechanics=data.get("active_mechanics", []) if isinstance(data.get("active_mechanics"), list) else [],
             mechanic_bindings=bindings,
             story=data.get("story"),

@@ -284,9 +284,9 @@ Action: bash[cat > data/emtom/tasks/working_task.json << 'EOF'
     }
   ],
   "golden_trajectory": [
-    {"agent": "agent_X", "action": "Communicate", "message": "<SHARE_UNIQUE_KNOWLEDGE>"},
-    {"agent": "agent_Y", "action": "Navigate", "target": "<object_from_scene>"},
-    {"agent": "agent_Y", "action": "<ACTION>", "target": "<object_from_scene>"}
+    {"actions": [{"agent": "agent_0", "action": "Communicate", "message": "<SHARE_UNIQUE_KNOWLEDGE>"}, {"agent": "agent_1", "action": "Wait"}]},
+    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Navigate", "target": "<object_from_scene>"}]},
+    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "<ACTION>", "target": "<object_from_scene>"}]}
   ]
 }
 EOF]
@@ -341,7 +341,27 @@ If any action fails or the terminal subtask conditions are not met, you must fix
 
 The trajectory should show BOTH agents contributing their unique knowledge/capabilities.
 
-**Format for each step:**
+**IMPORTANT: Each step contains ALL agents' actions for that timestep.**
+The format is a list of steps, where each step has an "actions" array containing what each agent does:
+
+```json
+"golden_trajectory": [
+    {
+        "actions": [
+            {"agent": "agent_0", "action": "Communicate", "message": "I know how to open this drawer"},
+            {"agent": "agent_1", "action": "Wait"}
+        ]
+    },
+    {
+        "actions": [
+            {"agent": "agent_0", "action": "Wait"},
+            {"agent": "agent_1", "action": "Navigate", "target": "table_22"}
+        ]
+    }
+]
+```
+
+**Format for each action entry:**
 - `agent`: "agent_0", "agent_1", etc.
 - `action`: One of [Navigate, Open, Close, Pick, Place, Use, Inspect, Search, Communicate, Wait]
 - `target`: The action argument(s). Format depends on action:
@@ -352,7 +372,7 @@ The trajectory should show BOTH agents contributing their unique knowledge/capab
     - spatial_constraint: "None" or "next_to"
     - reference_object: "None" or another object name
   - Communicate: omit target, use `message` field instead
-  - Wait: empty or omit target
+  - Wait: no target needed (agent does nothing this step)
 - `message`: string (required ONLY for Communicate action)
 
 ## Navigation
@@ -426,12 +446,12 @@ TASK_TEMPLATE = """{
   "subtasks": [],
   "source_trajectory": "trajectory_id",
   "golden_trajectory": [
-    {"agent": "agent_1", "action": "Communicate", "message": "Share agent_1's unique knowledge"},
-    {"agent": "agent_0", "action": "Communicate", "message": "Share agent_0's unique knowledge"},
-    {"agent": "agent_1", "action": "Navigate", "target": "furniture_id"},
-    {"agent": "agent_1", "action": "Open", "target": "furniture_id"},
-    {"agent": "agent_1", "action": "Pick", "target": "object_id"},
-    {"agent": "agent_1", "action": "Navigate", "target": "destination_furniture"},
-    {"agent": "agent_1", "action": "Place", "target": "object_id, on, destination_furniture, None, None"}
+    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Communicate", "message": "Share agent_1's unique knowledge"}]},
+    {"actions": [{"agent": "agent_0", "action": "Communicate", "message": "Share agent_0's unique knowledge"}, {"agent": "agent_1", "action": "Wait"}]},
+    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Navigate", "target": "furniture_id"}]},
+    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Open", "target": "furniture_id"}]},
+    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Pick", "target": "object_id"}]},
+    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Navigate", "target": "destination_furniture"}]},
+    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Place", "target": "object_id, on, destination_furniture, None, None"}]}
   ]
 }"""

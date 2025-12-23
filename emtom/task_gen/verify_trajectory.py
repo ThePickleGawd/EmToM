@@ -127,65 +127,88 @@ def main():
         sys.exit(1)
 
     # Execute trajectory
+    # New format: each step has "actions" array with all agents' actions for that step
     executed_steps = []
     print(f"\n=== Executing Golden Trajectory ({len(golden)} steps) ===", file=sys.stderr)
     try:
-        for i, step in enumerate(golden):
-            agent_str = step.get("agent", "agent_0")
-            agent_id = int(agent_str.split("_")[1])
-            action = step.get("action")
-            target = step.get("target")
-            message = step.get("message")
-
-            # Handle Place action - needs 5 comma-separated arguments
-            # Support both formats:
-            # 1. Full format: {"target": "obj, on, furniture, None, None"}
-            # 2. Legacy format: {"target": "obj", "receptacle": "furniture"}
-            if action == "Place" and target:
-                # Check if target already has commas (full format)
-                if "," not in str(target):
-                    # Legacy format - build the full argument string
-                    receptacle = step.get("receptacle", "")
-                    spatial_relation = step.get("spatial_relation", "on")
-                    spatial_constraint = step.get("spatial_constraint", "None")
-                    reference_object = step.get("reference_object", "None")
-                    target = f"{target}, {spatial_relation}, {receptacle}, {spatial_constraint}, {reference_object}"
-
-            # Skip Communicate
-            if action == "Communicate":
-                print(f"  Step {i+1}: {agent_str} Communicate(\"{message[:50]}...\") [SKIP]", file=sys.stderr)
-                executed_steps.append({
-                    "step": i, "agent": agent_str, "action": action,
-                    "message": message, "success": True, "skipped": True
-                })
+        for step_idx, step in enumerate(golden):
+            # Get the actions for this step
+            actions = step.get("actions", [])
+            if not actions:
+                print(f"  Step {step_idx+1}: No actions found in step, skipping", file=sys.stderr)
                 continue
 
-            print(f"  Step {i+1}: {agent_str} {action}({target})...", file=sys.stderr, end=" ")
-            result = runner.execute_action(uid=agent_id, action_name=action, target=target)
-            success = result.get("success", False)
-            obs = result.get("observation", "")[:100]
+            print(f"  Step {step_idx+1}:", file=sys.stderr)
+            step_results = []
 
-            if success:
-                print(f"OK", file=sys.stderr)
-            else:
-                print(f"FAILED: {obs}", file=sys.stderr)
+            for action_entry in actions:
+                agent_str = action_entry.get("agent", "agent_0")
+                agent_id = int(agent_str.split("_")[1])
+                action = action_entry.get("action")
+                target = action_entry.get("target")
+                message = action_entry.get("message")
 
-            executed_steps.append({
-                "step": i, "agent": agent_str, "action": action,
-                "target": target, "success": success,
-                "observation": result.get("observation", "")[:200]
-            })
+                # Skip Wait actions
+                if action == "Wait":
+                    print(f"    {agent_str}: Wait [SKIP]", file=sys.stderr)
+                    step_results.append({
+                        "agent": agent_str, "action": action,
+                        "success": True, "skipped": True
+                    })
+                    continue
 
-            if not success:
-                runner.cleanup()
-                print(json.dumps({
-                    "valid": False,
-                    "failed_step": i,
-                    "action": f"{agent_str}: {action}({target})",
-                    "error": result.get("observation", "Action failed"),
-                    "executed_steps": executed_steps,
-                }, indent=2))
-                sys.exit(0)
+                # Handle Place action - needs 5 comma-separated arguments
+                # Support both formats:
+                # 1. Full format: {"target": "obj, on, furniture, None, None"}
+                # 2. Legacy format: {"target": "obj", "receptacle": "furniture"}
+                if action == "Place" and target:
+                    # Check if target already has commas (full format)
+                    if "," not in str(target):
+                        # Legacy format - build the full argument string
+                        receptacle = action_entry.get("receptacle", "")
+                        spatial_relation = action_entry.get("spatial_relation", "on")
+                        spatial_constraint = action_entry.get("spatial_constraint", "None")
+                        reference_object = action_entry.get("reference_object", "None")
+                        target = f"{target}, {spatial_relation}, {receptacle}, {spatial_constraint}, {reference_object}"
+
+                # Skip Communicate
+                if action == "Communicate":
+                    msg_preview = message[:50] if message else ""
+                    print(f"    {agent_str}: Communicate(\"{msg_preview}...\") [SKIP]", file=sys.stderr)
+                    step_results.append({
+                        "agent": agent_str, "action": action,
+                        "message": message, "success": True, "skipped": True
+                    })
+                    continue
+
+                print(f"    {agent_str}: {action}({target})...", file=sys.stderr, end=" ")
+                result = runner.execute_action(uid=agent_id, action_name=action, target=target)
+                success = result.get("success", False)
+                obs = result.get("observation", "")[:100]
+
+                if success:
+                    print(f"OK", file=sys.stderr)
+                else:
+                    print(f"FAILED: {obs}", file=sys.stderr)
+
+                step_results.append({
+                    "agent": agent_str, "action": action,
+                    "target": target, "success": success,
+                    "observation": result.get("observation", "")[:200]
+                })
+
+                if not success:
+                    runner.cleanup()
+                    print(json.dumps({
+                        "valid": False,
+                        "failed_step": step_idx,
+                        "action": f"{agent_str}: {action}({target})",
+                        "error": result.get("observation", "Action failed"),
+                        "executed_steps": executed_steps + [{"step": step_idx, "actions": step_results}],
+                    }, indent=2))
+                    sys.exit(0)
+
+            executed_steps.append({"step": step_idx, "actions": step_results})
 
         # Evaluate success
         print(f"\n=== Evaluating Success Condition ===", file=sys.stderr)

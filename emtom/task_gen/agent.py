@@ -48,6 +48,7 @@ class TaskGeneratorAgent:
         verbose: bool = True,
         subtasks: int = 3,
         scene_data: Optional[Any] = None,
+        log_dir: Optional[str] = None,
     ):
         """
         Initialize the agent.
@@ -61,6 +62,7 @@ class TaskGeneratorAgent:
             verbose: Print agent thoughts and actions
             subtasks: Exact number of subtasks/steps per task
             scene_data: Live scene data from SceneLoader (required)
+            log_dir: Directory for log files (defaults to Hydra output or output_dir/logs)
         """
         self.llm = llm_client
         self.config = config
@@ -91,7 +93,11 @@ class TaskGeneratorAgent:
         self.last_verify_passed = False  # Track if golden trajectory verified
 
         # Setup logging to file
-        self.log_dir = self.output_dir / "logs"
+        # Prefer log_dir (Hydra output), fallback to output_dir/logs
+        if log_dir:
+            self.log_dir = Path(log_dir)
+        else:
+            self.log_dir = self.output_dir / "logs"
         self.log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_file = self.log_dir / f"task_generator_{timestamp}.log"
@@ -167,8 +173,13 @@ class TaskGeneratorAgent:
 - Each subtask should be a distinct action that gates progress to the next
 
 ## Scene Data (from PARTNR dataset - these objects EXIST!)
-Episode ID: {self.scene_data.episode_id}
-Scene ID: {self.scene_data.scene_id}
+**Episode ID**: {self.scene_data.episode_id}
+**Scene ID**: {self.scene_data.scene_id}
+
+CRITICAL: When creating tasks, you MUST set these fields exactly:
+- "episode_id": "{self.scene_data.episode_id}"
+- "dataset_episode_id": "{self.scene_data.episode_id}"  (same value!)
+- "scene_id": "{self.scene_data.scene_id}"
 
 {scene_info}
 
@@ -231,7 +242,7 @@ Start by reading the template, then create a task using the scene data above."""
             self.messages.append({"role": "assistant", "content": response})
             self.messages.append({"role": "user", "content": f"Observation: {observation}"})
 
-            self._log(f"Observation: {observation[:300]}...")
+            self._log(f"Observation: {observation}", truncate_terminal=300)
 
         self._log(f"\n{'='*60}")
         self._log(f"Agent finished. Submitted {len(self.submitted_tasks)} tasks:")
@@ -246,7 +257,7 @@ Start by reading the template, then create a task using the scene data above."""
         # Format messages for LLM
         prompt = self._format_messages_for_llm()
         response = self.llm.generate(prompt)
-        self._log(f"Agent: {response[:300]}...")
+        self._log(f"Agent: {response}", truncate_terminal=300)
         return response
 
     def _format_messages_for_llm(self) -> str:
@@ -495,8 +506,9 @@ Start by reading the template, then create a task using the scene data above."""
         """Validate task JSON structure without running benchmark."""
         # Core required fields (success_condition is optional if subtasks have valid DAG)
         required_fields = [
-            "task_id", "title", "story", "episode_id", "public_goal", "category",
-            "mechanic_bindings", "agent_secrets", "agent_roles", "agent_actions"
+            "task_id", "title", "story", "episode_id", "dataset_episode_id",
+            "public_goal", "category", "mechanic_bindings", "agent_secrets",
+            "agent_roles", "agent_actions"
         ]
 
         missing = [f for f in required_fields if f not in task_data]
@@ -506,6 +518,45 @@ Start by reading the template, then create a task using the scene data above."""
                 "error": f"Missing required fields: {missing}",
                 "summary": "Task validation failed"
             }
+
+        # Validate dataset_episode_id matches the loaded scene
+        if self.scene_data:
+            expected_episode = self.scene_data.episode_id
+            task_episode = task_data.get("dataset_episode_id", "")
+            if task_episode != expected_episode:
+                return {
+                    "valid": False,
+                    "error": f"dataset_episode_id must be '{expected_episode}' (from loaded scene), got '{task_episode}'",
+                    "summary": "Task validation failed - wrong episode"
+                }
+
+        # Validate object IDs in golden_trajectory exist in scene
+        if self.scene_data and task_data.get("golden_trajectory"):
+            all_valid_ids = set(
+                self.scene_data.rooms +
+                self.scene_data.furniture +
+                self.scene_data.objects
+            )
+            invalid_ids = []
+            for step in task_data["golden_trajectory"]:
+                actions = step.get("actions", [])
+                for action_entry in actions:
+                    target = action_entry.get("target", "")
+                    if target and action_entry.get("action") not in ["Communicate", "Wait"]:
+                        # For Place action, target is comma-separated - extract first part
+                        if "," in str(target):
+                            target_id = target.split(",")[0].strip()
+                        else:
+                            target_id = str(target).strip()
+                        if target_id and target_id not in all_valid_ids:
+                            invalid_ids.append(target_id)
+
+            if invalid_ids:
+                return {
+                    "valid": False,
+                    "error": f"golden_trajectory contains invalid object IDs not in scene: {list(set(invalid_ids))}",
+                    "summary": "Task validation failed - invalid object IDs"
+                }
 
         # Validate success condition OR subtasks DAG
         has_success_condition = "success_condition" in task_data and task_data["success_condition"]
@@ -823,49 +874,53 @@ Start by reading the template, then create a task using the scene data above."""
 
         lines = []
 
-        # Rooms
+        # Warning about exact IDs
+        lines.append("**WARNING: You MUST use EXACT object IDs from this list. Do NOT invent or guess IDs!**\n")
+
+        # Rooms - show all
         lines.append("### Rooms")
-        for room in self.scene_data.rooms[:15]:
+        for room in self.scene_data.rooms:
             lines.append(f"  - {room}")
-        if len(self.scene_data.rooms) > 15:
-            lines.append(f"  ... and {len(self.scene_data.rooms) - 15} more")
 
-        # Articulated furniture (can open/close - good for mechanics)
+        # Articulated furniture (can open/close - good for mechanics) - show all
         lines.append("\n### Articulated Furniture (can open/close)")
-        for furn in self.scene_data.articulated_furniture[:20]:
+        for furn in self.scene_data.articulated_furniture:
             lines.append(f"  - {furn}")
-        if len(self.scene_data.articulated_furniture) > 20:
-            lines.append(f"  ... and {len(self.scene_data.articulated_furniture) - 20} more")
 
-        # Other furniture
+        # Other furniture - show all
         other_furniture = [f for f in self.scene_data.furniture
                           if f not in self.scene_data.articulated_furniture]
         lines.append("\n### Other Furniture (tables, counters, etc.)")
-        for furn in other_furniture[:20]:
+        for furn in other_furniture:
             lines.append(f"  - {furn}")
-        if len(other_furniture) > 20:
-            lines.append(f"  ... and {len(other_furniture) - 20} more")
 
-        # Objects (pickable items)
+        # Objects (pickable items) - show all
         lines.append("\n### Objects (can be picked up)")
-        for obj in self.scene_data.objects[:30]:
+        for obj in self.scene_data.objects:
             lines.append(f"  - {obj}")
-        if len(self.scene_data.objects) > 30:
-            lines.append(f"  ... and {len(self.scene_data.objects) - 30} more")
 
         return "\n".join(lines)
 
-    def _log(self, message: str) -> None:
-        """Print log message and write to log file."""
-        # Always write to log file
+    def _log(self, message: str, truncate_terminal: int = 0) -> None:
+        """Print log message and write to log file.
+
+        Args:
+            message: Message to log
+            truncate_terminal: If > 0, truncate terminal output to this many chars
+                               (log file always gets full content)
+        """
+        # Always write full message to log file
         if hasattr(self, '_log_handle') and self._log_handle:
             timestamp = datetime.now().strftime("%H:%M:%S")
             self._log_handle.write(f"[{timestamp}] {message}\n")
             self._log_handle.flush()
 
-        # Print to terminal if verbose
+        # Print to terminal if verbose (optionally truncated)
         if self.verbose:
-            print(message, flush=True)
+            if truncate_terminal > 0 and len(message) > truncate_terminal:
+                print(f"{message[:truncate_terminal]}...", flush=True)
+            else:
+                print(message, flush=True)
 
     def close(self) -> None:
         """Close log file handle."""

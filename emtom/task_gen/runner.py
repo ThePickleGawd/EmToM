@@ -29,6 +29,13 @@ from habitat_llm.utils import cprint, setup_config, fix_config
 @hydra.main(version_base=None, config_path="../../habitat_llm/conf")
 def main(config: DictConfig) -> None:
     """Main entry point with Hydra configuration."""
+    # Get Hydra output directory for logging
+    from hydra.core.hydra_config import HydraConfig
+    try:
+        hydra_output_dir = HydraConfig.get().runtime.output_dir
+    except Exception:
+        hydra_output_dir = None
+
     # Extract custom args from config (passed as +arg=value)
     num_tasks = config.get("num_tasks", 1)
     model = config.get("model", "gpt-5")
@@ -101,6 +108,7 @@ def main(config: DictConfig) -> None:
         verbose=not quiet,
         subtasks=subtasks,
         scene_data=scene_data,  # Pass live scene data
+        log_dir=hydra_output_dir,  # Pass Hydra output directory for logs
     )
 
     # Run agent

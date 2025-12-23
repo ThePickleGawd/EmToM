@@ -7,8 +7,9 @@
   "public_context": "Optional background context that both agents know",
   "theory_of_mind_required": true,
   "category": "knowledge_asymmetry",
-  "scene_id": "FROM_TRAJECTORY_metadata.scene_id",
-  "episode_id": "FROM_TRAJECTORY_episode_id",
+  "scene_id": "FROM_SCENE_DATA",
+  "episode_id": "FROM_SCENE_DATA",
+  "dataset_episode_id": "FROM_SCENE_DATA (same as episode_id)",
   "active_mechanics": ["inverse_state"],
   "mechanic_bindings": [
     {
@@ -88,12 +89,47 @@
   "difficulty": 3,
   "source_trajectory": "trajectory_episode_id",
   "golden_trajectory": [
-    {"agent": "agent_0", "action": "Communicate", "message": "Share agent_0's unique knowledge"},
-    {"agent": "agent_1", "action": "Communicate", "message": "Share agent_1's unique knowledge"},
-    {"agent": "agent_1", "action": "Navigate", "target": "container_id"},
-    {"agent": "agent_1", "action": "Open", "target": "container_id"},
-    {"agent": "agent_1", "action": "Pick", "target": "object_id"},
-    {"agent": "agent_1", "action": "Navigate", "target": "destination_id"},
-    {"agent": "agent_1", "action": "Place", "target": "object_id, on, destination_id, None, None"}
+    {
+      "actions": [
+        {"agent": "agent_0", "action": "Communicate", "message": "Share agent_0's unique knowledge"},
+        {"agent": "agent_1", "action": "Wait"}
+      ]
+    },
+    {
+      "actions": [
+        {"agent": "agent_0", "action": "Wait"},
+        {"agent": "agent_1", "action": "Communicate", "message": "Share agent_1's unique knowledge"}
+      ]
+    },
+    {
+      "actions": [
+        {"agent": "agent_0", "action": "Wait"},
+        {"agent": "agent_1", "action": "Navigate", "target": "container_id"}
+      ]
+    },
+    {
+      "actions": [
+        {"agent": "agent_0", "action": "Wait"},
+        {"agent": "agent_1", "action": "Open", "target": "container_id"}
+      ]
+    },
+    {
+      "actions": [
+        {"agent": "agent_0", "action": "Wait"},
+        {"agent": "agent_1", "action": "Pick", "target": "object_id"}
+      ]
+    },
+    {
+      "actions": [
+        {"agent": "agent_0", "action": "Wait"},
+        {"agent": "agent_1", "action": "Navigate", "target": "destination_id"}
+      ]
+    },
+    {
+      "actions": [
+        {"agent": "agent_0", "action": "Wait"},
+        {"agent": "agent_1", "action": "Place", "target": "object_id, on, destination_id, None, None"}
+      ]
+    }
   ]
 }
