@@ -208,6 +208,68 @@ class ItemRegistry:
             lines.append(f"  - {info['name']} [{type_str}]{consumable}: {info['description'][:50]}...")
         return "\n".join(lines)
 
+    @staticmethod
+    def get_items_for_task_generation() -> str:
+        """
+        Get comprehensive item information formatted for task generation prompts.
+
+        Returns a detailed string that tells the LLM:
+        - What items are available (with item_id for use in JSON)
+        - How each item works (type, consumable, grants action)
+        - How to use items in task definitions
+
+        Returns:
+            Formatted string for LLM prompts
+        """
+        from emtom.state.items import ItemType
+
+        lines = []
+
+        # Group by item type
+        key_items = []
+        tool_items = []
+
+        for item_id in sorted(_ITEM_REGISTRY.keys()):
+            cls = _ITEM_REGISTRY[item_id]
+            info = {
+                "item_id": item_id,
+                "name": getattr(cls, "name", item_id),
+                "description": getattr(cls, "description", ""),
+                "item_type": getattr(cls, "item_type", ItemType.KEY),
+                "consumable": getattr(cls, "consumable", False),
+                "grants_action": getattr(cls, "grants_action", None),
+                "action_description": getattr(cls, "action_description", None),
+            }
+
+            if info["item_type"] == ItemType.TOOL:
+                tool_items.append(info)
+            else:
+                key_items.append(info)
+
+        # KEY items section
+        if key_items:
+            lines.append("KEY Items (unlock containers, satisfy possession goals):")
+            for info in key_items:
+                consumable_str = "consumable, single-use" if info["consumable"] else "reusable"
+                lines.append(f"  - {info['item_id']}: {info['name']} ({consumable_str})")
+                lines.append(f"    {info['description']}")
+
+        # TOOL items section
+        if tool_items:
+            if lines:
+                lines.append("")
+            lines.append("TOOL Items (grant new actions when obtained):")
+            for info in tool_items:
+                consumable_str = "consumable" if info["consumable"] else "unlimited uses"
+                lines.append(f"  - {info['item_id']}: {info['name']} ({consumable_str})")
+                lines.append(f"    {info['description']}")
+                if info["grants_action"]:
+                    lines.append(f"    Grants action: {info['grants_action']}")
+                if info["action_description"]:
+                    lines.append(f"    Usage: {info['action_description']}")
+
+        return "\n".join(lines)
+
 
 def clear_registry() -> None:
     """Clear all registered items (useful for testing)."""

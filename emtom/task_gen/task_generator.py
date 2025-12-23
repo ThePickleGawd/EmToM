@@ -368,13 +368,17 @@ Furniture (can navigate to, some can be opened): {furniture}
 Objects (can be picked up, hidden, inspected): {objects}
 Articulated Furniture (can be opened/closed): {articulated}
 
+## Available Items (use these item_ids in hidden_items and locked_containers)
+{available_items}
+
 ## Discovered Mechanics (hidden connections between objects)
 {surprises}
 
 ## CRITICAL CONSTRAINTS
 - ONLY use objects/furniture from the Scene Inventory above
-- DO NOT invent objects like "device", "key", "battery", "PIN", "box"
-- Adapt the escape room themes to work with the REAL objects listed
+- ONLY use items from the Available Items list above (use exact item_id like "small_key", "big_key", "radio")
+- Instance items by appending _N suffix (e.g., "small_key_1", "small_key_2")
+- Adapt the escape room themes to work with the REAL objects and items listed
 - Create MULTI-STEP puzzles (3-5 steps) where each step unlocks the next
 
 ## MULTI-STEP PUZZLE DESIGN
@@ -391,6 +395,19 @@ Use these mechanics to create chains:
 - Locked containers block Search until unlocked
 - Keys are consumed when used
 
+## TOOL Items with Room Restrictions (for Theory of Mind)
+TOOL items (like radio) can have "allowed_rooms" to restrict where they work:
+- If allowed_rooms is set, the tool ONLY works in those specific rooms
+- This creates Theory of Mind challenges: agents must know WHERE to use tools
+- Example: A radio that only works in the living room requires navigation + knowledge
+
+To use room restrictions, add "items" array with allowed_rooms:
+```
+"items": [
+  {{"item_id": "radio_1", "allowed_rooms": ["living_room_1", "office_1"]}}
+]
+```
+
 ## Task Type: {task_type}
 
 ### THEORY OF MIND TASKS:
@@ -399,6 +416,7 @@ Use these mechanics to create chains:
 - agent_1 does NOT know about the mechanics (creates theory of mind challenge)
 - Agents must communicate and reason about each other's knowledge
 - The narrative should make the asymmetric knowledge feel natural
+- Use room-restricted TOOL items to test spatial reasoning (e.g., radio only works in certain rooms)
 
 ### REGULAR TASKS:
 - Simple collaborative tasks for {num_agents} agent(s)
@@ -417,13 +435,16 @@ Create an immersive MULTI-STEP puzzle scenario. The "story" field is REQUIRED.
         "agent_positions": {{"agent_0": "REAL_room", "agent_1": "REAL_room"}},
         "hidden_items": {{
             "drawer_1": ["small_key_1"],
-            "cabinet_2": ["small_key_2"],
-            "chest_3": ["goal_item"]
+            "cabinet_2": ["radio_1"],
+            "chest_3": ["big_key_1"]
         }},
         "locked_containers": {{
             "cabinet_2": "small_key",
             "chest_3": "small_key"
-        }}
+        }},
+        "items": [
+            {{"item_id": "radio_1", "allowed_rooms": ["living_room_1"]}}
+        ]
     }},
     "agent_secrets": {{
         "agent_0": ["The hidden knowledge agent_0 has discovered (mechanics, connections, where keys are hidden)"],
@@ -446,7 +467,10 @@ Create an immersive MULTI-STEP puzzle scenario. The "story" field is REQUIRED.
     ],
     "success_condition": {{
         "description": "What success looks like",
-        "required_states": [{{"entity": "REAL_object", "property": "location", "value": "REAL_target"}}]
+        "required_states": [
+            {{"entity": "REAL_object", "property": "location", "value": "REAL_target"}},
+            {{"entity": "agent_0", "property": "has_item", "value": "big_key_1"}}
+        ]
     }},
     "failure_conditions": [
         {{"description": "What causes failure"}}
@@ -673,11 +697,16 @@ class TaskGenerator:
         scenarios = load_scenario_inspirations(max_scenarios=10)
         scenario_text = self._format_scenario_inspirations(scenarios)
 
+        # Get available items from registry (dynamically loaded)
+        from emtom.state.item_registry import ItemRegistry
+        available_items = ItemRegistry.get_items_for_task_generation()
+
         prompt = TASK_GENERATION_PROMPT.format(
             rooms=rooms,
             furniture=furniture,
             objects=objects,
             articulated=articulated,
+            available_items=available_items,
             surprises=surprises,
             scenario_inspirations=scenario_text,
             num_agents=num_agents,

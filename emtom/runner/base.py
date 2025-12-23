@@ -294,12 +294,14 @@ class EMTOMBaseRunner(ABC):
             argument_types=item_def.action_targets or ["OBJECT_INSTANCE", "FURNITURE_INSTANCE"],
             consumable=item_def.consumable,
             agent_uid=uid,
+            allowed_rooms=item_def.allowed_rooms,  # Room restrictions for ToM tasks
         )
         tool.set_environment(self.env_interface)
         tool.set_game_manager(self.game_manager)
 
         agent.tools[item_def.grants_action] = tool
-        print(f"[EMTOMBaseRunner] Injected {item_def.grants_action} tool from {item_def.name} for agent_{uid}")
+        rooms_info = f" (works in: {', '.join(item_def.allowed_rooms)})" if item_def.allowed_rooms else ""
+        print(f"[EMTOMBaseRunner] Injected {item_def.grants_action} tool from {item_def.name} for agent_{uid}{rooms_info}")
         return True
 
     def check_and_inject_item_tools(self, uid: int) -> None:

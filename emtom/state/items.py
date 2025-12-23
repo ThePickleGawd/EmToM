@@ -69,6 +69,9 @@ class BaseItem(ABC):
     # TOOL-specific attributes
     grants_action: Optional[str] = None
     action_description: Optional[str] = None
+    action_targets: Optional[List[str]] = None
+    # Room restrictions: if set, tool only works in these rooms (great for ToM tasks)
+    allowed_rooms: Optional[List[str]] = None
 
     # Instance attributes - set at runtime
     instance_id: str = ""
@@ -151,6 +154,8 @@ class BaseItem(ABC):
             "uses_remaining": self.uses_remaining,
             "grants_action": self.grants_action,
             "action_description": self.action_description,
+            "action_targets": self.action_targets,
+            "allowed_rooms": self.allowed_rooms,
             "hidden_in": self.hidden_in,
         }
 
@@ -183,6 +188,11 @@ class BaseItem(ABC):
         instance.base_id = base_id
         instance.uses_remaining = data.get("uses_remaining")
         instance.hidden_in = data.get("hidden_in")
+        # Override class-level TOOL attributes if specified in data
+        if data.get("action_targets"):
+            instance.action_targets = data.get("action_targets")
+        if data.get("allowed_rooms") is not None:
+            instance.allowed_rooms = data.get("allowed_rooms")
 
         return instance
 
@@ -207,6 +217,7 @@ class ItemDefinition:
         grants_action: Optional[str] = None,
         action_description: Optional[str] = None,
         action_targets: Optional[List[str]] = None,
+        allowed_rooms: Optional[List[str]] = None,
         consumable: bool = False,
         uses_remaining: Optional[int] = None,
         hidden_in: Optional[str] = None,
@@ -220,6 +231,7 @@ class ItemDefinition:
         self.grants_action = grants_action
         self.action_description = action_description
         self.action_targets = action_targets or []
+        self.allowed_rooms = allowed_rooms  # Room restrictions for TOOL items
         self.consumable = consumable
         self.uses_remaining = uses_remaining
         self.hidden_in = hidden_in
@@ -236,6 +248,7 @@ class ItemDefinition:
             "grants_action": self.grants_action,
             "action_description": self.action_description,
             "action_targets": self.action_targets,
+            "allowed_rooms": self.allowed_rooms,
             "consumable": self.consumable,
             "uses_remaining": self.uses_remaining,
             "hidden_in": self.hidden_in,
@@ -257,6 +270,7 @@ class ItemDefinition:
             grants_action=data.get("grants_action"),
             action_description=data.get("action_description"),
             action_targets=data.get("action_targets", []),
+            allowed_rooms=data.get("allowed_rooms"),
             consumable=data.get("consumable", False),
             uses_remaining=data.get("uses_remaining"),
             hidden_in=data.get("hidden_in"),

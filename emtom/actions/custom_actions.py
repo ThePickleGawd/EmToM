@@ -428,6 +428,11 @@ class DynamicItemTool(EMTOMAction):
     those actions based on the item definition.
 
     Not registered in the action registry since these are created dynamically.
+
+    Room-based restrictions:
+        If allowed_rooms is set, the tool only works when the agent is in
+        one of the specified rooms. This enables Theory of Mind tasks where
+        agents must navigate to specific locations to use certain abilities.
     """
 
     def __init__(
@@ -438,12 +443,14 @@ class DynamicItemTool(EMTOMAction):
         argument_types: Optional[List[str]] = None,
         consumable: bool = False,
         agent_uid: int = 0,
+        allowed_rooms: Optional[List[str]] = None,
     ):
         self.action_name = name
         self.action_description = description
         self._item_id = item_id
         self._argument_types = argument_types or ["OBJECT_INSTANCE", "FURNITURE_INSTANCE"]
         self._consumable = consumable
+        self._allowed_rooms = allowed_rooms  # None means no restriction
         super().__init__(agent_uid)
 
     @property
@@ -491,6 +498,10 @@ class DynamicItemTool(EMTOMAction):
 
         Currently supported:
         - Communicate: Send a message via radio to other agents
+
+        Room restrictions:
+        - If allowed_rooms is set, checks agent's current room before execution
+        - Returns failure with helpful message if not in allowed room
         """
         item = self._game_manager.get_item(self._item_id)
         item_name = item.name if item else self._item_id
@@ -501,6 +512,21 @@ class DynamicItemTool(EMTOMAction):
                 success=False,
                 observation=f"You need to specify a message for {action}.",
             )
+
+        # Check room restrictions if set
+        if self._allowed_rooms is not None:
+            agent_room = self._game_manager.state.agent_rooms.get(agent_id)
+            if agent_room not in self._allowed_rooms:
+                # Provide helpful message about where tool works
+                if len(self._allowed_rooms) == 1:
+                    rooms_hint = f"the {self._allowed_rooms[0]}"
+                else:
+                    rooms_hint = f"one of: {', '.join(self._allowed_rooms)}"
+                return ActionResult(
+                    success=False,
+                    observation=f"The {item_name} doesn't work here. You need to be in {rooms_hint} to use it.",
+                    effect=f"tool_blocked_by_room={agent_room}",
+                )
 
         # Communicate: Send a radio message to other agents
         if action == "Communicate":
