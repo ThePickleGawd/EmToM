@@ -12,7 +12,10 @@ Or via shell script:
 from __future__ import annotations
 
 import json
+import shutil
 import sys
+import tempfile
+import uuid
 from pathlib import Path
 
 # Ensure project root is in Python path (for imports like emtom.*)
@@ -39,11 +42,16 @@ def main(config: DictConfig) -> None:
     # Extract custom args from config (passed as +arg=value)
     num_tasks = config.get("num_tasks", 1)
     model = config.get("model", "gpt-5")
-    output_dir = config.get("output_dir", "data/emtom/tasks/curated")
+    output_dir = config.get("output_dir", "data/emtom/tasks")  # Final output location
     max_iterations = config.get("max_iterations", 100)
     quiet = config.get("quiet", False)
     subtasks = config.get("subtasks", 3)
     seed = config.get("seed", None)
+
+    # Create unique temp working directory for this instance (allows parallel runs)
+    instance_id = uuid.uuid4().hex[:8]
+    working_dir = Path(tempfile.gettempdir()) / f"emtom_taskgen_{instance_id}"
+    working_dir.mkdir(parents=True, exist_ok=True)
 
     # Setup config (registers Habitat plugins, sets seed, etc.)
     fix_config(config)
@@ -52,8 +60,10 @@ def main(config: DictConfig) -> None:
     cprint("=" * 60, "blue")
     cprint("EMTOM Task Generator (Live Scene Mode)", "blue")
     cprint("=" * 60, "blue")
+    cprint(f"Instance: {instance_id}", "blue")
     cprint(f"Target tasks: {num_tasks}", "blue")
     cprint(f"Model: {model}", "blue")
+    cprint(f"Working dir: {working_dir}", "blue")
     cprint(f"Output: {output_dir}", "blue")
     cprint("=" * 60, "blue")
     print()
@@ -73,13 +83,13 @@ def main(config: DictConfig) -> None:
         cprint(f"Error loading scene: {e}", "red")
         import traceback
         traceback.print_exc()
+        # Clean up temp dir on error
+        shutil.rmtree(working_dir, ignore_errors=True)
         sys.exit(1)
 
     print()
 
-    # Save scene data for task generator
-    working_dir = Path("data/emtom/tasks")
-    working_dir.mkdir(parents=True, exist_ok=True)
+    # Save scene data to working directory
     scene_file = working_dir / "current_scene.json"
     with open(scene_file, "w") as f:
         json.dump(scene_data.to_dict(), f, indent=2)
@@ -102,8 +112,8 @@ def main(config: DictConfig) -> None:
     agent = TaskGeneratorAgent(
         llm_client=llm_client,
         config=config,
-        working_dir="data/emtom/tasks",
-        output_dir=output_dir,
+        working_dir=str(working_dir),  # Unique temp dir for this instance
+        output_dir=output_dir,  # Shared output for all instances
         max_iterations=max_iterations,
         verbose=not quiet,
         subtasks=subtasks,
@@ -112,7 +122,13 @@ def main(config: DictConfig) -> None:
     )
 
     # Run agent
-    submitted_tasks = agent.run(num_tasks_target=num_tasks)
+    try:
+        submitted_tasks = agent.run(num_tasks_target=num_tasks)
+    finally:
+        # Clean up temp working directory
+        agent.close()
+        shutil.rmtree(working_dir, ignore_errors=True)
+        cprint(f"Cleaned up temp directory: {working_dir}", "blue")
 
     # Summary
     print()

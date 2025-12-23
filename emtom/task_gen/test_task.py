@@ -131,7 +131,14 @@ def main():
         instruction = task_to_instruction(task)
         results = runner.run(instruction=instruction, max_turns=args.max_turns)
 
+        # Get planner traces before cleanup
+        planner_traces = runner.get_planner_traces()
+
         runner.cleanup()
+
+        # Include action history for debugging
+        action_history = results.get("action_history", [])
+        evaluation = results.get("evaluation", {})
 
         write_result({
             "success": True,
@@ -139,7 +146,10 @@ def main():
             "turns": results.get("turns", 0),
             "done": results.get("done", False),
             "episode_over": results.get("episode_over", False),
-            "summary": f"Task {'completed' if results.get('done') else 'not completed'} in {results.get('turns', 0)} turns"
+            "summary": f"Task {'completed' if results.get('done') else 'not completed'} in {results.get('turns', 0)} turns",
+            "action_history": action_history,
+            "evaluation": evaluation,
+            "planner_traces": planner_traces,
         })
 
     except Exception as e:

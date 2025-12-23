@@ -492,6 +492,29 @@ Start by reading the template, then create a task using the scene data above."""
                 validation_result["benchmark_error"] = results["error"]
                 validation_result["summary"] = f"Task structure valid. Benchmark skipped: {results['error']}"
                 return json.dumps(validation_result, indent=2)
+
+            # Log detailed action history
+            action_history = results.get("action_history", [])
+            if action_history:
+                self._log("\n=== Agent Action History ===")
+                for entry in action_history:
+                    self._log(f"  Turn {entry.get('turn', '?')}: {entry.get('agent', '?')} -> {entry.get('action', '?')}")
+
+            # Save planner traces to separate file for reference
+            planner_traces = results.get("planner_traces", {})
+            if planner_traces:
+                trace_file = self.log_dir / f"planner_traces_{datetime.now().strftime('%H%M%S')}.txt"
+                with open(trace_file, 'w') as f:
+                    for agent_id, trace in planner_traces.items():
+                        f.write(f"\n{'='*60}\n")
+                        f.write(f"=== {agent_id} Trace ===\n")
+                        f.write(f"{'='*60}\n\n")
+                        f.write(trace)
+                        f.write("\n")
+                self._log(f"Planner traces saved to: {trace_file}")
+                # Don't include full traces in the JSON response (too large)
+                results["planner_traces"] = f"See {trace_file}"
+
             # Benchmark ran successfully - merge results with validation
             validation_result.update(results)
             return json.dumps(validation_result, indent=2)
