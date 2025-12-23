@@ -23,7 +23,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
     """
     Runner for benchmark evaluation with LLM planners.
 
-    Each agent gets an EmtomPlanner (from emtom/benchmark/) that uses
+    Each agent gets an EmtomPlanner (from emtom/planner.py) that uses
     ReAct-style prompting with exploration-style logging.
     """
 
@@ -80,7 +80,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         from omegaconf import OmegaConf
 
         # Use our EmtomPlanner with custom logging
-        from emtom.benchmark import EmtomPlanner
+        from emtom.planner import EmtomPlanner
 
         if not hasattr(self.config, 'evaluation') or not hasattr(self.config.evaluation, 'agents'):
             print("[BenchmarkRunner] Warning: No agents in config for planner setup")
@@ -101,7 +101,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
             planner_conf = OmegaConf.to_container(agent_conf.planner, resolve=True)
             if '_target_' in planner_conf and 'LLMPlanner' in planner_conf['_target_']:
                 # Use our custom EmtomPlanner
-                planner_conf['_target_'] = 'emtom.benchmark.emtom_planner.EmtomPlanner'
+                planner_conf['_target_'] = 'emtom.planner.EmtomPlanner'
 
             planner = instantiate(OmegaConf.create(planner_conf))
             planner = planner(env_interface=self.env_interface)

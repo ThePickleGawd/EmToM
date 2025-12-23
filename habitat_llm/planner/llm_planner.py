@@ -760,7 +760,7 @@ class LLMPlanner(Planner):
                 self.agents, llm_response, self.params
             )
 
-            print(f"[Action] {high_level_actions}")
+            self._log_high_level_actions(high_level_actions, thought)
 
             # Get low level actions and/or responses
             low_level_actions, responses = self.process_high_level_actions(
@@ -834,3 +834,16 @@ class LLMPlanner(Planner):
         :return: True if the agent is done, False otherwise.
         """
         return self.end_expression in llm_response
+
+    def _log_high_level_actions(
+        self,
+        high_level_actions: Dict[int, Any],
+        thought: Optional[str] = None,
+    ) -> None:
+        """
+        Log high-level actions. Override in subclass for custom formatting.
+
+        :param high_level_actions: Dict mapping agent uid to action tuple.
+        :param thought: Optional thought string from LLM.
+        """
+        print(f"[Action] {high_level_actions}")
