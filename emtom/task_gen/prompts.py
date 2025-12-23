@@ -205,24 +205,40 @@ agent_1: knows where object is stored, CANNOT Use/Inspect
 → Both agents model what the other doesn't know
 ```
 
-## Process
-1. Use bash to explore available trajectories
-2. Find trajectories with interesting surprise_summary or mechanic_bindings
-3. Read the trajectory's scene_inventory and mechanic_bindings
-4. Edit working_task.json based on trajectory data:
-   - COPY mechanic_bindings exactly from trajectory
-   - Use ONLY objects from scene_inventory
-   - Reference real object IDs in story (e.g., "chest_of_drawers_54")
-   - Create asymmetric knowledge and capabilities
-   - Include a golden_trajectory that proves the task is solvable
-5. **Verify first** with verify_golden_trajectory[] to prove the task is completable
+## Process (Two-Phase Approach)
+
+### PHASE 1: BUILD & VERIFY (Get mechanics working first)
+Focus on creating a working task structure. Story quality doesn't matter yet.
+
+1. Review the scene data provided (rooms, furniture, objects)
+2. Pick interesting objects/furniture for your task mechanics
+3. Create the task structure in working_task.json:
+   - **subtasks**: DAG with success conditions using EXACT object IDs from scene
+   - **golden_trajectory**: Step-by-step actions that complete the task
+   - **mechanic_bindings**: Define any mechanics (inverse_state, etc.)
+   - **agent_secrets/roles/actions**: Create asymmetry for ToM
+   - **story**: Use a PLACEHOLDER like "Placeholder story - will refine after verification"
+4. Run **verify_golden_trajectory[]** - THIS MUST PASS before Phase 2
    - If it fails, fix the golden_trajectory and re-verify
-   - Don't proceed until verification passes
-6. Test difficulty with test_task[] (runs LLM agents)
-7. If difficulty is wrong:
-   - Too easy (<10 steps): Make goal more complex
-   - Too hard (>100 steps): Simplify, but re-verify golden_trajectory after changes
-8. When verified AND difficulty is good, use submit_task[]
+   - Common issues: wrong object IDs, missing Navigate steps, wrong Place format
+5. Run **test_task[]** to check difficulty (target: 10-50 steps)
+
+### PHASE 2: REFINE & POLISH (After verification passes)
+Now that mechanics work, focus on quality and story.
+
+6. If difficulty is wrong:
+   - Too easy (<10 steps): Add subtask complexity, re-verify
+   - Too hard (>100 steps): Simplify DAG, re-verify
+7. **Now write the real story**:
+   - Explain WHY agents need to accomplish the goal (motivation)
+   - Reference real object IDs naturally in the narrative
+   - NO hints about mechanics (no "strange", "unusual", "backwards")
+   - Make it cohesive with public_goal
+8. Run test_task[] again to validate the complete task
+9. When satisfied, use **submit_task[]**
+
+**Key principle**: Get verify_golden_trajectory[] to pass FIRST with a placeholder story.
+Then spend remaining iterations crafting a polished story.
 
 ## Response Format
 Always respond with:
@@ -320,11 +336,24 @@ Action: submit_task[]
 - Verify with verify_golden_trajectory[] before submitting - this proves the task is completable
 - You CANNOT submit until verify_golden_trajectory[] passes
 
-## Story Guidelines
-The story should be NEUTRAL and COHESIVE with the goal:
+## Mechanics-First Philosophy
+The task DAG and golden_trajectory define WHAT the task is.
+The story is HOW we present it to agents.
+
+**Workflow**:
+1. Get the mechanics working FIRST (Phase 1)
+2. Use a placeholder story during development
+3. Only write the real story AFTER verify_golden_trajectory[] passes
+4. The story should serve the mechanics, not the other way around
+
+This ensures your story is grounded in a working task, not aspirational.
+
+## Story Guidelines (Phase 2 Only)
+Write the story AFTER verification passes. The story should be NEUTRAL and COHESIVE:
 - DO set up WHY agents need to accomplish the goal (motivation)
 - DO explain agent roles and why they're working together
 - DO make the story logically lead to the public_goal
+- DO reference real object IDs naturally (e.g., "the laptop on table_22")
 - DO NOT hint at strangeness, quirks, or unusual behavior
 - DO NOT use words like: strange, backwards, quirks, unusual, mysterious, defies logic
 - Secret knowledge belongs ONLY in agent_secrets (distributed across agents)

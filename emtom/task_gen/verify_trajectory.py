@@ -21,20 +21,26 @@ sys.path.insert(0, str(project_root))
 def main():
     parser = argparse.ArgumentParser(description="Verify golden trajectory")
     parser.add_argument("--task-file", required=True, help="Path to task JSON")
+    parser.add_argument("--result-file", required=True, help="Path to write result JSON")
     parser.add_argument("--config-name", default="examples/emtom_two_robots")
     args = parser.parse_args()
+
+    def write_result(result: dict):
+        """Write result to file instead of stdout."""
+        with open(args.result_file, 'w') as f:
+            json.dump(result, f, indent=2)
 
     # Load task
     try:
         with open(args.task_file) as f:
             task_data = json.load(f)
     except Exception as e:
-        print(json.dumps({"valid": False, "error": f"Failed to load task: {e}"}))
+        write_result({"valid": False, "error": f"Failed to load task: {e}"})
         sys.exit(1)
 
     golden = task_data.get("golden_trajectory", [])
     if not golden:
-        print(json.dumps({"valid": False, "error": "No golden_trajectory found"}))
+        write_result({"valid": False, "error": "No golden_trajectory found"})
         sys.exit(1)
 
     # Import and setup Habitat
@@ -52,7 +58,7 @@ def main():
         from emtom.runner.verification import VerificationRunner
         from emtom.task_gen import GeneratedTask
     except ImportError as e:
-        print(json.dumps({"valid": False, "error": f"Import error: {e}"}))
+        write_result({"valid": False, "error": f"Import error: {e}"})
         sys.exit(1)
 
     # Initialize Hydra config
@@ -82,14 +88,14 @@ def main():
         fix_config(config)
         config = setup_config(config, seed=47668090)
     except Exception as e:
-        print(json.dumps({"valid": False, "error": f"Config error: {e}"}))
+        write_result({"valid": False, "error": f"Config error: {e}"})
         sys.exit(1)
 
     # Convert to GeneratedTask
     try:
         task = GeneratedTask.from_dict(task_data)
     except Exception as e:
-        print(json.dumps({"valid": False, "error": f"Invalid task format: {e}"}))
+        write_result({"valid": False, "error": f"Invalid task format: {e}"})
         sys.exit(1)
 
     # Setup environment
@@ -123,7 +129,7 @@ def main():
             save_video=False,
         )
     except Exception as e:
-        print(json.dumps({"valid": False, "error": f"Environment setup failed: {e}"}))
+        write_result({"valid": False, "error": f"Environment setup failed: {e}"})
         sys.exit(1)
 
     # Execute trajectory
@@ -199,13 +205,13 @@ def main():
 
                 if not success:
                     runner.cleanup()
-                    print(json.dumps({
+                    write_result({
                         "valid": False,
                         "failed_step": step_idx,
                         "action": f"{agent_str}: {action}({target})",
                         "error": result.get("observation", "Action failed"),
                         "executed_steps": executed_steps + [{"step": step_idx, "actions": step_results}],
-                    }, indent=2))
+                    })
                     sys.exit(0)
 
             executed_steps.append({"step": step_idx, "actions": step_results})
@@ -218,29 +224,29 @@ def main():
 
         if success_met:
             print(f"  Result: SUCCESS", file=sys.stderr)
-            print(json.dumps({
+            write_result({
                 "valid": True,
                 "steps_executed": len(executed_steps),
                 "success_condition_met": True,
                 "executed_steps": executed_steps,
-            }, indent=2))
+            })
         else:
             print(f"  Result: FAILED", file=sys.stderr)
             print(f"  Reason: {evaluation.get('failure_explanations', ['Unknown'])}", file=sys.stderr)
-            print(json.dumps({
+            write_result({
                 "valid": False,
                 "error": "Success condition not met after trajectory",
                 "evaluation": evaluation,
                 "executed_steps": executed_steps,
-            }, indent=2))
+            })
 
     except Exception as e:
         runner.cleanup()
-        print(json.dumps({
+        write_result({
             "valid": False,
             "error": f"Verification error: {e}",
             "executed_steps": executed_steps,
-        }, indent=2))
+        })
         sys.exit(1)
 
 

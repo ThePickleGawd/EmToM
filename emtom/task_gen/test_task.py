@@ -21,16 +21,22 @@ sys.path.insert(0, str(project_root))
 def main():
     parser = argparse.ArgumentParser(description="Test task with LLM agents")
     parser.add_argument("--task-file", required=True, help="Path to task JSON")
+    parser.add_argument("--result-file", required=True, help="Path to write result JSON")
     parser.add_argument("--config-name", default="examples/emtom_two_robots")
     parser.add_argument("--max-turns", type=int, default=20, help="Max LLM turns per agent")
     args = parser.parse_args()
+
+    def write_result(result: dict):
+        """Write result to file instead of stdout."""
+        with open(args.result_file, 'w') as f:
+            json.dump(result, f, indent=2)
 
     # Load task
     try:
         with open(args.task_file) as f:
             task_data = json.load(f)
     except Exception as e:
-        print(json.dumps({"success": False, "error": f"Failed to load task: {e}"}))
+        write_result({"success": False, "error": f"Failed to load task: {e}"})
         sys.exit(1)
 
     # Import and setup Habitat
@@ -53,7 +59,7 @@ def main():
         from emtom.runner.benchmark import task_to_instruction
         from emtom.task_gen import GeneratedTask
     except ImportError as e:
-        print(json.dumps({"success": False, "error": f"Import error: {e}"}))
+        write_result({"success": False, "error": f"Import error: {e}"})
         sys.exit(1)
 
     # Initialize Hydra config
@@ -77,14 +83,14 @@ def main():
         fix_config(config)
         config = setup_config(config, seed=47668090)
     except Exception as e:
-        print(json.dumps({"success": False, "error": f"Config error: {e}"}))
+        write_result({"success": False, "error": f"Config error: {e}"})
         sys.exit(1)
 
     # Convert to GeneratedTask
     try:
         task = GeneratedTask.from_dict(task_data)
     except Exception as e:
-        print(json.dumps({"success": False, "error": f"Invalid task format: {e}"}))
+        write_result({"success": False, "error": f"Invalid task format: {e}"})
         sys.exit(1)
 
     # Setup environment
@@ -127,23 +133,23 @@ def main():
 
         runner.cleanup()
 
-        print(json.dumps({
+        write_result({
             "success": True,
             "steps": results.get("steps", 0),
             "turns": results.get("turns", 0),
             "done": results.get("done", False),
             "episode_over": results.get("episode_over", False),
             "summary": f"Task {'completed' if results.get('done') else 'not completed'} in {results.get('turns', 0)} turns"
-        }))
+        })
 
     except Exception as e:
-        print(json.dumps({
+        write_result({
             "success": False,
             "steps": 0,
             "done": False,
             "error": str(e),
             "summary": f"Benchmark error: {e}"
-        }))
+        })
         sys.exit(1)
 
 

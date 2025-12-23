@@ -665,6 +665,9 @@ Start by reading the template, then create a task using the scene data above."""
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
                 json.dump(task_data, f)
                 temp_task_file = f.name
+            # Also create a temp file for results
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                temp_result_file = f.name
         except Exception as e:
             return {
                 "steps": 0,
@@ -679,49 +682,46 @@ Start by reading the template, then create a task using the scene data above."""
             sys.executable,
             str(script_path),
             "--task-file", temp_task_file,
+            "--result-file", temp_result_file,
             "--config-name", "examples/emtom_two_robots",
             "--max-turns", "20",
         ]
 
         try:
-            result = subprocess.run(
+            subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=600,  # 10 minute timeout for LLM agents
             )
 
-            # Clean up temp file
+            # Read result from file (cleaner than parsing stdout)
             try:
-                os.unlink(temp_task_file)
-            except Exception:
-                pass
-
-            # Parse JSON output
-            output = result.stdout.strip()
-            if not output:
-                return {
+                with open(temp_result_file) as f:
+                    result = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                result = {
                     "steps": 0,
                     "done": False,
-                    "error": f"No output from test subprocess. stderr: {result.stderr[:500]}",
-                    "summary": "Subprocess error"
+                    "error": f"Failed to read result file: {e}",
+                    "summary": "Result file error"
                 }
 
-            try:
-                return json.loads(output)
-            except json.JSONDecodeError:
-                return {
-                    "steps": 0,
-                    "done": False,
-                    "error": f"Invalid JSON from subprocess: {output[:200]}",
-                    "summary": "Parse error"
-                }
+            # Clean up temp files
+            for temp_file in [temp_task_file, temp_result_file]:
+                try:
+                    os.unlink(temp_file)
+                except Exception:
+                    pass
+
+            return result
 
         except subprocess.TimeoutExpired:
-            try:
-                os.unlink(temp_task_file)
-            except Exception:
-                pass
+            for temp_file in [temp_task_file, temp_result_file]:
+                try:
+                    os.unlink(temp_file)
+                except Exception:
+                    pass
             return {
                 "steps": 0,
                 "done": False,
@@ -729,10 +729,11 @@ Start by reading the template, then create a task using the scene data above."""
                 "summary": "Timeout"
             }
         except Exception as e:
-            try:
-                os.unlink(temp_task_file)
-            except Exception:
-                pass
+            for temp_file in [temp_task_file, temp_result_file]:
+                try:
+                    os.unlink(temp_file)
+                except Exception:
+                    pass
             return {
                 "steps": 0,
                 "done": False,
@@ -748,6 +749,7 @@ Start by reading the template, then create a task using the scene data above."""
         (avoids OpenGL context issues when reusing the main process).
         """
         import subprocess
+        import tempfile
 
         # Check task file exists
         if not self.task_file.exists():
@@ -775,57 +777,70 @@ Start by reading the template, then create a task using the scene data above."""
 
         self._log(f"Verifying golden trajectory: {len(golden)} steps")
 
+        # Create temp file for results
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                temp_result_file = f.name
+        except Exception as e:
+            return json.dumps({
+                "valid": False,
+                "error": f"Failed to create temp result file: {e}"
+            })
+
         # Run verification in subprocess (fresh GL context)
         script_path = Path(__file__).parent / "verify_trajectory.py"
         cmd = [
             sys.executable,
             str(script_path),
             "--task-file", str(self.task_file),
+            "--result-file", temp_result_file,
             "--config-name", "examples/emtom_two_robots",
         ]
 
         try:
-            result = subprocess.run(
+            subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5 minute timeout
             )
 
-            # Parse JSON output from subprocess
-            if result.returncode != 0 and not result.stdout.strip():
-                return json.dumps({
-                    "valid": False,
-                    "error": f"Verification subprocess failed: {result.stderr[:500]}",
-                    "summary": "Subprocess error"
-                })
-
-            # Parse and return the JSON output from the subprocess
-            output = result.stdout.strip()
-            if not output:
-                return json.dumps({
-                    "valid": False,
-                    "error": "No output from verification subprocess",
-                    "stderr": result.stderr[:500]
-                })
-
-            # Check if verification passed and update flag
+            # Read result from file (cleaner than parsing stdout)
             try:
-                result_data = json.loads(output)
+                with open(temp_result_file) as f:
+                    result_data = json.load(f)
                 if result_data.get("valid", False):
                     self.last_verify_passed = True
-            except json.JSONDecodeError:
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                result_data = {
+                    "valid": False,
+                    "error": f"Failed to read result file: {e}",
+                    "summary": "Result file error"
+                }
+
+            # Clean up temp file
+            try:
+                os.unlink(temp_result_file)
+            except Exception:
                 pass
 
-            return output
+            return json.dumps(result_data, indent=2)
 
         except subprocess.TimeoutExpired:
+            try:
+                os.unlink(temp_result_file)
+            except Exception:
+                pass
             return json.dumps({
                 "valid": False,
                 "error": "Verification timed out after 5 minutes",
                 "summary": "Timeout"
             })
         except Exception as e:
+            try:
+                os.unlink(temp_result_file)
+            except Exception:
+                pass
             return json.dumps({
                 "valid": False,
                 "error": f"Verification subprocess error: {e}",
