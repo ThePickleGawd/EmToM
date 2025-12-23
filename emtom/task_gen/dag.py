@@ -131,7 +131,41 @@ def validate_dag(subtasks: List["Subtask"]) -> Tuple[bool, List[str]]:
         elif "entity" not in s.success_condition or "property" not in s.success_condition:
             errors.append(f"Subtask '{sid}' success_condition missing 'entity' or 'property'")
 
+    # Check that no two sequential nodes have the same success condition
+    # Sequential = one directly depends on the other
+    subtask_map = {get_subtask_id(s): s for s in subtasks}
+    for s in subtasks:
+        sid = get_subtask_id(s)
+        if not s.success_condition:
+            continue
+        s_cond = _normalize_condition(s.success_condition)
+        for dep_id in s.depends_on:
+            dep = subtask_map.get(dep_id)
+            if dep and dep.success_condition:
+                dep_cond = _normalize_condition(dep.success_condition)
+                if s_cond == dep_cond:
+                    errors.append(
+                        f"Sequential subtasks '{dep_id}' -> '{sid}' have identical "
+                        f"success_condition ({s_cond}). Each step should represent distinct progress."
+                    )
+
     return len(errors) == 0, errors
+
+
+def _normalize_condition(condition: Dict[str, Any]) -> str:
+    """
+    Normalize a success_condition to a comparable string.
+
+    Handles both 'value' and 'target' fields, sorts keys for consistency.
+    """
+    if not condition:
+        return ""
+    # Extract key fields in a consistent order
+    entity = condition.get("entity", "")
+    prop = condition.get("property", "")
+    # Use 'target' if present, otherwise 'value'
+    target_or_value = condition.get("target", condition.get("value", ""))
+    return f"{entity}:{prop}:{target_or_value}"
 
 
 def _has_cycle(subtasks: List["Subtask"]) -> bool:
