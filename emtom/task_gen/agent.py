@@ -901,10 +901,12 @@ Start by reading the template, then create a task using the scene data above."""
         except json.JSONDecodeError as e:
             return f"Error: Invalid JSON: {e}"
 
-        # Generate task ID
-        task_id = task_data.get("task_id", f"task_{len(self.submitted_tasks):03d}")
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_filename = f"{task_id}_{timestamp}.json"
+        # Generate filename: {datetime}_{title_slug}.json
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        title = task_data.get("title", "untitled")
+        # Slugify title: lowercase, replace spaces with underscores, keep only alphanumeric and underscores
+        title_slug = re.sub(r'[^a-z0-9]+', '_', title.lower()).strip('_')[:50]
+        output_filename = f"{timestamp}_{title_slug}.json"
         output_path = self.output_dir / output_filename
 
         # Copy file

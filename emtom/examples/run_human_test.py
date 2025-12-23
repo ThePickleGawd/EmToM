@@ -44,6 +44,48 @@ from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 from emtom import list_mechanics
 
 
+def print_task_info(task_info: Dict[str, Any]) -> None:
+    """Pretty print task information for human readability."""
+    cprint("\n╔══════════════════════════════════════════════════════════════╗", "cyan")
+    cprint("║                       TASK INFORMATION                        ║", "cyan")
+    cprint("╚══════════════════════════════════════════════════════════════╝", "cyan")
+
+    # Title and ID
+    if task_info.get("title"):
+        cprint(f"\nTitle: {task_info['title']}", "blue")
+    if task_info.get("task_id"):
+        cprint(f"Task ID: {task_info['task_id']}", "gray")
+
+    # Story / atmosphere
+    if task_info.get("story"):
+        cprint(f"\nStory:", "blue")
+        cprint(f"  {task_info['story']}", "gray")
+
+    # Public goal and context
+    if task_info.get("public_goal"):
+        cprint(f"\nPublic Goal: {task_info['public_goal']}", "blue")
+    if task_info.get("public_context"):
+        cprint(f"Context: {task_info['public_context']}", "gray")
+
+    # Agent roles
+    agent_roles = task_info.get("agent_roles", {})
+    if agent_roles:
+        cprint("\nAgent Roles:", "blue")
+        for agent_id, role in agent_roles.items():
+            cprint(f"  {agent_id}: {role}", "gray")
+
+    # Agent secrets (the vital info!)
+    agent_secrets = task_info.get("agent_secrets", {})
+    if agent_secrets:
+        cprint("\n⚠️  Agent Secrets:", "yellow")
+        for agent_id, secrets in agent_secrets.items():
+            cprint(f"  {agent_id}:", "yellow")
+            for secret in secrets:
+                cprint(f"    • {secret}", "gray")
+
+    cprint("\n" + "-" * 66, "cyan")
+
+
 def print_bindings_pretty(bindings: Dict[str, Any]) -> None:
     """Pretty print auto-bound mechanics for human readability."""
     cprint("\n╔══════════════════════════════════════════════════════════════╗", "green")
@@ -227,6 +269,9 @@ def main(config: DictConfig):
     if extra_args and extra_args.task:
         task_info = load_task(extra_args.task)
         if task_info:
+            # Print task information including agent secrets
+            print_task_info(task_info)
+
             # Reset environment to the correct episode for this task
             task_episode_id = task_info.get("episode_id")
             if task_episode_id and task_episode_id != "unknown":

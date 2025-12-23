@@ -22,14 +22,7 @@ from emtom.task_gen.dag import (
     topological_sort,
     validate_dag,
 )
-from emtom.task_gen.dag_visualizer import (
-    print_dag,
-    print_task_dag,
-    to_dot,
-    to_mermaid,
-    visualize_dag,
-    visualize_task_dag,
-)
+from emtom.task_gen.dag_visualizer import view_dag, view_task_dag
 from emtom.task_gen.agent import TaskGeneratorAgent
 
 __all__ = [
@@ -53,12 +46,8 @@ __all__ = [
     "topological_sort",
     "validate_dag",
     # DAG visualization
-    "print_dag",
-    "print_task_dag",
-    "to_dot",
-    "to_mermaid",
-    "visualize_dag",
-    "visualize_task_dag",
+    "view_dag",
+    "view_task_dag",
     # Agentic generator
     "TaskGeneratorAgent",
 ]

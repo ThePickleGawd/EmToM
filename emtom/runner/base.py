@@ -445,7 +445,7 @@ class EMTOMBaseRunner(ABC):
             # Execute motor skill
             tool = agent.tools[actual_action]
             skill_steps = 0
-            max_skill_steps = 500
+            max_skill_steps = 1000
 
             while skill_steps < max_skill_steps:
                 try:

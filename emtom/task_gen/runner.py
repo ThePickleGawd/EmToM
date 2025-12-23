@@ -12,11 +12,15 @@ Or via shell script:
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import sys
 import tempfile
 import uuid
 from pathlib import Path
+
+# Suppress httpx logging (OpenAI client HTTP requests)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Ensure project root is in Python path (for imports like emtom.*)
 _project_root = Path(__file__).resolve().parent.parent.parent

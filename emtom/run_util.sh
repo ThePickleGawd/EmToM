@@ -10,7 +10,6 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
 # Default values
-FORMAT="ascii"
 OUTPUT_FILE=""
 TASK_FILE=""
 
@@ -27,35 +26,22 @@ print_usage() {
     echo -e "${YELLOW}Usage:${NC} ./emtom/run_util.sh <command> [options]"
     echo ""
     echo -e "${YELLOW}Commands:${NC}"
-    echo "  dag <task.json>   Visualize the subtask DAG for a task file"
+    echo "  dag <task.json>   Visualize the subtask DAG as a PNG graph"
     echo "  list-tasks        List all curated task files"
     echo ""
-    echo -e "${YELLOW}DAG Visualization Options:${NC}"
-    echo "  --format FORMAT   Output format: ascii (default), dot, mermaid"
-    echo "  --output FILE     Write output to file instead of stdout"
+    echo -e "${YELLOW}DAG Options:${NC}"
+    echo "  -o, --output FILE   Output file path (default: /tmp/task_dag.png)"
     echo ""
     echo -e "${YELLOW}Examples:${NC}"
-    echo "  # View DAG for a task (ASCII art)"
-    echo "  ./emtom/run_util.sh dag data/emtom/tasks/task_xxx.json"
-    echo ""
-    echo "  # Export DAG to Graphviz DOT format"
-    echo "  ./emtom/run_util.sh dag data/emtom/tasks/working_task.json --format dot"
-    echo ""
-    echo "  # Export DAG to Mermaid (for markdown/GitHub)"
-    echo "  ./emtom/run_util.sh dag data/emtom/tasks/working_task.json --format mermaid"
-    echo ""
-    echo "  # Save DOT output to file for rendering"
-    echo "  ./emtom/run_util.sh dag task.json --format dot --output task.dot"
-    echo "  dot -Tpng task.dot -o task.png"
-    echo ""
-    echo "  # List available task files"
+    echo "  ./emtom/run_util.sh dag data/emtom/tasks/my_task.json"
+    echo "  ./emtom/run_util.sh dag my_task.json -o dag.png"
     echo "  ./emtom/run_util.sh list-tasks"
 }
 
 run_dag() {
     if [ -z "$TASK_FILE" ]; then
         echo -e "${RED}Error: Please specify a task file${NC}"
-        echo "Usage: ./emtom/run_util.sh dag <task.json> [--format FORMAT]"
+        echo "Usage: ./emtom/run_util.sh dag <task.json> [-o output.png]"
         exit 1
     fi
 
@@ -64,35 +50,13 @@ run_dag() {
         exit 1
     fi
 
-    # Build Python command based on format
-    PYTHON_CMD="
-import json
-from emtom.task_gen import GeneratedTask, visualize_task_dag, to_dot, to_mermaid
-
-with open('$TASK_FILE') as f:
-    task_data = json.load(f)
-
-task = GeneratedTask.from_dict(task_data)
-
-if '$FORMAT' == 'ascii':
-    output = visualize_task_dag(task)
-elif '$FORMAT' == 'dot':
-    output = to_dot(task.subtasks, title=task.title)
-elif '$FORMAT' == 'mermaid':
-    output = to_mermaid(task.subtasks, title=task.title)
-else:
-    print('Unknown format: $FORMAT')
-    exit(1)
-
-print(output)
-"
-
+    # Build arguments for the visualizer
+    ARGS="$TASK_FILE"
     if [ -n "$OUTPUT_FILE" ]; then
-        python3 -c "$PYTHON_CMD" > "$OUTPUT_FILE"
-        echo -e "${GREEN}Output written to: $OUTPUT_FILE${NC}"
-    else
-        python3 -c "$PYTHON_CMD"
+        ARGS="$ARGS -o $OUTPUT_FILE"
     fi
+
+    python -m emtom.task_gen.dag_visualizer $ARGS
 }
 
 run_list_tasks() {
@@ -144,14 +108,6 @@ while [[ $# -gt 0 ]]; do
         list-tasks)
             COMMAND="list-tasks"
             shift
-            ;;
-        --format)
-            FORMAT=$2
-            if [[ "$FORMAT" != "ascii" && "$FORMAT" != "dot" && "$FORMAT" != "mermaid" ]]; then
-                echo -e "${RED}Error: --format must be 'ascii', 'dot', or 'mermaid'${NC}"
-                exit 1
-            fi
-            shift 2
             ;;
         --output|-o)
             OUTPUT_FILE=$2
