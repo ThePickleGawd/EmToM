@@ -22,7 +22,7 @@ def main():
     parser = argparse.ArgumentParser(description="Verify golden trajectory")
     parser.add_argument("--task-file", required=True, help="Path to task JSON")
     parser.add_argument("--result-file", required=True, help="Path to write result JSON")
-    parser.add_argument("--config-name", default="examples/emtom_two_robots")
+    parser.add_argument("--config-name", default="examples/emtom_2_robots")
     args = parser.parse_args()
 
     def write_result(result: dict):

@@ -76,7 +76,7 @@ get_agent_config() {
 
     if [ "$agent_type" = "human" ]; then
         case $num_agents in
-            2) echo "examples/emtom_two_humans" ;;
+            2) echo "examples/emtom_2_humans" ;;
             3) echo "examples/emtom_3_humans" ;;
             4) echo "examples/emtom_4_humans" ;;
             5) echo "examples/emtom_5_humans" ;;
@@ -89,7 +89,7 @@ get_agent_config() {
     else
         # Robot configs
         case $num_agents in
-            2) echo "examples/emtom_two_robots" ;;
+            2) echo "examples/emtom_2_robots" ;;
             3) echo "examples/emtom_3_robots" ;;
             4) echo "examples/emtom_4_robots" ;;
             5) echo "examples/emtom_5_robots" ;;
@@ -138,7 +138,7 @@ run_generate() {
     # Use Hydra config system with custom overrides
     # Scene is loaded live from PARTNR dataset - no trajectories needed
     python emtom/task_gen/runner.py \
-        --config-name examples/emtom_two_robots \
+        --config-name examples/emtom_2_robots \
         +num_tasks=$NUM_TASKS \
         +model=$MODEL \
         +subtasks=$SUBTASKS \

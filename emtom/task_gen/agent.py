@@ -706,7 +706,7 @@ Start by reading the template, then create a task using the scene data above."""
             str(script_path),
             "--task-file", temp_task_file,
             "--result-file", temp_result_file,
-            "--config-name", "examples/emtom_two_robots",
+            "--config-name", "examples/emtom_2_robots",
             "--max-turns", "20",
         ]
 
@@ -817,7 +817,7 @@ Start by reading the template, then create a task using the scene data above."""
             str(script_path),
             "--task-file", str(self.task_file),
             "--result-file", temp_result_file,
-            "--config-name", "examples/emtom_two_robots",
+            "--config-name", "examples/emtom_2_robots",
         ]
 
         try:

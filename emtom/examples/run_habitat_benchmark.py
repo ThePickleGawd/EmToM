@@ -235,7 +235,7 @@ if __name__ == "__main__":
 
     if len(sys.argv) < 2:
         cprint("Usage: python run_habitat_benchmark.py --config-name <config>", "yellow")
-        cprint("Example: python run_habitat_benchmark.py --config-name examples/emtom_two_robots", "yellow")
+        cprint("Example: python run_habitat_benchmark.py --config-name examples/emtom_2_robots", "yellow")
         sys.exit(1)
 
     main()

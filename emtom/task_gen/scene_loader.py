@@ -199,7 +199,7 @@ if __name__ == "__main__":
     GlobalHydra.instance().clear()
     config_dir = str(project_root / "habitat_llm" / "conf")
     initialize_config_dir(config_dir=config_dir, version_base=None)
-    config = compose(config_name="examples/emtom_two_robots")
+    config = compose(config_name="examples/emtom_2_robots")
 
     fix_config(config)
     config = setup_config(config, seed=47668090)

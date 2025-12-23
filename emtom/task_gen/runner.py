@@ -3,7 +3,7 @@
 Entry point for the agentic task generator.
 
 Usage:
-    python emtom/task_gen/runner.py --config-name examples/emtom_two_robots +num_tasks=5 +model=gpt-5
+    python emtom/task_gen/runner.py --config-name examples/emtom_2_robots +num_tasks=5 +model=gpt-5
 
 Or via shell script:
     ./emtom/run_emtom.sh generate --num-tasks 5 --model gpt-5

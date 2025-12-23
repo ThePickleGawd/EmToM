@@ -22,7 +22,7 @@ def main():
     parser = argparse.ArgumentParser(description="Test task with LLM agents")
     parser.add_argument("--task-file", required=True, help="Path to task JSON")
     parser.add_argument("--result-file", required=True, help="Path to write result JSON")
-    parser.add_argument("--config-name", default="examples/emtom_two_robots")
+    parser.add_argument("--config-name", default="examples/emtom_2_robots")
     parser.add_argument("--max-turns", type=int, default=20, help="Max LLM turns per agent")
     args = parser.parse_args()
 

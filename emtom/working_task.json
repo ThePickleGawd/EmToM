@@ -1,0 +1,240 @@
+{
+  "task_id": "1512_laptop_at_dusk",
+  "title": "Call Before Dusk",
+  "story": "You arrived at the old house to set up a long-awaited call. The laptop (laptop_0) was put away in cabinet_35; it must sit on table_19 and be powered on before the call begins. You work as a pair—one of you handles the device itself while the other fetches and places it—so clear communication matters.",
+  "episode_id": "1512",
+  "dataset_episode_id": "1512",
+  "scene_id": "107734449_176000403",
+  "public_goal": "Place laptop_0 on table_19 and power it on.",
+  "public_context": "Both agents know there's a scheduled call and the device must be ready. You can speak to each other but each of you has different skills.",
+  "theory_of_mind_required": true,
+  "category": "knowledge_asymmetry",
+  "active_mechanics": ["inverse_state"],
+  "mechanic_bindings": [
+    {
+      "mechanic_type": "inverse_state",
+      "trigger_object": "cabinet_35",
+      "target_object": null,
+      "target_state": null,
+      "count": null
+    }
+  ],
+  "agent_secrets": {
+    "agent_0": [
+      "I know the laptop must be powered on after it is placed on table_19 to complete the task."
+    ],
+    "agent_1": [
+      "I know laptop_0 is stored inside cabinet_35."
+    ]
+  },
+  "agent_roles": {
+    "agent_0": "Technician - can inspect and use electronic items but cannot pick up or place objects.",
+    "agent_1": "Runner - can navigate, open containers, pick and place objects but cannot power on devices."
+  },
+  "agent_actions": {
+    "agent_0": ["Inspect", "Use", "Communicate", "Navigate", "Wait"],
+    "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate", "Wait"]
+  },
+  "subtasks": [
+    {
+      "id": "open_cabinet_35",
+      "description": "Open cabinet_35 so its contents are accessible.",
+      "success_condition": {
+        "entity": "cabinet_35",
+        "property": "is_open",
+        "value": true
+      },
+      "depends_on": [],
+      "assigned_agent": "agent_1"
+    },
+    {
+      "id": "retrieve_laptop",
+      "description": "Pick up laptop_0 from inside cabinet_35.",
+      "success_condition": {
+        "entity": "laptop_0",
+        "property": "is_held_by",
+        "target": "agent_1"
+      },
+      "depends_on": [
+        "open_cabinet_35"
+      ],
+      "assigned_agent": "agent_1"
+    },
+    {
+      "id": "place_on_table",
+      "description": "Place laptop_0 on table_19.",
+      "success_condition": {
+        "entity": "laptop_0",
+        "property": "is_on_top",
+        "target": "table_19"
+      },
+      "depends_on": [
+        "retrieve_laptop"
+      ],
+      "assigned_agent": "agent_1"
+    },
+    {
+      "id": "close_cabinet_35",
+      "description": "Close cabinet_35 after removing the laptop.",
+      "success_condition": {
+        "entity": "cabinet_35",
+        "property": "is_closed",
+        "value": true
+      },
+      "depends_on": [
+        "place_on_table"
+      ],
+      "assigned_agent": "agent_1"
+    },
+    {
+      "id": "power_on_laptop",
+      "description": "Power on laptop_0 once it is positioned on table_19.",
+      "success_condition": {
+        "entity": "laptop_0",
+        "property": "is_powered_on",
+        "value": true
+      },
+      "depends_on": [
+        "close_cabinet_35"
+      ],
+      "assigned_agent": "agent_0"
+    }
+  ],
+  "failure_conditions": [
+    {
+      "description": "Too many failed attempts",
+      "failure_states": [],
+      "max_failed_attempts": 10
+    }
+  ],
+  "initial_world_state": {
+    "objects": ["laptop_0", "candle_1", "spoon_2", "cup_3"],
+    "agent_positions": {
+      "agent_0": "living_room_1",
+      "agent_1": "hallway_1"
+    }
+  },
+  "num_agents": 2,
+  "difficulty": 3,
+  "source_trajectory": "trajectory_1512_placeholder",
+  "golden_trajectory": [
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Communicate",
+          "message": "If you get the laptop on the table I can power it on."
+        },
+        {
+          "agent": "agent_1",
+          "action": "Communicate",
+          "message": "I know laptop_0 is in cabinet_35; I'll get it."
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Navigate",
+          "target": "cabinet_35"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Open",
+          "target": "cabinet_35"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Pick",
+          "target": "laptop_0"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Navigate",
+          "target": "table_19"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Place",
+          "target": "laptop_0, on, table_19, None, None"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Close",
+          "target": "cabinet_35"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Navigate",
+          "target": "table_19"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Wait"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Use",
+          "target": "laptop_0"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Wait"
+        }
+      ]
+    }
+  ]
+}

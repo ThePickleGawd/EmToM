@@ -2,7 +2,7 @@
 
 # Compose a full, runnable config for the bomb game without relying on baseline configs.
 defaults:
-  - /examples/emtom_two_robots
+  - /examples/emtom_2_robots
   - override /evaluation: decentralized_evaluation_runner_multi_agent
   - override /llm@evaluation.agents.agent_0.planner.plan_config.llm: openai_chat
   - override /llm@evaluation.agents.agent_1.planner.plan_config.llm: openai_chat
