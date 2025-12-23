@@ -140,6 +140,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         done = False
         all_planners_done = False
         turn_count = 0
+        planners_done: set = set()  # Track which planners have finished
 
         while self._step_count < max_steps and not done and not self._episode_done:
             # Check turn limit
@@ -150,9 +151,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
             self._step_count += 1
 
             world_graph = self.get_world_graph()
-            planner_done_count = 0
 
             for uid, planner in self.planners.items():
+                # Skip planners that are already done
+                if uid in planners_done:
+                    continue
+
                 agent_id = f"agent_{uid}"
                 agent_instruction = instruction.get(agent_id, instruction.get(str(uid), ""))
 
@@ -174,7 +178,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         })
 
                     if planner_done:
-                        planner_done_count += 1
+                        planners_done.add(uid)
                         print(f"[Agent {uid} DONE]", flush=True)
 
                 except AssertionError as e:
@@ -188,7 +192,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     continue
 
             # Check if all planners are done
-            if planner_done_count == len(self.planners):
+            if len(planners_done) == len(self.planners):
                 all_planners_done = True
                 done = True
 
