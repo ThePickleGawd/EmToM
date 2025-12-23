@@ -36,7 +36,7 @@ print_usage() {
     echo ""
     echo -e "${YELLOW}Examples:${NC}"
     echo "  # View DAG for a task (ASCII art)"
-    echo "  ./emtom/run_util.sh dag data/emtom/tasks/curated/task_xxx.json"
+    echo "  ./emtom/run_util.sh dag data/emtom/tasks/task_xxx.json"
     echo ""
     echo "  # Export DAG to Graphviz DOT format"
     echo "  ./emtom/run_util.sh dag data/emtom/tasks/working_task.json --format dot"
@@ -101,7 +101,7 @@ run_list_tasks() {
     echo -e "==============================================${NC}"
     echo ""
 
-    TASK_DIR="data/emtom/tasks/curated"
+    TASK_DIR="data/emtom/tasks"
 
     if [ ! -d "$TASK_DIR" ]; then
         echo "No curated tasks directory found."

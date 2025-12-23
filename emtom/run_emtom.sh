@@ -143,7 +143,7 @@ run_generate() {
         +model=$MODEL \
         +subtasks=$SUBTASKS \
         +max_iterations=$MAX_ITERATIONS \
-        +output_dir=data/emtom/tasks/curated \
+        +output_dir=data/emtom/tasks \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-generate"
 }
 

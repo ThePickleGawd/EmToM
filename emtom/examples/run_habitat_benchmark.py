@@ -116,7 +116,7 @@ def main(config: DictConfig) -> None:
 
     # Load EMTOM task from curated directory
     # Uses most recently modified task file if multiple exist
-    task_dir = Path("data/emtom/tasks/curated")
+    task_dir = Path("data/emtom/tasks")
 
     if not task_dir.exists():
         cprint(f"ERROR: Task directory not found: {task_dir}", "red")

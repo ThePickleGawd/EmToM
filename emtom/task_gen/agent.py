@@ -43,7 +43,7 @@ class TaskGeneratorAgent:
         llm_client: "BaseLLM",
         config: DictConfig,
         working_dir: str = "data/emtom/tasks",
-        output_dir: str = "data/emtom/tasks/curated",
+        output_dir: str = "data/emtom/tasks",
         max_iterations: int = 100,
         verbose: bool = True,
         subtasks: int = 3,
@@ -153,10 +153,19 @@ class TaskGeneratorAgent:
                 truncated = s[:500] + "..." if len(s) > 500 else s
                 scenario_text += f"\n--- Theme {i} ---\n{truncated}\n"
 
-        # Initialize conversation with action descriptions injected
+        # Initialize conversation with action descriptions and paths injected
         system_prompt = SYSTEM_PROMPT.replace(
             "{action_descriptions}",
             ActionRegistry.get_all_action_descriptions()
+        ).replace(
+            "{template_file}",
+            str(self.template_file)
+        ).replace(
+            "{task_file}",
+            str(self.task_file)
+        ).replace(
+            "{output_dir}",
+            str(self.output_dir)
         )
         self.messages = [
             {"role": "system", "content": system_prompt}
@@ -235,7 +244,6 @@ Start by reading the template, then create a task using the scene data above."""
 
             # Execute action and get observation
             tool, args = action
-            self._log(f"Action: {tool}[{args[:80]}{'...' if len(args) > 80 else ''}]")
             observation = self._execute_action(tool, args)
 
             # Add to conversation
@@ -393,8 +401,8 @@ Start by reading the template, then create a task using the scene data above."""
             if pattern in command:
                 return f"Command substitution not allowed: '{pattern}' detected."
 
-        # Allowed directories (relative to project root)
-        allowed_paths = ["data/emtom/", "outputs/emtom/", "emtom/"]
+        # Allowed directories (temp working dir only - all working files are there)
+        allowed_paths = [str(self.working_dir)]
 
         # Allow cat with heredoc even though it writes
         is_heredoc = "<<" in command and "EOF" in command

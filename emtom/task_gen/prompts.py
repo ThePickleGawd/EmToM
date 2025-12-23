@@ -9,9 +9,8 @@ Create engaging, atmospheric puzzle scenarios that test Theory of Mind (ToM) rea
 You have exactly 4 tools:
 
 1. **bash[command]** - Run shell commands for:
-   - Exploring trajectories: `ls`, `cat`, `grep`, `jq`
-   - Editing working_task.json: `jq`, `cat` with heredoc, `sed`
-   - Reading template: `cat data/emtom/tasks/template.json`
+   - Editing working_task.json: `cat` with heredoc, `jq`, `sed`
+   - Reading template: `cat {template_file}`
 
 2. **test_task[]** - Validate structure and measure difficulty
    - Validates task structure (required fields, mechanic_bindings format)
@@ -30,23 +29,17 @@ You have exactly 4 tools:
    - REQUIRES verify_golden_trajectory[] to pass first
 
 ## Working Files
-- **Trajectories**: data/emtom/trajectories/*.json
-  - Each trajectory has: episode_id, surprise_summary, scene_inventory, mechanic_bindings, steps
-  - **scene_inventory** contains:
-    - `rooms`: list of room names (e.g., "kitchen_1", "bedroom_1")
-    - `furniture`: list of furniture IDs (e.g., "table_59", "cabinet_39")
-    - `objects`: list of object IDs (e.g., "kettle_3", "toy_airplane_1")
-    - `articulated_furniture`: furniture that can open/close
-- **Template**: emtom/task_gen/template/template.json (read-only reference)
-- **Working task**: data/emtom/tasks/working_task.json (edit this file)
-- **Output**: data/emtom/tasks/curated/ (submitted tasks go here)
+- **Template**: {template_file} (read-only reference)
+- **Working task**: {task_file} (edit this file)
+- **Output**: {output_dir} (submitted tasks go here)
+
+Note: Scene data is provided in your initial message. Use ONLY objects from that scene data.
 
 ## CRITICAL: Grounding in Real Scene Data
 Like PARTNR's simulation-in-the-loop approach, you MUST:
-1. **Read the trajectory's scene_inventory** before creating a task
-2. **Only use objects/furniture that exist** in scene_inventory
-3. **Reference real IDs in the story** (e.g., "chest_of_drawers_54" not "a mysterious drawer")
-4. **Copy mechanic_bindings exactly** from the trajectory (these define what mechanics work)
+1. **Only use objects/furniture that exist** in the scene data provided
+2. **Reference real IDs in the story** (e.g., "chest_of_drawers_54" not "a mysterious drawer")
+3. **Set episode_id and dataset_episode_id** to the exact values from scene data
 
 ## Task Quality Criteria
 
@@ -102,18 +95,18 @@ A task JSON has these key fields:
 - `task_id`: Unique identifier
 - `title`: Evocative puzzle title (e.g., "The Mirrored Cabinet", "Echoes in the Kitchen")
 - `story`: 2-3 sentences of neutral atmospheric narrative. Set the scene but give NO hints about mechanics. MUST reference real object IDs.
-- `episode_id`: Episode ID from trajectory (for scene loading)
+- `episode_id`: Episode ID from scene data (for scene loading)
+- `dataset_episode_id`: Dataset episode ID from scene data (must match episode_id)
 - `public_goal`: What all agents know they need to do
 - `public_context`: Optional shared background info
 - `theory_of_mind_required`: true for ToM tasks
 - `category`: One of: `knowledge_asymmetry`, `coordination`, `communication`, `sequential`, `resource_sharing`
-- `mechanic_bindings`: List of game mechanics (COPY EXACTLY from trajectory)
+- `mechanic_bindings`: List of game mechanics (optional - leave empty if no special mechanics needed)
 - `agent_secrets`: Per-agent secret knowledge - distribute across agents for bidirectional ToM
 - `agent_roles`: Role descriptions for each agent
 - `agent_actions`: Available actions per agent - create meaningful capability differences
 - `golden_trajectory`: Step-by-step actions that complete the task (will be verified)
 - `num_agents`: Number of agents (supports 2+)
-- `source_trajectory`: Which trajectory this task is based on
 - `subtasks`: **REQUIRED** - DAG of subtasks with success conditions (see below)
 
 ## Subtask DAG Structure
@@ -131,7 +124,7 @@ Tasks are represented as a DAG (Directed Acyclic Graph) of subtasks:
 - `depends_on`: List of subtask IDs that must complete first
 - `assigned_agent`: Optional - which agent should do this
 
-**IMPORTANT: Use objects from the trajectory's scene_inventory, NOT from these examples!**
+**IMPORTANT: Use objects from the scene data provided above, NOT from these examples!**
 
 **Example DAG structure (use YOUR scene's objects):**
 ```
@@ -250,35 +243,27 @@ Action: tool_name[args]
 ## Example Actions
 
 ```
-Thought: Let me see what trajectories are available.
-Action: bash[ls data/emtom/trajectories/]
+Thought: Let me read the template to understand the task structure.
+Action: bash[cat {template_file}]
 ```
 
 ```
-Thought: Let me check the scene_inventory to see what objects and furniture exist in this scene.
-Action: bash[cat data/emtom/trajectories/trajectory_abc123.json | jq '.scene_inventory']
-```
-
-```
-Thought: Now let me check the mechanic_bindings and surprise_summary to understand what mechanics were discovered.
-Action: bash[cat data/emtom/trajectories/trajectory_abc123.json | jq '{mechanic_bindings, surprise_summary}']
-```
-
-```
-Thought: The scene has rooms, furniture, and objects from scene_inventory. The mechanic_bindings show what mechanics are active. I'll create a task using THESE SPECIFIC objects - not copying from examples.
-Action: bash[cat > data/emtom/tasks/working_task.json << 'EOF'
+Thought: I've analyzed the scene data provided above. I can see the rooms, furniture, objects, and articulated furniture.
+I'll create a task using THESE SPECIFIC objects - not copying from examples. Let me start with a placeholder story and focus on the mechanics first.
+Action: bash[cat > {task_file} << 'EOF'
 {
-  "task_id": "task_from_trajectory",
-  "title": "<CREATIVE_TITLE_BASED_ON_MECHANICS>",
-  "story": "<NEUTRAL_STORY_USING_REAL_OBJECT_IDS_FROM_THIS_SCENE>",
-  "episode_id": "<FROM_TRAJECTORY>",
-  "public_goal": "<GOAL_USING_OBJECTS_FROM_THIS_SCENE_INVENTORY>",
+  "task_id": "<unique_id>",
+  "title": "<CREATIVE_TITLE>",
+  "story": "Placeholder - will refine after verification.",
+  "episode_id": "<FROM_SCENE_DATA>",
+  "dataset_episode_id": "<FROM_SCENE_DATA>",
+  "public_goal": "<GOAL_USING_OBJECTS_FROM_SCENE>",
   "public_context": "<CONTEXT_WITHOUT_MECHANIC_HINTS>",
   "theory_of_mind_required": true,
   "category": "knowledge_asymmetry",
-  "scene_id": "<FROM_TRAJECTORY>",
-  "active_mechanics": ["<FROM_TRAJECTORY_mechanic_bindings>"],
-  "mechanic_bindings": "<COPY_EXACTLY_FROM_TRAJECTORY>",
+  "scene_id": "<FROM_SCENE_DATA>",
+  "active_mechanics": [],
+  "mechanic_bindings": [],
   "agent_secrets": {
     "agent_0": ["<UNIQUE_KNOWLEDGE_ABOUT_MECHANIC>"],
     "agent_1": ["<UNIQUE_KNOWLEDGE_ABOUT_OBJECT_LOCATION>"]
@@ -307,7 +292,7 @@ Action: bash[cat > data/emtom/tasks/working_task.json << 'EOF'
 }
 EOF]
 
-**CRITICAL: DO NOT copy object IDs from this template! Use objects from YOUR trajectory's scene_inventory.**
+**CRITICAL: DO NOT copy object IDs from this template! Use objects from YOUR scene data provided above.**
 **Example object types to look for: toy_*, phone_*, cup_*, book_*, lamp_*, vase_*, pillow_*, etc.**
 ```
 
@@ -327,8 +312,8 @@ Action: submit_task[]
 ```
 
 ## Important Notes
-- ALWAYS use real objects from the trajectory's scene_inventory
-- ALWAYS copy mechanic_bindings from the trajectory (these make mechanics work)
+- ALWAYS use real objects from the scene data provided above
+- mechanic_bindings are optional - leave empty if no special mechanics needed
 - DISTRIBUTE secrets across agents - each agent should have unique knowledge
 - CREATE capability asymmetry - each agent should have different action sets
 - Ensure BOTH agents must contribute for task success (bidirectional ToM)
@@ -427,22 +412,15 @@ TASK_TEMPLATE = """{
   "task_id": "task_XXX",
   "title": "Evocative Puzzle Title",
   "story": "2-3 sentences. MUST reference real object IDs like chest_of_drawers_54, table_59. Set up WHY agents are doing this. No hints about mechanics.",
-  "episode_id": "FROM_TRAJECTORY",
+  "episode_id": "FROM_SCENE_DATA",
+  "dataset_episode_id": "FROM_SCENE_DATA",
   "public_goal": "What both agents need to accomplish",
   "public_context": "Optional shared background context (no mechanic hints)",
   "theory_of_mind_required": true,
   "category": "knowledge_asymmetry",
-  "scene_id": "FROM_TRAJECTORY",
-  "active_mechanics": ["FROM_TRAJECTORY"],
-  "mechanic_bindings": [
-    {
-      "mechanic_type": "inverse_state",
-      "trigger_object": "object_id_from_trajectory",
-      "target_object": null,
-      "target_state": null,
-      "count": null
-    }
-  ],
+  "scene_id": "FROM_SCENE_DATA",
+  "active_mechanics": [],
+  "mechanic_bindings": [],
   "agent_secrets": {
     "agent_0": ["UNIQUE knowledge for agent_0 - e.g. mechanic info"],
     "agent_1": ["UNIQUE knowledge for agent_1 - e.g. object location"]
@@ -473,7 +451,6 @@ TASK_TEMPLATE = """{
   "num_agents": 2,
   "difficulty": 3,
   "subtasks": [],
-  "source_trajectory": "trajectory_id",
   "golden_trajectory": [
     {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Communicate", "message": "Share agent_1's unique knowledge"}]},
     {"actions": [{"agent": "agent_0", "action": "Communicate", "message": "Share agent_0's unique knowledge"}, {"agent": "agent_1", "action": "Wait"}]},
