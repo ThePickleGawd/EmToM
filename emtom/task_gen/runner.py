@@ -75,9 +75,12 @@ def main(config: DictConfig) -> None:
     # Load random scene from PARTNR dataset
     cprint("Loading random scene from PARTNR dataset...", "blue")
     from emtom.task_gen.scene_loader import load_random_scene
+    from habitat_llm.utils import get_random_seed
 
     try:
-        scene_data = load_random_scene(config, seed=seed)
+        # Use a truly random seed for scene selection if not explicitly provided
+        scene_seed = seed if seed is not None else get_random_seed()
+        scene_data = load_random_scene(config, seed=scene_seed)
         cprint(f"Loaded scene {scene_data.scene_id} (episode {scene_data.episode_id})", "green")
         cprint(f"  Rooms: {len(scene_data.rooms)}", "green")
         cprint(f"  Furniture: {len(scene_data.furniture)}", "green")
