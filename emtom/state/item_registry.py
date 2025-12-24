@@ -13,7 +13,7 @@ Usage:
     @register_item("item_small_key")
     class SmallKey(BaseItem):
         name = "Small Key"
-        description = "A small brass key. Use[item_small_key_N, container] to unlock."
+        description = "A small brass key. UseItem[item_small_key_N, container] to unlock."
         consumable = True
         use_args = ["container"]
 
@@ -252,7 +252,7 @@ class ItemRegistry:
 
             # Show use_args
             if info["use_args"]:
-                usage = f"Use[{info['item_id']}_N, {', '.join(info['use_args'])}]"
+                usage = f"UseItem[{info['item_id']}_N, {', '.join(info['use_args'])}]"
                 lines.append(f"    Usage: {usage}")
 
             # Show granted action

@@ -351,16 +351,21 @@ Articulated Furniture (can be opened/closed): {articulated}
 ## MULTI-STEP PUZZLE DESIGN
 Design puzzles where progress is GATED by previous steps:
 - Step 1: Search a drawer to find a key
-- Step 2: Use key to unlock a cabinet
+- Step 2: UseItem[key, cabinet] to unlock
 - Step 3: Search the cabinet to find another key
-- Step 4: Use that key to unlock a chest
+- Step 4: UseItem[key, chest] to unlock
 - Step 5: Retrieve the goal item from the chest
 
 Use these mechanics to create chains:
 - "hidden_items": Items hidden inside furniture (found via Search action)
-- "is_locked": Locked containers (use Use[key, container] to unlock)
+- "is_locked": Locked containers (use UseItem[key, container] to unlock)
 - Locked containers block Search until unlocked
 - Keys are consumed when used
+
+**CRITICAL: Items are ABSTRACT (not in world graph)**
+- Items go directly to inventory when found
+- You CANNOT Pick, Navigate to, or physically interact with items
+- Use `UseItem[item_id, args]` to use items from inventory
 
 ## TOOL Items with Room Restrictions (for Theory of Mind)
 TOOL items (like radio) can have "allowed_rooms" to restrict where they work:
@@ -406,14 +411,14 @@ Create an immersive MULTI-STEP puzzle scenario. The "story" field is REQUIRED.
         "agent_1": "The one who must follow strange instructions on faith"
     }},
     "agent_actions": {{
-        "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Search", "Communicate"],
+        "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "UseItem", "Inspect", "Search", "Communicate"],
         "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
     }},
     "subtasks": [
         "Step 1: Search drawer_1 to find small_key_1",
-        "Step 2: Use small_key_1 to unlock cabinet_2",
+        "Step 2: UseItem[small_key_1, cabinet_2] to unlock",
         "Step 3: Search cabinet_2 to find small_key_2",
-        "Step 4: Use small_key_2 to unlock chest_3",
+        "Step 4: UseItem[small_key_2, chest_3] to unlock",
         "Step 5: Retrieve goal_item from chest_3 and place on table"
     ],
     "success_condition": {{
@@ -729,7 +734,7 @@ class TaskGenerator:
 
         # Default agent_actions if not provided
         default_agent_actions = {
-            "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "Use", "Inspect", "Communicate"],
+            "agent_0": ["Navigate", "Open", "Close", "Pick", "Place", "UseItem", "Inspect", "Communicate"],
             "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"],
         }
 

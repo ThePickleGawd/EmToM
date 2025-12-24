@@ -14,11 +14,12 @@ Create Theory of Mind (ToM) tasks where agents must share knowledge and coordina
 
 **Helper tools** (modify working_task.json directly):
 - `add_item[item_id, placement, container]` - e.g., `add_item[item_key_1, hidden_in, drawer_52]`
-- `lock_container[container, key_type]` - e.g., `lock_container[cabinet_45, item_small_key]`
 - `add_subtask[id, desc, entity, property, target, depends_on]`
-- `set_agent_actions[agent_id, action1, action2, ...]`
-- `add_agent_secret[agent_id, secret]`
-- `set_field[field, value]`
+- `set_field[path, value]` - dot notation for nested fields:
+  - `set_field[title, The Lost Key]`
+  - `set_field[locked_containers.cabinet_45, item_small_key]`
+  - `set_field[agent_actions.agent_0, ["Navigate", "Search", "Communicate"]]`
+  - `set_field[agent_secrets.agent_1, ["The key is in drawer_12"]]`
 
 ## Files
 - Template: {template_file}
@@ -34,11 +35,18 @@ Create Theory of Mind (ToM) tasks where agents must share knowledge and coordina
 ## Available Actions
 {action_descriptions}
 
-## Item System
-Items are NOT physical objects - they go directly to inventory when found.
+## Item System (CRITICAL: Items are ABSTRACT!)
+Items are **NOT in the world graph** - they exist ONLY in inventory.
+- You **CANNOT** Pick, Navigate to, or physically interact with items
+- Items go directly to inventory when found (Search or Open)
+- Use `UseItem[item_id, args]` to use items from inventory
+
+**Placement:**
 - `hidden_in` container → found with **Search[container]**
 - `inside` container → found when **Open[container]**
 - Lock containers with `locked_containers: {{"cabinet_45": "item_small_key"}}`
+
+**Example**: `UseItem[item_small_key_1, cabinet_45]` to unlock cabinet
 
 ## Task Structure
 ```json
@@ -63,7 +71,7 @@ Items are NOT physical objects - they go directly to inventory when found.
   "agent_roles": {{"agent_0": "Role A", "agent_1": "Role B"}},
   "agent_actions": {{
     "agent_0": ["Navigate", "Communicate", "Wait"],
-    "agent_1": ["Navigate", "Search", "Open", "Use", "Communicate"]
+    "agent_1": ["Navigate", "Search", "Open", "UseItem", "Communicate"]
   }},
   "subtasks": [
     {{"id": "goal_1", "description": "Goal description",

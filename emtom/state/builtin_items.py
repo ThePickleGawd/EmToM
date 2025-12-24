@@ -29,11 +29,11 @@ class SmallKey(BaseItem):
     Common item - can find multiples in a scenario.
     Single use - crumbles to dust after unlocking.
 
-    Usage: Use[item_small_key_1, container_id]
+    Usage: UseItem[item_small_key_1, container_id]
     """
 
     name = "Small Key"
-    description = "A small brass key. Use[item_small_key_N, container] to unlock."
+    description = "A small brass key. UseItem[item_small_key_N, container] to unlock."
     consumable = True  # Single use - consumed when used
     use_args = ["container"]  # Requires 1 arg: what to unlock
 
@@ -59,11 +59,11 @@ class BigKey(BaseItem):
     Rare item - typically only one in a scenario.
     Reusable - not consumed when used.
 
-    Usage: Use[item_big_key_1, container_id]
+    Usage: UseItem[item_big_key_1, container_id]
     """
 
     name = "Big Key"
-    description = "A large ornate key. Use[item_big_key_N, container] to unlock."
+    description = "A large ornate key. UseItem[item_big_key_N, container] to unlock."
     consumable = False  # Reusable
     use_args = ["container"]  # Requires 1 arg: what to unlock
 

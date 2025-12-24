@@ -157,23 +157,28 @@ class EMTOMAction(Tool):
         return []
 
 
-@register_action("Use")
-class UseAction(EMTOMAction):
+@register_action("UseItem")
+class UseItemAction(EMTOMAction):
     """
     Use an inventory item.
 
-    Format: Use[item_id, arg1, arg2, ...]
+    Items are ABSTRACT - they exist only in inventory, NOT in the world graph.
+    You cannot Pick, Navigate to, or physically interact with items.
+    UseItem is the ONLY way to use items from inventory.
+
+    Format: UseItem[item_id, arg1, arg2, ...]
     - Items define their required args via use_args field
-    - Keys require 1 arg: Use[item_small_key_1, container]
-    - Some items require 0 args: Use[item_flashlight_1]
+    - Keys require 1 arg: UseItem[item_small_key_1, container]
+    - Some items require 0 args: UseItem[item_flashlight_1]
 
     Item IDs always start with "item_" prefix.
     """
 
-    action_name = "Use"
+    action_name = "UseItem"
     action_description = (
-        "Use[item_id, args...]: Use an item from your inventory. "
-        "Example: Use[item_small_key_1, cabinet_42] to unlock."
+        "UseItem[item_id, args...]: Use an item from your inventory. "
+        "Items are abstract (not physical objects). "
+        "Example: UseItem[item_small_key_1, cabinet_42] to unlock."
     )
 
     @property
@@ -189,7 +194,7 @@ class UseAction(EMTOMAction):
         if not target:
             return ActionResult(
                 success=False,
-                observation="You need to specify what to use. Format: Use[item_id, args...]",
+                observation="You need to specify what to use. Format: UseItem[item_id, args...]",
             )
 
         if not self._game_manager:

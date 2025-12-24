@@ -1108,9 +1108,9 @@ class GameStateManager:
         expected_args = getattr(item, 'use_args', []) or []
         if len(args) != len(expected_args):
             if expected_args:
-                usage = f"Use[{item_id}, {', '.join(expected_args)}]"
+                usage = f"UseItem[{item_id}, {', '.join(expected_args)}]"
             else:
-                usage = f"Use[{item_id}]"
+                usage = f"UseItem[{item_id}]"
             return False, f"Wrong number of arguments. Usage: {usage}"
 
         # Call item's on_use method

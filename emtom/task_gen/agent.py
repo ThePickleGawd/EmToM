@@ -49,6 +49,7 @@ class TaskGeneratorAgent:
         subtasks: int = 3,
         scene_data: Optional[Any] = None,
         log_dir: Optional[str] = None,
+        max_context_chars: Optional[int] = None,
     ):
         """
         Initialize the agent.
@@ -63,6 +64,7 @@ class TaskGeneratorAgent:
             subtasks: Exact number of subtasks/steps per task
             scene_data: Live scene data from SceneLoader (required)
             log_dir: Directory for log files (defaults to Hydra output or output_dir/logs)
+            max_context_chars: Max context size before summarizing. Auto-detected from model if None.
         """
         self.llm = llm_client
         self.config = config
@@ -72,6 +74,7 @@ class TaskGeneratorAgent:
         self.max_iterations = max_iterations
         self.verbose = verbose
         self.scene_data = scene_data
+        self.max_context_chars = max_context_chars or self._get_model_context_limit()
 
         # Task file paths
         self.task_file = self.working_dir / "working_task.json"
@@ -113,6 +116,44 @@ class TaskGeneratorAgent:
             # Shell control structures (for loops, conditionals)
             "for", "do", "done", "while", "if", "then", "else", "fi", "in",
         ]
+
+    def _get_model_context_limit(self) -> int:
+        """
+        Get context limit based on model name.
+
+        Returns 80% of model's context window in chars (~4 chars/token).
+        """
+        # Model context windows (in tokens)
+        context_windows = {
+            "gpt-5.2": 128000,
+            "gpt-5": 128000,
+            "gpt-5-mini": 128000,
+            "gpt-4o": 128000,
+            "gpt-4o-mini": 128000,
+            "gpt-4-turbo": 128000,
+            "gpt-4": 8192,
+            "gpt-3.5-turbo": 16385,
+            "claude-3": 200000,
+            "claude-3.5": 200000,
+        }
+
+        # Try to get model name from LLM config
+        model_name = ""
+        try:
+            if hasattr(self.llm, 'llm_conf'):
+                params = self.llm.llm_conf.get('generation_params', {})
+                model_name = params.get('model', '').lower()
+        except Exception:
+            pass
+
+        # Find matching context window
+        for model_key, tokens in context_windows.items():
+            if model_key in model_name:
+                # 80% of context, ~4 chars per token
+                return int(tokens * 0.8 * 4)
+
+        # Default: assume 128k context (gpt-5 class)
+        return int(128000 * 0.8 * 4)
 
     def run(self, num_tasks_target: int = 1) -> List[str]:
         """
@@ -242,6 +283,9 @@ Start by reading the template, then create a task using the scene data above."""
             self._log(f"Iteration {self.iteration_count}/{self.max_iterations} | Submitted: {len(self.submitted_tasks)}/{num_tasks_target}")
             self._log(f"{'='*40}")
 
+            # Check if context needs summarization
+            self._maybe_summarize_context()
+
             # Get LLM response
             try:
                 response = self._get_llm_response()
@@ -342,6 +386,89 @@ Start by reading the template, then create a task using the scene data above."""
             elif role == "assistant":
                 parts.append(f"Assistant:\n{content}")
         return "\n\n".join(parts)
+
+    def _estimate_context_size(self) -> int:
+        """Estimate current context size in characters."""
+        return sum(len(msg["content"]) for msg in self.messages)
+
+    def _maybe_summarize_context(self) -> None:
+        """
+        Summarize older messages if context exceeds threshold.
+
+        Uses the LLM to summarize, preserving intent and important observations.
+
+        Keeps:
+        - messages[0]: System prompt (exactly as-is)
+        - messages[1]: Initial user message with scene data
+        - Last N messages (recent conversation)
+
+        Summarizes middle messages via LLM into a single summary.
+        """
+        context_size = self._estimate_context_size()
+        if context_size < self.max_context_chars:
+            return
+
+        self._log(f"Context size ({context_size} chars) exceeds threshold ({self.max_context_chars}). Summarizing...")
+
+        # Keep system prompt (0), initial user msg (1), and last 10 messages
+        keep_recent = 10
+        if len(self.messages) <= 2 + keep_recent:
+            # Not enough messages to summarize
+            return
+
+        # Messages to summarize: from index 2 to -(keep_recent)
+        to_summarize = self.messages[2:-keep_recent]
+        if not to_summarize:
+            return
+
+        # Format messages for summarization
+        conversation_text = []
+        for msg in to_summarize:
+            role = msg["role"].capitalize()
+            content = msg["content"]
+            # Truncate very long observations for the summary request
+            if len(content) > 500:
+                content = content[:500] + "..."
+            conversation_text.append(f"{role}: {content}")
+
+        summarize_prompt = f"""Summarize this conversation history for context continuity.
+Preserve:
+1. Your current intent/goal and progress toward it
+2. Important observations (errors, successful actions, state changes)
+3. Key decisions made and why
+4. Current state of working_task.json (what fields have been set)
+
+Be concise but complete. This summary replaces the conversation history.
+
+CONVERSATION TO SUMMARIZE:
+{chr(10).join(conversation_text)}
+
+SUMMARY:"""
+
+        # Use LLM to generate summary
+        try:
+            summary = self.llm.generate(summarize_prompt)
+            summary = f"[CONTEXT SUMMARY - {len(to_summarize)} messages summarized by LLM]\n\n{summary}\n\n[End of summary - recent conversation follows]"
+        except Exception as e:
+            self._log(f"LLM summarization failed: {e}, using fallback")
+            # Fallback to simple list of actions
+            actions = []
+            for msg in to_summarize:
+                if msg["role"] == "assistant":
+                    match = re.search(r'Action:\s*(\w+)\[', msg["content"])
+                    if match:
+                        actions.append(match.group(1))
+            summary = f"[CONTEXT SUMMARY - {len(to_summarize)} messages]\nActions taken: {', '.join(actions[-30:])}\n[End of summary]"
+
+        # Rebuild messages: system + initial + summary + recent
+        self.messages = (
+            self.messages[:2] +  # System + initial user
+            [{"role": "user", "content": summary}] +  # Summary
+            self.messages[-keep_recent:]  # Recent messages
+        )
+
+        new_size = self._estimate_context_size()
+        self._log(f"Context reduced from {context_size} to {new_size} chars")
 
     def _parse_action(self, response: str) -> Optional[tuple]:
         """
@@ -489,23 +616,14 @@ Start by reading the template, then create a task using the scene data above."""
         elif tool == "add_item":
             self.last_verify_passed = False
             return self._add_item(args)
-        elif tool == "lock_container":
-            self.last_verify_passed = False
-            return self._lock_container(args)
         elif tool == "add_subtask":
             self.last_verify_passed = False
             return self._add_subtask(args)
-        elif tool == "set_agent_actions":
-            self.last_verify_passed = False
-            return self._set_agent_actions(args)
-        elif tool == "add_agent_secret":
-            self.last_verify_passed = False
-            return self._add_agent_secret(args)
         elif tool == "set_field":
             self.last_verify_passed = False
             return self._set_field(args)
         else:
-            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, submit_task, fail, add_item, lock_container, add_subtask, set_agent_actions, add_agent_secret, set_field"
+            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, submit_task, fail, add_item, add_subtask, set_field"
 
     def _bash(self, command: str) -> str:
         """
@@ -1155,37 +1273,6 @@ Start by reading the template, then create a task using the scene data above."""
         self._save_task(task)
         return f"Added item: {item_id} ({placement_type} {container})"
 
-    def _lock_container(self, args: str) -> str:
-        """
-        Lock a container, requiring a key to open.
-
-        Format: lock_container[container, key_type]
-        - container: furniture ID to lock
-        - key_type: base key type (e.g., "item_small_key")
-
-        Example: lock_container[cabinet_45, item_small_key]
-        """
-        parts = [p.strip() for p in args.split(",")]
-        if len(parts) != 2:
-            return "Error: lock_container requires 2 args: container, key_type"
-
-        container, key_type = parts
-
-        if not key_type.startswith("item_"):
-            return f"Error: key_type must start with 'item_', got '{key_type}'"
-
-        task, err = self._load_task()
-        if err:
-            return err
-
-        if "locked_containers" not in task:
-            task["locked_containers"] = {}
-
-        task["locked_containers"][container] = key_type
-
-        self._save_task(task)
-        return f"Locked container: {container} (requires {key_type})"
-
     def _add_subtask(self, args: str) -> str:
         """
         Add a subtask to the DAG.
@@ -1253,85 +1340,24 @@ Start by reading the template, then create a task using the scene data above."""
         deps_str = ", ".join(depends_on) if depends_on else "none"
         return f"Added subtask: {subtask_id} (depends on: {deps_str})"
 
-    def _set_agent_actions(self, args: str) -> str:
-        """
-        Set available actions for an agent.
-
-        Format: set_agent_actions[agent_id, action1, action2, ...]
-
-        Example: set_agent_actions[agent_0, Navigate, Communicate, Wait]
-        Example: set_agent_actions[agent_1, Navigate, Search, Open, Pick, Use, Communicate, Wait]
-        """
-        parts = [p.strip() for p in args.split(",")]
-        if len(parts) < 2:
-            return "Error: set_agent_actions requires at least 2 args: agent_id, action1, ..."
-
-        agent_id = parts[0]
-        actions = parts[1:]
-
-        task, err = self._load_task()
-        if err:
-            return err
-
-        if "agent_actions" not in task:
-            task["agent_actions"] = {}
-
-        task["agent_actions"][agent_id] = actions
-
-        self._save_task(task)
-        return f"Set {agent_id} actions: {', '.join(actions)}"
-
-    def _add_agent_secret(self, args: str) -> str:
-        """
-        Add a secret to an agent's knowledge.
-
-        Format: add_agent_secret[agent_id, secret_text]
-
-        Example: add_agent_secret[agent_0, The key is hidden in the drawer by the window]
-        """
-        # Split only on first comma to preserve secret text
-        parts = args.split(",", 1)
-        if len(parts) != 2:
-            return "Error: add_agent_secret requires 2 args: agent_id, secret_text"
-
-        agent_id = parts[0].strip()
-        secret = parts[1].strip()
-
-        task, err = self._load_task()
-        if err:
-            return err
-
-        if "agent_secrets" not in task:
-            task["agent_secrets"] = {}
-
-        if agent_id not in task["agent_secrets"]:
-            task["agent_secrets"][agent_id] = []
-
-        task["agent_secrets"][agent_id].append(secret)
-
-        self._save_task(task)
-        return f"Added secret to {agent_id}: \"{secret[:50]}...\""
-
     def _set_field(self, args: str) -> str:
         """
-        Set a top-level field in the task.
+        Set a field in the task using dot notation for nested paths.
 
-        Format: set_field[field_name, value]
+        Format: set_field[path, value]
 
-        For simple values (strings, numbers, booleans):
+        Examples:
           set_field[title, The Locked Cabinet]
-          set_field[num_agents, 2]
-          set_field[theory_of_mind_required, true]
-
-        For JSON values (arrays, objects), use JSON syntax:
-          set_field[active_mechanics, ["inverse_state"]]
+          set_field[locked_containers.cabinet_45, item_small_key]
+          set_field[agent_actions.agent_0, ["Navigate", "Search", "Communicate"]]
+          set_field[agent_secrets.agent_1, ["The key is in drawer_12"]]
         """
         # Split only on first comma
         parts = args.split(",", 1)
         if len(parts) != 2:
-            return "Error: set_field requires 2 args: field_name, value"
+            return "Error: set_field requires 2 args: path, value"
 
-        field_name = parts[0].strip()
+        path = parts[0].strip()
         value_str = parts[1].strip()
 
         task, err = self._load_task()
@@ -1357,10 +1383,22 @@ Start by reading the template, then create a task using the scene data above."""
                     except ValueError:
                         value = value_str  # Keep as string
 
-        task[field_name] = value
+        # Handle dot notation for nested paths
+        path_parts = path.split(".")
+        if len(path_parts) == 1:
+            # Simple top-level field
+            task[path] = value
+        else:
+            # Nested path - navigate to parent and set final key
+            current = task
+            for key in path_parts[:-1]:
+                if key not in current:
+                    current[key] = {}
+                current = current[key]
+            current[path_parts[-1]] = value
 
         self._save_task(task)
-        return f"Set {field_name} = {json.dumps(value)[:100]}"
+        return f"Set {path} = {json.dumps(value)[:100]}"
 
     def _format_scene_data(self) -> str:
         """Format scene data for the LLM prompt."""

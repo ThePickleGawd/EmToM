@@ -422,8 +422,8 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
             # Add hints about special actions
             if "Search" in actions:
                 parts.append("(Search finds hidden items and adds them to your inventory)")
-            if "Use" in actions:
-                parts.append("(Use lets you use items, e.g., Use[key, container] to unlock)")
+            if "UseItem" in actions:
+                parts.append("(UseItem lets you use items from inventory, e.g., UseItem[item_key_1, cabinet] to unlock)")
 
         # Per-agent secrets (only for ToM tasks)
         secrets = task.agent_secrets.get(agent_id, [])
