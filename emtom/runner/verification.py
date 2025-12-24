@@ -28,6 +28,7 @@ class VerificationRunner(EMTOMBaseRunner):
     def __init__(self, config):
         super().__init__(config)
         self.task: Optional["GeneratedTask"] = None
+        self._llm_client = None
 
     def setup(
         self,
@@ -58,6 +59,25 @@ class VerificationRunner(EMTOMBaseRunner):
 
         # Call parent setup (no planners created)
         super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions, save_video=save_video)
+
+        # Setup LLM for perception tools (FindObjectTool, etc.)
+        self._setup_llm_for_tools()
+
+    def _setup_llm_for_tools(self) -> None:
+        """Setup LLM client for perception tools (FindObjectTool, etc.)."""
+        try:
+            from habitat_llm.llm import instantiate_llm
+
+            # Use gpt-5 for perception tools
+            self._llm_client = instantiate_llm("openai_chat", model="gpt-5")
+
+            # Pass LLM to agent tools
+            for uid, agent in self.agents.items():
+                if hasattr(agent, 'pass_llm_to_tools'):
+                    agent.pass_llm_to_tools(self._llm_client)
+        except Exception as e:
+            # Log but don't fail - some trajectories may not need perception tools
+            print(f"[VerificationRunner] Warning: Could not setup LLM for tools: {e}")
 
     def _task_to_mechanics_dict(self, task: "GeneratedTask") -> Dict[str, Any]:
         """Convert GeneratedTask to mechanics initialization format."""

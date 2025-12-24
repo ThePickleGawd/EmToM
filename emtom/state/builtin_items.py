@@ -5,6 +5,7 @@ These are the standard items available in EMTOM scenarios:
 - SmallKey: Common key that unlocks small containers (consumed on use)
 - BigKey: Rare key for final objectives (reusable)
 - Radio: Grants Communicate action when obtained
+- OracleCrystal: Passive effect grants full world observability
 
 Item naming convention:
 - All item IDs use "item_" prefix (e.g., "item_small_key_1")
@@ -116,3 +117,45 @@ class Radio(BaseItem):
     ) -> Tuple[bool, str]:
         """Radio is used via the granted Communicate action."""
         return False, "Use Communicate[message] instead of Use for the radio."
+
+
+@register_item("item_oracle_crystal")
+class OracleCrystal(BaseItem):
+    """
+    A glowing crystal that reveals all locations and objects.
+
+    Passive effect: grants full world graph observability.
+    When an agent has this item, they can "see" all entities in the
+    environment regardless of partial observability settings.
+
+    Not consumable - passive effect persists while in inventory.
+    No direct Use action - the effect is always active.
+    """
+
+    name = "Oracle Crystal"
+    description = "A glowing crystal that reveals all locations. Grants full observability while held."
+    consumable = False
+    use_args = []  # No direct usage
+
+    # Passive effect: grants full world graph
+    passive_effects = {"oracle_world_graph": True}
+
+    def on_acquire(
+        self,
+        game_manager: "GameStateManager",
+        agent_id: str,
+    ) -> str:
+        """Crystal reveals all when obtained."""
+        msg = "Obtained Oracle Crystal! The world's layout becomes clear in your mind."
+        if self.task_info:
+            msg += f" {self.task_info}"
+        return msg
+
+    def on_use(
+        self,
+        game_manager: "GameStateManager",
+        agent_id: str,
+        args: Optional[List[str]] = None,
+    ) -> Tuple[bool, str]:
+        """Crystal's effect is passive, no active use needed."""
+        return False, "The Oracle Crystal's power is always active while you hold it."

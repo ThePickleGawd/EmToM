@@ -23,6 +23,7 @@ from emtom.mechanics.handlers import (
     get_handler,
     list_mechanics,
     get_mechanic_info,
+    get_mechanics_for_task_generation,
     # Types
     HandlerResult,
     MechanicHandler,
@@ -46,6 +47,7 @@ __all__ = [
     "get_handler",
     "list_mechanics",
     "get_mechanic_info",
+    "get_mechanics_for_task_generation",
     # Types
     "HandlerResult",
     "MechanicHandler",

@@ -678,10 +678,25 @@ class EMTOMBaseRunner(ABC):
         return self.env_interface.get_observations()
 
     def get_world_graph(self) -> Dict[int, Any]:
-        """Get world graph for all agents."""
+        """
+        Get world graph for all agents, respecting passive effects.
+
+        If an agent has the 'oracle_world_graph' passive effect from an item
+        in their inventory, they receive the full world graph instead of
+        their partial observation.
+        """
         world_graph = {}
         for uid in self.agents.keys():
             try:
+                # Check if agent has oracle effect from inventory items
+                if self.game_manager:
+                    effects = self.game_manager.get_agent_passive_effects(f"agent_{uid}")
+                    if effects.get("oracle_world_graph"):
+                        # Full observability - return the complete world graph
+                        world_graph[uid] = self.env_interface.full_world_graph
+                        continue
+
+                # Default: agent's normal (possibly partial) world graph
                 world_graph[uid] = self.env_interface.world_graph[uid]
             except Exception:
                 world_graph[uid] = None

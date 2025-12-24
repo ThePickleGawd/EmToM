@@ -144,20 +144,25 @@ class TaskGeneratorAgent:
             self.task_file.unlink()
             self._log(f"Cleaned up previous {self.task_file}")
 
-        # Load scenario inspirations for creative story ideas
+        # Create working_task.json from template with scene fields pre-populated
+        self._create_working_task_from_template()
+
+        # Load scenario inspirations - one per task target
         from emtom.task_gen.task_generator import load_scenario_inspirations
-        scenarios = load_scenario_inspirations(max_scenarios=5)
+        scenarios = load_scenario_inspirations(max_scenarios=num_tasks_target)
         scenario_text = ""
         if scenarios:
-            scenario_text = "\n\n## Escape Room Inspirations (use these themes for your story!)\n"
+            scenario_text = "\n\n## Story Inspiration\n"
             for i, s in enumerate(scenarios, 1):
-                # Truncate long scenarios
-                truncated = s[:500] + "..." if len(s) > 500 else s
-                scenario_text += f"\n--- Theme {i} ---\n{truncated}\n"
+                scenario_text += f"\n--- Theme {i} ---\n{s}\n"
 
         # Get available items from registry
         from emtom.state.item_registry import ItemRegistry
         available_items = ItemRegistry.get_items_for_task_generation()
+
+        # Get available mechanics
+        from emtom.mechanics import get_mechanics_for_task_generation
+        available_mechanics = get_mechanics_for_task_generation()
 
         # Initialize conversation with action descriptions and paths injected
         system_prompt = SYSTEM_PROMPT.replace(
@@ -175,6 +180,9 @@ class TaskGeneratorAgent:
         ).replace(
             "{available_items}",
             available_items
+        ).replace(
+            "{available_mechanics}",
+            available_mechanics
         )
         self.messages = [
             {"role": "system", "content": system_prompt}
@@ -212,6 +220,15 @@ IMPORTANT:
 Start by reading the template, then create a task using the scene data above."""
 
         self.messages.append({"role": "user", "content": user_msg})
+
+        # Save full initial prompt to output directory for debugging
+        prompt_file = self.log_dir / "initial_prompt.txt"
+        with open(prompt_file, "w") as f:
+            f.write("=== SYSTEM PROMPT ===\n\n")
+            f.write(system_prompt)
+            f.write("\n\n=== USER MESSAGE ===\n\n")
+            f.write(user_msg)
+        self._log(f"Saved initial prompt to: {prompt_file}")
 
         # Main ReAct loop
         while len(self.submitted_tasks) < num_tasks_target and not self.failed:
@@ -270,7 +287,39 @@ Start by reading the template, then create a task using the scene data above."""
                 self._log(f"  - {task_path}")
         self._log(f"{'='*60}\n")
 
+        # Save working_task.json to log directory for debugging
+        self._save_working_task_to_logs()
+
         return self.submitted_tasks
+
+    def _save_working_task_to_logs(self) -> None:
+        """Save a copy of working_task.json to log directory for debugging."""
+        if self.task_file.exists():
+            try:
+                import shutil
+                dest = self.log_dir / "working_task_final.json"
+                shutil.copy(self.task_file, dest)
+                self._log(f"Saved working task to: {dest}")
+            except Exception as e:
+                self._log(f"Warning: Could not save working task: {e}")
+
+    def _create_working_task_from_template(self) -> None:
+        """Create working_task.json from template with scene fields pre-populated."""
+        # Load template
+        with open(self.template_file) as f:
+            task = json.load(f)
+
+        # Auto-populate scene fields
+        if self.scene_data:
+            task["scene_id"] = self.scene_data.scene_id
+            task["episode_id"] = self.scene_data.episode_id
+            task["dataset_episode_id"] = self.scene_data.episode_id
+
+        # Write to working_task.json
+        with open(self.task_file, 'w') as f:
+            json.dump(task, f, indent=2)
+
+        self._log(f"Created {self.task_file} with scene fields pre-populated")
 
     def _get_llm_response(self) -> str:
         """Get response from LLM."""
@@ -296,42 +345,79 @@ Start by reading the template, then create a task using the scene data above."""
 
     def _parse_action(self, response: str) -> Optional[tuple]:
         """
-        Parse action from LLM response.
+        Parse action from LLM response using bracket-matching.
 
         Expected format:
         Thought: [reasoning]
         Action: tool_name[args]
 
+        Uses proper bracket matching to handle nested brackets in JSON, etc.
+
         Returns:
             Tuple of (tool_name, args) or None if parsing fails
         """
-        # First, try to match heredoc pattern (most complex case)
-        # Matches: Action: bash[cat > file << 'EOF'\n...\nEOF]
-        heredoc_pattern = r"Action:\s*bash\[(cat\s*>\s*[^\n]+<<\s*'?EOF'?\n.*?\nEOF)\]"
-        match = re.search(heredoc_pattern, response, re.DOTALL)
-        if match:
-            return ("bash", match.group(1).strip())
+        # Find "Action:" followed by tool name and opening bracket
+        action_match = re.search(r'Action:\s*(\w+)\[', response)
+        if not action_match:
+            return None
 
-        # Try matching jq -n pattern with multi-line content
-        jq_pattern = r"Action:\s*bash\[(jq\s+-n\s+'[^']*'(?:\s*>\s*[^\]]+)?)\]"
-        match = re.search(jq_pattern, response, re.DOTALL)
-        if match:
-            return ("bash", match.group(1).strip())
+        tool_name = action_match.group(1)
+        start_idx = action_match.end()  # Position right after the opening [
 
-        # Try simple Action: tool_name[args] pattern (single line or simple args)
-        # Find "Action:" then match tool name and extract args up to the closing ]
-        simple_pattern = r'Action:\s*(\w+)\[([^\]]*)\]'
-        match = re.search(simple_pattern, response)
-        if match:
-            tool = match.group(1).strip()
-            args = match.group(2).strip()
-            return (tool, args)
+        # Use bracket matching to find the closing ]
+        args = self._extract_bracket_content(response, start_idx)
+        if args is None:
+            return None
 
-        # For test_task[] and submit_task[] with empty args
-        empty_args_pattern = r'Action:\s*(\w+)\[\s*\]'
-        match = re.search(empty_args_pattern, response)
-        if match:
-            return (match.group(1).strip(), "")
+        return (tool_name, args.strip())
+
+    def _extract_bracket_content(self, text: str, start: int) -> Optional[str]:
+        """
+        Extract content between brackets using proper bracket matching.
+
+        Args:
+            text: The full text
+            start: Index right after the opening bracket
+
+        Returns:
+            The content between brackets, or None if no matching bracket found
+        """
+        depth = 1  # We've already seen one [
+        in_single_quote = False
+        in_double_quote = False
+        escape_next = False
+        i = start
+
+        while i < len(text) and depth > 0:
+            char = text[i]
+
+            if escape_next:
+                escape_next = False
+                i += 1
+                continue
+
+            if char == '\\':
+                escape_next = True
+                i += 1
+                continue
+
+            # Track quote state (only toggle if not in the other quote type)
+            if char == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+            elif char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+            # Count brackets only when not inside quotes
+            elif not in_single_quote and not in_double_quote:
+                if char == '[':
+                    depth += 1
+                elif char == ']':
+                    depth -= 1
+
+            i += 1
+
+        if depth == 0:
+            # i is now one past the closing bracket
+            return text[start:i - 1]
 
         return None
 
@@ -595,6 +681,13 @@ Start by reading the template, then create a task using the scene data above."""
                     "summary": "Task validation failed - wrong episode"
                 }
 
+        # Collect defined item IDs from task
+        defined_items = set()
+        for item in task_data.get("items", []):
+            item_id = item.get("item_id")
+            if item_id:
+                defined_items.add(item_id)
+
         # Validate object IDs in golden_trajectory exist in scene or are custom items
         if self.scene_data and task_data.get("golden_trajectory"):
             all_valid_ids = set(
@@ -603,32 +696,38 @@ Start by reading the template, then create a task using the scene data above."""
                 self.scene_data.objects
             )
             # Also include custom items from task definition
-            for item in task_data.get("items", []):
-                item_id = item.get("item_id")
-                if item_id:
-                    all_valid_ids.add(item_id)
+            all_valid_ids.update(defined_items)
+
             invalid_ids = []
+            invalid_items = []
             for step in task_data["golden_trajectory"]:
                 actions = step.get("actions", [])
                 for action_entry in actions:
                     target = action_entry.get("target", "")
                     if target and action_entry.get("action") not in ["Communicate", "Wait"]:
-                        # For Place/Use action, target is comma-separated - extract first part
-                        if "," in str(target):
-                            target_id = target.split(",")[0].strip()
-                        else:
-                            target_id = str(target).strip()
-                        # Skip item_ prefixed IDs - those are always valid inventory items
-                        if target_id.startswith("item_"):
-                            continue
-                        if target_id and target_id not in all_valid_ids:
-                            invalid_ids.append(target_id)
+                        # For Place/Use action, target is comma-separated - check all parts
+                        parts = [p.strip() for p in str(target).split(",")]
+                        for target_id in parts:
+                            if not target_id or target_id == "None":
+                                continue
+                            # Check item_ prefixed IDs against defined items
+                            if target_id.startswith("item_"):
+                                if target_id not in defined_items:
+                                    invalid_items.append(target_id)
+                            elif target_id not in all_valid_ids:
+                                invalid_ids.append(target_id)
 
             if invalid_ids:
                 return {
                     "valid": False,
                     "error": f"golden_trajectory contains invalid object IDs not in scene: {list(set(invalid_ids))}",
                     "summary": "Task validation failed - invalid object IDs"
+                }
+            if invalid_items:
+                return {
+                    "valid": False,
+                    "error": f"golden_trajectory references undefined items: {list(set(invalid_items))}. Defined items: {list(defined_items)}",
+                    "summary": "Task validation failed - item ID mismatch"
                 }
 
         # Validate success condition OR subtasks DAG
@@ -658,6 +757,26 @@ Start by reading the template, then create a task using the scene data above."""
                     "valid": False,
                     "error": f"Invalid subtask DAG: {'; '.join(errors)}",
                     "summary": "Task validation failed"
+                }
+
+            # Validate item IDs in subtask success conditions
+            invalid_items_in_subtasks = []
+            for s in task_data["subtasks"]:
+                if isinstance(s, dict):
+                    condition = s.get("success_condition", {})
+                    if isinstance(condition, dict):
+                        # Check has_item conditions
+                        if condition.get("property") == "has_item":
+                            target_item = condition.get("target") or condition.get("value")
+                            if target_item and target_item.startswith("item_"):
+                                if target_item not in defined_items:
+                                    invalid_items_in_subtasks.append(target_item)
+
+            if invalid_items_in_subtasks:
+                return {
+                    "valid": False,
+                    "error": f"subtasks reference undefined items: {list(set(invalid_items_in_subtasks))}. Defined items: {list(defined_items)}",
+                    "summary": "Task validation failed - item ID mismatch in subtasks"
                 }
 
         # Check story is not empty

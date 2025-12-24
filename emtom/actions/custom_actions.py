@@ -286,12 +286,21 @@ class SearchAction(EMTOMAction):
 
         state = self._game_manager.get_state()
 
-        # Fix 2: Check if container is locked before searching
+        # Check if container is locked
         is_locked = state.get_object_property(target, "is_locked", False)
         if is_locked:
             return ActionResult(
                 success=False,
                 observation=f"You try to search {target}, but it's locked. Unlock it first.",
+            )
+
+        # Check if container is closed (only for openable containers)
+        # is_open defaults to None for non-openable objects
+        is_open = state.get_object_property(target, "is_open", None)
+        if is_open is False:
+            return ActionResult(
+                success=False,
+                observation=f"You try to search {target}, but it's closed. Open it first.",
             )
 
         hidden_items = state.get_object_property(target, "hidden_items", [])

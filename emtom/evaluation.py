@@ -176,16 +176,24 @@ class EMTOMPredicates:
         """
         Check if an articulated object (drawer, cabinet, etc.) is open.
 
-        This is EMTOM-specific - PARTNR doesn't have this predicate.
         Queries the object state machine for is_open state.
         """
+        import sys
         object_states_dict = sim.object_state_machine.get_snapshot_dict(sim)
+        is_open_states = object_states_dict.get("is_open", {})
+
+        print(f"[DEBUG is_open] Checking: {object_handles}", file=sys.stderr)
+        print(f"[DEBUG is_open] All states keys: {list(object_states_dict.keys())}", file=sys.stderr)
+        print(f"[DEBUG is_open] is_open entries: {dict(list(is_open_states.items())[:5])}", file=sys.stderr)
 
         for handle in object_handles:
-            is_open_states = object_states_dict.get("is_open", {})
-            if handle in is_open_states and is_open_states[handle]:
-                return PropositionResult(True, {"object_handles": handle})
+            if handle in is_open_states:
+                val = is_open_states[handle]
+                print(f"[DEBUG is_open] {handle} -> {val}", file=sys.stderr)
+                if val:
+                    return PropositionResult(True, {"object_handles": handle})
 
+        print(f"[DEBUG is_open] NOT FOUND in is_open_states", file=sys.stderr)
         return PropositionResult(False, {"object_handles": ""})
 
     @classmethod
@@ -196,7 +204,6 @@ class EMTOMPredicates:
     ) -> PropositionResult:
         """Check if an articulated object is closed (not open)."""
         result = cls.is_open(sim, object_handles)
-        # Invert the result
         return PropositionResult(not result.is_satisfied, result.info)
 
 
@@ -266,14 +273,12 @@ class TaskEvaluator:
             Full sim_handle from world graph, or original name if not found
         """
         if not self.world_graph:
-            # No world graph available, return name as-is
             return name
 
         try:
             entity = self.world_graph.get_node_from_name(name)
             return entity.sim_handle
         except ValueError:
-            # Entity not found in world graph
             return name
 
     def _check_proposition(self, prop: Dict[str, Any]) -> PropositionResult:

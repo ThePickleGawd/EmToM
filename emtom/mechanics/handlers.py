@@ -50,41 +50,69 @@ MECHANIC_INFO = {
         "description": "Actions have opposite effects (open becomes close)",
         "category": "state_transform",
         "setup_keys": ["trigger_object"],
+        "agent_observation": "You try to open {trigger}, but it closes instead!",
+        "tom_use": "One agent discovers the inversion, must warn the other",
+        "example_binding": {"mechanic_type": "inverse_state", "trigger_object": "drawer_52"},
     },
     "remote_control": {
-        "description": "Acting on one object affects a different object",
+        "description": "Acting on trigger affects a remote target",
         "category": "hidden_mapping",
         "setup_keys": ["trigger_object", "target_object", "target_state"],
+        "agent_observation": "You hear something happen to {target}! (It opened)",
+        "tom_use": "Agent A flips switch, Agent B's door unlocks - they must communicate",
+        "example_binding": {"mechanic_type": "remote_control", "trigger_object": "lamp_12", "target_object": "cabinet_45", "target_state": "is_open"},
+        "recommended_for_tom": True,
     },
     "counting_state": {
         "description": "Object only responds after N interactions",
         "category": "conditional",
         "setup_keys": ["trigger_object", "required_count"],
+        "agent_observation": "You open {trigger}, but nothing happens. (2/3)",
+        "tom_use": "Agents must coordinate to reach count, or one discovers the pattern",
+        "example_binding": {"mechanic_type": "counting_state", "trigger_object": "drawer_52", "required_count": 3},
     },
     "delayed_effect": {
-        "description": "Actions take effect after N steps",
+        "description": "Actions take effect after N steps (not immediate)",
         "category": "time_delayed",
         "setup_keys": ["trigger_object", "delay_steps"],
+        "agent_observation": "You open {trigger}, but nothing seems to happen immediately.",
+        "tom_use": "Agent acts, leaves, effect happens later - partner sees result",
+        "example_binding": {"mechanic_type": "delayed_effect", "trigger_object": "drawer_52", "delay_steps": 5},
     },
     "decaying_state": {
         "description": "States automatically revert after N steps",
         "category": "time_delayed",
         "setup_keys": ["trigger_object", "decay_steps"],
+        "agent_observation": "(This will revert in {decay_steps} steps)",
+        "tom_use": "One agent must hold/maintain while other acts quickly",
+        "example_binding": {"mechanic_type": "decaying_state", "trigger_object": "door_3", "decay_steps": 3},
     },
     "conditional_unlock": {
-        "description": "Object only works after prerequisite action or having an item",
+        "description": "Object blocked until prerequisite action or item obtained",
         "category": "conditional",
-        "setup_keys": ["trigger_object", "prerequisite_object", "prerequisite_action", "requires_item"],
+        "setup_keys": ["trigger_object", "prerequisite_object", "requires_item"],
+        "agent_observation": "You try to open {trigger}, but it won't budge. Something seems to be blocking it.",
+        "tom_use": "One agent knows the prerequisite, other is stuck",
+        "example_binding": {"mechanic_type": "conditional_unlock", "trigger_object": "chest_45", "prerequisite_object": "lever_12"},
+        "alt_example": {"mechanic_type": "conditional_unlock", "trigger_object": "vault_1", "requires_item": "item_magic_orb_1"},
+        "recommended_for_tom": True,
     },
     "state_mirroring": {
-        "description": "Two objects always have the same state",
+        "description": "Two objects always have the same state (open one, both open)",
         "category": "hidden_mapping",
         "setup_keys": ["trigger_object", "target_object", "target_state"],
+        "agent_observation": "{target} opens too!",
+        "tom_use": "Agents in different rooms see linked effects",
+        "example_binding": {"mechanic_type": "state_mirroring", "trigger_object": "drawer_1", "target_object": "drawer_2", "target_state": "is_open"},
     },
     "sequence_lock": {
-        "description": "Objects must be interacted in specific order",
+        "description": "Must interact with objects in specific order to unlock target",
         "category": "conditional",
         "setup_keys": ["trigger_object", "sequence"],
+        "agent_observation": "You hear a small click. / You hear a satisfying click - something unlocked!",
+        "tom_use": "Different agents know different parts of the sequence",
+        "example_binding": {"mechanic_type": "sequence_lock", "trigger_object": "safe_1", "sequence": ["button_1", "button_2", "button_3"]},
+        "recommended_for_tom": True,
     },
 }
 
@@ -92,6 +120,56 @@ MECHANIC_INFO = {
 def get_mechanic_info(name: str) -> Dict[str, Any]:
     """Get info about a mechanic."""
     return MECHANIC_INFO.get(name, {})
+
+
+def get_mechanics_for_task_generation() -> str:
+    """
+    Get comprehensive mechanic descriptions for task generation prompts.
+
+    Dynamically generates from MECHANIC_INFO, including:
+    - What each mechanic does
+    - What agents observe when it triggers
+    - The exact JSON binding format with examples
+
+    Returns:
+        Formatted string for LLM prompts
+    """
+    import json
+
+    lines = ["Available mechanics for creating puzzle complexity:\n"]
+    recommended = []
+
+    for mech_name, info in MECHANIC_INFO.items():
+        lines.append(f"## {mech_name}")
+        lines.append(f"**Effect**: {info['description']}")
+
+        if info.get("agent_observation"):
+            lines.append(f"**Agent sees**: \"{info['agent_observation']}\"")
+
+        if info.get("tom_use"):
+            lines.append(f"**ToM use**: {info['tom_use']}")
+
+        if info.get("example_binding"):
+            lines.append("```json")
+            lines.append(json.dumps(info["example_binding"]))
+            lines.append("```")
+
+        # Show alternative example if present (e.g., conditional_unlock has two forms)
+        if info.get("alt_example"):
+            lines.append("Or:")
+            lines.append("```json")
+            lines.append(json.dumps(info["alt_example"]))
+            lines.append("```")
+
+        if info.get("recommended_for_tom"):
+            recommended.append(mech_name)
+
+        lines.append("")  # blank line between mechanics
+
+    if recommended:
+        lines.append(f"**Best for ToM**: {', '.join(recommended)} (create cross-agent dependencies)")
+
+    return "\n".join(lines)
 
 
 def list_mechanics() -> list:
