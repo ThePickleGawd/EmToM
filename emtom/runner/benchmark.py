@@ -177,6 +177,15 @@ class BenchmarkRunner(EMTOMBaseRunner):
                             "action": high_level_action,
                         })
 
+                        # Print thought + action + observation for debugging
+                        thought = planner_info.get("thought", "")
+                        response = planner_info.get("response", "")
+                        if thought:
+                            print(f"Thought: {thought}", flush=True)
+                        print(f"Agent_{uid}: {high_level_action}", flush=True)
+                        if response:
+                            print(f"  → {response}", flush=True)
+
                     if planner_done:
                         planners_done.add(uid)
                         print(f"[Agent {uid} DONE]", flush=True)
@@ -349,6 +358,11 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
         actions = task.agent_actions.get(agent_id, [])
         if actions:
             parts.append(f"\nYour available actions: {', '.join(actions)}")
+            # Add hints about special actions
+            if "Search" in actions:
+                parts.append("(Search finds hidden items and adds them to your inventory)")
+            if "Use" in actions:
+                parts.append("(Use lets you use items, e.g., Use[key, container] to unlock)")
 
         # Per-agent secrets (only for ToM tasks)
         secrets = task.agent_secrets.get(agent_id, [])

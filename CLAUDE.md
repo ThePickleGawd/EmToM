@@ -1,4 +1,6 @@
 - gpt-5 and gpt-5-mini are valid models
 - Use `./emtom/run_emtom` as the entry point for our benchmark. Don't call python files directly unless absolutely needed
 - Don't commit unless explicitly told. I will specify every time I want to commit.
-- See and maintain `README.md` to explain how Emtom works, as well as the usage. 
+- See and maintain `README.md` to explain how Emtom works, as well as the usage.
+- Do not hard code functionality that must be scalable (ex. action descriptions in llm prompts)
+- Try to keep a "clean, one solution" mindset. No legacy code or "backwards compatibility hell".

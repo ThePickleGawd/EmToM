@@ -4,11 +4,15 @@ Item definitions for the EMTOM inventory system.
 Items are abstract objects that exist only in game state (no Habitat correspondence).
 They can be KEYs (possession-checkable, unlock things) or TOOLs (grant new actions).
 
+Item naming convention:
+- All item IDs use "item_" prefix (e.g., "item_small_key_1")
+- This distinguishes them from Habitat scene objects (e.g., "cup_1")
+
 To create a new item:
     from emtom.state.item_registry import register_item
     from emtom.state.items import BaseItem, ItemType
 
-    @register_item("magic_wand")
+    @register_item("item_magic_wand")
     class MagicWand(BaseItem):
         name = "Magic Wand"
         description = "A wand that casts spells."
@@ -16,9 +20,11 @@ To create a new item:
         grants_action = "CastSpell"
         consumable = True
         uses = 3
+        use_args = ["target"]  # Requires 1 arg
 
-        def on_use(self, game_manager, agent_id, target):
-            return True, "You cast a spell!"
+        def on_use(self, game_manager, agent_id, args):
+            target = args[0] if args else None
+            return True, f"You cast a spell on {target}!"
 """
 
 from __future__ import annotations
@@ -45,18 +51,19 @@ class BaseItem(ABC):
 
     Class Attributes (define in subclass):
         name: Display name (e.g., "Small Key")
-        description: Description shown in inventory
+        description: Description shown in inventory (include usage hint)
         item_type: ItemType.KEY or ItemType.TOOL
         consumable: Whether item is consumed on use (default False)
         uses: Number of uses if consumable (default None = unlimited or single-use)
+        use_args: List of argument names for Use action (e.g., ["container"])
 
     For TOOL items:
         grants_action: Action name this item grants (e.g., "Communicate")
         action_description: Description of the granted action
 
     Instance Attributes (set at runtime):
-        instance_id: Unique ID like "small_key_1"
-        base_id: Base ID like "small_key" (set by @register_item)
+        instance_id: Unique ID like "item_small_key_1"
+        base_id: Base ID like "item_small_key" (set by @register_item)
     """
 
     # Class attributes - override in subclasses
@@ -65,6 +72,7 @@ class BaseItem(ABC):
     item_type: ItemType = ItemType.KEY
     consumable: bool = False
     uses: Optional[int] = None
+    use_args: List[str] = []  # Arguments for Use action (e.g., ["container"])
 
     # TOOL-specific attributes
     grants_action: Optional[str] = None
@@ -91,7 +99,7 @@ class BaseItem(ABC):
         self,
         game_manager: "GameStateManager",
         agent_id: str,
-        target: Optional[str] = None,
+        args: Optional[List[str]] = None,
     ) -> Tuple[bool, str]:
         """
         Called when this item is used.
@@ -101,7 +109,7 @@ class BaseItem(ABC):
         Args:
             game_manager: The game state manager
             agent_id: ID of agent using the item
-            target: Optional target of the use action
+            args: List of arguments passed to Use (validated against use_args)
 
         Returns:
             (success, message) tuple
@@ -152,6 +160,7 @@ class BaseItem(ABC):
             "consumable": self.consumable,
             "uses": self.uses,
             "uses_remaining": self.uses_remaining,
+            "use_args": self.use_args,
             "grants_action": self.grants_action,
             "action_description": self.action_description,
             "action_targets": self.action_targets,

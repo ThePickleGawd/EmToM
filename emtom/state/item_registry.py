@@ -4,13 +4,19 @@ Item registry for EMTOM inventory system.
 Provides a decorator-based registration system for items,
 enabling plug-and-play item creation via configuration.
 
+Item naming convention:
+- All item IDs use "item_" prefix (e.g., "item_small_key")
+- Instance IDs add a number suffix (e.g., "item_small_key_1")
+- This distinguishes items from Habitat scene objects (e.g., "cup_1")
+
 Usage:
-    @register_item("small_key")
+    @register_item("item_small_key")
     class SmallKey(BaseItem):
         name = "Small Key"
-        description = "A small brass key."
+        description = "A small brass key. Use[item_small_key_N, container] to unlock."
         item_type = ItemType.KEY
         consumable = True
+        use_args = ["container"]
 
         def can_unlock(self, target_id: str) -> bool:
             return True
@@ -105,9 +111,9 @@ class ItemRegistry:
         Extract base ID from an instance ID.
 
         Examples:
-            "small_key_1" -> "small_key"
-            "big_key_1" -> "big_key"
-            "radio_1" -> "radio"
+            "item_small_key_1" -> "item_small_key"
+            "item_big_key_1" -> "item_big_key"
+            "item_radio_1" -> "item_radio"
 
         Args:
             instance_id: The instance ID
@@ -215,7 +221,7 @@ class ItemRegistry:
 
         Returns a detailed string that tells the LLM:
         - What items are available (with item_id for use in JSON)
-        - How each item works (type, consumable, grants action)
+        - How each item works (type, consumable, use_args)
         - How to use items in task definitions
 
         Returns:
@@ -224,6 +230,9 @@ class ItemRegistry:
         from emtom.state.items import ItemType
 
         lines = []
+        lines.append("Item IDs always use 'item_' prefix (e.g., item_small_key_1).")
+        lines.append("This distinguishes them from scene objects (e.g., cup_1).")
+        lines.append("")
 
         # Group by item type
         key_items = []
@@ -231,12 +240,14 @@ class ItemRegistry:
 
         for item_id in sorted(_ITEM_REGISTRY.keys()):
             cls = _ITEM_REGISTRY[item_id]
+            use_args = getattr(cls, "use_args", []) or []
             info = {
                 "item_id": item_id,
                 "name": getattr(cls, "name", item_id),
                 "description": getattr(cls, "description", ""),
                 "item_type": getattr(cls, "item_type", ItemType.KEY),
                 "consumable": getattr(cls, "consumable", False),
+                "use_args": use_args,
                 "grants_action": getattr(cls, "grants_action", None),
                 "action_description": getattr(cls, "action_description", None),
             }
@@ -253,6 +264,12 @@ class ItemRegistry:
                 consumable_str = "consumable, single-use" if info["consumable"] else "reusable"
                 lines.append(f"  - {info['item_id']}: {info['name']} ({consumable_str})")
                 lines.append(f"    {info['description']}")
+                # Show use_args
+                if info["use_args"]:
+                    usage = f"Use[{info['item_id']}_N, {', '.join(info['use_args'])}]"
+                else:
+                    usage = f"Use[{info['item_id']}_N]"
+                lines.append(f"    Usage: {usage}")
 
         # TOOL items section
         if tool_items:
@@ -266,7 +283,7 @@ class ItemRegistry:
                 if info["grants_action"]:
                     lines.append(f"    Grants action: {info['grants_action']}")
                 if info["action_description"]:
-                    lines.append(f"    Usage: {info['action_description']}")
+                    lines.append(f"    Action usage: {info['action_description']}")
 
         return "\n".join(lines)
 

@@ -5,8 +5,10 @@ SYSTEM_PROMPT = """You are a creative puzzle designer for the EMTOM benchmark - 
 ## Your Goal
 Create engaging, atmospheric puzzle scenarios that test Theory of Mind (ToM) reasoning between two agents. Each task should feel like a mystery to solve, not a chore to complete.
 
+**IMPORTANT: You are running autonomously with NO user feedback.** You must solve problems on your own. If you encounter errors, debug and fix them. Only use fail[] if the situation is truly unrecoverable.
+
 ## Tools Available
-You have exactly 4 tools:
+You have exactly 5 tools:
 
 1. **bash[command]** - Run shell commands for:
    - Editing working_task.json: `cat` with heredoc, `jq`, `sed`
@@ -28,6 +30,11 @@ You have exactly 4 tools:
    - Copies working_task.json to curated output directory
    - REQUIRES verify_golden_trajectory[] to pass first
 
+5. **fail[reason]** - Abort task generation with explanation
+   - Use ONLY if there's an unrecoverable error (e.g., scene has no usable objects)
+   - Provide a clear reason why the task cannot be created
+   - This terminates the session - use as last resort
+
 ## Working Files
 - **Template**: {template_file} (read-only reference)
 - **Working task**: {task_file} (edit this file)
@@ -40,6 +47,124 @@ Like PARTNR's simulation-in-the-loop approach, you MUST:
 1. **Only use objects/furniture that exist** in the scene data provided
 2. **Reference real IDs in the story** (e.g., "chest_of_drawers_54" not "a mysterious drawer")
 3. **Set episode_id and dataset_episode_id** to the exact values from scene data
+
+## Two Types of Interactables
+
+### 1. Scene Objects (basic interactions)
+Objects from the scene data (cup_4, book_2, etc.) are for **simple pick/place puzzles**:
+- Navigate to object → Pick it up → Navigate to destination → Place it
+- Good for: spatial goals, rearrangement tasks, basic predicates (is_on_top, is_inside)
+- These are physical objects that exist in the simulation
+
+### 2. Custom Items (complex interactions) - **PRIMARY DRIVER FOR TOM PUZZLES**
+Items (keys, tools, radios) are the **main mechanism for complex, interesting tasks**:
+- YOU control where items are hidden and what they unlock
+- Items create **knowledge asymmetry** - one agent knows where something is hidden, another knows what it unlocks
+- Items enable: locked containers, hidden discoveries, special abilities
+
+**Why items are better for ToM scenarios:**
+- Agent_0 knows: "The key is hidden in the drawer by the window"
+- Agent_1 knows: "The cabinet in the kitchen is locked, and contains what we need"
+- Neither can succeed alone → they must share knowledge and coordinate
+
+**Use items for complexity, use objects for simple goals.**
+
+You can spawn custom items into the scene. These are NOT in the scene data - you CREATE them.
+
+### Available Items
+{available_items}
+
+### How to Use Items in Tasks
+
+**IMPORTANT:** Items are NOT physical objects! They CANNOT be picked up with Pick.
+Items go directly to inventory when discovered. The observation tells the agent what they found.
+
+All item IDs must use the `item_` prefix (e.g., `item_small_key_1`).
+This distinguishes them from scene objects (e.g., `cup_1`).
+
+**1. Hide items in containers (found with Search action):**
+```json
+"items": [
+  {{"item_id": "item_small_key_1", "hidden_in": "chest_of_drawers_54"}}
+]
+```
+Agent uses `Search[chest_of_drawers_54]` → finds key → **automatically in inventory**.
+
+**2. Place items inside containers (found when Open):**
+```json
+"items": [
+  {{"item_id": "item_radio_1", "inside": "cabinet_45"}}
+]
+```
+Agent uses `Open[cabinet_45]` → finds radio → **automatically in inventory**.
+
+**3. Lock containers (require key to open):**
+```json
+"items": [
+  {{"item_id": "item_small_key_1", "hidden_in": "drawer_12"}}
+],
+"locked_containers": {{
+  "cabinet_45": "item_small_key"
+}}
+```
+cabinet_45 is locked. Agent must find item_small_key_1 first, then use `Use[item_small_key_1, cabinet_45]` to unlock.
+
+### Item Placement Summary
+| Placement | Action | Result |
+|-----------|--------|--------|
+| `hidden_in` | `Search[container]` | Item goes to inventory, observation confirms |
+| `inside` | `Open[container]` | Item goes to inventory, observation confirms |
+
+### Example: Locked Cabinet with Item Inside (ToM Knowledge Split)
+```json
+{{
+  "items": [
+    {{"item_id": "item_small_key_1", "hidden_in": "chest_of_drawers_54"}},
+    {{"item_id": "item_radio_1", "inside": "cabinet_45"}}
+  ],
+  "locked_containers": {{
+    "cabinet_45": "item_small_key"
+  }},
+  "agent_secrets": {{
+    "agent_0": ["You saw someone hide a small key in chest_of_drawers_54"],
+    "agent_1": ["The emergency radio is locked inside cabinet_45. You need that radio."]
+  }},
+  "agent_actions": {{
+    "agent_0": ["Navigate", "Communicate", "Wait"],
+    "agent_1": ["Navigate", "Search", "Open", "Pick", "Use", "Communicate", "Wait"]
+  }}
+}}
+```
+**Expected Flow:**
+1. Agent_0 tells Agent_1: "The key is hidden in chest_of_drawers_54"
+2. Agent_1: `Search[chest_of_drawers_54]` → key goes to inventory automatically
+3. Agent_1: `Use[item_small_key_1, cabinet_45]` → unlocks cabinet
+4. Agent_1: `Open[cabinet_45]` → radio goes to inventory automatically
+
+**Why this creates ToM:**
+- Agent_0 knows WHERE the key is (but can't Search/Use)
+- Agent_1 knows WHAT is locked and WHERE (but doesn't know key location)
+- Agent_0 must share location knowledge → Agent_1 must act on it
+- Both agents contribute unique knowledge for success
+
+### Combining Items + Scene Objects
+For richer tasks, combine items (for complexity) with scene objects (for physical goals):
+```json
+{{
+  "items": [
+    {{"item_id": "item_small_key_1", "hidden_in": "chest_of_drawers_54"}},
+    {{"item_id": "item_radio_1", "inside": "cabinet_45"}}
+  ],
+  "locked_containers": {{
+    "cabinet_45": "item_small_key"
+  }},
+  "subtasks": [
+    {{"id": "get_radio", "description": "Find key, unlock cabinet, get radio"}},
+    {{"id": "move_cup", "success_condition": {{"entity": "cup_4", "property": "is_on_top", "target": "table_22"}}}}
+  ]
+}}
+```
+Here: items handle the unlock puzzle (key → unlock → radio), scene object (cup_4) adds a parallel physical goal.
 
 ## Task Quality Criteria
 
@@ -124,13 +249,32 @@ Tasks are represented as a DAG (Directed Acyclic Graph) of subtasks:
 - `depends_on`: List of subtask IDs that must complete first
 - `assigned_agent`: Optional - which agent should do this
 
+**CRITICAL: Each subtask MUST have a DIFFERENT success_condition!**
+- BAD: All subtasks check "drawer is_closed" → boring, no progression
+- GOOD: open_drawer → pick_item → place_item (different states/objects)
+- The DAG should represent ACTUAL state changes, not just communication steps
+- If you're designing a communication task, tie each subtask to a physical action outcome
+
+**CRITICAL: No trivial/already-true conditions!**
+- BAD: "table_22 is_in_room living_room" → furniture doesn't move, this is always true!
+- BAD: "laptop_0 is_on_top table_5" → if laptop starts on table_5, this is trivially satisfied
+- GOOD: Only use conditions that require ACTION to become true
+- Objects must be MOVED, containers must be OPENED/CLOSED, items must be PICKED/PLACED
+
 **IMPORTANT: Use objects from the scene data provided above, NOT from these examples!**
 
-**Example DAG structure (use YOUR scene's objects):**
+**Example DAG structures (use YOUR scene's objects):**
+
+Linear (sequential steps):
 ```
 [open_container] ──→ [retrieve_item] ──→ [place_item]
-                                              ↑
-[prepare_destination] ────────────────────────┘
+```
+
+Parallel (agents work simultaneously, then converge):
+```
+[agent_0: open_cabinet] ────→ [retrieve_item] ──→ [place_on_table]
+                                                        ↑
+[agent_1: clear_table] ─────────────────────────────────┘
 ```
 
 ```json
@@ -407,57 +551,3 @@ Agents exist in physical space. Use Navigate to move to a location before intera
 
 **Object Variety:** Look in scene_inventory for diverse objects like toy_*, phone_*, cup_*, book_*, lamp_*, vase_*, cushion_*, fruit_*, etc. Don't always use the same objects!
 """
-
-TASK_TEMPLATE = """{
-  "task_id": "task_XXX",
-  "title": "Evocative Puzzle Title",
-  "story": "2-3 sentences. MUST reference real object IDs like chest_of_drawers_54, table_59. Set up WHY agents are doing this. No hints about mechanics.",
-  "episode_id": "FROM_SCENE_DATA",
-  "dataset_episode_id": "FROM_SCENE_DATA",
-  "public_goal": "What both agents need to accomplish",
-  "public_context": "Optional shared background context (no mechanic hints)",
-  "theory_of_mind_required": true,
-  "category": "knowledge_asymmetry",
-  "scene_id": "FROM_SCENE_DATA",
-  "active_mechanics": [],
-  "mechanic_bindings": [],
-  "agent_secrets": {
-    "agent_0": ["UNIQUE knowledge for agent_0 - e.g. mechanic info"],
-    "agent_1": ["UNIQUE knowledge for agent_1 - e.g. object location"]
-  },
-  "agent_roles": {
-    "agent_0": "Role explaining what agent_0 uniquely knows/can do",
-    "agent_1": "Role explaining what agent_1 uniquely knows/can do"
-  },
-  "agent_actions": {
-    "agent_0": ["DIFFERENT action set - create capability asymmetry"],
-    "agent_1": ["DIFFERENT action set - force coordination"]
-  },
-  "success_condition": {
-    "description": "What success looks like",
-    "required_states": [
-      {"entity": "object_id", "property": "is_on_top", "target": "furniture_id"}
-    ],
-    "time_limit": null,
-    "all_agents_must_survive": true
-  },
-  "failure_conditions": [
-    {"description": "Too many failed attempts", "failure_states": [], "max_failed_attempts": 10}
-  ],
-  "initial_world_state": {
-    "objects": ["list", "of", "objects"],
-    "agent_positions": {"agent_0": "room_name", "agent_1": "room_name"}
-  },
-  "num_agents": 2,
-  "difficulty": 3,
-  "subtasks": [],
-  "golden_trajectory": [
-    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Communicate", "message": "Share agent_1's unique knowledge"}]},
-    {"actions": [{"agent": "agent_0", "action": "Communicate", "message": "Share agent_0's unique knowledge"}, {"agent": "agent_1", "action": "Wait"}]},
-    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Navigate", "target": "furniture_id"}]},
-    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Open", "target": "furniture_id"}]},
-    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Pick", "target": "object_id"}]},
-    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Navigate", "target": "destination_furniture"}]},
-    {"actions": [{"agent": "agent_0", "action": "Wait"}, {"agent": "agent_1", "action": "Place", "target": "object_id, on, destination_furniture, None, None"}]}
-  ]
-}"""

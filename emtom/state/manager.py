@@ -154,6 +154,7 @@ class GameStateManager:
             if item_id:
                 state.item_definitions[item_id] = item_data
                 # If item is hidden_in a container, add to hidden_items list
+                # Items are found via Search and go directly to inventory
                 hidden_in = item_data.get("hidden_in")
                 if hidden_in:
                     current = state.get_object_property(hidden_in, "hidden_items", [])
@@ -162,6 +163,22 @@ class GameStateManager:
                     if item_id not in current:
                         current = current + [item_id]
                     state = state.set_object_property(hidden_in, "hidden_items", current)
+                # If item is inside a container, add to items_inside
+                # Items are found via Open and go directly to inventory
+                inside = item_data.get("inside")
+                if inside:
+                    current = state.get_object_property(inside, "items_inside", [])
+                    if not isinstance(current, list):
+                        current = [current] if current else []
+                    if item_id not in current:
+                        current = current + [item_id]
+                    state = state.set_object_property(inside, "items_inside", current)
+
+        # Set up locked containers (require key to open)
+        locked_containers = task_data.get("locked_containers", {})
+        for container_id, key_type in locked_containers.items():
+            state = state.set_object_property(container_id, "is_locked", True)
+            state = state.set_object_property(container_id, "required_key", key_type)
 
         self.state = state
 
@@ -1066,21 +1083,23 @@ class GameStateManager:
         self,
         agent_id: str,
         item_id: str,
-        target: Optional[str] = None,
+        args: Optional[List[str]] = None,
     ) -> Tuple[bool, str]:
         """
         Use an item from the agent's inventory.
 
-        Calls the item's on_use() method and handles consumable items.
+        Validates args against item.use_args, then calls on_use().
 
         Args:
             agent_id: Agent using the item
             item_id: Item to use
-            target: Optional target for the use action
+            args: List of arguments for the Use action
 
         Returns:
             (success, message) tuple
         """
+        args = args or []
+
         # Check if agent has item
         if not self.agent_has_item(agent_id, item_id):
             return False, f"You don't have that item."
@@ -1090,8 +1109,17 @@ class GameStateManager:
         if not item:
             return False, f"Unknown item: {item_id}"
 
+        # Validate args against item.use_args
+        expected_args = getattr(item, 'use_args', []) or []
+        if len(args) != len(expected_args):
+            if expected_args:
+                usage = f"Use[{item_id}, {', '.join(expected_args)}]"
+            else:
+                usage = f"Use[{item_id}]"
+            return False, f"Wrong number of arguments. Usage: {usage}"
+
         # Call item's on_use method
-        success, message = item.on_use(self, agent_id, target)
+        success, message = item.on_use(self, agent_id, args)
 
         # Handle consumable items
         if success and item.consumable:

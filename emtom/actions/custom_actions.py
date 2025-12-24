@@ -160,19 +160,20 @@ class EMTOMAction(Tool):
 @register_action("Use")
 class UseAction(EMTOMAction):
     """
-    Use an item or interact with an object.
+    Use an inventory item.
 
-    Supports two formats:
-    - Use[item]: Use an item from inventory (generic interaction)
-    - Use[key, target]: Use a key to unlock a locked container
+    Format: Use[item_id, arg1, arg2, ...]
+    - Items define their required args via use_args field
+    - Keys require 1 arg: Use[item_small_key_1, container]
+    - Some items require 0 args: Use[item_flashlight_1]
 
-    Can be affected by mechanics (inverse_state, remote_control, etc.)
+    Item IDs always start with "item_" prefix.
     """
 
     action_name = "Use"
     action_description = (
-        "Use[item] or Use[key, target]: Use an item or unlock something. "
-        "To unlock a locked container, use: Use[small_key_1, cabinet_42]"
+        "Use[item_id, args...]: Use an item from your inventory. "
+        "Example: Use[item_small_key_1, cabinet_42] to unlock."
     )
 
     @property
@@ -188,77 +189,55 @@ class UseAction(EMTOMAction):
         if not target:
             return ActionResult(
                 success=False,
-                observation="You need to specify what to use.",
+                observation="You need to specify what to use. Format: Use[item_id, args...]",
             )
-
-        # Check for "key, target" format (unlock action)
-        if "," in target:
-            return self._handle_unlock(agent_id, target, world_state)
-
-        # Check if target is a key in inventory (might want to use on something)
-        if self._game_manager and self._game_manager.agent_has_item(agent_id, target):
-            item = self._game_manager.get_item(target)
-            if item and "key" in item.instance_id.lower():
-                return ActionResult(
-                    success=False,
-                    observation=f"To use {item.name} on something, specify the target: Use[{target}, <container>]",
-                )
-            # Generic item use - delegate to manager's use_item
-            success, msg = self._game_manager.use_item(agent_id, target)
-            return ActionResult(
-                success=success,
-                observation=msg,
-                effect=f"used={target}" if success else None,
-            )
-
-        # Target is not in inventory - check if it's an entity in the world
-        entities = world_state.get("entities", [])
-        entity_names = [e.get("name", e.get("id")) for e in entities]
-        if target not in entity_names:
-            return ActionResult(
-                success=False,
-                observation=f"You don't have {target} and don't see it here.",
-            )
-
-        # Generic world object interaction
-        return ActionResult(
-            success=True,
-            observation=f"You interact with {target}.",
-            effect=f"used={target}",
-        )
-
-    def _handle_unlock(
-        self,
-        agent_id: str,
-        target: str,
-        world_state: Dict[str, Any],
-    ) -> ActionResult:
-        """Handle Use[key, container] unlock action."""
-        parts = [p.strip() for p in target.split(",", 1)]
-        if len(parts) != 2:
-            return ActionResult(
-                success=False,
-                observation="Invalid format. Use: Use[key, target]",
-            )
-
-        key_id, container = parts
 
         if not self._game_manager:
             return ActionResult(
                 success=False,
-                observation="Cannot unlock: game manager not available.",
+                observation="Cannot use: game manager not available.",
             )
 
-        # Use the unlock helper
-        from emtom.actions.tool_wrapper import try_unlock_with_key
-        success, message = try_unlock_with_key(
-            self._game_manager, agent_id, key_id, container
-        )
+        # Parse comma-separated arguments
+        parts = [p.strip() for p in target.split(",")]
+        item_id = parts[0]
+        item_args = parts[1:] if len(parts) > 1 else []
 
+        # Check if item_id looks like an item (has item_ prefix)
+        if not item_id.startswith("item_"):
+            return ActionResult(
+                success=False,
+                observation=f"'{item_id}' is not an item. Item IDs start with 'item_' (e.g., item_small_key_1).",
+            )
+
+        # Check if agent has the item
+        if not self._game_manager.agent_has_item(agent_id, item_id):
+            return ActionResult(
+                success=False,
+                observation=f"You don't have {item_id}.",
+            )
+
+        # Get item to check if it's a key (special unlock handling)
+        item = self._game_manager.get_item(item_id)
+        if item and "key" in item_id.lower() and item_args:
+            # Key usage - delegate to unlock helper
+            container = item_args[0]
+            from emtom.actions.tool_wrapper import try_unlock_with_key
+            success, message = try_unlock_with_key(
+                self._game_manager, agent_id, item_id, container
+            )
+            return ActionResult(
+                success=success,
+                observation=message,
+                effect=f"unlock={container}" if success else None,
+            )
+
+        # Generic item use - delegate to manager's use_item (validates use_args)
+        success, msg = self._game_manager.use_item(agent_id, item_id, item_args)
         return ActionResult(
             success=success,
-            observation=message,
-            effect=f"unlock={container}" if success else None,
+            observation=msg,
+            effect=f"used={item_id}" if success else None,
         )
 
     def get_available_targets(self, world_state: Dict[str, Any]) -> List[str]:

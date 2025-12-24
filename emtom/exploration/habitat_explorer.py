@@ -225,7 +225,7 @@ class HabitatExplorer:
 
         # Track current skill execution
         self._current_skill_steps = 0
-        self._max_skill_steps = 1000
+        self._max_skill_steps = 5000
         self._episode_done = False
 
         # Cache tool descriptions from first agent

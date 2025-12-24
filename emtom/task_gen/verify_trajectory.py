@@ -187,15 +187,15 @@ def main():
                     })
                     continue
 
-                print(f"    {agent_str}: {action}({target})...", file=sys.stderr, end=" ")
                 result = runner.execute_action(uid=agent_id, action_name=action, target=target)
                 success = result.get("success", False)
-                obs = result.get("observation", "")[:100]
+                obs = result.get("observation", "")
 
-                if success:
-                    print(f"OK", file=sys.stderr)
-                else:
-                    print(f"FAILED: {obs}", file=sys.stderr)
+                # Print action + observation
+                status = "✓" if success else "✗"
+                print(f"    {agent_str}: {action}[{target}] {status}", file=sys.stderr)
+                if obs:
+                    print(f"      → {obs}", file=sys.stderr)
 
                 step_results.append({
                     "agent": agent_str, "action": action,

@@ -11,9 +11,14 @@ Usage:
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-# Type for condition check functions
+# Type for condition check functions (pre-action)
 # Returns (blocked: bool, message: str or None)
 ConditionCheck = Callable[[str, Any], Tuple[bool, Optional[str]]]
+
+# Type for post-action hooks
+# Takes (target, result, game_manager, agent_id) -> modified result
+# Result is (action_output, observation_string)
+PostActionHook = Callable[[str, Tuple[Any, str], Any, str], Tuple[Any, str]]
 
 
 # =============================================================================
@@ -47,16 +52,77 @@ def check_has_required_key(target: str, game_manager) -> Tuple[bool, Optional[st
 
 
 # =============================================================================
-# CONDITION REGISTRY
+# POST-ACTION HOOKS
 # =============================================================================
 
-# Map action names to their condition checks
+def reveal_items_inside(
+    target: str,
+    result: Tuple[Any, str],
+    game_manager,
+    agent_id: str,
+) -> Tuple[Any, str]:
+    """
+    Post-hook for Open: add items inside the container to agent's inventory.
+
+    Items are NOT physical objects - they go directly to inventory when
+    the container is opened. The observation tells the agent what they found.
+
+    Task config example:
+        "items": [{"item_id": "item_radio_1", "inside": "cabinet_45"}]
+    """
+    action_output, observation = result
+
+    state = game_manager.get_state()
+    items_inside = state.get_object_property(target, "items_inside", [])
+
+    if not items_inside:
+        return result
+
+    # Add items directly to agent's inventory
+    revealed_names = []
+    for item_id in items_inside:
+        # Add to agent's inventory
+        game_manager.add_item_to_inventory(agent_id, item_id)
+        # Get display name
+        item = game_manager.get_item(item_id)
+        if item:
+            revealed_names.append(item.name)
+        else:
+            revealed_names.append(item_id)
+
+    # Clear items_inside (they've been collected)
+    state = game_manager.get_state()  # Re-fetch after inventory changes
+    state = state.set_object_property(target, "items_inside", [])
+    game_manager.set_state(state)
+
+    # Append to observation
+    if len(revealed_names) == 1:
+        observation = f"{observation} Inside you find: {revealed_names[0]}. It's now in your inventory."
+    else:
+        observation = f"{observation} Inside you find: {', '.join(revealed_names)}. They're now in your inventory."
+
+    return action_output, observation
+
+
+# =============================================================================
+# REGISTRIES
+# =============================================================================
+
+# Map action names to their condition checks (pre-action)
 # Conditions are checked in order; first failure blocks the action
 ACTION_CONDITIONS: Dict[str, List[ConditionCheck]] = {
     "Open": [check_not_locked],
     # Add more as needed:
     # "Pick": [check_not_sealed],
     # "Navigate": [check_room_unlocked],
+}
+
+# Map action names to their post-action hooks
+# Hooks run after successful action; can modify the result
+POST_ACTION_HOOKS: Dict[str, List[PostActionHook]] = {
+    "Open": [reveal_items_inside],
+    # Add more as needed:
+    # "Close": [check_trap_trigger],
 }
 
 
@@ -66,7 +132,7 @@ ACTION_CONDITIONS: Dict[str, List[ConditionCheck]] = {
 
 def wrap_tool(tool, game_manager, agent_uid: int = 0) -> None:
     """
-    Wrap a single Habitat tool with EMTOM condition checks.
+    Wrap a single Habitat tool with EMTOM condition checks and post-hooks.
 
     Modifies the tool in-place by replacing process_high_level_action.
 
@@ -77,24 +143,35 @@ def wrap_tool(tool, game_manager, agent_uid: int = 0) -> None:
     """
     tool_name = getattr(tool, 'name', tool.__class__.__name__)
     conditions = ACTION_CONDITIONS.get(tool_name, [])
+    post_hooks = POST_ACTION_HOOKS.get(tool_name, [])
 
-    if not conditions:
-        # No conditions for this tool, skip wrapping
+    if not conditions and not post_hooks:
+        # No conditions or hooks for this tool, skip wrapping
         return
 
     # Store original method
     original_method = tool.process_high_level_action
+    agent_id = f"agent_{agent_uid}"
 
     def wrapped_process(input_query: str, observations: Any) -> Tuple[Optional[Any], str]:
-        """Wrapped version that checks conditions first."""
-        # Check all conditions
+        """Wrapped version with pre-checks and post-hooks."""
+        # PRE-ACTION: Check all conditions
         for check in conditions:
             blocked, message = check(input_query, game_manager)
             if blocked:
                 return None, message
 
-        # All conditions passed, call original
-        return original_method(input_query, observations)
+        # Execute original action
+        result = original_method(input_query, observations)
+
+        # POST-ACTION: Run hooks (only if action succeeded)
+        # Check if action succeeded (result[0] is not None or observation doesn't indicate failure)
+        action_output, observation = result
+        if action_output is not None or "failed" not in observation.lower():
+            for hook in post_hooks:
+                result = hook(input_query, result, game_manager, agent_id)
+
+        return result
 
     # Replace the method
     tool.process_high_level_action = wrapped_process
@@ -209,7 +286,7 @@ def try_unlock_with_key(
 
     # Check if key type matches using item's can_unlock() method
     from emtom.state.item_registry import ItemRegistry
-    required_key = state.get_object_property(target, "required_key", "small_key")
+    required_key = state.get_object_property(target, "required_key", "item_small_key")
     key_base = ItemRegistry.get_base_id(key_id)
 
     # First check base type, then ask item
@@ -223,7 +300,7 @@ def try_unlock_with_key(
     unlock_container(game_manager, target)
 
     # Use the item (handles consumption via item's on_use and consumable flag)
-    success, use_message = game_manager.use_item(agent_id, key_id, target)
+    success, use_message = game_manager.use_item(agent_id, key_id, [target])
 
     key_name = item.name
     if item.consumable:

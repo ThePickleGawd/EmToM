@@ -10,16 +10,15 @@
   "scene_id": "FROM_SCENE_DATA",
   "episode_id": "FROM_SCENE_DATA",
   "dataset_episode_id": "FROM_SCENE_DATA (same as episode_id)",
-  "active_mechanics": ["inverse_state"],
-  "mechanic_bindings": [
-    {
-      "mechanic_type": "inverse_state",
-      "trigger_object": "object_id_from_trajectory",
-      "target_object": null,
-      "target_state": null,
-      "count": null
-    }
+  "active_mechanics": [],
+  "mechanic_bindings": [],
+  "items": [
+    {"item_id": "item_small_key_1", "hidden_in": "container_id"},
+    {"item_id": "item_radio_1", "inside": "container_id"}
   ],
+  "locked_containers": {
+    "cabinet_id": "item_small_key"
+  },
   "agent_secrets": {
     "agent_0": [
       "UNIQUE knowledge for agent_0 (e.g., how a mechanic works)"

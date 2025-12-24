@@ -91,6 +91,8 @@ class TaskGeneratorAgent:
         self.messages: List[Dict[str, str]] = []
         self.iteration_count = 0
         self.last_verify_passed = False  # Track if golden trajectory verified
+        self.failed = False  # Track if agent called fail[]
+        self.fail_reason = ""  # Reason for failure
 
         # Setup logging to file
         # Prefer log_dir (Hydra output), fallback to output_dir/logs
@@ -153,6 +155,10 @@ class TaskGeneratorAgent:
                 truncated = s[:500] + "..." if len(s) > 500 else s
                 scenario_text += f"\n--- Theme {i} ---\n{truncated}\n"
 
+        # Get available items from registry
+        from emtom.state.item_registry import ItemRegistry
+        available_items = ItemRegistry.get_items_for_task_generation()
+
         # Initialize conversation with action descriptions and paths injected
         system_prompt = SYSTEM_PROMPT.replace(
             "{action_descriptions}",
@@ -166,6 +172,9 @@ class TaskGeneratorAgent:
         ).replace(
             "{output_dir}",
             str(self.output_dir)
+        ).replace(
+            "{available_items}",
+            available_items
         )
         self.messages = [
             {"role": "system", "content": system_prompt}
@@ -205,7 +214,7 @@ Start by reading the template, then create a task using the scene data above."""
         self.messages.append({"role": "user", "content": user_msg})
 
         # Main ReAct loop
-        while len(self.submitted_tasks) < num_tasks_target:
+        while len(self.submitted_tasks) < num_tasks_target and not self.failed:
             self.iteration_count += 1
 
             if self.iteration_count > self.max_iterations:
@@ -253,9 +262,12 @@ Start by reading the template, then create a task using the scene data above."""
             self._log(f"Observation: {observation}", truncate_terminal=300)
 
         self._log(f"\n{'='*60}")
-        self._log(f"Agent finished. Submitted {len(self.submitted_tasks)} tasks:")
-        for task_path in self.submitted_tasks:
-            self._log(f"  - {task_path}")
+        if self.failed:
+            self._log(f"Agent FAILED: {self.fail_reason}")
+        else:
+            self._log(f"Agent finished. Submitted {len(self.submitted_tasks)} tasks:")
+            for task_path in self.submitted_tasks:
+                self._log(f"  - {task_path}")
         self._log(f"{'='*60}\n")
 
         return self.submitted_tasks
@@ -385,8 +397,10 @@ Start by reading the template, then create a task using the scene data above."""
             return self._verify_golden_trajectory()
         elif tool == "submit_task":
             return self._submit_task()
+        elif tool == "fail":
+            return self._fail(args)
         else:
-            return f"Unknown tool: {tool}. Available tools: bash, test_task, verify_golden_trajectory, submit_task"
+            return f"Unknown tool: {tool}. Available tools: bash, test_task, verify_golden_trajectory, submit_task, fail"
 
     def _bash(self, command: str) -> str:
         """
@@ -457,9 +471,10 @@ Start by reading the template, then create a task using the scene data above."""
             output = result.stdout + result.stderr
             if not output.strip():
                 output = "(no output)"
-            # Truncate long output
+            # Log full output to file, but truncate for LLM context
             if len(output) > 5000:
-                output = output[:5000] + "\n... (truncated)"
+                self._log(f"[Full bash output ({len(output)} chars)]:\n{output}")
+                output = output[:5000] + f"\n... (truncated, full output in log file)"
             return output
         except subprocess.TimeoutExpired:
             return "Command timed out after 30 seconds"
@@ -561,24 +576,32 @@ Start by reading the template, then create a task using the scene data above."""
                     "summary": "Task validation failed - wrong episode"
                 }
 
-        # Validate object IDs in golden_trajectory exist in scene
+        # Validate object IDs in golden_trajectory exist in scene or are custom items
         if self.scene_data and task_data.get("golden_trajectory"):
             all_valid_ids = set(
                 self.scene_data.rooms +
                 self.scene_data.furniture +
                 self.scene_data.objects
             )
+            # Also include custom items from task definition
+            for item in task_data.get("items", []):
+                item_id = item.get("item_id")
+                if item_id:
+                    all_valid_ids.add(item_id)
             invalid_ids = []
             for step in task_data["golden_trajectory"]:
                 actions = step.get("actions", [])
                 for action_entry in actions:
                     target = action_entry.get("target", "")
                     if target and action_entry.get("action") not in ["Communicate", "Wait"]:
-                        # For Place action, target is comma-separated - extract first part
+                        # For Place/Use action, target is comma-separated - extract first part
                         if "," in str(target):
                             target_id = target.split(",")[0].strip()
                         else:
                             target_id = str(target).strip()
+                        # Skip item_ prefixed IDs - those are always valid inventory items
+                        if target_id.startswith("item_"):
+                            continue
                         if target_id and target_id not in all_valid_ids:
                             invalid_ids.append(target_id)
 
@@ -719,9 +742,11 @@ Start by reading the template, then create a task using the scene data above."""
         ]
 
         try:
+            # Stream stderr to terminal for live logging, capture stdout
             subprocess.run(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.DEVNULL,
+                stderr=None,  # Inherit stderr - shows logs in terminal
                 text=True,
                 timeout=600,  # 10 minute timeout for LLM agents
             )
@@ -829,11 +854,14 @@ Start by reading the template, then create a task using the scene data above."""
         ]
 
         try:
+            timeout = 1800 # 30 minutes
+            # Stream stderr to terminal for live logging
             subprocess.run(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.DEVNULL,
+                stderr=None,  # Inherit stderr - shows logs in terminal
                 text=True,
-                timeout=300,  # 5 minute timeout
+                timeout=timeout,
             )
 
             # Read result from file (cleaner than parsing stdout)
@@ -864,7 +892,7 @@ Start by reading the template, then create a task using the scene data above."""
                 pass
             return json.dumps({
                 "valid": False,
-                "error": "Verification timed out after 5 minutes",
+                "error": f"Verification timed out after {timeout} seconds",
                 "summary": "Timeout"
             })
         except Exception as e:
@@ -915,6 +943,17 @@ Start by reading the template, then create a task using the scene data above."""
 
         return f"Task saved to {output_path}. Total submitted: {len(self.submitted_tasks)}"
 
+    def _fail(self, reason: str) -> str:
+        """
+        Mark task generation as failed.
+
+        This should only be used for truly unrecoverable errors.
+        """
+        self.failed = True
+        self.fail_reason = reason
+        self._log(f"FAIL: {reason}")
+        return f"Task generation aborted: {reason}"
+
     def _format_scene_data(self) -> str:
         """Format scene data for the LLM prompt."""
         if not self.scene_data:
@@ -943,7 +982,7 @@ Start by reading the template, then create a task using the scene data above."""
             lines.append(f"  - {furn}")
 
         # Objects with their locations - show all
-        lines.append("\n### Objects (can be picked up)")
+        lines.append("\n### Objects (can be picked up and placed)")
         # Build reverse mapping: object -> furniture it's on
         obj_locations = {}
         for furn, objs in self.scene_data.objects_on_furniture.items():
