@@ -2,24 +2,17 @@
 EMTOM Evaluation System.
 
 Uses PARTNR's SimBasedPredicates for ground-truth simulator state checks.
-Extends with EMTOM-specific predicates for mechanics verification.
+Extends with EMTOM-specific predicates (is_open, is_closed) not in PARTNR.
 
 Based on: https://arxiv.org/abs/2411.00081
 """
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
-from enum import Enum
 
 if TYPE_CHECKING:
     from habitat_llm.sims.collaboration_sim import CollaborationSim
     from habitat_llm.world_model import Graph
-
-
-class ConstraintType(Enum):
-    """Types of temporal constraints."""
-    BEFORE = "before"
-    AFTER = "after"
 
 
 @dataclass
@@ -31,15 +24,7 @@ class PropositionResult:
 
 @dataclass
 class EvaluationResult:
-    """
-    Result of task evaluation.
-
-    Attributes:
-        percent_complete: Ratio of satisfied propositions (0.0 to 1.0)
-        success: True if all propositions satisfied and constraints met
-        failure_explanations: Human-readable list of why task failed
-        proposition_status: Dict mapping prop_id -> satisfied (bool)
-    """
+    """Result of task evaluation."""
     percent_complete: float
     success: bool
     failure_explanations: List[str]
@@ -54,188 +39,57 @@ class EvaluationResult:
         }
 
 
-class EMTOMPredicates:
-    """
-    EMTOM predicates that extend PARTNR's SimBasedPredicates.
+# PARTNR predicates (from SimBasedPredicates)
+PARTNR_PREDICATES = {
+    "is_on_top", "is_inside", "is_in_room", "is_on_floor", "is_next_to",
+    "is_clean", "is_dirty", "is_filled", "is_empty", "is_powered_on", "is_powered_off",
+}
 
-    Includes all PARTNR predicates plus EMTOM-specific ones like is_open.
-    """
+# EMTOM-specific predicates (not in PARTNR)
+EMTOM_PREDICATES = {"is_open", "is_closed"}
 
-    @classmethod
-    def is_on_top(
-        cls,
-        sim: "CollaborationSim",
-        object_handles: List[str],
-        receptacle_handles: List[str],
-    ) -> PropositionResult:
-        """Check if object is on top of receptacle. Delegates to PARTNR."""
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        result = SimBasedPredicates.is_on_top(sim, object_handles, receptacle_handles)
-        return PropositionResult(result.is_satisfied, result.info)
 
-    @classmethod
-    def is_inside(
-        cls,
-        sim: "CollaborationSim",
-        object_handles: List[str],
-        receptacle_handles: List[str],
-    ) -> PropositionResult:
-        """Check if object is inside receptacle. Delegates to PARTNR."""
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        result = SimBasedPredicates.is_inside(sim, object_handles, receptacle_handles)
-        return PropositionResult(result.is_satisfied, result.info)
+def is_open(
+    sim: "CollaborationSim",
+    object_handles: List[str],
+    threshold: float = 0.1,
+) -> PropositionResult:
+    """Check if an articulated object is open using joint positions."""
+    from habitat.sims.habitat_simulator.sim_utilities import (
+        get_ao_default_link,
+        link_is_open,
+    )
 
-    @classmethod
-    def is_in_room(
-        cls,
-        sim: "CollaborationSim",
-        object_handles: List[str],
-        room_ids: List[str],
-    ) -> PropositionResult:
-        """Check if object is in room. Delegates to PARTNR."""
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        result = SimBasedPredicates.is_in_room(sim, object_handles, room_ids)
-        return PropositionResult(result.is_satisfied, result.info)
+    aom = sim.get_articulated_object_manager()
 
-    @classmethod
-    def is_on_floor(
-        cls,
-        sim: "CollaborationSim",
-        object_handles: List[str],
-    ) -> PropositionResult:
-        """Check if object is on floor. Delegates to PARTNR."""
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        result = SimBasedPredicates.is_on_floor(sim, object_handles)
-        return PropositionResult(result.is_satisfied, result.info)
+    for handle in object_handles:
+        ao = aom.get_object_by_handle(handle)
+        if ao is None:
+            continue
 
-    @classmethod
-    def is_next_to(
-        cls,
-        sim: "CollaborationSim",
-        entity_handles_a: List[str],
-        entity_handles_b: List[str],
-        l2_threshold: float = 0.5,
-    ) -> PropositionResult:
-        """Check if entities are next to each other. Delegates to PARTNR."""
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        result = SimBasedPredicates.is_next_to(
-            sim, entity_handles_a, entity_handles_b, l2_threshold=l2_threshold
-        )
-        return PropositionResult(result.is_satisfied, result.info)
+        default_link = get_ao_default_link(ao, compute_if_not_found=True)
+        if default_link is None:
+            return PropositionResult(True, {"object_handles": handle})
 
-    @classmethod
-    def is_clean(cls, sim: "CollaborationSim", object_handles: List[str]) -> PropositionResult:
-        """Check if object is clean. Delegates to PARTNR."""
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        result = SimBasedPredicates.is_clean(sim, object_handles)
-        return PropositionResult(result.is_satisfied, result.info)
+        if link_is_open(ao, default_link, threshold=threshold):
+            return PropositionResult(True, {"object_handles": handle})
 
-    @classmethod
-    def is_dirty(cls, sim: "CollaborationSim", object_handles: List[str]) -> PropositionResult:
-        """Check if object is dirty. Delegates to PARTNR."""
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        result = SimBasedPredicates.is_dirty(sim, object_handles)
-        return PropositionResult(result.is_satisfied, result.info)
+    return PropositionResult(False, {"object_handles": ""})
 
-    @classmethod
-    def is_filled(cls, sim: "CollaborationSim", object_handles: List[str]) -> PropositionResult:
-        """Check if object is filled. Delegates to PARTNR."""
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        result = SimBasedPredicates.is_filled(sim, object_handles)
-        return PropositionResult(result.is_satisfied, result.info)
 
-    @classmethod
-    def is_empty(cls, sim: "CollaborationSim", object_handles: List[str]) -> PropositionResult:
-        """Check if object is empty. Delegates to PARTNR."""
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        result = SimBasedPredicates.is_empty(sim, object_handles)
-        return PropositionResult(result.is_satisfied, result.info)
-
-    @classmethod
-    def is_powered_on(cls, sim: "CollaborationSim", object_handles: List[str]) -> PropositionResult:
-        """Check if object is powered on. Delegates to PARTNR."""
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        result = SimBasedPredicates.is_powered_on(sim, object_handles)
-        return PropositionResult(result.is_satisfied, result.info)
-
-    @classmethod
-    def is_powered_off(cls, sim: "CollaborationSim", object_handles: List[str]) -> PropositionResult:
-        """Check if object is powered off. Delegates to PARTNR."""
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        result = SimBasedPredicates.is_powered_off(sim, object_handles)
-        return PropositionResult(result.is_satisfied, result.info)
-
-    # ========== EMTOM-specific predicates ==========
-
-    @classmethod
-    def is_open(
-        cls,
-        sim: "CollaborationSim",
-        object_handles: List[str],
-    ) -> PropositionResult:
-        """
-        Check if an articulated object (drawer, cabinet, etc.) is open.
-
-        Queries the object state machine for is_open state.
-        """
-        import sys
-        object_states_dict = sim.object_state_machine.get_snapshot_dict(sim)
-        is_open_states = object_states_dict.get("is_open", {})
-
-        print(f"[DEBUG is_open] Checking: {object_handles}", file=sys.stderr)
-        print(f"[DEBUG is_open] All states keys: {list(object_states_dict.keys())}", file=sys.stderr)
-        print(f"[DEBUG is_open] is_open entries: {dict(list(is_open_states.items())[:5])}", file=sys.stderr)
-
-        for handle in object_handles:
-            if handle in is_open_states:
-                val = is_open_states[handle]
-                print(f"[DEBUG is_open] {handle} -> {val}", file=sys.stderr)
-                if val:
-                    return PropositionResult(True, {"object_handles": handle})
-
-        print(f"[DEBUG is_open] NOT FOUND in is_open_states", file=sys.stderr)
-        return PropositionResult(False, {"object_handles": ""})
-
-    @classmethod
-    def is_closed(
-        cls,
-        sim: "CollaborationSim",
-        object_handles: List[str],
-    ) -> PropositionResult:
-        """Check if an articulated object is closed (not open)."""
-        result = cls.is_open(sim, object_handles)
-        return PropositionResult(not result.is_satisfied, result.info)
+def is_closed(
+    sim: "CollaborationSim",
+    object_handles: List[str],
+) -> PropositionResult:
+    """Check if an articulated object is closed."""
+    result = is_open(sim, object_handles)
+    return PropositionResult(not result.is_satisfied, result.info)
 
 
 class TaskEvaluator:
-    """
-    Evaluates task completion using PARTNR predicates.
+    """Evaluates task completion using PARTNR + EMTOM predicates."""
 
-    Usage:
-        evaluator = TaskEvaluator(success_condition, sim, world_graph)
-        result = evaluator.evaluate()
-    """
-
-    # Supported predicates - PARTNR predicates + EMTOM extensions
-    # Use these names directly in task success_condition
-    PREDICATES = {
-        # PARTNR spatial predicates
-        "is_on_top",
-        "is_inside",
-        "is_in_room",
-        "is_on_floor",
-        "is_next_to",
-        # PARTNR object state predicates
-        "is_clean",
-        "is_dirty",
-        "is_filled",
-        "is_empty",
-        "is_powered_on",
-        "is_powered_off",
-        # EMTOM extensions
-        "is_open",
-        "is_closed",
-    }
+    PREDICATES = PARTNR_PREDICATES | EMTOM_PREDICATES
 
     def __init__(
         self,
@@ -243,176 +97,118 @@ class TaskEvaluator:
         sim: "CollaborationSim",
         world_graph: Optional["Graph"] = None,
     ):
-        """
-        Initialize evaluator.
-
-        Args:
-            success_condition: Task's success_condition dict with required_states
-            sim: Habitat CollaborationSim instance for predicate checks
-            world_graph: PARTNR world graph for name-to-handle resolution
-        """
         self.success_condition = success_condition
         self.sim = sim
         self.world_graph = world_graph
-        self.description = success_condition.get("description", "Complete the task")
-
-        # Parse required states
         self.required_states = success_condition.get("required_states", [])
 
-        # Parse temporal constraints
-        self.temporal_constraints = success_condition.get("temporal_constraints", [])
-
     def _resolve_handle(self, name: str) -> str:
-        """
-        Resolve a simple name to a full simulator handle using PARTNR's world graph.
-
-        Args:
-            name: Simple name like "kettle_3" or "table_59"
-
-        Returns:
-            Full sim_handle from world graph, or original name if not found
-        """
+        """Resolve name to simulator handle via world graph."""
         if not self.world_graph:
             return name
-
         try:
-            entity = self.world_graph.get_node_from_name(name)
-            return entity.sim_handle
+            return self.world_graph.get_node_from_name(name).sim_handle
         except ValueError:
             return name
 
+    def _get_predicate_fn(self, name: str):
+        """Get predicate function by name."""
+        if name in EMTOM_PREDICATES:
+            return {"is_open": is_open, "is_closed": is_closed}[name]
+
+        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
+        return getattr(SimBasedPredicates, name)
+
     def _check_proposition(self, prop: Dict[str, Any]) -> PropositionResult:
-        """
-        Check a single proposition against simulator state.
-
-        Args:
-            prop: Dict with entity, property, target (for relational) or value (for boolean)
-                  Examples:
-                    {"entity": "kettle_3", "property": "is_on_top", "target": "table_59"}
-                    {"entity": "drawer_1", "property": "is_open", "value": True}
-
-        Returns:
-            PropositionResult with is_satisfied and info
-        """
+        """Check a single proposition."""
         entity = prop.get("entity")
         property_name = prop.get("property")
         target = prop.get("target")
         value = prop.get("value")
 
         if property_name not in self.PREDICATES:
-            return PropositionResult(
-                False,
-                {"error": f"Unknown predicate: {property_name}. Supported: {self.PREDICATES}"}
-            )
+            return PropositionResult(False, {"error": f"Unknown predicate: {property_name}"})
 
-        predicate_fn = getattr(EMTOMPredicates, property_name)
-
-        # Resolve simple names to full simulator handles
+        predicate_fn = self._get_predicate_fn(property_name)
         entity_handle = self._resolve_handle(entity) if entity else None
         target_handle = self._resolve_handle(target) if target else None
 
-        # Relational predicates (require target)
+        # Relational predicates
         if property_name in ("is_on_top", "is_inside"):
             if not target_handle:
                 return PropositionResult(False, {"error": f"{property_name} requires 'target'"})
-            return predicate_fn(self.sim, [entity_handle], [target_handle])
+            result = predicate_fn(self.sim, [entity_handle], [target_handle])
 
         elif property_name == "is_in_room":
             if not target:
-                return PropositionResult(False, {"error": "is_in_room requires 'target' (room_id)"})
-            # Room IDs are not object handles, use as-is
-            return predicate_fn(self.sim, [entity_handle], [target])
+                return PropositionResult(False, {"error": "is_in_room requires 'target'"})
+            result = predicate_fn(self.sim, [entity_handle], [target])
 
         elif property_name == "is_next_to":
             if not target_handle:
                 return PropositionResult(False, {"error": "is_next_to requires 'target'"})
-            return predicate_fn(self.sim, [entity_handle], [target_handle])
+            result = predicate_fn(self.sim, [entity_handle], [target_handle])
 
-        # Unary predicates (entity only)
-        elif property_name in ("is_on_floor", "is_open", "is_closed",
-                               "is_clean", "is_dirty", "is_filled",
-                               "is_empty", "is_powered_on", "is_powered_off"):
+        # Unary predicates
+        else:
             result = predicate_fn(self.sim, [entity_handle])
-            # If value is explicitly False, invert the check
-            if value is False:
-                return PropositionResult(not result.is_satisfied, result.info)
-            return result
 
-        return PropositionResult(False, {"error": f"Unhandled predicate: {property_name}"})
+        # Convert PARTNR result to our format if needed
+        if not isinstance(result, PropositionResult):
+            result = PropositionResult(result.is_satisfied, result.info)
+
+        # Handle explicit False value
+        if value is False:
+            return PropositionResult(not result.is_satisfied, result.info)
+
+        return result
 
     def evaluate(self) -> EvaluationResult:
-        """
-        Evaluate task completion.
-
-        Returns:
-            EvaluationResult with percent_complete, success, and failure_explanations
-        """
+        """Evaluate task completion."""
         if not self.required_states:
-            # No requirements = success
-            return EvaluationResult(
-                percent_complete=1.0,
-                success=True,
-                failure_explanations=[],
-                proposition_status={},
-            )
+            return EvaluationResult(1.0, True, [], {})
 
-        proposition_status: Dict[str, bool] = {}
-        failure_explanations: List[str] = []
+        proposition_status = {}
+        failure_explanations = []
         satisfied_count = 0
 
         for i, prop in enumerate(self.required_states):
             prop_id = prop.get("prop_id", f"prop_{i}")
-
             try:
                 result = self._check_proposition(prop)
                 proposition_status[prop_id] = result.is_satisfied
-
                 if result.is_satisfied:
                     satisfied_count += 1
                 else:
-                    explanation = self._explain_failure(prop, result)
-                    failure_explanations.append(explanation)
+                    failure_explanations.append(self._explain_failure(prop))
             except Exception as e:
                 proposition_status[prop_id] = False
-                failure_explanations.append(f"Error checking {prop_id}: {str(e)}")
+                failure_explanations.append(f"Error checking {prop_id}: {e}")
 
-        # Calculate percent complete
         percent_complete = satisfied_count / len(self.required_states)
-
-        # Success requires all propositions satisfied
-        success = percent_complete == 1.0
-
         return EvaluationResult(
             percent_complete=percent_complete,
-            success=success,
+            success=percent_complete == 1.0,
             failure_explanations=failure_explanations,
             proposition_status=proposition_status,
         )
 
-    def _explain_failure(self, prop: Dict[str, Any], result: PropositionResult) -> str:
-        """Generate human-readable explanation for proposition failure."""
+    def _explain_failure(self, prop: Dict[str, Any]) -> str:
+        """Generate failure explanation."""
         entity = prop.get("entity")
-        property_name = prop.get("property")
+        prop_name = prop.get("property")
         target = prop.get("target")
 
-        if property_name == "is_on_top":
-            return f"{entity} is not on top of {target}"
-        elif property_name == "is_inside":
-            return f"{entity} is not inside {target}"
-        elif property_name == "is_in_room":
-            return f"{entity} is not in room {target}"
-        elif property_name == "is_next_to":
-            return f"{entity} is not next to {target}"
-        elif property_name == "is_on_floor":
-            return f"{entity} is not on the floor"
-        elif property_name == "is_open":
-            return f"{entity} is not open"
-        elif property_name == "is_closed":
-            return f"{entity} is not closed"
-        elif property_name in ("is_clean", "is_dirty", "is_filled", "is_empty", "is_powered_on", "is_powered_off"):
-            return f"{entity} is not {property_name.replace('is_', '')}"
-        else:
-            return f"{entity}.{property_name} failed"
+        explanations = {
+            "is_on_top": f"{entity} is not on top of {target}",
+            "is_inside": f"{entity} is not inside {target}",
+            "is_in_room": f"{entity} is not in room {target}",
+            "is_next_to": f"{entity} is not next to {target}",
+            "is_on_floor": f"{entity} is not on the floor",
+            "is_open": f"{entity} is not open",
+            "is_closed": f"{entity} is not closed",
+        }
+        return explanations.get(prop_name, f"{entity} is not {prop_name.replace('is_', '')}")
 
 
 def evaluate_task(
@@ -420,16 +216,5 @@ def evaluate_task(
     sim: "CollaborationSim",
     world_graph: Optional["Graph"] = None,
 ) -> EvaluationResult:
-    """
-    Convenience function to evaluate a task.
-
-    Args:
-        success_condition: Task's success_condition dict
-        sim: Habitat CollaborationSim instance
-        world_graph: PARTNR world graph for name resolution (recommended)
-
-    Returns:
-        EvaluationResult
-    """
-    evaluator = TaskEvaluator(success_condition, sim, world_graph)
-    return evaluator.evaluate()
+    """Convenience function to evaluate a task."""
+    return TaskEvaluator(success_condition, sim, world_graph).evaluate()

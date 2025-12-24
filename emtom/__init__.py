@@ -29,9 +29,12 @@ from emtom.mechanics import (
 from emtom.evaluation import (
     TaskEvaluator,
     EvaluationResult,
-    EMTOMPredicates,
     PropositionResult,
     evaluate_task,
+    is_open,
+    is_closed,
+    PARTNR_PREDICATES,
+    EMTOM_PREDICATES,
 )
 from emtom.tracing import (
     Event,
@@ -53,9 +56,12 @@ __all__ = [
     # Evaluation (PARTNR-style)
     "TaskEvaluator",
     "EvaluationResult",
-    "EMTOMPredicates",
     "PropositionResult",
     "evaluate_task",
+    "is_open",
+    "is_closed",
+    "PARTNR_PREDICATES",
+    "EMTOM_PREDICATES",
     # Tracing (ARE-style)
     "Event",
     "EventType",
