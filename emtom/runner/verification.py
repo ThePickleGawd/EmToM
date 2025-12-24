@@ -80,15 +80,18 @@ class VerificationRunner(EMTOMBaseRunner):
             print(f"[VerificationRunner] Warning: Could not setup LLM for tools: {e}")
 
     def _task_to_mechanics_dict(self, task: "GeneratedTask") -> Dict[str, Any]:
-        """Convert GeneratedTask to mechanics initialization format."""
+        """Convert GeneratedTask to task data for GameStateManager initialization."""
+        result = {}
         if task.mechanic_bindings:
-            return {
-                "mechanics": [
-                    {"mechanic_type": b.mechanic_type, **b.to_dict()}
-                    for b in task.mechanic_bindings
-                ]
-            }
-        return {"mechanics": []}
+            result["mechanics"] = [
+                {"mechanic_type": b.mechanic_type, **b.to_dict()}
+                for b in task.mechanic_bindings
+            ]
+        if task.items:
+            result["items"] = task.items  # Already list of dicts
+        if task.locked_containers:
+            result["locked_containers"] = task.locked_containers
+        return result
 
     def run(self, **kwargs) -> Dict[str, Any]:
         """Not used for verification - actions are executed individually."""

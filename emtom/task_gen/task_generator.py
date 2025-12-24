@@ -202,6 +202,8 @@ class GeneratedTask:
 
     # Optional
     subtasks: List[Subtask] = field(default_factory=list)
+    items: List[Dict[str, Any]] = field(default_factory=list)
+    locked_containers: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -249,6 +251,16 @@ class GeneratedTask:
         if isinstance(raw_success, dict) and "description" in raw_success:
             success_condition = SuccessCondition.from_dict(raw_success)
 
+        # Parse items - keep as list of dicts
+        items = data.get("items", [])
+        if isinstance(items, str):
+            items = []
+
+        # Parse locked_containers
+        locked_containers = data.get("locked_containers", {})
+        if isinstance(locked_containers, str):
+            locked_containers = {}
+
         return cls(
             task_id=data.get("task_id", "unknown"),
             title=data.get("title", "Untitled"),
@@ -268,6 +280,8 @@ class GeneratedTask:
             num_agents=data.get("num_agents", 2),
             theory_of_mind_required=data.get("theory_of_mind_required", False),
             subtasks=subtasks,
+            items=items,
+            locked_containers=locked_containers,
         )
 
     # DAG-related methods
@@ -335,7 +349,7 @@ Furniture (can navigate to, some can be opened): {furniture}
 Objects (can be picked up, hidden, inspected): {objects}
 Articulated Furniture (can be opened/closed): {articulated}
 
-## Available Items (use these item_ids in hidden_items and locked_containers)
+## Available Items (use these item_ids in the items array)
 {available_items}
 
 ## Discovered Mechanics (hidden connections between objects)
@@ -356,11 +370,21 @@ Design puzzles where progress is GATED by previous steps:
 - Step 4: UseItem[key, chest] to unlock
 - Step 5: Retrieve the goal item from the chest
 
-Use these mechanics to create chains:
-- "hidden_items": Items hidden inside furniture (found via Search action)
-- "is_locked": Locked containers (use UseItem[key, container] to unlock)
-- Locked containers block Search until unlocked
+## Item Placement (use "items" array)
+Place items using `hidden_in` or `inside`:
+- `hidden_in`: Found via Search action
+- `inside`: Found when Open action is performed
+- Lock containers with `locked_containers: {{"cabinet_45": "item_small_key_1"}}`
 - Keys are consumed when used
+
+Example:
+```json
+"items": [
+  {{"item_id": "item_small_key_1", "hidden_in": "drawer_52"}},
+  {{"item_id": "item_radio_1", "inside": "cabinet_33"}}
+],
+"locked_containers": {{"cabinet_33": "item_small_key_1"}}
+```
 
 **CRITICAL: Items are ABSTRACT (not in world graph)**
 - Items go directly to inventory when found
@@ -370,13 +394,11 @@ Use these mechanics to create chains:
 ## TOOL Items with Room Restrictions (for Theory of Mind)
 TOOL items (like radio) can have "allowed_rooms" to restrict where they work:
 - If allowed_rooms is set, the tool ONLY works in those specific rooms
-- This creates Theory of Mind challenges: agents must know WHERE to use tools
 - Example: A radio that only works in the living room requires navigation + knowledge
 
-To use room restrictions, add "items" array with allowed_rooms:
-```
+```json
 "items": [
-  {{"item_id": "radio_1", "allowed_rooms": ["living_room_1", "office_1"]}}
+  {{"item_id": "item_radio_1", "inside": "cabinet_33", "allowed_rooms": ["living_room_1"]}}
 ]
 ```
 

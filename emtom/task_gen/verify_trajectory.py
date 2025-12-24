@@ -114,12 +114,18 @@ def main():
 
         runner = VerificationRunner(config)
 
-        task_mechanics = {
-            "mechanics": [
+        # Build task data with mechanics, items, and locked_containers
+        task_mechanics = {}
+        if task.mechanic_bindings:
+            task_mechanics["mechanics"] = [
                 {"mechanic_type": b.mechanic_type, **b.to_dict()}
                 for b in task.mechanic_bindings
             ]
-        } if task.mechanic_bindings else None
+        if task.items:
+            task_mechanics["items"] = task.items  # Already list of dicts
+        if task.locked_containers:
+            task_mechanics["locked_containers"] = task.locked_containers
+        task_mechanics = task_mechanics if task_mechanics else None
 
         runner.setup(
             env_interface=env_interface,

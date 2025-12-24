@@ -117,23 +117,6 @@ class GameStateManager:
             if isinstance(binding, dict):
                 self._setup_mechanic_state(state, mech_type, binding)
 
-        # Set up hidden items (for Search/Shake action)
-        # Supports both single item (legacy) and list of items
-        hidden_items = task_data.get("hidden_items", {})
-        for obj_id, hidden_info in hidden_items.items():
-            if isinstance(hidden_info, dict):
-                contains = hidden_info.get("contains")
-            elif isinstance(hidden_info, list):
-                contains = hidden_info
-            else:
-                contains = hidden_info
-
-            # Normalize to list format
-            if isinstance(contains, str):
-                contains = [contains]
-            if contains:
-                state = state.set_object_property(obj_id, "hidden_items", contains)
-
         # Set up goals
         goals_data = task_data.get("goals", [])
         for g in goals_data:
@@ -840,12 +823,16 @@ class GameStateManager:
         """Get debug information about current state."""
         state = self.state
 
-        # Collect hidden items (container -> item mappings)
+        # Collect hidden items and items_inside (container -> item mappings)
         hidden_items = {}
+        items_inside = {}
         for obj_id, props in state.object_properties.items():
-            items = props.get("hidden_items", [])
-            if items:
-                hidden_items[obj_id] = items
+            h_items = props.get("hidden_items", [])
+            if h_items:
+                hidden_items[obj_id] = h_items
+            i_items = props.get("items_inside", [])
+            if i_items:
+                items_inside[obj_id] = i_items
 
         return {
             "current_step": state.current_step,
@@ -859,7 +846,8 @@ class GameStateManager:
             "pending_effects": len(state.pending_effects),
             "spawned_items": [s.item_id for s in state.spawned_items],
             "hidden_objects": list(state.hidden_objects),
-            "hidden_items": hidden_items,  # container -> item_id mappings
+            "hidden_items": hidden_items,  # container -> item_id mappings (found via Search)
+            "items_inside": items_inside,  # container -> item_id mappings (found via Open)
             "item_definitions": state.item_definitions,  # item definitions from task
             "agent_inventory": state.agent_inventory,  # per-agent inventory
             "goals": [

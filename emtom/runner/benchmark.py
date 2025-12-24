@@ -65,15 +65,18 @@ class BenchmarkRunner(EMTOMBaseRunner):
         self._setup_planners()
 
     def _task_to_mechanics_dict(self, task: "GeneratedTask") -> Dict[str, Any]:
-        """Convert GeneratedTask to mechanics initialization format."""
+        """Convert GeneratedTask to task data for GameStateManager initialization."""
+        result = {}
         if task.mechanic_bindings:
-            return {
-                "mechanics": [
-                    {"mechanic_type": b.mechanic_type, **b.to_dict()}
-                    for b in task.mechanic_bindings
-                ]
-            }
-        return {"mechanics": []}
+            result["mechanics"] = [
+                {"mechanic_type": b.mechanic_type, **b.to_dict()}
+                for b in task.mechanic_bindings
+            ]
+        if task.items:
+            result["items"] = task.items  # Already list of dicts
+        if task.locked_containers:
+            result["locked_containers"] = task.locked_containers
+        return result
 
     def _setup_planners(self) -> None:
         """Initialize LLM planner for each agent using our custom LLMPlanner."""

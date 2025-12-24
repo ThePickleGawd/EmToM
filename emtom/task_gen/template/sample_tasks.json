@@ -10,6 +10,8 @@
   "theory_of_mind_required": true,
   "category": "knowledge_asymmetry",
   "active_mechanics": ["inverse_state"],
+  "items": [],
+  "locked_containers": {},
   "mechanic_bindings": [
     {
       "mechanic_type": "inverse_state",

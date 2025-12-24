@@ -365,6 +365,64 @@ class EMTOMBaseRunner(ABC):
             except Exception:
                 pass
 
+    def _sync_remote_effects_to_simulator(self, effects: List[str]) -> None:
+        """
+        Sync remote control effects to the Habitat simulator.
+
+        When a remote_control mechanic triggers (e.g., opening counter_31 also
+        opens cabinet_26), we need to actually open cabinet_26 in the simulator,
+        not just update game state.
+
+        Args:
+            effects: List of effect strings from mechanic result
+        """
+        from habitat.sims.habitat_simulator.sim_utilities import (
+            get_ao_default_link,
+            open_link,
+            close_link,
+        )
+
+        sim = self.env_interface.sim
+        aom = sim.get_articulated_object_manager()
+
+        for effect in effects:
+            if not effect.startswith("remote_effect="):
+                continue
+
+            # Parse "remote_effect=cabinet_26.is_open=True"
+            try:
+                _, rest = effect.split("=", 1)
+                obj_id, prop_value = rest.rsplit(".", 1)
+                prop, value_str = prop_value.split("=")
+                value = value_str.lower() == "true"
+            except ValueError:
+                continue
+
+            if prop != "is_open":
+                continue
+
+            # Resolve object handle from world graph
+            try:
+                node = self.env_interface.world_graph.get_node_from_name(obj_id)
+                handle = node.sim_handle
+            except (ValueError, AttributeError):
+                handle = obj_id
+
+            # Get the articulated object
+            ao = aom.get_object_by_handle(handle)
+            if ao is None:
+                continue
+
+            # Get default link and open/close it
+            default_link = get_ao_default_link(ao, compute_if_not_found=True)
+            if default_link is None:
+                continue
+
+            if value:
+                open_link(ao, default_link)
+            else:
+                close_link(ao, default_link)
+
     def execute_action(
         self,
         uid: int,
@@ -521,6 +579,8 @@ class EMTOMBaseRunner(ABC):
 
         if mech_result.applies:
             state, result = self.game_manager.apply_action(action_name, agent_id, target)
+            # Sync any remote effects to the actual simulator
+            self._sync_remote_effects_to_simulator(result.effects)
             # Log mechanic effect
             self.event_log.log_mechanic(
                 step=self._step_count,

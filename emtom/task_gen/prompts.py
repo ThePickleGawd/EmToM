@@ -43,52 +43,30 @@ Items are **NOT in the world graph** - they exist ONLY in inventory.
 - Items go directly to inventory when found (Search or Open)
 - Use `UseItem[item_id, args]` to use items from inventory
 
-**Placement:**
+**Placement (use "items" array in task JSON):**
 - `hidden_in` container → found with **Search[container]**
 - `inside` container → found when **Open[container]**
-- Lock containers with `locked_containers: {{"cabinet_45": "item_small_key"}}`
+- Lock containers with `locked_containers: {{"cabinet_45": "item_small_key_1"}}`
 
-**Example**: `UseItem[item_small_key_1, cabinet_45]` to unlock cabinet
+**Example JSON:**
+```json
+"items": [
+  {{"item_id": "item_small_key_1", "hidden_in": "drawer_52"}},
+  {{"item_id": "item_radio_1", "inside": "cabinet_45"}}
+],
+"locked_containers": {{"cabinet_45": "item_small_key_1"}}
+```
+
+**Example action**: `UseItem[item_small_key_1, cabinet_45]` to unlock cabinet
 
 ## Task Structure
-```json
-{{
-  "task_id": "unique_id",
-  "title": "Evocative title",
-  "story": "2-3 sentences, reference real object IDs, NO mechanic hints",
-  "episode_id": "FROM_SCENE_DATA",
-  "dataset_episode_id": "FROM_SCENE_DATA",
-  "scene_id": "FROM_SCENE_DATA",
-  "public_goal": "What agents need to do (generic, no object IDs)",
-  "public_context": "Shared background",
-  "theory_of_mind_required": true,
-  "category": "knowledge_asymmetry",
-  "items": [{{"item_id": "item_key_1", "hidden_in": "drawer_52"}}],
-  "locked_containers": {{"cabinet_45": "item_small_key"}},
-  "mechanic_bindings": [],
-  "agent_secrets": {{
-    "agent_0": ["Partial knowledge A knows"],
-    "agent_1": ["Different knowledge B knows"]
-  }},
-  "agent_roles": {{"agent_0": "Role A", "agent_1": "Role B"}},
-  "agent_actions": {{
-    "agent_0": ["Navigate", "Communicate", "Wait"],
-    "agent_1": ["Navigate", "Search", "Open", "UseItem", "Communicate"]
-  }},
-  "subtasks": [
-    {{"id": "goal_1", "description": "Goal description",
-      "success_condition": {{"entity": "obj", "property": "predicate", "target": "value"}},
-      "depends_on": []}}
-  ],
-  "golden_trajectory": [
-    {{"actions": [
-      {{"agent": "agent_0", "action": "Communicate", "message": "Info to share"}},
-      {{"agent": "agent_1", "action": "Wait"}}
-    ]}}
-  ],
-  "num_agents": 2
-}}
-```
+Read the template file for the full JSON structure. Key fields:
+- `task_id`, `title`, `story`: Task metadata
+- `public_goal`: What agents need to do (generic, no object IDs)
+- `agent_secrets`: Per-agent private knowledge (location hints, etc.)
+- `agent_actions`: Per-agent available actions
+- `subtasks`: Goal-oriented success conditions (2-5 goals, not process steps)
+- `golden_trajectory`: Step-by-step solution with all agents' actions per timestep
 
 ## Predicates
 - Spatial: `is_on_top`, `is_inside`, `is_in_room`, `is_on_floor`, `is_next_to`
@@ -156,4 +134,8 @@ Wait for the observation before your next action.
 - Subtasks should be GOALS (2-5), not process steps
 - Each subtask needs a DIFFERENT success_condition
 - Story should explain WHY, not hint at mechanics
+
+## Helpful Hints
+- Agents must Navigate to objects before interacting (Pick, Open)
+- Items are abstract, while objects are physical. Items are prepended with 'item_'
 """

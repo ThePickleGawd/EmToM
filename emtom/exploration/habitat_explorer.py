@@ -998,6 +998,59 @@ class HabitatExplorer:
 
         return actions
 
+    def _sync_remote_effects_to_simulator(self, effects: List[str]) -> None:
+        """
+        Sync remote control effects to the Habitat simulator.
+
+        When a remote_control mechanic triggers (e.g., opening counter_31 also
+        opens cabinet_26), we need to actually open cabinet_26 in the simulator.
+        """
+        from habitat.sims.habitat_simulator.sim_utilities import (
+            get_ao_default_link,
+            open_link,
+            close_link,
+        )
+
+        sim = self.env.sim
+        aom = sim.get_articulated_object_manager()
+
+        for effect in effects:
+            if not effect.startswith("remote_effect="):
+                continue
+
+            # Parse "remote_effect=cabinet_26.is_open=True"
+            try:
+                _, rest = effect.split("=", 1)
+                obj_id, prop_value = rest.rsplit(".", 1)
+                prop, value_str = prop_value.split("=")
+                value = value_str.lower() == "true"
+            except ValueError:
+                continue
+
+            if prop != "is_open":
+                continue
+
+            # Resolve object handle from world graph
+            try:
+                node = self.env.world_graph.get_node_from_name(obj_id)
+                handle = node.sim_handle
+            except (ValueError, AttributeError):
+                handle = obj_id
+
+            # Get the articulated object and open/close it
+            ao = aom.get_object_by_handle(handle)
+            if ao is None:
+                continue
+
+            default_link = get_ao_default_link(ao, compute_if_not_found=True)
+            if default_link is None:
+                continue
+
+            if value:
+                open_link(ao, default_link)
+            else:
+                close_link(ao, default_link)
+
     def _execute_action(self, agent_id: str, action_choice: ActionChoice) -> Dict[str, Any]:
         """Execute an action in the Habitat environment.
 
@@ -1098,6 +1151,8 @@ class HabitatExplorer:
         if action_name in EMTOM_ACTIONS:
             # Apply custom action to game state
             state, custom_result = self.game_manager.apply_action(action_name, agent_id, target)
+            # Sync any remote effects to the actual simulator
+            self._sync_remote_effects_to_simulator(custom_result.effects)
             # Record frame for custom action
             obs = self.env.get_observations()
             self._record_frame(obs, {agent_uid: (action_name, target)}, current_agent_id=agent_id)
@@ -1332,6 +1387,8 @@ class HabitatExplorer:
         # This updates game state (e.g., inverse_state flips, counting_state updates)
         if mech_result.applies:
             _, applied_result = self.game_manager.apply_action(action_name, agent_id, target)
+            # Sync any remote effects to the actual simulator
+            self._sync_remote_effects_to_simulator(applied_result.effects)
             # Use the mechanic's observation if it provides one
             if mechanic_observation:
                 obs_text = f"{obs_text} {mechanic_observation}"
