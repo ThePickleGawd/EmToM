@@ -141,7 +141,7 @@ class TrajectoryLogger:
                 {
                     "inverse_state": {"target": "fridge_58"},
                     "remote_control": {"trigger": "chest_of_drawers_52", "target": "table_59"},
-                    "counting_state": {"target": "cabinet_57", "required_count": 3},
+                    "state_mirroring": {"pair": ["drawer_1", "drawer_2"]},
                 }
         """
         if not self._started:

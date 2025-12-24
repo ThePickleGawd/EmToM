@@ -139,11 +139,11 @@ class SuccessCondition:
 @dataclass
 class MechanicBinding:
     """Specifies how a mechanic is bound to scene objects."""
-    mechanic_type: str  # "inverse_state", "remote_control", "counting_state"
+    mechanic_type: str  # "inverse_state", "remote_control", "state_mirroring", "conditional_unlock"
     trigger_object: str  # Object that triggers the mechanic (e.g., "fridge_58")
-    target_object: Optional[str] = None  # For remote_control: the affected object
+    target_object: Optional[str] = None  # For remote_control/state_mirroring: the affected object
     target_state: Optional[str] = None  # State being affected (e.g., "is_open")
-    count: Optional[int] = None  # For counting_state: number of interactions needed
+    count: Optional[int] = None  # Reserved for future use
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -577,7 +577,6 @@ class TaskGenerator:
                 {
                     "inverse_state": {"targets": ["fridge_58"]},
                     "remote_control": [{"trigger": "chest_52", "target": "table_59", "target_state": "is_open"}],
-                    "counting_state": {"targets": {"cabinet_57": 0}},
                 }
 
         Returns:
@@ -605,16 +604,6 @@ class TaskGenerator:
                         target_object=rc["target"],
                         target_state=rc.get("target_state", "is_open"),
                     ))
-
-        # counting_state: dict of {target: current_count}
-        if "counting_state" in raw_bindings:
-            targets = raw_bindings["counting_state"].get("targets", {})
-            for target, count in targets.items():
-                bindings.append(MechanicBinding(
-                    mechanic_type="counting_state",
-                    trigger_object=target,
-                    count=3,  # Default required count
-                ))
 
         return bindings
 

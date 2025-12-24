@@ -16,7 +16,6 @@ import uuid
 from emtom.state.game_state import (
     EMTOMGameState,
     SpawnedItem,
-    PendingEffect,
     ActionRecord,
     Goal,
     GoalStatus,
@@ -193,39 +192,12 @@ class GameStateManager:
             if trigger and target_obj:
                 state.mirror_pairs.append((trigger, target_obj, target_state))
 
-        elif mech_type == "counting_state":
-            if trigger:
-                state.interaction_counts[trigger] = 0
-                count = binding.get("required_count", binding.get("count", 3))
-                state.object_properties.setdefault(trigger, {})["required_count"] = count
-
-        elif mech_type == "delayed_effect":
-            if trigger:
-                delay = binding.get("delay_steps", 3)
-                state.object_properties.setdefault(trigger, {})["delay_steps"] = delay
-
-        elif mech_type == "decaying_state":
-            if trigger:
-                decay = binding.get("decay_steps", 3)
-                state.object_properties.setdefault(trigger, {})["decay_steps"] = decay
-
         elif mech_type == "conditional_unlock":
             if trigger:
                 prereq = binding.get("prerequisite_object")
                 if prereq:
                     state.object_properties.setdefault(trigger, {})["prerequisite"] = prereq
                     state.object_properties.setdefault(prereq, {})["unlocks"] = trigger
-
-        elif mech_type == "sequence_lock":
-            if trigger:
-                state.sequence_progress[trigger] = 0
-                sequence = binding.get("sequence", [])
-                state.object_properties.setdefault(trigger, {})["sequence_length"] = len(sequence)
-                # Set up sequence steps
-                for step in sequence:
-                    step_obj = step.get("object") if isinstance(step, dict) else step
-                    if step_obj:
-                        state.object_properties.setdefault(step_obj, {})["advances_sequence"] = trigger
 
     def sync_from_habitat(self, state: Optional[EMTOMGameState] = None) -> EMTOMGameState:
         """
@@ -360,21 +332,6 @@ class GameStateManager:
                     new_state.remote_mappings[trigger] = (target, "is_open")
                     bindings_info["remote_control"] = {"trigger": trigger, "target": target}
 
-            elif mech_type == "counting_state":
-                # Bind to an articulated object, require 3 interactions
-                if articulated:
-                    target = articulated.pop(0)
-                    new_state.interaction_counts[target] = 0
-                    new_state.object_properties.setdefault(target, {})["required_count"] = 3
-                    bindings_info["counting_state"] = {"target": target, "required_count": 3}
-
-            elif mech_type == "delayed_effect":
-                # Bind to an articulated object, delay by 2 steps
-                if articulated:
-                    target = articulated.pop(0)
-                    new_state.object_properties.setdefault(target, {})["delay_steps"] = 2
-                    bindings_info["delayed_effect"] = {"target": target, "delay_steps": 2}
-
             elif mech_type == "state_mirroring":
                 # Bind pair of articulated objects
                 if len(articulated) >= 2:
@@ -392,7 +349,7 @@ class GameStateManager:
                     new_state.object_properties.setdefault(prereq, {})["unlocks"] = target
                     bindings_info["conditional_unlock"] = {"prerequisite": prereq, "target": target}
 
-        # Set up scenario-based items for Shake/Search action
+        # Set up scenario-based items for Search action
         if shakeable:
             # Load scenario system
             from emtom.task_gen.scenario_system import get_compatible_scenario, ScenarioInstantiator
@@ -533,7 +490,7 @@ class GameStateManager:
         Apply an action, running it through active mechanics.
 
         Args:
-            action_name: Name of the action (e.g., "open", "Shake")
+            action_name: Name of the action (e.g., "open", "Search")
             agent_id: Agent performing the action
             target: Target of the action
             state: State to apply to. If None, uses self.state.
@@ -592,45 +549,9 @@ class GameStateManager:
         state: EMTOMGameState,
         mech_result: HandlerResult,
     ) -> Tuple[EMTOMGameState, Optional[HandlerResult]]:
-        """Apply built-in action effects (Shake, Hide, etc.)."""
+        """Apply built-in action effects (Hide, etc.)."""
 
-        if action_name == "Shake" and target:
-            hidden_items = state.get_object_property(target, "hidden_items", [])
-
-            if hidden_items:
-                new_state = state
-                found_names = []
-                effects = []
-
-                for item_id in hidden_items:
-                    new_state, success, msg = self.grant_item(agent_id, item_id, source=f"Shake:{target}", state=new_state)
-                    item = self.get_item(item_id)
-                    item_name = item.name if item else item_id
-                    found_names.append(item_name)
-                    effects.append(f"found={item_id}")
-                    effects.append(f"inventory+={item_id}")
-
-                # Clear hidden items from container
-                new_state = new_state.set_object_property(target, "hidden_items", [])
-
-                items_text = ", ".join(found_names)
-                return new_state, HandlerResult(
-                    applies=True,
-                    state=new_state,
-                    observation=f"You shake {target}. {items_text} fall{'s' if len(found_names) == 1 else ''} out!",
-                    success=True,
-                    effects=effects,
-                )
-            else:
-                return state, HandlerResult(
-                    applies=True,
-                    state=state,
-                    observation=f"You shake {target}. Nothing falls out.",
-                    success=True,
-                    effects=[],
-                )
-
-        elif action_name == "Hide" and target:
+        if action_name == "Hide" and target:
             new_hidden = copy.copy(state.hidden_objects)
             new_hidden.add(target)
             state = copy.copy(state)
@@ -674,7 +595,7 @@ class GameStateManager:
         """
         Advance time by one step.
 
-        Processes pending effects and increments step counter.
+        Increments step counter.
 
         Args:
             state: State to tick. If None, uses self.state.
@@ -685,37 +606,9 @@ class GameStateManager:
         if state is None:
             state = self.state
 
-        triggered_descriptions = []
-        remaining = []
-
-        for effect in state.pending_effects:
-            new_steps = effect.steps_remaining - 1
-            if new_steps <= 0:
-                triggered_descriptions.append(effect.description)
-                # Apply the effect
-                state = state.set_object_property(
-                    effect.target,
-                    effect.property_name,
-                    effect.new_value,
-                )
-            else:
-                remaining.append(PendingEffect(
-                    effect_id=effect.effect_id,
-                    target=effect.target,
-                    property_name=effect.property_name,
-                    new_value=effect.new_value,
-                    steps_remaining=new_steps,
-                    triggered_by=effect.triggered_by,
-                    triggered_at_step=effect.triggered_at_step,
-                    description=effect.description,
-                ))
-
-        new_state = copy.copy(state)
-        new_state.pending_effects = remaining
-        new_state = new_state.increment_step()
-
+        new_state = state.increment_step()
         self.state = new_state
-        return new_state, triggered_descriptions
+        return new_state, []
 
     def check_goals(self, state: Optional[EMTOMGameState] = None) -> List[Goal]:
         """
@@ -840,10 +733,7 @@ class GameStateManager:
             "inverse_objects": list(state.inverse_objects),
             "remote_mappings": {k: list(v) for k, v in state.remote_mappings.items()},
             "mirror_pairs": state.mirror_pairs,
-            "interaction_counts": state.interaction_counts,
-            "sequence_progress": state.sequence_progress,
             "unlocked_targets": list(state.unlocked_targets),
-            "pending_effects": len(state.pending_effects),
             "spawned_items": [s.item_id for s in state.spawned_items],
             "hidden_objects": list(state.hidden_objects),
             "hidden_items": hidden_items,  # container -> item_id mappings (found via Search)

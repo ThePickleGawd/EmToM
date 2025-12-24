@@ -94,8 +94,7 @@ def print_bindings_pretty(bindings: Dict[str, Any]) -> None:
 
     # Standard mechanics
     mechanics_printed = False
-    for mech in ["inverse_state", "remote_control", "counting_state",
-                 "delayed_effect", "state_mirroring", "conditional_unlock"]:
+    for mech in ["inverse_state", "remote_control", "state_mirroring", "conditional_unlock"]:
         if mech in bindings:
             if not mechanics_printed:
                 cprint("\nMechanics:", "blue")
@@ -105,10 +104,6 @@ def print_bindings_pretty(bindings: Dict[str, Any]) -> None:
                 cprint(f"   - Inverse State: {info.get('target')}", "gray")
             elif mech == "remote_control":
                 cprint(f"   - Remote Control: {info.get('trigger')} -> {info.get('target')}", "gray")
-            elif mech == "counting_state":
-                cprint(f"   - Counting State: {info.get('target')} (need {info.get('required_count')} interactions)", "gray")
-            elif mech == "delayed_effect":
-                cprint(f"   - Delayed Effect: {info.get('target')} (delay: {info.get('delay_steps')} steps)", "gray")
             elif mech == "state_mirroring":
                 pair = info.get('pair', [])
                 cprint(f"   - State Mirroring: {pair[0] if pair else '?'} <-> {pair[1] if len(pair) > 1 else '?'}", "gray")

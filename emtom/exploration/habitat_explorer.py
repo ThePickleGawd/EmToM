@@ -425,11 +425,6 @@ class HabitatExplorer:
                 for trigger, target_info in remote.items()
             ]
 
-        if debug_info.get("interaction_counts"):
-            counts = debug_info["interaction_counts"]
-            self.logger.log_message(f"Counting state targets: {counts}")
-            bindings["counting_state"] = {"targets": counts}
-
         if debug_info.get("hidden_items"):
             hidden = debug_info["hidden_items"]
             self.logger.log_message(f"Hidden items: {hidden}")
@@ -1000,10 +995,11 @@ class HabitatExplorer:
 
     def _sync_remote_effects_to_simulator(self, effects: List[str]) -> None:
         """
-        Sync remote control effects to the Habitat simulator.
+        Sync mechanic effects (remote_control, state_mirroring) to Habitat simulator.
 
-        When a remote_control mechanic triggers (e.g., opening counter_31 also
-        opens cabinet_26), we need to actually open cabinet_26 in the simulator.
+        When a remote_control or state_mirroring mechanic triggers (e.g., opening
+        counter_31 also opens cabinet_26), we need to actually open cabinet_26 in
+        the simulator.
         """
         from habitat.sims.habitat_simulator.sim_utilities import (
             get_ao_default_link,
@@ -1015,12 +1011,16 @@ class HabitatExplorer:
         aom = sim.get_articulated_object_manager()
 
         for effect in effects:
-            if not effect.startswith("remote_effect="):
+            # Handle both remote_effect= and mirrored= prefixes
+            if effect.startswith("remote_effect="):
+                rest = effect[len("remote_effect="):]
+            elif effect.startswith("mirrored="):
+                rest = effect[len("mirrored="):]
+            else:
                 continue
 
-            # Parse "remote_effect=cabinet_26.is_open=True"
+            # Parse "cabinet_26.is_open=True"
             try:
-                _, rest = effect.split("=", 1)
                 obj_id, prop_value = rest.rsplit(".", 1)
                 prop, value_str = prop_value.split("=")
                 value = value_str.lower() == "true"
@@ -1384,7 +1384,7 @@ class HabitatExplorer:
             }
 
         # Habitat action succeeded - now apply mechanic state changes
-        # This updates game state (e.g., inverse_state flips, counting_state updates)
+        # This updates game state (e.g., inverse_state flips, remote effects)
         if mech_result.applies:
             _, applied_result = self.game_manager.apply_action(action_name, agent_id, target)
             # Sync any remote effects to the actual simulator

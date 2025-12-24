@@ -508,8 +508,6 @@ class HumanTestRunner(EMTOMBaseRunner):
                 print("Remote control mappings:")
                 for trigger, (target, state) in debug_info['remote_mappings'].items():
                     print(f"  {trigger} -> {target} ({state})")
-            if debug_info.get('interaction_counts'):
-                print(f"Counting state targets: {debug_info['interaction_counts']}")
         else:
             print("No game manager configured")
 

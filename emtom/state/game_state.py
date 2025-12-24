@@ -31,24 +31,11 @@ class SpawnedItem:
     """An item that was spawned/revealed during gameplay."""
     item_id: str
     item_type: str
-    spawned_by_action: str  # e.g., "Shake"
+    spawned_by_action: str  # e.g., "Search"
     spawned_from: str  # e.g., "vase_1"
     spawned_at_step: int
     location: Optional[str] = None  # room or position
     picked_up_by: Optional[str] = None  # agent who picked it up
-
-
-@dataclass
-class PendingEffect:
-    """A delayed effect waiting to trigger."""
-    effect_id: str
-    target: str
-    property_name: str
-    new_value: Any
-    steps_remaining: int
-    triggered_by: str  # agent who caused this
-    triggered_at_step: int
-    description: str = ""
 
 
 @dataclass
@@ -97,7 +84,7 @@ class EMTOMGameState:
     # === Our overlay (custom properties) ===
     # Custom properties per object (hidden_items, is_locked, inverse, linked_to, etc.)
     object_properties: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    # Items spawned by actions (Shake reveals key, etc.)
+    # Items spawned by actions (Search reveals key, etc.)
     spawned_items: List[SpawnedItem] = field(default_factory=list)
     # Objects hidden by Hide action
     hidden_objects: Set[str] = field(default_factory=set)
@@ -107,16 +94,8 @@ class EMTOMGameState:
     world_objects: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     # === Mechanic state (owned here, mechanics are stateless) ===
-    # delayed_effect, decaying_state: effects waiting to trigger
-    pending_effects: List[PendingEffect] = field(default_factory=list)
     # conditional_unlock: targets that have been unlocked
     unlocked_targets: Set[str] = field(default_factory=set)
-    # sequence_lock: progress through sequences (target -> step count)
-    sequence_progress: Dict[str, int] = field(default_factory=dict)
-    # sequence_lock: whether target is unlocked
-    sequence_unlocked: Set[str] = field(default_factory=set)
-    # counting_state: interaction counts per object
-    interaction_counts: Dict[str, int] = field(default_factory=dict)
     # state_mirroring: pairs of linked objects [(obj_a, obj_b, state), ...]
     mirror_pairs: List[Tuple[str, str, str]] = field(default_factory=list)
     # inverse_state: objects with inverted behavior
@@ -165,12 +144,6 @@ class EMTOMGameState:
     def get_habitat_state(self, obj_id: str, prop: str, default: Any = None) -> Any:
         """Get a property from Habitat's object state."""
         return self.object_states.get(obj_id, {}).get(prop, default)
-
-    def add_pending_effect(self, effect: PendingEffect) -> "EMTOMGameState":
-        """Add a pending effect. Returns new state."""
-        new_state = copy.copy(self)
-        new_state.pending_effects = self.pending_effects + [effect]
-        return new_state
 
     def add_spawned_item(self, item: SpawnedItem) -> "EMTOMGameState":
         """Add a spawned item. Returns new state."""
@@ -222,23 +195,7 @@ class EMTOMGameState:
             ],
             "hidden_objects": list(self.hidden_objects),
             "world_objects": self.world_objects,
-            "pending_effects": [
-                {
-                    "effect_id": e.effect_id,
-                    "target": e.target,
-                    "property_name": e.property_name,
-                    "new_value": e.new_value,
-                    "steps_remaining": e.steps_remaining,
-                    "triggered_by": e.triggered_by,
-                    "triggered_at_step": e.triggered_at_step,
-                    "description": e.description,
-                }
-                for e in self.pending_effects
-            ],
             "unlocked_targets": list(self.unlocked_targets),
-            "sequence_progress": self.sequence_progress,
-            "sequence_unlocked": list(self.sequence_unlocked),
-            "interaction_counts": self.interaction_counts,
             "mirror_pairs": self.mirror_pairs,
             "inverse_objects": list(self.inverse_objects),
             "remote_mappings": self.remote_mappings,
@@ -277,13 +234,7 @@ class EMTOMGameState:
         ]
         state.hidden_objects = set(data.get("hidden_objects", []))
         state.world_objects = data.get("world_objects", {})
-        state.pending_effects = [
-            PendingEffect(**e) for e in data.get("pending_effects", [])
-        ]
         state.unlocked_targets = set(data.get("unlocked_targets", []))
-        state.sequence_progress = data.get("sequence_progress", {})
-        state.sequence_unlocked = set(data.get("sequence_unlocked", []))
-        state.interaction_counts = data.get("interaction_counts", {})
         state.mirror_pairs = data.get("mirror_pairs", [])
         state.inverse_objects = set(data.get("inverse_objects", []))
         state.remote_mappings = data.get("remote_mappings", {})

@@ -145,18 +145,13 @@ class EMTOMBaseRunner(ABC):
         print("\n[EMTOMBaseRunner] Auto-bound mechanics:")
 
         # Mechanics
-        for mech in ["inverse_state", "remote_control", "counting_state",
-                     "delayed_effect", "state_mirroring", "conditional_unlock"]:
+        for mech in ["inverse_state", "remote_control", "state_mirroring", "conditional_unlock"]:
             if mech in bindings:
                 info = bindings[mech]
                 if mech == "inverse_state":
                     print(f"  • {mech}: {info.get('target')}")
                 elif mech == "remote_control":
                     print(f"  • {mech}: {info.get('trigger')} → {info.get('target')}")
-                elif mech == "counting_state":
-                    print(f"  • {mech}: {info.get('target')} (count={info.get('required_count')})")
-                elif mech == "delayed_effect":
-                    print(f"  • {mech}: {info.get('target')} (delay={info.get('delay_steps')})")
                 elif mech == "state_mirroring":
                     pair = info.get('pair', [])
                     print(f"  • {mech}: {pair[0] if pair else '?'} ↔ {pair[1] if len(pair) > 1 else '?'}")
@@ -367,11 +362,15 @@ class EMTOMBaseRunner(ABC):
 
     def _sync_remote_effects_to_simulator(self, effects: List[str]) -> None:
         """
-        Sync remote control effects to the Habitat simulator.
+        Sync mechanic effects to the Habitat simulator.
 
-        When a remote_control mechanic triggers (e.g., opening counter_31 also
-        opens cabinet_26), we need to actually open cabinet_26 in the simulator,
-        not just update game state.
+        When mechanics like remote_control or state_mirroring trigger, they
+        update game state but we also need to actually open/close objects
+        in the simulator.
+
+        Handles effects like:
+        - remote_effect=cabinet_26.is_open=True
+        - mirrored=drawer_2.is_open=True
 
         Args:
             effects: List of effect strings from mechanic result
@@ -386,12 +385,16 @@ class EMTOMBaseRunner(ABC):
         aom = sim.get_articulated_object_manager()
 
         for effect in effects:
-            if not effect.startswith("remote_effect="):
+            # Handle both remote_effect= and mirrored= prefixes
+            if effect.startswith("remote_effect="):
+                rest = effect[len("remote_effect="):]
+            elif effect.startswith("mirrored="):
+                rest = effect[len("mirrored="):]
+            else:
                 continue
 
-            # Parse "remote_effect=cabinet_26.is_open=True"
+            # Parse "cabinet_26.is_open=True"
             try:
-                _, rest = effect.split("=", 1)
                 obj_id, prop_value = rest.rsplit(".", 1)
                 prop, value_str = prop_value.split("=")
                 value = value_str.lower() == "true"

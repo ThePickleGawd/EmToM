@@ -6,9 +6,9 @@ Python function signatures and type hints. Borrowed from ARE's pattern.
 
 Usage:
     class EMTOMTools:
-        @tool(description="Shake an object to reveal hidden contents")
-        def shake(self, target: str) -> str:
-            '''Shake the target object.'''
+        @tool(description="Search a container for hidden items")
+        def search(self, target: str) -> str:
+            '''Search the target container.'''
             ...
 
     # Get schemas for LLM tool use
@@ -145,9 +145,9 @@ def tool(
         name: Override the function name for the tool
 
     Example:
-        @tool(description="Shake an object to reveal hidden contents",
+        @tool(description="Search a container for hidden items",
               targets=["FURNITURE_INSTANCE"])
-        def shake(self, target: str) -> str:
+        def search(self, target: str) -> str:
             ...
     """
     def decorator(func: Callable) -> Callable:

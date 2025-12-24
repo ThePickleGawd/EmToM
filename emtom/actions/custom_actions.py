@@ -255,9 +255,7 @@ class SearchAction(EMTOMAction):
     """
     Search a location or container for hidden items.
 
-    Unlike Shake (which may require physical interaction), Search is a careful
-    examination that can find hidden items within furniture or containers.
-
+    A careful examination that can find hidden items within furniture or containers.
     Adds found items to the agent's inventory.
     """
 

@@ -11,9 +11,8 @@ Handlers don't store any state - all state lives in EMTOMGameState.
 from typing import Any, Dict, Optional, Tuple, Callable
 from dataclasses import dataclass
 import copy
-import uuid
 
-from emtom.state.game_state import EMTOMGameState, PendingEffect
+from emtom.state.game_state import EMTOMGameState
 
 
 @dataclass
@@ -63,30 +62,6 @@ MECHANIC_INFO = {
         "example_binding": {"mechanic_type": "remote_control", "trigger_object": "lamp_12", "target_object": "cabinet_45", "target_state": "is_open"},
         "recommended_for_tom": True,
     },
-    "counting_state": {
-        "description": "Object only responds after N interactions",
-        "category": "conditional",
-        "setup_keys": ["trigger_object", "required_count"],
-        "agent_observation": "You open {trigger}, but nothing happens. (2/3)",
-        "tom_use": "Agents must coordinate to reach count, or one discovers the pattern",
-        "example_binding": {"mechanic_type": "counting_state", "trigger_object": "drawer_52", "required_count": 3},
-    },
-    "delayed_effect": {
-        "description": "Actions take effect after N steps (not immediate)",
-        "category": "time_delayed",
-        "setup_keys": ["trigger_object", "delay_steps"],
-        "agent_observation": "You open {trigger}, but nothing seems to happen immediately.",
-        "tom_use": "Agent acts, leaves, effect happens later - partner sees result",
-        "example_binding": {"mechanic_type": "delayed_effect", "trigger_object": "drawer_52", "delay_steps": 5},
-    },
-    "decaying_state": {
-        "description": "States automatically revert after N steps",
-        "category": "time_delayed",
-        "setup_keys": ["trigger_object", "decay_steps"],
-        "agent_observation": "(This will revert in {decay_steps} steps)",
-        "tom_use": "One agent must hold/maintain while other acts quickly",
-        "example_binding": {"mechanic_type": "decaying_state", "trigger_object": "door_3", "decay_steps": 3},
-    },
     "conditional_unlock": {
         "description": "Object blocked until prerequisite action or item obtained",
         "category": "conditional",
@@ -104,15 +79,6 @@ MECHANIC_INFO = {
         "agent_observation": "{target} opens too!",
         "tom_use": "Agents in different rooms see linked effects",
         "example_binding": {"mechanic_type": "state_mirroring", "trigger_object": "drawer_1", "target_object": "drawer_2", "target_state": "is_open"},
-    },
-    "sequence_lock": {
-        "description": "Must interact with objects in specific order to unlock target",
-        "category": "conditional",
-        "setup_keys": ["trigger_object", "sequence"],
-        "agent_observation": "You hear a small click. / You hear a satisfying click - something unlocked!",
-        "tom_use": "Different agents know different parts of the sequence",
-        "example_binding": {"mechanic_type": "sequence_lock", "trigger_object": "safe_1", "sequence": ["button_1", "button_2", "button_3"]},
-        "recommended_for_tom": True,
     },
 }
 
@@ -180,32 +146,6 @@ def list_mechanics() -> list:
 # =============================================================================
 # Helper Functions
 # =============================================================================
-
-def action_to_state(action_name: str) -> str:
-    """Map action name to state property."""
-    mapping = {
-        "open": "is_open",
-        "close": "is_open",
-        "turn_on": "is_on",
-        "turn_off": "is_on",
-        "lock": "is_locked",
-        "unlock": "is_locked",
-    }
-    return mapping.get(action_name, "is_active")
-
-
-def action_to_value(action_name: str) -> bool:
-    """Map action name to resulting value."""
-    mapping = {
-        "open": True,
-        "close": False,
-        "turn_on": True,
-        "turn_off": False,
-        "lock": True,
-        "unlock": False,
-    }
-    return mapping.get(action_name, True)
-
 
 def no_effect(state: EMTOMGameState) -> HandlerResult:
     """Return a non-applying result."""
@@ -337,150 +277,6 @@ def handle_remote_control(
     )
 
 
-def handle_counting_state(
-    action_name: str,
-    agent_id: str,
-    target: Optional[str],
-    state: EMTOMGameState,
-) -> HandlerResult:
-    """
-    Counting State: Object only responds after N interactions.
-
-    Setup in state:
-        state.interaction_counts = {"door_1": 0}
-        state.object_properties["door_1"]["required_count"] = 3
-    """
-    if not target or target not in state.interaction_counts:
-        return no_effect(state)
-
-    required_count = state.get_object_property(target, "required_count", 3)
-    current_count = state.interaction_counts.get(target, 0) + 1
-    action_lower = action_name.lower()
-
-    # Update count
-    new_counts = copy.copy(state.interaction_counts)
-    new_counts[target] = current_count
-    new_state = copy.copy(state)
-    new_state.interaction_counts = new_counts
-
-    if current_count >= required_count:
-        # Reset count for next cycle
-        new_counts[target] = 0
-        return HandlerResult(
-            applies=True,
-            state=new_state,
-            observation=f"This time it responds!",
-            success=True,
-            effects=[f"count_reached={current_count}"],
-        )
-    else:
-        # Block the action - don't execute in Habitat
-        return HandlerResult(
-            applies=True,
-            state=new_state,
-            observation=f"You {action_lower} {target}, but nothing happens. ({current_count}/{required_count})",
-            success=False,
-            effects=[f"count={current_count}/{required_count}"],
-            surprise_trigger=f"{target} didn't respond (attempt {current_count})",
-            blocked=True,  # Don't execute in Habitat
-        )
-
-
-def handle_delayed_effect(
-    action_name: str,
-    agent_id: str,
-    target: Optional[str],
-    state: EMTOMGameState,
-) -> HandlerResult:
-    """
-    Delayed Effect: Actions take effect after N steps.
-
-    Setup in state:
-        state.object_properties["door_1"]["delay_steps"] = 3
-    """
-    delay_steps = state.get_object_property(target, "delay_steps")
-    if not delay_steps or not target:
-        return no_effect(state)
-
-    # Only apply to state-changing actions (not Navigate, Pick, etc.)
-    action_lower = action_name.lower()
-    state_changing_actions = {"open", "close", "turn_on", "turn_off", "lock", "unlock"}
-    if action_lower not in state_changing_actions:
-        return no_effect(state)
-
-    # Create pending effect
-    effect = PendingEffect(
-        effect_id=str(uuid.uuid4()),
-        target=target,
-        property_name=action_to_state(action_name),
-        new_value=action_to_value(action_name),
-        steps_remaining=delay_steps,
-        triggered_by=agent_id,
-        triggered_at_step=state.current_step,
-        description=f"{action_name} on {target} (delayed {delay_steps} steps)",
-    )
-    new_state = state.add_pending_effect(effect)
-
-    return HandlerResult(
-        applies=True,
-        state=new_state,
-        observation=f"You {action_lower} {target}, but nothing seems to happen immediately.",
-        success=True,
-        effects=[f"delayed={delay_steps}_steps"],
-        surprise_trigger=f"{target} didn't respond immediately",
-        actual_action=action_name,
-        actual_target=target,
-        blocked=True,  # Don't execute immediately - effect is delayed
-    )
-
-
-def handle_decaying_state(
-    action_name: str,
-    agent_id: str,
-    target: Optional[str],
-    state: EMTOMGameState,
-) -> HandlerResult:
-    """
-    Decaying State: States automatically revert after N steps.
-
-    Setup in state:
-        state.object_properties["door_1"]["decay_steps"] = 3
-    """
-    decay_steps = state.get_object_property(target, "decay_steps")
-    if not decay_steps or not target:
-        return no_effect(state)
-
-    # Only apply to state-changing actions (not Navigate, Pick, etc.)
-    action_lower = action_name.lower()
-    state_changing_actions = {"open", "close", "turn_on", "turn_off", "lock", "unlock"}
-    if action_lower not in state_changing_actions:
-        return no_effect(state)
-
-    # Schedule reversion (opposite of current action)
-    current_value = action_to_value(action_name)
-    revert_value = not current_value
-
-    effect = PendingEffect(
-        effect_id=str(uuid.uuid4()),
-        target=target,
-        property_name=action_to_state(action_name),
-        new_value=revert_value,
-        steps_remaining=decay_steps,
-        triggered_by=agent_id,
-        triggered_at_step=state.current_step,
-        description=f"{target} will revert in {decay_steps} steps",
-    )
-    new_state = state.add_pending_effect(effect)
-
-    return HandlerResult(
-        applies=True,
-        state=new_state,
-        observation=f"(This will revert in {decay_steps} steps)",
-        success=True,
-        effects=[f"will_decay_in={decay_steps}_steps"],
-    )
-
-
 def handle_conditional_unlock(
     action_name: str,
     agent_id: str,
@@ -501,6 +297,8 @@ def handle_conditional_unlock(
     if not target:
         return no_effect(state)
 
+    # Actions that should be blocked by locks (interaction actions, not movement)
+    LOCKABLE_ACTIONS = {"Open", "Close", "Search"}
     action_lower = action_name.lower()
 
     # Check if target is locked by item prerequisite (must have item in inventory)
@@ -509,15 +307,17 @@ def handle_conditional_unlock(
         # Check if agent has the required item
         agent_inventory = state.agent_inventory.get(agent_id, [])
         if required_item not in agent_inventory:
-            return HandlerResult(
-                applies=True,
-                state=state,
-                observation=f"You try to {action_lower} {target}, but it won't budge. You sense you need something special.",
-                success=False,
-                effects=[],
-                surprise_trigger=f"{target} requires a special item",
-                blocked=True,
-            )
+            # Only block interactive actions
+            if action_name in LOCKABLE_ACTIONS:
+                return HandlerResult(
+                    applies=True,
+                    state=state,
+                    observation=f"You try to {action_lower} {target}, but it won't budge. You sense you need something special.",
+                    success=False,
+                    effects=[],
+                    surprise_trigger=f"{target} requires a special item",
+                    blocked=True,
+                )
         else:
             # Agent has the item - unlock the target
             new_unlocked = copy.copy(state.unlocked_targets)
@@ -537,15 +337,17 @@ def handle_conditional_unlock(
     # Check if target is locked by object prerequisite (must interact with prereq first)
     prerequisite = state.get_object_property(target, "prerequisite")
     if prerequisite and target not in state.unlocked_targets:
-        return HandlerResult(
-            applies=True,
-            state=state,
-            observation=f"You try to {action_lower} {target}, but it won't budge. Something seems to be blocking it.",
-            success=False,
-            effects=[],
-            surprise_trigger=f"{target} is locked by unknown prerequisite",
-            blocked=True,
-        )
+        # Only block interactive actions
+        if action_name in LOCKABLE_ACTIONS:
+            return HandlerResult(
+                applies=True,
+                state=state,
+                observation=f"You try to {action_lower} {target}, but it won't budge. Something seems to be blocking it.",
+                success=False,
+                effects=[],
+                surprise_trigger=f"{target} is locked by unknown prerequisite",
+                blocked=True,
+            )
 
     # Check if this action unlocks something
     unlocks = state.get_object_property(target, "unlocks")
@@ -630,70 +432,6 @@ def handle_state_mirroring(
     )
 
 
-def handle_sequence_lock(
-    action_name: str,
-    agent_id: str,
-    target: Optional[str],
-    state: EMTOMGameState,
-) -> HandlerResult:
-    """
-    Sequence Lock: Objects must be interacted in specific order.
-
-    Setup in state:
-        state.sequence_progress = {"chest_1": 0}
-        state.object_properties["chest_1"]["sequence_length"] = 3
-        state.object_properties["button_1"]["advances_sequence"] = "chest_1"
-    """
-    if not target:
-        return no_effect(state)
-
-    # Check if target is sequence-locked
-    if target in state.sequence_progress and target not in state.sequence_unlocked:
-        return HandlerResult(
-            applies=True,
-            state=state,
-            observation=f"You try to {action_name} {target}, but it's locked. A specific sequence is required.",
-            success=False,
-            effects=[],
-            surprise_trigger=f"{target} requires a sequence to unlock",
-            blocked=True,  # Don't execute in Habitat
-        )
-
-    # Check if this action advances a sequence
-    sequence_target = state.get_object_property(target, "advances_sequence")
-    if sequence_target and sequence_target in state.sequence_progress:
-        new_progress = copy.copy(state.sequence_progress)
-        current = new_progress.get(sequence_target, 0)
-        new_progress[sequence_target] = current + 1
-        new_state = copy.copy(state)
-        new_state.sequence_progress = new_progress
-
-        required = state.get_object_property(sequence_target, "sequence_length", 3)
-
-        if new_progress[sequence_target] >= required:
-            new_unlocked = copy.copy(state.sequence_unlocked)
-            new_unlocked.add(sequence_target)
-            new_state.sequence_unlocked = new_unlocked
-            return HandlerResult(
-                applies=True,
-                state=new_state,
-                observation=f"You hear a satisfying click - something unlocked!",
-                success=True,
-                effects=[f"sequence_complete={sequence_target}"],
-                surprise_trigger=f"Sequence completed, {sequence_target} unlocked",
-            )
-        else:
-            return HandlerResult(
-                applies=True,
-                state=new_state,
-                observation=f"You hear a small click.",
-                success=True,
-                effects=[f"sequence_progress={new_progress[sequence_target]}/{required}"],
-            )
-
-    return no_effect(state)
-
-
 # =============================================================================
 # Handler Registry
 # =============================================================================
@@ -701,12 +439,8 @@ def handle_sequence_lock(
 MECHANIC_HANDLERS: Dict[str, MechanicHandler] = {
     "inverse_state": handle_inverse_state,
     "remote_control": handle_remote_control,
-    "counting_state": handle_counting_state,
-    "delayed_effect": handle_delayed_effect,
-    "decaying_state": handle_decaying_state,
     "conditional_unlock": handle_conditional_unlock,
     "state_mirroring": handle_state_mirroring,
-    "sequence_lock": handle_sequence_lock,
 }
 
 
