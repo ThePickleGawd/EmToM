@@ -52,6 +52,20 @@ STANDARD_ACTIONS: Dict[str, str] = {
     "Communicate": (
         "Communicate[message]: Send a message to other agents. Example: Communicate[I found the key!]"
     ),
+    "FindObjectTool": (
+        "FindObjectTool[query]: Find the exact name of objects matching a description. "
+        "Use when you know what type of object to look for but not its ID. "
+        "Example: FindObjectTool[books on the shelf] → returns 'book_1 is on shelves_13'"
+    ),
+    "FindReceptacleTool": (
+        "FindReceptacleTool[query]: Find the exact name of furniture/receptacles matching a description. "
+        "Use when you need to find where to place things or where items might be stored. "
+        "Example: FindReceptacleTool[a table in the living room] → returns 'table_16'"
+    ),
+    "FindRoomTool": (
+        "FindRoomTool[query]: Find the exact name of a room matching a description. "
+        "Example: FindRoomTool[a room with a bed] → returns 'bedroom_1'"
+    ),
 }
 
 

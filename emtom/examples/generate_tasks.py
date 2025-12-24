@@ -57,8 +57,6 @@ def print_task(task, index: int):
     print(f"TASK {index}: {task.title}")
     print(f"{'='*60}")
     print(f"Category: {task.category.value}")
-    print(f"Difficulty: {task.difficulty}/5")
-    print(f"Estimated steps: {task.estimated_steps}")
     print(f"Theory of Mind required: {task.theory_of_mind_required}")
     print(f"Communication required: {task.communication_required}")
 
@@ -94,12 +92,6 @@ def print_task(task, index: int):
     print(f"  Required states:")
     for state in task.success_condition.required_states:
         print(f"    - {state}")
-
-    print(f"\nFAILURE CONDITIONS:")
-    for fc in task.failure_conditions:
-        print(f"  - {fc.description}")
-        if fc.max_failed_attempts:
-            print(f"    Max failed attempts: {fc.max_failed_attempts}")
 
     print(f"\nREQUIRED MECHANICS: {task.required_mechanics}")
 

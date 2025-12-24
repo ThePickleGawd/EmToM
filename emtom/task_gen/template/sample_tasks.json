@@ -87,28 +87,7 @@
       "assigned_agent": "agent_1"
     }
   ],
-  "failure_conditions": [
-    {
-      "description": "Too many failed attempts",
-      "failure_states": [],
-      "max_failed_attempts": 10
-    }
-  ],
-  "initial_world_state": {
-    "objects": [
-      "laptop_0",
-      "candle_1",
-      "spoon_2",
-      "cup_3"
-    ],
-    "agent_positions": {
-      "agent_0": "living_room_1",
-      "agent_1": "hallway_1"
-    }
-  },
   "num_agents": 2,
-  "difficulty": 3,
-  "source_trajectory": "trajectory_1512",
   "golden_trajectory": [
     {
       "actions": [

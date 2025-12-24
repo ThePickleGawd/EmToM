@@ -137,23 +137,6 @@ class SuccessCondition:
 
 
 @dataclass
-class FailureCondition:
-    """Defines what causes task failure."""
-
-    description: str
-    failure_states: List[Dict[str, Any]] = field(default_factory=list)
-    max_failed_attempts: Optional[int] = None
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "FailureCondition":
-        return cls(
-            description=data["description"],
-            failure_states=data.get("failure_states", []),
-            max_failed_attempts=data.get("max_failed_attempts"),
-        )
-
-
-@dataclass
 class MechanicBinding:
     """Specifies how a mechanic is bound to scene objects."""
     mechanic_type: str  # "inverse_state", "remote_control", "counting_state"
@@ -212,17 +195,13 @@ class GeneratedTask:
     # INTERNAL (not shown to agents)
     # success_condition is optional - derived from terminal subtasks if not provided
     success_condition: Optional[SuccessCondition]
-    failure_conditions: List[FailureCondition]
-    initial_world_state: Dict[str, Any]
 
     # METADATA
     num_agents: int
-    difficulty: int
     theory_of_mind_required: bool
 
     # Optional
     subtasks: List[Subtask] = field(default_factory=list)
-    source_trajectory: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -264,14 +243,6 @@ class GeneratedTask:
             elif isinstance(s, dict):
                 subtasks.append(Subtask.from_dict(s))
 
-        # Parse failure conditions - handle string placeholders
-        failure_conditions = []
-        raw_failures = data.get("failure_conditions", [])
-        if isinstance(raw_failures, list):
-            for f in raw_failures:
-                if isinstance(f, dict):
-                    failure_conditions.append(FailureCondition.from_dict(f))
-
         # Parse success_condition if present and valid
         success_condition = None
         raw_success = data.get("success_condition")
@@ -294,13 +265,9 @@ class GeneratedTask:
             agent_roles=data.get("agent_roles", {}) if isinstance(data.get("agent_roles"), dict) else {},
             agent_actions=data.get("agent_actions", {}) if isinstance(data.get("agent_actions"), dict) else {},
             success_condition=success_condition,
-            failure_conditions=failure_conditions,
-            initial_world_state=data.get("initial_world_state", {}) if isinstance(data.get("initial_world_state"), dict) else {},
             num_agents=data.get("num_agents", 2),
-            difficulty=data.get("difficulty", 3),
             theory_of_mind_required=data.get("theory_of_mind_required", False),
             subtasks=subtasks,
-            source_trajectory=data.get("source_trajectory"),
         )
 
     # DAG-related methods
@@ -430,22 +397,6 @@ Create an immersive MULTI-STEP puzzle scenario. The "story" field is REQUIRED.
     "story": "2-3 sentences of atmospheric narrative setting up the puzzle. Draw from the escape room inspiration above.",
     "public_goal": "Clear objective using REAL object names (e.g., 'Find the hidden artifact and place it on the table')",
     "public_context": "What both agents know about the situation (no secrets here)",
-    "initial_world_state": {{
-        "objects": ["REAL objects from inventory"],
-        "agent_positions": {{"agent_0": "REAL_room", "agent_1": "REAL_room"}},
-        "hidden_items": {{
-            "drawer_1": ["small_key_1"],
-            "cabinet_2": ["radio_1"],
-            "chest_3": ["big_key_1"]
-        }},
-        "locked_containers": {{
-            "cabinet_2": "small_key",
-            "chest_3": "small_key"
-        }},
-        "items": [
-            {{"item_id": "radio_1", "allowed_rooms": ["living_room_1"]}}
-        ]
-    }},
     "agent_secrets": {{
         "agent_0": ["The hidden knowledge agent_0 has discovered (mechanics, connections, where keys are hidden)"],
         "agent_1": []
@@ -472,10 +423,6 @@ Create an immersive MULTI-STEP puzzle scenario. The "story" field is REQUIRED.
             {{"entity": "agent_0", "property": "has_item", "value": "big_key_1"}}
         ]
     }},
-    "failure_conditions": [
-        {{"description": "What causes failure"}}
-    ],
-    "difficulty": 4,
     "category": "knowledge_asymmetry"
 }}
 
@@ -776,22 +723,6 @@ class TaskGenerator:
             time_limit=sc_data.get("time_limit", 30),
         )
 
-        # Parse failure conditions
-        failure_conditions = []
-        for fc in data.get("failure_conditions", []):
-            failure_conditions.append(FailureCondition(
-                description=fc.get("description", "Task failed"),
-                failure_states=fc.get("failure_states", []),
-                max_failed_attempts=fc.get("max_failed_attempts"),
-            ))
-
-        # Default failure condition if none provided
-        if not failure_conditions:
-            failure_conditions.append(FailureCondition(
-                description="Too many failed attempts",
-                max_failed_attempts=10,
-            ))
-
         # Set theory_of_mind_required based on task_type
         # task_type 1 = Theory of Mind, task_type 2 = Regular
         is_tom_task = (task_type == 1)
@@ -818,11 +749,7 @@ class TaskGenerator:
             agent_roles=data.get("agent_roles", {}),
             agent_actions=data.get("agent_actions", default_agent_actions),
             success_condition=success_condition,
-            failure_conditions=failure_conditions,
-            initial_world_state=data.get("initial_world_state", {}),
             num_agents=num_agents,
-            difficulty=data.get("difficulty", 3 if is_tom_task else 1),
             theory_of_mind_required=is_tom_task,
             subtasks=subtasks,
-            source_trajectory=episode_id,
         )

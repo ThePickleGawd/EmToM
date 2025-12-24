@@ -523,20 +523,45 @@ class HumanTestRunner(EMTOMBaseRunner):
             mode = record.get("mode", "?")
             print(f"  [{record['step']}] {record['agent']} ({mode}): {record['action']}")
 
+    def _get_action_description(self, action_name: str) -> str:
+        """Get description for an action from registry."""
+        from emtom.actions.registry import STANDARD_ACTIONS, ActionRegistry
+
+        # Check standard actions first
+        if action_name in STANDARD_ACTIONS:
+            return STANDARD_ACTIONS[action_name]
+
+        # Check custom actions
+        if ActionRegistry.is_registered(action_name):
+            info = ActionRegistry.get_info(action_name)
+            return f"{action_name}: {info['description']}"
+
+        return f"{action_name}: (no description available)"
+
     def _print_help(self) -> None:
-        """Print help."""
+        """Print help with per-agent actions."""
+        from emtom.actions.registry import STANDARD_ACTIONS, ActionRegistry
+
         print(f"\n{'='*50}")
         print("HELP")
         print(f"{'='*50}")
-        print("Actions:")
-        print("  Navigate[target]  - Move to a location")
-        print("  Open[target]      - Open furniture")
-        print("  Close[target]     - Close furniture")
-        print("  Pick[target]      - Pick up object")
-        print("  Place[target]     - Place held object")
-        print("  Use[target]       - Use/interact with object")
-        print("  Inspect[target]   - Examine object")
-        print("  Communicate[msg]  - Send message to teammate")
+
+        agent_actions = self.task_info.get("agent_actions") if self.task_info else None
+
+        if agent_actions:
+            # Show per-agent actions with descriptions
+            for agent_id in sorted(agent_actions.keys()):
+                actions = agent_actions[agent_id]
+                mode = "human" if agent_id in self.human_agents else "LLM"
+                print(f"\n{agent_id} ({mode}) Actions:")
+                for action_name in actions:
+                    desc = self._get_action_description(action_name)
+                    print(f"  {desc}")
+        else:
+            # Fallback: show all standard actions
+            print("Actions:")
+            for name, desc in sorted(STANDARD_ACTIONS.items()):
+                print(f"  {desc}")
         print("\nCommands:")
         print("  status    - Show full world status")
         print("  subtasks  - Show subtask progress")

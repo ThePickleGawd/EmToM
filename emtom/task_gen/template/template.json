@@ -70,23 +70,7 @@
       "assigned_agent": "agent_1"
     }
   ],
-  "failure_conditions": [
-    {
-      "description": "Too many failed attempts",
-      "failure_states": [],
-      "max_failed_attempts": 10
-    }
-  ],
-  "initial_world_state": {
-    "objects": ["list_of_relevant_objects_from_scene_inventory"],
-    "agent_positions": {
-      "agent_0": "room_from_scene_inventory",
-      "agent_1": "different_room_from_scene_inventory"
-    }
-  },
   "num_agents": 2,
-  "difficulty": 3,
-  "source_trajectory": "trajectory_episode_id",
   "golden_trajectory": [
     {
       "actions": [

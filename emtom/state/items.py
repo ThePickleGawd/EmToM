@@ -84,7 +84,8 @@ class BaseItem(ABC):
     uses_remaining: Optional[int] = None
     hidden_in: Optional[str] = None
 
-    # Task-specific info (set by task generator)
+    # Task-specific info / clue (set by task generator, shown when acquired)
+    # Use this for hints that guide emergent discovery
     task_info: Optional[str] = None
 
     def __init__(self):
@@ -129,9 +130,12 @@ class BaseItem(ABC):
             agent_id: ID of agent acquiring the item
 
         Returns:
-            Message to show agent
+            Message to show agent (includes task_info/clue if present)
         """
-        return f"Obtained {self.name}!"
+        msg = f"Obtained {self.name}!"
+        if self.task_info:
+            msg += f" {self.task_info}"
+        return msg
 
     def can_unlock(self, target_id: str) -> bool:
         """
