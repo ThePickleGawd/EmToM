@@ -21,7 +21,7 @@ from emtom.state.game_state import (
     Goal,
     GoalStatus,
 )
-from emtom.state.items import ItemDefinition, ItemType, BaseItem
+from emtom.state.items import BaseItem
 from emtom.state.item_registry import ItemRegistry
 from emtom.mechanics.handlers import (
     apply_mechanics,
@@ -621,8 +621,8 @@ class GameStateManager:
 
                 for item_id in hidden_items:
                     new_state, success, msg = self.grant_item(agent_id, item_id, source=f"Shake:{target}", state=new_state)
-                    item_def = self.get_item_definition(item_id)
-                    item_name = item_def.name if item_def else item_id
+                    item = self.get_item(item_id)
+                    item_name = item.name if item else item_id
                     found_names.append(item_name)
                     effects.append(f"found={item_id}")
                     effects.append(f"inventory+={item_id}")
@@ -878,21 +878,6 @@ class GameStateManager:
 
     # ========== Inventory Methods ==========
 
-    def get_item_definition(self, item_id: str) -> Optional[ItemDefinition]:
-        """
-        Get the ItemDefinition for an item.
-
-        Args:
-            item_id: The item ID to look up
-
-        Returns:
-            ItemDefinition or None if not found
-        """
-        item_data = self.state.item_definitions.get(item_id)
-        if item_data:
-            return ItemDefinition.from_dict(item_data)
-        return None
-
     def grant_item(
         self,
         agent_id: str,
@@ -1019,23 +1004,6 @@ class GameStateManager:
 
         return None
 
-    def get_item_definition(self, item_id: str) -> Optional[ItemDefinition]:
-        """
-        Get the ItemDefinition for an item.
-
-        DEPRECATED: Use get_item() instead for new code.
-
-        Args:
-            item_id: The item ID to look up
-
-        Returns:
-            ItemDefinition or None if not found
-        """
-        item_data = self.state.item_definitions.get(item_id)
-        if item_data:
-            return ItemDefinition.from_dict(item_data)
-        return None
-
     def get_agent_inventory(self, agent_id: str) -> List[BaseItem]:
         """
         Get all items in agent's inventory.
@@ -1071,13 +1039,40 @@ class GameStateManager:
         lines = ["Your inventory:"]
         for item in items:
             line = f"- {item.name}: {item.description}"
-            if item.item_type == ItemType.TOOL and item.grants_action:
+            if item.grants_action:
                 line += f" (enables {item.grants_action} action)"
+            if item.task_info:
+                line += f" ({item.task_info})"
             if item.consumable and item.uses_remaining is not None:
                 line += f" [{item.uses_remaining} uses remaining]"
             lines.append(line)
 
         return "\n".join(lines)
+
+    def get_agent_passive_effects(self, agent_id: str) -> Dict[str, Any]:
+        """
+        Get all passive effects from items in agent's inventory.
+
+        Collects passive_effects from all items the agent has. Use this
+        to check for special abilities at action time.
+
+        Args:
+            agent_id: Agent to get passive effects for
+
+        Returns:
+            Dict of all passive effects (merged from all items)
+
+        Example:
+            effects = manager.get_agent_passive_effects("agent_0")
+            if effects.get("oracle_world_graph"):
+                # Agent can see full world state
+        """
+        effects: Dict[str, Any] = {}
+        items = self.get_agent_inventory(agent_id)
+        for item in items:
+            if item.passive_effects:
+                effects.update(item.passive_effects)
+        return effects
 
     def use_item(
         self,
@@ -1148,6 +1143,100 @@ class GameStateManager:
             True if agent has the item
         """
         return self.agent_has_item(entity, value)
+
+    def _check_is_unlocked(self, entity: str) -> bool:
+        """
+        Check if a container is unlocked.
+
+        Used for success criteria checking with property="is_unlocked".
+
+        Args:
+            entity: Container ID (e.g., "cabinet_45")
+
+        Returns:
+            True if container is NOT locked
+        """
+        is_locked = self.state.get_object_property(entity, "is_locked", False)
+        return not is_locked
+
+    def _check_is_used(self, entity: str) -> bool:
+        """
+        Check if an item has been used/consumed.
+
+        Used for success criteria checking with property="is_used".
+        An item is "used" if it was granted to some agent but is no longer
+        in any agent's inventory (consumed).
+
+        Args:
+            entity: Item ID (e.g., "item_small_key_1")
+
+        Returns:
+            True if item was granted and is now consumed
+        """
+        # Check if item is in any agent's inventory
+        for agent_id, inventory in self.state.agent_inventory.items():
+            if entity in inventory:
+                return False  # Still in inventory, not used
+
+        # Item not in any inventory - check if it was ever granted
+        # by looking at action history
+        for record in self.state.action_history:
+            # Check if item was obtained via Open, Search, etc.
+            if entity in record.observation:
+                return True  # Item was mentioned in an observation (obtained then used)
+
+        # Also check spawned items
+        for spawned in self.state.spawned_items:
+            if spawned.item_id == entity and spawned.picked_up_by is not None:
+                return True  # Was spawned and picked up, now gone = used
+
+        return False
+
+    # EMTOM game state predicates that can be used in success_condition
+    GAME_STATE_PREDICATES = {"has_item", "is_unlocked", "is_used"}
+
+    def _check_game_state_predicate(self, condition: Dict[str, Any]) -> Optional[bool]:
+        """
+        Check if condition is an EMTOM game state predicate and evaluate it.
+
+        Args:
+            condition: Success condition dict with entity, property, value/target
+
+        Returns:
+            True/False if this is a game state predicate, None if not handled
+        """
+        prop = condition.get("property")
+        if prop not in self.GAME_STATE_PREDICATES:
+            return None  # Not a game state predicate
+
+        entity = condition.get("entity")
+        target = condition.get("target")
+        value = condition.get("value")
+
+        if prop == "has_item":
+            # entity=agent_id, target=item_id
+            item_id = target or value
+            if not item_id:
+                return False
+            return self._check_has_item(entity, item_id)
+
+        elif prop == "is_unlocked":
+            # entity=container_id
+            result = self._check_is_unlocked(entity)
+            # Handle value=False (checking if locked)
+            if value is False:
+                return not result
+            return result
+
+        elif prop == "is_used":
+            # entity=item_id
+            result = self._check_is_used(entity)
+            # Handle value=False (checking if NOT used)
+            if value is False:
+                return not result
+            return result
+
+        return None
 
     # ========== PARTNR-style Evaluation ==========
 
@@ -1247,11 +1336,18 @@ class GameStateManager:
 
         def check_condition(subtask) -> bool:
             """Check if a subtask's success_condition is satisfied."""
-            from emtom.evaluation import evaluate_task, EvaluationResult
-
             condition = subtask.success_condition
             if not condition:
                 return False
+
+            # First, check if this is an EMTOM game state predicate
+            # (has_item, is_unlocked, is_used) - these don't need simulator
+            game_state_result = self._check_game_state_predicate(condition)
+            if game_state_result is not None:
+                return game_state_result
+
+            # Fall back to simulator-based predicates (is_on_top, is_open, etc.)
+            from emtom.evaluation import evaluate_task
 
             # Wrap single condition in required_states format
             success_cond = {

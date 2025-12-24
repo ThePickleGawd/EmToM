@@ -81,8 +81,10 @@ def reveal_items_inside(
     # Add items directly to agent's inventory
     revealed_names = []
     for item_id in items_inside:
-        # Add to agent's inventory
-        game_manager.add_item_to_inventory(agent_id, item_id)
+        # Add to agent's inventory via grant_item
+        state, success, msg = game_manager.grant_item(
+            agent_id, item_id, source=f"Open:{target}", state=state
+        )
         # Get display name
         item = game_manager.get_item(item_id)
         if item:
@@ -91,7 +93,6 @@ def reveal_items_inside(
             revealed_names.append(item_id)
 
     # Clear items_inside (they've been collected)
-    state = game_manager.get_state()  # Re-fetch after inventory changes
     state = state.set_object_property(target, "items_inside", [])
     game_manager.set_state(state)
 

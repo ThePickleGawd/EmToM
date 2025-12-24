@@ -109,11 +109,18 @@ class EMTOMBaseRunner(ABC):
         self.world_adapter = HabitatWorldAdapter(self.env_interface, agent_uid=0)
 
         # Determine mechanics to use
-        if task_data and task_data.get("mechanics"):
+        # If task_data is provided (even with empty mechanics), respect the task definition
+        # Only enable all mechanics if task_data is None (exploration mode)
+        if task_data is not None:
+            # Task mode: use only the mechanics defined in the task
             self.game_manager.initialize_from_task(task_data)
-            print(f"[EMTOMBaseRunner] Loaded mechanics from task: {len(task_data['mechanics'])} bindings")
+            mechanics_count = len(task_data.get("mechanics", []))
+            if mechanics_count > 0:
+                print(f"[EMTOMBaseRunner] Loaded mechanics from task: {mechanics_count} bindings")
+            else:
+                print("[EMTOMBaseRunner] Task has no mechanics defined")
         else:
-            # Default: enable all mechanics
+            # Exploration mode: enable all mechanics
             all_mechanics = list_mechanics()
             self.game_manager.initialize_from_task({
                 "mechanics": [{"mechanic_type": m} for m in all_mechanics]
@@ -126,8 +133,9 @@ class EMTOMBaseRunner(ABC):
         state.entities = entities
         self.game_manager.set_state(state)
 
-        # Auto-bind if no explicit bindings provided
-        if not (task_data and task_data.get("mechanics")):
+        # Auto-bind only if no task_data provided at all (exploration mode)
+        # If task_data is provided (even with empty mechanics), respect the task definition
+        if task_data is None:
             state, bindings = self.game_manager.auto_bind_mechanics()
             if bindings:
                 self._print_bindings(bindings)
@@ -267,41 +275,37 @@ class EMTOMBaseRunner(ABC):
         Returns:
             True if a tool was injected, False otherwise
         """
-        from emtom.state.items import ItemType
         from emtom.actions.custom_actions import DynamicItemTool
 
         if uid not in self.agents:
             return False
 
-        item_def = self.game_manager.get_item_definition(item_id)
-        if not item_def or item_def.item_type != ItemType.TOOL:
-            return False
-
-        if not item_def.grants_action:
+        item = self.game_manager.get_item(item_id)
+        if not item or not item.grants_action:
             return False
 
         agent = self.agents[uid]
 
         # Skip if agent already has this tool
-        if item_def.grants_action in agent.tools:
+        if item.grants_action in agent.tools:
             return False
 
         # Create the dynamic tool
         tool = DynamicItemTool(
-            name=item_def.grants_action,
-            description=item_def.action_description or f"Use {item_def.name}",
+            name=item.grants_action,
+            description=item.action_description or f"Use {item.name}",
             item_id=item_id,
-            argument_types=item_def.action_targets or ["OBJECT_INSTANCE", "FURNITURE_INSTANCE"],
-            consumable=item_def.consumable,
+            argument_types=item.action_targets or ["OBJECT_INSTANCE", "FURNITURE_INSTANCE"],
+            consumable=item.consumable,
             agent_uid=uid,
-            allowed_rooms=item_def.allowed_rooms,  # Room restrictions for ToM tasks
+            allowed_rooms=item.allowed_rooms,  # Room restrictions for ToM tasks
         )
         tool.set_environment(self.env_interface)
         tool.set_game_manager(self.game_manager)
 
-        agent.tools[item_def.grants_action] = tool
-        rooms_info = f" (works in: {', '.join(item_def.allowed_rooms)})" if item_def.allowed_rooms else ""
-        print(f"[EMTOMBaseRunner] Injected {item_def.grants_action} tool from {item_def.name} for agent_{uid}{rooms_info}")
+        agent.tools[item.grants_action] = tool
+        rooms_info = f" (works in: {', '.join(item.allowed_rooms)})" if item.allowed_rooms else ""
+        print(f"[EMTOMBaseRunner] Injected {item.grants_action} tool from {item.name} for agent_{uid}{rooms_info}")
         return True
 
     def check_and_inject_item_tools(self, uid: int) -> None:

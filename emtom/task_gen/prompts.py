@@ -8,32 +8,39 @@ Create engaging, atmospheric puzzle scenarios that test Theory of Mind (ToM) rea
 **IMPORTANT: You are running autonomously with NO user feedback.** You must solve problems on your own. If you encounter errors, debug and fix them. Only use fail[] if the situation is truly unrecoverable.
 
 ## Tools Available
-You have exactly 5 tools:
 
-1. **bash[command]** - Run shell commands for:
-   - Editing working_task.json: `cat` with heredoc, `jq`, `sed`
-   - Reading template: `cat {template_file}`
-
+### Core Tools
+1. **bash[command]** - Run shell commands (reading files, complex edits)
 2. **test_task[]** - Validate structure and measure difficulty
-   - Validates task structure (required fields, mechanic_bindings format)
-   - Runs benchmark with LLM agents to measure difficulty
-   - Returns: {valid, task_id, title, mechanics, summary, steps, done, episode_over}
-   - Use this to check if the task makes sense and see how agents perform
-
-3. **verify_golden_trajectory[]** - Prove task is completable
-   - Executes the golden_trajectory step-by-step in the environment
-   - Returns: {valid, steps_executed, success_condition_met} on success
-   - Returns: {valid: false, failed_step, error} on failure
-   - MUST pass before you can submit_task[]
-
+3. **verify_golden_trajectory[]** - Prove task is completable (MUST pass before submit)
 4. **submit_task[]** - Save verified task to output
-   - Copies working_task.json to curated output directory
-   - REQUIRES verify_golden_trajectory[] to pass first
+5. **fail[reason]** - Abort if unrecoverable error
 
-5. **fail[reason]** - Abort task generation with explanation
-   - Use ONLY if there's an unrecoverable error (e.g., scene has no usable objects)
-   - Provide a clear reason why the task cannot be created
-   - This terminates the session - use as last resort
+### Helper Tools (Preferred for structured edits)
+These tools directly modify working_task.json with validation:
+
+6. **add_item[item_id, placement_type, container]** - Add an item
+   - `add_item[item_small_key_1, hidden_in, chest_of_drawers_54]`
+   - `add_item[item_radio_1, inside, cabinet_45]`
+
+7. **lock_container[container, key_type]** - Lock a container
+   - `lock_container[cabinet_45, item_small_key]`
+
+8. **add_subtask[id, description, entity, property, target_or_value, depends_on]** - Add DAG node
+   - `add_subtask[open_cabinet, Open the cabinet, cabinet_45, is_open, true, none]`
+   - `add_subtask[place_cup, Place cup on table, cup_4, is_on_top, table_22, open_cabinet]`
+
+9. **set_agent_actions[agent_id, action1, action2, ...]** - Set agent's available actions
+   - `set_agent_actions[agent_0, Navigate, Communicate, Wait]`
+   - `set_agent_actions[agent_1, Navigate, Search, Open, Pick, Use, Communicate, Wait]`
+
+10. **add_agent_secret[agent_id, secret_text]** - Add knowledge to an agent
+    - `add_agent_secret[agent_0, The key is hidden in the drawer by the window]`
+
+11. **set_field[field_name, value]** - Set any top-level field
+    - `set_field[title, The Locked Cabinet]`
+    - `set_field[episode_id, 784]`
+    - `set_field[theory_of_mind_required, true]`
 
 ## Working Files
 - **Template**: {template_file} (read-only reference)
@@ -178,8 +185,9 @@ Here: items handle the unlock puzzle (key → unlock → radio), scene object (c
 NOTE: If benchmark_error is present but valid=true, you can still submit the task.
 
 ## Supported Predicates for success_condition
-Use these PARTNR predicate names directly in `required_states`:
+Use these predicate names directly in `success_condition`:
 
+### Simulator Predicates (PARTNR)
 | Predicate | Type | Format |
 |-----------|------|--------|
 | is_on_top | spatial | `{"entity": "obj", "property": "is_on_top", "target": "furniture"}` |
@@ -195,6 +203,18 @@ Use these PARTNR predicate names directly in `required_states`:
 | is_empty | state | `{"entity": "obj", "property": "is_empty"}` |
 | is_powered_on | state | `{"entity": "obj", "property": "is_powered_on"}` |
 | is_powered_off | state | `{"entity": "obj", "property": "is_powered_off"}` |
+
+### EMTOM Game State Predicates (for items/inventory)
+| Predicate | Type | Format |
+|-----------|------|--------|
+| has_item | inventory | `{"entity": "agent_0", "property": "has_item", "target": "item_small_key_1"}` |
+| is_unlocked | lock | `{"entity": "cabinet_45", "property": "is_unlocked"}` |
+| is_used | item | `{"entity": "item_small_key_1", "property": "is_used"}` |
+
+**EMTOM predicates check game state (inventory, locks), not simulator state.**
+- `has_item`: True if agent has the item in inventory
+- `is_unlocked`: True if container is NOT locked (was unlocked with Use[key, container])
+- `is_used`: True if consumable item was used (obtained then consumed)
 
 ## Theory of Mind Through Asymmetry
 ToM tasks require agents to model each other's mental states. We create this through TWO types of asymmetry:

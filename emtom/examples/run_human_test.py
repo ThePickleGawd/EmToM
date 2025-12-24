@@ -265,10 +265,13 @@ def main(config: DictConfig):
     # Load task or setup mechanics
     task_info = None
     task_data = {"mechanics": []}
+    is_task_mode = False  # Track if we're running a specific task
 
     if extra_args and extra_args.task:
         task_info = load_task(extra_args.task)
         if task_info:
+            is_task_mode = True  # Running a specific task
+
             # Print task information including agent secrets
             print_task_info(task_info)
 
@@ -283,7 +286,7 @@ def main(config: DictConfig):
                     cprint(f"Warning: Could not load episode {task_episode_id}: {e}", "yellow")
                     cprint("Continuing with current episode...", "yellow")
 
-            # Use mechanics from task
+            # Use mechanics from task (even if empty - we respect the task definition)
             if task_info.get("mechanic_bindings"):
                 task_data["mechanics"] = task_info["mechanic_bindings"]
                 cprint(f"  Mechanics: {len(task_data['mechanics'])} from task", "green")
@@ -292,6 +295,8 @@ def main(config: DictConfig):
                     trigger = binding.get("trigger_object", "?")
                     target = binding.get("target_object", "self")
                     print(f"    - {mech_type}: {trigger} -> {target}")
+            else:
+                cprint("  Mechanics: none (task has no mechanics)", "green")
 
     elif extra_args and extra_args.mechanics:
         cprint(f"Using mechanics from CLI: {extra_args.mechanics}", "green")
@@ -299,7 +304,7 @@ def main(config: DictConfig):
             task_data["mechanics"].append({"mechanic_type": mech_name})
 
     else:
-        # Default: use all mechanics
+        # Default exploration mode: use all mechanics
         all_mechanics = list_mechanics()
         cprint(f"Using all mechanics: {all_mechanics}", "yellow")
         for mech_name in all_mechanics:
@@ -314,14 +319,17 @@ def main(config: DictConfig):
     runner = HumanTestRunner(config)
     runner.setup(
         env_interface=env_interface,
-        task_data=task_data if task_data["mechanics"] else None,
+        # In task mode, always pass task_data (even if empty) to prevent auto-bind in base.py
+        # In exploration mode, pass task_data with all mechanics enabled
+        task_data=task_data,
         output_dir=output_dir,
         task_info=task_info,
         human_agents=human_agents,
     )
 
-    # If no explicit bindings and no task, auto-bind
-    if not (extra_args and extra_args.task and task_info and task_info.get("mechanic_bindings")):
+    # Only auto-bind mechanics if NOT in task mode (exploration mode only)
+    # When running a specific task, use ONLY the mechanics defined in the task
+    if not is_task_mode:
         state, bindings = runner.game_manager.auto_bind_mechanics()
         if bindings:
             print_bindings_pretty(bindings)

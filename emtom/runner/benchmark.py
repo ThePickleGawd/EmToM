@@ -32,6 +32,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
         self.planners: Dict[int, Any] = {}  # uid -> LLMPlanner
         self.task: Optional["GeneratedTask"] = None
+        self._completed_subtasks: set = set()  # Track completed subtask IDs
 
     def setup(
         self,
@@ -186,6 +187,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         if response:
                             print(f"  → {response}", flush=True)
 
+                        # Check for subtask completion after each action
+                        self._check_subtasks()
+
                     if planner_done:
                         planners_done.add(uid)
                         print(f"[Agent {uid} DONE]", flush=True)
@@ -226,6 +230,63 @@ class BenchmarkRunner(EMTOMBaseRunner):
             "action_history": self._action_history,
             "evaluation": evaluation,
         }
+
+    def _check_subtasks(self) -> List[str]:
+        """
+        Check all subtasks and return list of newly completed subtask IDs.
+
+        Logs completion to console when a subtask is newly completed.
+        """
+        if not self.task or not self.task.subtasks:
+            return []
+
+        subtasks = self.task.subtasks
+        newly_completed = []
+
+        for subtask in subtasks:
+            subtask_id = subtask.id if hasattr(subtask, 'id') else subtask.get("id", "")
+            if not subtask_id or subtask_id in self._completed_subtasks:
+                continue
+
+            # Check if all dependencies are completed first
+            if hasattr(subtask, 'depends_on'):
+                depends_on = subtask.depends_on
+            else:
+                depends_on = subtask.get("depends_on", [])
+            if not all(dep in self._completed_subtasks for dep in depends_on):
+                # Dependencies not met, skip this subtask
+                continue
+
+            # Get success condition
+            if hasattr(subtask, 'success_condition'):
+                success_condition = subtask.success_condition
+            else:
+                success_condition = subtask.get("success_condition")
+
+            if not success_condition:
+                continue
+
+            # Check this subtask's condition
+            result = self.evaluate_task({"required_states": [success_condition]})
+            if result and result.get("success"):
+                self._completed_subtasks.add(subtask_id)
+                newly_completed.append(subtask_id)
+
+                # Get description
+                if hasattr(subtask, 'description'):
+                    desc = subtask.description
+                else:
+                    desc = subtask.get("description", subtask_id)
+
+                # Log the completion
+                total = len(subtasks)
+                print(f"\n{'─'*50}", flush=True)
+                print(f"✓ SUBTASK COMPLETE: {subtask_id}", flush=True)
+                print(f"  {desc}", flush=True)
+                print(f"  Progress: {len(self._completed_subtasks)}/{total} subtasks", flush=True)
+                print(f"{'─'*50}", flush=True)
+
+        return newly_completed
 
     def _extract_high_level_action(self, planner_info: Dict, uid: int) -> Optional[str]:
         """Extract high-level action string from planner info."""

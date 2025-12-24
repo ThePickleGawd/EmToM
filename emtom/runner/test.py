@@ -32,6 +32,7 @@ class HumanTestRunner(EMTOMBaseRunner):
         self.human_agents: Set[str] = set()
         self.planners: Dict[int, Any] = {}  # uid -> LLMPlanner for LLM agents
         self.task_info: Optional[Dict[str, Any]] = None
+        self._completed_subtasks: Set[str] = set()  # Track completed subtask IDs
 
     def setup(
         self,
@@ -168,7 +169,10 @@ class HumanTestRunner(EMTOMBaseRunner):
                         "mode": "human" if agent_id in self.human_agents else "llm",
                     })
 
-                    # Check for task completion after each action
+                    # Check for subtask completion after each action
+                    self._check_subtasks()
+
+                    # Check for overall task completion
                     eval_result = self._check_task_completion()
                     if eval_result and eval_result.get("success"):
                         print(f"\n{'='*60}")
@@ -210,34 +214,113 @@ class HumanTestRunner(EMTOMBaseRunner):
 
         return self.evaluate_task(success_condition)
 
+    def _check_subtasks(self) -> List[str]:
+        """
+        Check all subtasks and return list of newly completed subtask IDs.
+
+        Only evaluates subtasks whose dependencies (depends_on) are all completed.
+        Logs completion to console when a subtask is newly completed.
+        """
+        if not self.task_info:
+            return []
+
+        subtasks = self.task_info.get("subtasks", [])
+        if not subtasks:
+            return []
+
+        newly_completed = []
+
+        for subtask in subtasks:
+            subtask_id = subtask.get("id", "")
+            if not subtask_id or subtask_id in self._completed_subtasks:
+                continue
+
+            # Check if all dependencies are completed
+            depends_on = subtask.get("depends_on", [])
+            if not all(dep in self._completed_subtasks for dep in depends_on):
+                # Dependencies not met, skip this subtask
+                continue
+
+            success_condition = subtask.get("success_condition")
+            if not success_condition:
+                continue
+
+            # Check this subtask's condition
+            result = self.evaluate_task({"required_states": [success_condition]})
+            if result and result.get("success"):
+                self._completed_subtasks.add(subtask_id)
+                newly_completed.append(subtask_id)
+
+                # Log the completion
+                desc = subtask.get("description", subtask_id)
+                print(f"\n{'─'*50}")
+                print(f"✓ SUBTASK COMPLETE: {subtask_id}")
+                print(f"  {desc}")
+                print(f"  Progress: {len(self._completed_subtasks)}/{len(subtasks)} subtasks")
+                print(f"{'─'*50}")
+
+        return newly_completed
+
+    def _print_subtasks(self) -> None:
+        """Print current subtask status."""
+        if not self.task_info:
+            print("No task info available.")
+            return
+
+        subtasks = self.task_info.get("subtasks", [])
+        if not subtasks:
+            print("No subtasks defined.")
+            return
+
+        print(f"\n{'='*60}")
+        print(f"SUBTASKS ({len(self._completed_subtasks)}/{len(subtasks)} complete)")
+        print(f"{'='*60}")
+
+        for subtask in subtasks:
+            subtask_id = subtask.get("id", "unknown")
+            desc = subtask.get("description", "")
+            assigned = subtask.get("assigned_agent", "")
+            depends = subtask.get("depends_on", [])
+
+            if subtask_id in self._completed_subtasks:
+                status = "✓"
+            else:
+                # Check if dependencies are met
+                deps_met = all(d in self._completed_subtasks for d in depends)
+                status = "○" if deps_met else "◌"
+
+            agent_info = f" [{assigned}]" if assigned else ""
+            print(f"  {status} {subtask_id}{agent_info}: {desc}")
+
+        print(f"{'='*60}")
+
     def _print_header(self) -> None:
-        """Print task header with story."""
-        if self.task_info:
-            print(f"\n{'='*60}")
-            print(f"TASK: {self.task_info.get('title', 'Unknown')}")
-            print(f"{'='*60}")
-            # Print story first (sets the scene)
-            if self.task_info.get('story'):
-                print(f"\n{self.task_info['story']}\n")
-            print(f"Goal: {self.task_info.get('public_goal', 'N/A')}")
-            if self.task_info.get('public_context'):
-                print(f"Context: {self.task_info['public_context']}")
+        """Print task header - minimal since run_human_test.py already prints details."""
+        # Task info is already printed by run_human_test.py, so just print a separator
+        pass
 
     def _print_controls(self) -> None:
-        """Print control instructions."""
+        """Print control instructions with per-agent actions."""
         print(f"\n{'='*60}")
         print("CONTROLS")
         print(f"{'='*60}")
-        print("Actions: Navigate[target], Open[target], Close[target], Pick[target], Place[target]")
-        print("         Use[target], Inspect[target], Communicate[message]")
-        print("Commands: status, mechanics, history, skip, quit, help")
-        print(f"Human agents: {sorted(self.human_agents)}")
-        llm_agents = sorted(f"agent_{uid}" for uid in self.planners.keys())
-        print(f"LLM agents: {llm_agents}")
+
+        # Show per-agent actions if available
+        agent_actions = self.task_info.get("agent_actions") if self.task_info else None
+        if agent_actions:
+            for agent_id in sorted(agent_actions.keys()):
+                actions = agent_actions[agent_id]
+                mode = "human" if agent_id in self.human_agents else "LLM"
+                print(f"  {agent_id} ({mode}): {', '.join(actions)}")
+        else:
+            print("Actions: Navigate[target], Open[target], Close[target], Pick[target], Place[target]")
+            print("         Use[target], Inspect[target], Communicate[message]")
+
+        print(f"\nCommands: status, subtasks, mechanics, history, skip, quit, help")
         print(f"{'='*60}")
 
     def _print_agent_status(self, uid: int) -> None:
-        """Print status for an agent."""
+        """Print status for an agent (location and inventory only)."""
         agent_id = f"agent_{uid}"
         mode = "human" if agent_id in self.human_agents else "LLM"
 
@@ -249,32 +332,27 @@ class HumanTestRunner(EMTOMBaseRunner):
 
         print(f"\n--- {agent_id} ({mode}) in {room} ---")
 
-        # Show nearby entities
-        try:
-            entities = self.world_adapter.get_interactable_entities()
-            furniture = [e["name"] for e in entities if e["type"] == "furniture"][:10]
-            objects = [e["name"] for e in entities if e["type"] == "object"]
-
-            if furniture:
-                print(f"Furniture: {', '.join(furniture)}")
-            if objects:
-                print(f"Objects: {', '.join(objects)}")
-        except Exception:
-            pass
-
-        # Show inventory
+        # Show inventory only (use FindObjectTool/FindRoomTool for other info)
         try:
             state = self.game_manager.get_state()
-            inventory = state.agent_inventory.get(agent_id, [])
+            inventory = state.agent_inventory.get(agent_id, set())
             if inventory:
-                world_objects = getattr(state, 'world_objects', {})
-                inv_names = [
-                    world_objects.get(item, {}).get("name", item)
-                    for item in inventory
-                ]
+                # Get item names from definitions
+                inv_names = []
+                for item_id in inventory:
+                    item_def = state.item_definitions.get(item_id)
+                    if item_def:
+                        inv_names.append(item_def.get("name", item_id))
+                    else:
+                        inv_names.append(item_id)
                 print(f"Inventory: {', '.join(inv_names)}")
+            else:
+                print("Inventory: (empty)")
         except Exception:
             pass
+
+        # Hint about using tools
+        print("(Use FindObjectTool, FindRoomTool to explore)")
 
     def _get_human_input(self, agent_id: str) -> Optional[str]:
         """Get action from human via CLI."""
@@ -309,6 +387,10 @@ class HumanTestRunner(EMTOMBaseRunner):
 
             if cmd_lower == "history":
                 self._print_history()
+                continue
+
+            if cmd_lower == "subtasks":
+                self._print_subtasks()
                 continue
 
             if cmd_lower == "help":
@@ -457,6 +539,7 @@ class HumanTestRunner(EMTOMBaseRunner):
         print("  Communicate[msg]  - Send message to teammate")
         print("\nCommands:")
         print("  status    - Show full world status")
+        print("  subtasks  - Show subtask progress")
         print("  mechanics - Show active mechanics")
         print("  history   - Show action history")
         print("  skip      - Skip this agent's turn")

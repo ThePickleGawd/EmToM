@@ -12,13 +12,10 @@ Design principles:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Set, Tuple
 from enum import Enum
 import json
 import copy
-
-if TYPE_CHECKING:
-    from emtom.state.items import ItemDefinition
 
 
 class GoalStatus(Enum):
@@ -81,22 +78,6 @@ class Goal:
 
 
 @dataclass
-class AgentBelief:
-    """What an agent believes about the world (for ToM)."""
-    agent_id: str
-    # Object states the agent believes to be true
-    believed_states: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    # Objects the agent knows about
-    known_objects: Set[str] = field(default_factory=set)
-    # Objects the agent has seen hidden
-    known_hidden: Set[str] = field(default_factory=set)
-    # Mechanics the agent has discovered
-    discovered_mechanics: Set[str] = field(default_factory=set)
-    # Last known locations of objects
-    last_known_locations: Dict[str, str] = field(default_factory=dict)
-
-
-@dataclass
 class EMTOMGameState:
     """
     Central game state for EMTOM.
@@ -143,8 +124,6 @@ class EMTOMGameState:
     # remote_control: mappings from trigger -> (target, state)
     remote_mappings: Dict[str, Tuple[str, str]] = field(default_factory=dict)
 
-    # === Agent beliefs (ToM) ===
-    agent_beliefs: Dict[str, AgentBelief] = field(default_factory=dict)
     # Per-agent observation history
     agent_observations: Dict[str, List[str]] = field(default_factory=dict)
     # Per-agent inventory (items collected, not in world graph)
@@ -164,7 +143,7 @@ class EMTOMGameState:
     active_mechanics: List[str] = field(default_factory=list)
 
     # === Item definitions (from task definition) ===
-    # Maps item_id -> ItemDefinition dict (stored as dict for serialization)
+    # Maps item_id -> item data dict (stored as dict for serialization)
     item_definitions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def get_object_property(self, obj_id: str, prop: str, default: Any = None) -> Any:

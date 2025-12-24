@@ -4,7 +4,7 @@ Built-in items for the EMTOM inventory system.
 These are the standard items available in EMTOM scenarios:
 - SmallKey: Common key that unlocks small containers (consumed on use)
 - BigKey: Rare key for final objectives (reusable)
-- Radio: Enables inter-agent communication
+- Radio: Grants Communicate action when obtained
 
 Item naming convention:
 - All item IDs use "item_" prefix (e.g., "item_small_key_1")
@@ -14,7 +14,7 @@ Item naming convention:
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
 from emtom.state.item_registry import register_item
-from emtom.state.items import BaseItem, ItemType
+from emtom.state.items import BaseItem
 
 if TYPE_CHECKING:
     from emtom.state.manager import GameStateManager
@@ -33,7 +33,6 @@ class SmallKey(BaseItem):
 
     name = "Small Key"
     description = "A small brass key. Use[item_small_key_N, container] to unlock."
-    item_type = ItemType.KEY
     consumable = True  # Single use - consumed when used
     use_args = ["container"]  # Requires 1 arg: what to unlock
 
@@ -64,7 +63,6 @@ class BigKey(BaseItem):
 
     name = "Big Key"
     description = "A large ornate key. Use[item_big_key_N, container] to unlock."
-    item_type = ItemType.KEY
     consumable = False  # Reusable
     use_args = ["container"]  # Requires 1 arg: what to unlock
 
@@ -87,7 +85,7 @@ class Radio(BaseItem):
     """
     A two-way radio for inter-agent communication.
 
-    TOOL item - grants the Communicate action when obtained.
+    Grants the Communicate action when obtained.
     Not consumable - can be used unlimited times.
 
     Usage: Communicate[message] (granted action, not Use)
@@ -95,11 +93,10 @@ class Radio(BaseItem):
 
     name = "Two-Way Radio"
     description = "A handheld radio. Grants Communicate[message] action when obtained."
-    item_type = ItemType.TOOL
     consumable = False
     use_args = []  # No args needed (uses granted Communicate action instead)
 
-    # TOOL-specific: grants Communicate action
+    # Grants Communicate action
     grants_action = "Communicate"
     action_description = "Communicate[message]: Send a message to other agents."
 

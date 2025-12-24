@@ -49,11 +49,11 @@
     },
     {
       "id": "step_2",
-      "description": "Second step - depends on step_1",
+      "description": "Agent obtains the key from cabinet",
       "success_condition": {
-        "entity": "object_id",
-        "property": "is_held_by",
-        "target": "agent_1"
+        "entity": "agent_1",
+        "property": "has_item",
+        "target": "item_small_key_1"
       },
       "depends_on": ["step_1"],
       "assigned_agent": "agent_1"

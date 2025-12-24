@@ -14,7 +14,6 @@ Usage:
     class SmallKey(BaseItem):
         name = "Small Key"
         description = "A small brass key. Use[item_small_key_N, container] to unlock."
-        item_type = ItemType.KEY
         consumable = True
         use_args = ["container"]
 
@@ -180,8 +179,9 @@ class ItemRegistry:
             "item_id": item_id,
             "name": getattr(cls, "name", item_id),
             "description": getattr(cls, "description", ""),
-            "item_type": getattr(cls, "item_type", None),
             "consumable": getattr(cls, "consumable", False),
+            "grants_action": getattr(cls, "grants_action", None),
+            "passive_effects": getattr(cls, "passive_effects", {}),
             "class": cls.__name__,
         }
 
@@ -208,10 +208,9 @@ class ItemRegistry:
         lines = ["Registered Items:", "=" * 40]
         for item_id in sorted(_ITEM_REGISTRY.keys()):
             info = ItemRegistry.get_info(item_id)
-            item_type = info["item_type"]
-            type_str = item_type.value if item_type else "unknown"
             consumable = " (consumable)" if info["consumable"] else ""
-            lines.append(f"  - {info['name']} [{type_str}]{consumable}: {info['description'][:50]}...")
+            grants = f" [grants: {info['grants_action']}]" if info["grants_action"] else ""
+            lines.append(f"  - {info['name']}{consumable}{grants}: {info['description'][:50]}...")
         return "\n".join(lines)
 
     @staticmethod
@@ -221,22 +220,16 @@ class ItemRegistry:
 
         Returns a detailed string that tells the LLM:
         - What items are available (with item_id for use in JSON)
-        - How each item works (type, consumable, use_args)
+        - How each item works (consumable, use_args, grants_action)
         - How to use items in task definitions
 
         Returns:
             Formatted string for LLM prompts
         """
-        from emtom.state.items import ItemType
-
         lines = []
         lines.append("Item IDs always use 'item_' prefix (e.g., item_small_key_1).")
         lines.append("This distinguishes them from scene objects (e.g., cup_1).")
         lines.append("")
-
-        # Group by item type
-        key_items = []
-        tool_items = []
 
         for item_id in sorted(_ITEM_REGISTRY.keys()):
             cls = _ITEM_REGISTRY[item_id]
@@ -245,45 +238,33 @@ class ItemRegistry:
                 "item_id": item_id,
                 "name": getattr(cls, "name", item_id),
                 "description": getattr(cls, "description", ""),
-                "item_type": getattr(cls, "item_type", ItemType.KEY),
                 "consumable": getattr(cls, "consumable", False),
                 "use_args": use_args,
                 "grants_action": getattr(cls, "grants_action", None),
                 "action_description": getattr(cls, "action_description", None),
+                "passive_effects": getattr(cls, "passive_effects", {}),
             }
 
-            if info["item_type"] == ItemType.TOOL:
-                tool_items.append(info)
-            else:
-                key_items.append(info)
+            # Item header
+            consumable_str = "consumable" if info["consumable"] else "reusable"
+            lines.append(f"- {info['item_id']}: {info['name']} ({consumable_str})")
+            lines.append(f"    {info['description']}")
 
-        # KEY items section
-        if key_items:
-            lines.append("KEY Items (unlock containers, satisfy possession goals):")
-            for info in key_items:
-                consumable_str = "consumable, single-use" if info["consumable"] else "reusable"
-                lines.append(f"  - {info['item_id']}: {info['name']} ({consumable_str})")
-                lines.append(f"    {info['description']}")
-                # Show use_args
-                if info["use_args"]:
-                    usage = f"Use[{info['item_id']}_N, {', '.join(info['use_args'])}]"
-                else:
-                    usage = f"Use[{info['item_id']}_N]"
+            # Show use_args
+            if info["use_args"]:
+                usage = f"Use[{info['item_id']}_N, {', '.join(info['use_args'])}]"
                 lines.append(f"    Usage: {usage}")
 
-        # TOOL items section
-        if tool_items:
-            if lines:
-                lines.append("")
-            lines.append("TOOL Items (grant new actions when obtained):")
-            for info in tool_items:
-                consumable_str = "consumable" if info["consumable"] else "unlimited uses"
-                lines.append(f"  - {info['item_id']}: {info['name']} ({consumable_str})")
-                lines.append(f"    {info['description']}")
-                if info["grants_action"]:
-                    lines.append(f"    Grants action: {info['grants_action']}")
+            # Show granted action
+            if info["grants_action"]:
+                lines.append(f"    Grants action: {info['grants_action']}")
                 if info["action_description"]:
-                    lines.append(f"    Action usage: {info['action_description']}")
+                    lines.append(f"    Action: {info['action_description']}")
+
+            # Show passive effects
+            if info["passive_effects"]:
+                effects_str = ", ".join(info["passive_effects"].keys())
+                lines.append(f"    Passive effects: {effects_str}")
 
         return "\n".join(lines)
 

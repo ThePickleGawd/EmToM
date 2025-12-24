@@ -18,17 +18,18 @@ Usage:
         completed = manager.check_goals()
 
 Creating custom items:
-    from emtom.state import register_item, BaseItem, ItemType
+    from emtom.state import register_item, BaseItem
 
-    @register_item("magic_wand")
+    @register_item("item_magic_wand")
     class MagicWand(BaseItem):
         name = "Magic Wand"
         description = "A wand that casts spells."
-        item_type = ItemType.TOOL
+        grants_action = "CastSpell"
         consumable = True
         uses = 3
+        passive_effects = {"magic_aura": True}
 
-        def on_use(self, game_manager, agent_id, target):
+        def on_use(self, game_manager, agent_id, args):
             return True, "You cast a spell!"
 """
 
@@ -39,7 +40,6 @@ from emtom.state.game_state import (
     ActionRecord,
     Goal,
     GoalStatus,
-    AgentBelief,
 )
 
 from emtom.state.manager import (
@@ -48,9 +48,7 @@ from emtom.state.manager import (
 )
 
 from emtom.state.items import (
-    ItemType,
     BaseItem,
-    ItemDefinition,  # Legacy, for backward compatibility
 )
 
 from emtom.state.item_registry import (
@@ -71,17 +69,13 @@ __all__ = [
     "ActionRecord",
     "Goal",
     "GoalStatus",
-    "AgentBelief",
     # Manager
     "GameStateManager",
     "ActionExecutionResult",
-    # Items - new system
-    "ItemType",
+    # Items
     "BaseItem",
     "register_item",
     "ItemRegistry",
     "clear_registry",
     "get_registry",
-    # Items - legacy (deprecated)
-    "ItemDefinition",
 ]
