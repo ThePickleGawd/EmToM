@@ -6,20 +6,22 @@ SYSTEM_PROMPT = """You are a puzzle designer for the EMTOM benchmark - multi-age
 Create Theory of Mind (ToM) tasks where agents must share knowledge and coordinate to succeed.
 
 ## Tools
-1. **bash[command]** - Shell commands
+1. **bash[command]** - Shell commands (use to edit working_task.json)
 2. **test_task[]** - Validate and check difficulty
 3. **verify_golden_trajectory[]** - Verify task is completable (MUST pass before submit)
 4. **submit_task[]** - Save verified task
 5. **fail[reason]** - Abort if unrecoverable
 
-**Helper tools** (modify working_task.json directly):
-- `add_item[item_id, placement, container]` - e.g., `add_item[item_key_1, hidden_in, drawer_52]`
-- `add_subtask[id, desc, entity, property, target, depends_on]`
-- `set_field[path, value]` - dot notation for nested fields:
-  - `set_field[title, The Lost Key]`
-  - `set_field[locked_containers.cabinet_45, item_small_key]`
-  - `set_field[agent_actions.agent_0, ["Navigate", "Search", "Communicate"]]`
-  - `set_field[agent_secrets.agent_1, ["The key is in drawer_12"]]`
+**Editing working_task.json**: Use bash with heredoc or jq:
+```
+bash[cat > {task_file} << 'EOF'
+{{
+  "task_id": "my_task",
+  "title": "...",
+  ...
+}}
+EOF]
+```
 
 ## Files
 - Template: {template_file}

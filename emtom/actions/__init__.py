@@ -16,7 +16,7 @@ from emtom.actions.custom_actions import (
     EMTOMAction,
     EMTOMActionExecutor,
     DynamicItemTool,
-    UseAction,
+    UseItemAction,
     SearchAction,
     InspectAction,
     EMTOM_ACTIONS,
@@ -43,7 +43,7 @@ __all__ = [
     "EMTOMActionExecutor",
     "DynamicItemTool",
     # Actions (auto-registered)
-    "UseAction",
+    "UseItemAction",
     "SearchAction",
     "InspectAction",
     # Helpers

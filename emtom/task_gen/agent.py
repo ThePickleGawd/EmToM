@@ -243,15 +243,12 @@ class TaskGeneratorAgent:
 **Episode ID**: {self.scene_data.episode_id}
 **Scene ID**: {self.scene_data.scene_id}
 
-CRITICAL: When creating tasks, you MUST set these fields exactly:
-- "episode_id": "{self.scene_data.episode_id}"
-- "dataset_episode_id": "{self.scene_data.episode_id}"  (same value!)
-- "scene_id": "{self.scene_data.scene_id}"
+NOTE: scene_id, episode_id, and dataset_episode_id are ALREADY SET in working_task.json. Do not modify them.
 
 {scene_info}
 
 Template is at: {self.template_file}
-Edit this file for testing: {self.task_file}
+Working task (pre-populated with scene fields): {self.task_file}
 {scenario_text}
 IMPORTANT:
 - Use ONLY the objects listed above - they are verified to exist in this scene
@@ -612,18 +609,8 @@ SUMMARY:"""
             return self._submit_task()
         elif tool == "fail":
             return self._fail(args)
-        # Helper tools for structured task editing
-        elif tool == "add_item":
-            self.last_verify_passed = False
-            return self._add_item(args)
-        elif tool == "add_subtask":
-            self.last_verify_passed = False
-            return self._add_subtask(args)
-        elif tool == "set_field":
-            self.last_verify_passed = False
-            return self._set_field(args)
         else:
-            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, submit_task, fail, add_item, add_subtask, set_field"
+            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, submit_task, fail"
 
     def _bash(self, command: str) -> str:
         """
@@ -1209,196 +1196,6 @@ SUMMARY:"""
         self.fail_reason = reason
         self._log(f"FAIL: {reason}")
         return f"Task generation aborted: {reason}"
-
-    # =========================================================================
-    # HELPER TOOLS FOR STRUCTURED TASK EDITING
-    # =========================================================================
-
-    def _load_task(self) -> Tuple[Optional[Dict], Optional[str]]:
-        """Load the current task JSON. Returns (task_dict, error_message)."""
-        if not self.task_file.exists():
-            return None, "working_task.json does not exist. Create it first with bash."
-        try:
-            with open(self.task_file) as f:
-                return json.load(f), None
-        except json.JSONDecodeError as e:
-            return None, f"Invalid JSON in working_task.json: {e}"
-
-    def _save_task(self, task: Dict) -> str:
-        """Save task dict to JSON file."""
-        with open(self.task_file, 'w') as f:
-            json.dump(task, f, indent=2)
-        return "OK"
-
-    def _add_item(self, args: str) -> str:
-        """
-        Add an item to the task.
-
-        Format: add_item[item_id, placement_type, container]
-        - item_id: e.g., "item_small_key_1"
-        - placement_type: "hidden_in" or "inside"
-        - container: furniture ID where item is placed
-
-        Example: add_item[item_small_key_1, hidden_in, chest_of_drawers_54]
-        """
-        parts = [p.strip() for p in args.split(",")]
-        if len(parts) != 3:
-            return "Error: add_item requires 3 args: item_id, placement_type, container"
-
-        item_id, placement_type, container = parts
-
-        if placement_type not in ("hidden_in", "inside"):
-            return f"Error: placement_type must be 'hidden_in' or 'inside', got '{placement_type}'"
-
-        if not item_id.startswith("item_"):
-            return f"Error: item_id must start with 'item_', got '{item_id}'"
-
-        task, err = self._load_task()
-        if err:
-            return err
-
-        if "items" not in task:
-            task["items"] = []
-
-        # Check if item already exists
-        for item in task["items"]:
-            if item.get("item_id") == item_id:
-                return f"Error: item '{item_id}' already exists"
-
-        task["items"].append({
-            "item_id": item_id,
-            placement_type: container
-        })
-
-        self._save_task(task)
-        return f"Added item: {item_id} ({placement_type} {container})"
-
-    def _add_subtask(self, args: str) -> str:
-        """
-        Add a subtask to the DAG.
-
-        Format: add_subtask[id, description, entity, property, target_or_value, depends_on]
-        - id: unique subtask ID
-        - description: human-readable description
-        - entity: object ID for success condition
-        - property: predicate (see below)
-        - target_or_value: target entity or boolean value
-        - depends_on: comma-separated list of subtask IDs (or "none")
-
-        Simulator predicates: is_on_top, is_inside, is_open, is_closed, is_held_by, etc.
-        EMTOM predicates: has_item, is_unlocked, is_used (check game state)
-
-        Example: add_subtask[open_cabinet, Open the cabinet, cabinet_45, is_open, true, none]
-        Example: add_subtask[place_cup, Place cup on table, cup_4, is_on_top, table_22, open_cabinet]
-        Example: add_subtask[get_key, Agent gets the key, agent_0, has_item, item_small_key_1, open_drawer]
-        Example: add_subtask[unlock_safe, Safe is unlocked, safe_12, is_unlocked, true, get_key]
-        """
-        parts = [p.strip() for p in args.split(",")]
-        if len(parts) < 6:
-            return "Error: add_subtask requires 6 args: id, description, entity, property, target_or_value, depends_on"
-
-        subtask_id = parts[0]
-        description = parts[1]
-        entity = parts[2]
-        prop = parts[3]
-        target_or_value = parts[4]
-        depends_on_str = ",".join(parts[5:])  # Rest is depends_on
-
-        task, err = self._load_task()
-        if err:
-            return err
-
-        if "subtasks" not in task:
-            task["subtasks"] = []
-
-        # Check if subtask ID already exists
-        for st in task["subtasks"]:
-            if st.get("id") == subtask_id:
-                return f"Error: subtask '{subtask_id}' already exists"
-
-        # Build success condition
-        success_condition = {"entity": entity, "property": prop}
-        if target_or_value.lower() in ("true", "false"):
-            success_condition["value"] = target_or_value.lower() == "true"
-        else:
-            success_condition["target"] = target_or_value
-
-        # Parse depends_on
-        if depends_on_str.lower() == "none" or not depends_on_str:
-            depends_on = []
-        else:
-            depends_on = [d.strip() for d in depends_on_str.split(",") if d.strip()]
-
-        task["subtasks"].append({
-            "id": subtask_id,
-            "description": description,
-            "success_condition": success_condition,
-            "depends_on": depends_on,
-        })
-
-        self._save_task(task)
-        deps_str = ", ".join(depends_on) if depends_on else "none"
-        return f"Added subtask: {subtask_id} (depends on: {deps_str})"
-
-    def _set_field(self, args: str) -> str:
-        """
-        Set a field in the task using dot notation for nested paths.
-
-        Format: set_field[path, value]
-
-        Examples:
-          set_field[title, The Locked Cabinet]
-          set_field[locked_containers.cabinet_45, item_small_key]
-          set_field[agent_actions.agent_0, ["Navigate", "Search", "Communicate"]]
-          set_field[agent_secrets.agent_1, ["The key is in drawer_12"]]
-        """
-        # Split only on first comma
-        parts = args.split(",", 1)
-        if len(parts) != 2:
-            return "Error: set_field requires 2 args: path, value"
-
-        path = parts[0].strip()
-        value_str = parts[1].strip()
-
-        task, err = self._load_task()
-        if err:
-            return err
-
-        # Try to parse as JSON, fall back to string
-        try:
-            value = json.loads(value_str)
-        except json.JSONDecodeError:
-            # Check for boolean
-            if value_str.lower() == "true":
-                value = True
-            elif value_str.lower() == "false":
-                value = False
-            else:
-                # Try as number
-                try:
-                    value = int(value_str)
-                except ValueError:
-                    try:
-                        value = float(value_str)
-                    except ValueError:
-                        value = value_str  # Keep as string
-
-        # Handle dot notation for nested paths
-        path_parts = path.split(".")
-        if len(path_parts) == 1:
-            # Simple top-level field
-            task[path] = value
-        else:
-            # Nested path - navigate to parent and set final key
-            current = task
-            for key in path_parts[:-1]:
-                if key not in current:
-                    current[key] = {}
-                current = current[key]
-            current[path_parts[-1]] = value
-
-        self._save_task(task)
-        return f"Set {path} = {json.dumps(value)[:100]}"
 
     def _format_scene_data(self) -> str:
         """Format scene data for the LLM prompt."""
