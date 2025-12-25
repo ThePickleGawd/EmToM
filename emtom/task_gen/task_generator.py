@@ -357,18 +357,18 @@ Articulated Furniture (can be opened/closed): {articulated}
 
 ## CRITICAL CONSTRAINTS
 - ONLY use objects/furniture from the Scene Inventory above
-- ONLY use items from the Available Items list above (use exact item_id like "small_key", "big_key", "radio")
-- Instance items by appending _N suffix (e.g., "small_key_1", "small_key_2")
+- ONLY use items from the Available Items list above
+- Item IDs MUST have "item_" prefix and "_N" suffix (e.g., "item_small_key_1", "item_radio_1")
 - Adapt the escape room themes to work with the REAL objects and items listed
 - Create MULTI-STEP puzzles (3-5 steps) where each step unlocks the next
 
 ## MULTI-STEP PUZZLE DESIGN
 Design puzzles where progress is GATED by previous steps:
-- Step 1: Search a drawer to find a key
-- Step 2: UseItem[key, cabinet] to unlock
-- Step 3: Search the cabinet to find another key
-- Step 4: UseItem[key, chest] to unlock
-- Step 5: Retrieve the goal item from the chest
+- Step 1: Search a drawer to find item_small_key_1
+- Step 2: UseItem[item_small_key_1, cabinet] to unlock
+- Step 3: Open the cabinet to find item_big_key_1
+- Step 4: UseItem[item_big_key_1, chest] to unlock the final chest
+- Step 5: Retrieve the goal object from the chest
 
 ## Item Placement (use "items" array)
 Place items using `hidden_in` or `inside`:

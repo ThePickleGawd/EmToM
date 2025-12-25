@@ -830,8 +830,10 @@ class EMTOMBaseRunner(ABC):
                                 f"{entity} does not have {property_name.replace('has_', '')} {target}"
                             )
                 else:
-                    # Delegate to simulator evaluation
-                    simulator_conditions.append(prop)
+                    # Delegate to simulator evaluation - preserve original prop_id
+                    prop_with_id = dict(prop)
+                    prop_with_id["prop_id"] = prop_id
+                    simulator_conditions.append(prop_with_id)
 
             # Evaluate simulator conditions
             proposition_status = dict(game_state_results)

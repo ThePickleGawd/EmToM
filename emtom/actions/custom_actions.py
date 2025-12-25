@@ -317,9 +317,8 @@ class SearchAction(EMTOMAction):
                 new_state, success, msg = self._game_manager.grant_item(
                     agent_id, item_id, source=f"Search:{target}", state=new_state
                 )
-                item = self._game_manager.get_item(item_id)
-                item_name = item.name if item else item_id
-                found_names.append(item_name)
+                # Show item_id directly for clarity
+                found_names.append(item_id)
                 spawned.append(item_id)
 
             # Clear hidden items from container

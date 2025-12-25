@@ -85,12 +85,8 @@ def reveal_items_inside(
         state, success, msg = game_manager.grant_item(
             agent_id, item_id, source=f"Open:{target}", state=state
         )
-        # Get display name
-        item = game_manager.get_item(item_id)
-        if item:
-            revealed_names.append(item.name)
-        else:
-            revealed_names.append(item_id)
+        # Show item_id directly for clarity
+        revealed_names.append(item_id)
 
     # Clear items_inside (they've been collected)
     state = state.set_object_property(target, "items_inside", [])
