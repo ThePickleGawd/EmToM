@@ -107,7 +107,7 @@ def main(config: DictConfig) -> None:
     cprint("Initializing LLM client...", "blue")
     try:
         from habitat_llm.llm import instantiate_llm
-        llm_client = instantiate_llm("openai_chat", model=model)
+        llm_client = instantiate_llm("openai_chat", generation_params={"model": model})
         cprint(f"Using model: {llm_client.generation_params.model}", "green")
     except Exception as e:
         cprint(f"Error initializing LLM: {e}", "red")

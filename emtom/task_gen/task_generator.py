@@ -8,12 +8,41 @@ and having it create tasks that leverage the discovered mechanics.
 from __future__ import annotations
 
 import json
+import random
 import uuid
 from dataclasses import dataclass, field, asdict
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from emtom.task_gen.trajectory_analyzer import TrajectoryAnalysis
+
+
+def load_scenario_inspirations(
+    directory: str = "data/emtom/scenarios/scraped",
+    max_scenarios: int = 10,
+) -> List[str]:
+    """Load scraped scenario briefings to use as creative inspiration."""
+    path = Path(directory)
+    if not path.exists():
+        return []
+
+    txt_files = list(path.glob("*.txt"))
+    if not txt_files:
+        return []
+
+    if len(txt_files) > max_scenarios:
+        txt_files = random.sample(txt_files, max_scenarios)
+
+    scenarios = []
+    for txt_file in txt_files:
+        try:
+            with open(txt_file, encoding="utf-8") as f:
+                scenarios.append(f.read().strip())
+        except Exception:
+            continue
+
+    return scenarios
 
 
 class TaskType(Enum):
