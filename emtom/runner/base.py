@@ -770,7 +770,11 @@ class EMTOMBaseRunner(ABC):
         success_condition: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Evaluate task completion using PARTNR-style predicates.
+        Evaluate task completion using PARTNR-style predicates + EMTOM game state predicates.
+
+        Handles both:
+        - Simulator predicates (is_on_top, is_inside, etc.) via evaluation.py
+        - Game state predicates (has_item, is_unlocked, is_used) via GameStateManager
 
         Args:
             success_condition: Task's success_condition dict. If None, returns empty result.
@@ -787,10 +791,10 @@ class EMTOMBaseRunner(ABC):
 
         try:
             from emtom.evaluation import evaluate_task
+            from emtom.state.manager import GameStateManager
             sim = self.env_interface.sim
 
             # Get world graph for name-to-handle resolution
-            # Use first available agent's world graph (all agents share the same entity handles)
             world_graph = None
             if hasattr(self.env_interface, 'world_graph') and self.env_interface.world_graph:
                 for uid in self.agents.keys():
@@ -798,8 +802,59 @@ class EMTOMBaseRunner(ABC):
                         world_graph = self.env_interface.world_graph[uid]
                         break
 
-            result = evaluate_task(success_condition, sim, world_graph=world_graph)
-            return result.to_dict()
+            required_states = success_condition.get("required_states", [])
+
+            # Split predicates: game state vs simulator
+            game_state_predicates = GameStateManager.GAME_STATE_PREDICATES
+            simulator_conditions = []
+            game_state_results = {}
+            failure_explanations = []
+
+            for i, prop in enumerate(required_states):
+                prop_id = prop.get("prop_id", f"prop_{i}")
+                property_name = prop.get("property", "")
+
+                if property_name in game_state_predicates and self.game_manager:
+                    # Check via GameStateManager
+                    result = self.game_manager._check_game_state_predicate(prop)
+                    if result is None:
+                        # Shouldn't happen, but fallback
+                        game_state_results[prop_id] = False
+                        failure_explanations.append(f"Could not evaluate {prop_id}")
+                    else:
+                        game_state_results[prop_id] = result
+                        if not result:
+                            entity = prop.get("entity", "")
+                            target = prop.get("target", prop.get("value", ""))
+                            failure_explanations.append(
+                                f"{entity} does not have {property_name.replace('has_', '')} {target}"
+                            )
+                else:
+                    # Delegate to simulator evaluation
+                    simulator_conditions.append(prop)
+
+            # Evaluate simulator conditions
+            proposition_status = dict(game_state_results)
+            if simulator_conditions:
+                sim_condition = {
+                    "description": success_condition.get("description", ""),
+                    "required_states": simulator_conditions,
+                }
+                result = evaluate_task(sim_condition, sim, world_graph=world_graph)
+                proposition_status.update(result.proposition_status)
+                failure_explanations.extend(result.failure_explanations)
+
+            # Calculate overall success
+            total = len(required_states) if required_states else 1
+            satisfied = sum(1 for v in proposition_status.values() if v)
+            percent_complete = satisfied / total if total > 0 else 1.0
+
+            return {
+                "percent_complete": percent_complete,
+                "success": percent_complete == 1.0,
+                "failure_explanations": failure_explanations,
+                "proposition_status": proposition_status,
+            }
         except Exception as e:
             return {
                 "percent_complete": 0.0,

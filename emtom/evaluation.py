@@ -46,7 +46,7 @@ PARTNR_PREDICATES = {
 }
 
 # EMTOM-specific predicates (not in PARTNR)
-EMTOM_PREDICATES = {"is_open", "is_closed"}
+EMTOM_PREDICATES = {"is_open", "is_closed", "is_held_by"}
 
 
 def is_open(
@@ -86,6 +86,35 @@ def is_closed(
     return PropositionResult(not result.is_satisfied, result.info)
 
 
+def is_held_by(
+    sim: "CollaborationSim",
+    object_handles: List[str],
+    agent_ids: List[str],
+) -> PropositionResult:
+    """Check if an object is being held by an agent."""
+    # Get agent's grasp manager to check what they're holding
+    for agent_id in agent_ids:
+        try:
+            # Try to get the agent's grasp manager
+            agent_idx = int(agent_id.split("_")[-1]) if "_" in agent_id else int(agent_id)
+            agent = sim.agents_mgr[agent_idx]
+            grasp_mgr = agent.grasp_mgr
+
+            # Check if any of the object handles are currently grasped
+            if grasp_mgr.is_grasped:
+                grasped_obj = grasp_mgr.snap_idx
+                rom = sim.get_rigid_object_manager()
+                for handle in object_handles:
+                    # Try to match by handle or object ID
+                    obj = rom.get_object_by_handle(handle)
+                    if obj and obj.object_id == grasped_obj:
+                        return PropositionResult(True, {"agent": agent_id, "object": handle})
+        except Exception:
+            continue
+
+    return PropositionResult(False, {"object_handles": object_handles, "agent_ids": agent_ids})
+
+
 class TaskEvaluator:
     """Evaluates task completion using PARTNR + EMTOM predicates."""
 
@@ -114,7 +143,7 @@ class TaskEvaluator:
     def _get_predicate_fn(self, name: str):
         """Get predicate function by name."""
         if name in EMTOM_PREDICATES:
-            return {"is_open": is_open, "is_closed": is_closed}[name]
+            return {"is_open": is_open, "is_closed": is_closed, "is_held_by": is_held_by}[name]
 
         from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
         return getattr(SimBasedPredicates, name)
@@ -148,6 +177,12 @@ class TaskEvaluator:
             if not target_handle:
                 return PropositionResult(False, {"error": "is_next_to requires 'target'"})
             result = predicate_fn(self.sim, [entity_handle], [target_handle])
+
+        elif property_name == "is_held_by":
+            if not target:
+                return PropositionResult(False, {"error": "is_held_by requires 'target' (agent_id)"})
+            # target is the agent ID, entity is the object
+            result = predicate_fn(self.sim, [entity_handle], [target])
 
         # Unary predicates
         else:
@@ -207,6 +242,7 @@ class TaskEvaluator:
             "is_on_floor": f"{entity} is not on the floor",
             "is_open": f"{entity} is not open",
             "is_closed": f"{entity} is not closed",
+            "is_held_by": f"{entity} is not held by {target}",
         }
         return explanations.get(prop_name, f"{entity} is not {prop_name.replace('is_', '')}")
 

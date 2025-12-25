@@ -288,11 +288,12 @@ def try_unlock_with_key(
     # Check if key type matches using item's can_unlock() method
     from emtom.state.item_registry import ItemRegistry
     required_key = state.get_object_property(target, "required_key", "item_small_key")
+    required_key_base = ItemRegistry.get_base_id(required_key)
     key_base = ItemRegistry.get_base_id(key_id)
 
-    # First check base type, then ask item
-    if key_base != required_key:
-        return False, f"This lock requires a {required_key}, not a {key_base}."
+    # First check base type (small_key vs big_key), then ask item for specific lock
+    if key_base != required_key_base:
+        return False, f"This lock requires a {required_key_base}, not a {key_base}."
 
     if not item.can_unlock(target):
         return False, f"This key cannot unlock {target}."

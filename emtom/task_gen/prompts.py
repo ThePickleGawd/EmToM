@@ -62,16 +62,40 @@ Items are **NOT in the world graph** - they exist ONLY in inventory.
 ## Task Structure
 Read the template file for the full JSON structure. Key fields:
 - `task_id`, `title`, `story`: Task metadata
+- `category`: MUST be one of: coordination, knowledge_asymmetry, communication, sequential, resource_sharing, simple_action
 - `public_goal`: What agents need to do (generic, no object IDs)
 - `agent_secrets`: Per-agent private knowledge (location hints, etc.)
 - `agent_actions`: Per-agent available actions
-- `subtasks`: Goal-oriented success conditions (2-5 goals, not process steps)
+- `subtasks`: Goal-oriented success conditions (2-5 goals). Each subtask MUST be a dict with:
+  - `id`: Unique identifier (e.g., "s1_find_key")
+  - `description`: What needs to be achieved
+  - `success_condition`: Dict with `entity`, `property`, `target` (see Predicates below)
 - `golden_trajectory`: Step-by-step solution with all agents' actions per timestep
 
-## Predicates
-- Spatial: `is_on_top`, `is_inside`, `is_in_room`, `is_on_floor`, `is_next_to`
-- State: `is_open`, `is_closed`, `is_clean`, `is_dirty`, `is_filled`, `is_empty`, `is_powered_on`
-- EMTOM: `has_item` (agent has item), `is_unlocked` (container unlocked), `is_used` (item consumed)
+**Example subtask**:
+```json
+{{"id": "s1_place_cup", "description": "Place cup on table", "success_condition": {{"entity": "cup_5", "property": "is_on_top", "target": "table_22"}}}}
+```
+
+## Predicates (for success_condition)
+Format: `{{"entity": "X", "property": "predicate", "target": "Y"}}`
+
+**Spatial with target**:
+- `is_on_top`: {{"entity": "cup_5", "property": "is_on_top", "target": "table_22"}}
+- `is_inside`: {{"entity": "book_1", "property": "is_inside", "target": "cabinet_26"}}
+- `is_in_room`: {{"entity": "cup_5", "property": "is_in_room", "target": "kitchen"}} (target=room name, NOT floor_id)
+- `is_next_to`: {{"entity": "cup_5", "property": "is_next_to", "target": "table_22"}}
+
+**Unary** (entity=object, NO target):
+- `is_on_floor`: {{"entity": "box_6", "property": "is_on_floor"}} (checks if on ANY floor)
+- `is_open`, `is_closed`, `is_clean`, `is_dirty`, `is_filled`, `is_empty`, `is_powered_on`
+
+**Agent** (entity=object, target=agent):
+- `is_held_by`: {{"entity": "cup_5", "property": "is_held_by", "target": "agent_1"}}
+
+**EMTOM Game State**:
+- `has_item`: {{"entity": "agent_0", "property": "has_item", "target": "item_small_key_1"}}
+- `is_unlocked`: {{"entity": "cabinet_27", "property": "is_unlocked"}} (no target)
 
 ## Partial Observability (Discovery Tools)
 Agents don't know object IDs upfront - they must discover them!

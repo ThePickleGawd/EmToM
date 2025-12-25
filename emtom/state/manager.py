@@ -134,7 +134,13 @@ class GameStateManager:
         for item_data in items_data:
             item_id = item_data.get("item_id")
             if item_id:
-                state.item_definitions[item_id] = item_data
+                # Ensure base_id and instance_id are set for proper class lookup
+                enriched_data = dict(item_data)
+                if "base_id" not in enriched_data:
+                    enriched_data["base_id"] = ItemRegistry.get_base_id(item_id)
+                if "instance_id" not in enriched_data:
+                    enriched_data["instance_id"] = item_id
+                state.item_definitions[item_id] = enriched_data
                 # If item is hidden_in a container, add to hidden_items list
                 # Items are found via Search and go directly to inventory
                 hidden_in = item_data.get("hidden_in")

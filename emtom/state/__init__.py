@@ -36,7 +36,6 @@ Creating custom items:
 from emtom.state.game_state import (
     EMTOMGameState,
     SpawnedItem,
-    PendingEffect,
     ActionRecord,
     Goal,
     GoalStatus,
@@ -65,7 +64,6 @@ __all__ = [
     # Core state
     "EMTOMGameState",
     "SpawnedItem",
-    "PendingEffect",
     "ActionRecord",
     "Goal",
     "GoalStatus",

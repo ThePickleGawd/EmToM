@@ -1,31 +1,63 @@
 {
-  "task_id": "",
-  "title": "",
-  "story": "",
-  "public_goal": "",
-  "public_context": "",
+  "task_id": "REPLACE_WITH_UNIQUE_ID",
+  "title": "REPLACE_WITH_TITLE",
+  "story": "REPLACE_WITH_STORY",
+  "public_goal": "REPLACE_WITH_GOAL",
+  "public_context": "REPLACE_WITH_CONTEXT",
   "theory_of_mind_required": true,
-  "category": "",
+  "category": "coordination|knowledge_asymmetry|communication|sequential|resource_sharing|simple_action",
   "scene_id": "",
   "episode_id": "",
   "dataset_episode_id": "",
   "active_mechanics": [],
-  "mechanic_bindings": [],
-  "items": [],
-  "locked_containers": {},
+  "mechanic_bindings": [
+    {
+      "mechanic_type": "remote_control|conditional_unlock|inverse_state|state_mirroring",
+      "trigger_object": "REPLACE_WITH_OBJECT_ID",
+      "target_object": "REPLACE_WITH_TARGET_ID",
+      "target_state": "is_open"
+    }
+  ],
+  "items": [
+    {
+      "item_id": "item_small_key_1|item_radio_1|etc",
+      "hidden_in": "REPLACE_WITH_CONTAINER (for Search)",
+      "inside": "REPLACE_WITH_CONTAINER (for Open)"
+    }
+  ],
+  "locked_containers": {
+    "REPLACE_CONTAINER_ID": "REPLACE_ITEM_ID"
+  },
   "agent_secrets": {
-    "agent_0": [],
-    "agent_1": []
+    "agent_0": ["REPLACE_WITH_SECRET_INFO"],
+    "agent_1": ["REPLACE_WITH_SECRET_INFO"]
   },
   "agent_roles": {
-    "agent_0": "",
-    "agent_1": ""
+    "agent_0": "REPLACE_WITH_ROLE",
+    "agent_1": "REPLACE_WITH_ROLE"
   },
   "agent_actions": {
-    "agent_0": [],
-    "agent_1": []
+    "agent_0": ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"],
+    "agent_1": ["Navigate", "Open", "Search", "Pick", "Place", "Communicate", "Wait"]
   },
-  "subtasks": [],
+  "subtasks": [
+    {
+      "id": "REPLACE_WITH_ID",
+      "description": "REPLACE_WITH_DESCRIPTION",
+      "success_condition": {
+        "entity": "REPLACE (agent_id for has_item, object_id for others)",
+        "property": "is_on_top|is_inside|is_in_room|is_held_by|has_item|is_on_floor|is_open",
+        "target": "REPLACE (omit for unary: is_on_floor/is_open/etc)"
+      }
+    }
+  ],
   "num_agents": 2,
-  "golden_trajectory": []
+  "golden_trajectory": [
+    {
+      "actions": [
+        {"agent": "agent_0", "action": "ACTION_NAME", "target": "REPLACE_TARGET"},
+        {"agent": "agent_1", "action": "Wait"}
+      ]
+    }
+  ]
 }

@@ -220,7 +220,16 @@ class BenchmarkRunner(EMTOMBaseRunner):
         # Evaluate task with PARTNR-style metrics
         evaluation = {}
         if self.game_manager:
-            evaluation = self.game_manager.evaluate_task()
+            # Derive success condition from task's subtasks if available
+            success_condition = None
+            if self.task:
+                effective = self.task.get_effective_success_condition()
+                if effective:
+                    success_condition = {
+                        "description": effective.description,
+                        "required_states": effective.required_states,
+                    }
+            evaluation = self.game_manager.evaluate_task(success_condition)
 
         # Save outputs
         self._save_outputs(instruction, evaluation)

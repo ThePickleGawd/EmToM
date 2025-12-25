@@ -259,14 +259,8 @@ Start by reading the template, then create a task using the scene data above."""
 
         self.messages.append({"role": "user", "content": user_msg})
 
-        # Save full initial prompt to output directory for debugging
-        prompt_file = self.log_dir / "initial_prompt.txt"
-        with open(prompt_file, "w") as f:
-            f.write("=== SYSTEM PROMPT ===\n\n")
-            f.write(system_prompt)
-            f.write("\n\n=== USER MESSAGE ===\n\n")
-            f.write(user_msg)
-        self._log(f"Saved initial prompt to: {prompt_file}")
+        # Save initial context window
+        self._save_context_window()
 
         # Main ReAct loop
         while len(self.submitted_tasks) < num_tasks_target and not self.failed:
@@ -319,6 +313,9 @@ Start by reading the template, then create a task using the scene data above."""
 
             self._log(f"Observation: {observation}", truncate_terminal=300)
 
+            # Save full context window after each step
+            self._save_context_window()
+
         self._log(f"\n{'='*60}")
         if self.failed:
             self._log(f"Agent FAILED: {self.fail_reason}")
@@ -343,6 +340,20 @@ Start by reading the template, then create a task using the scene data above."""
                 self._log(f"Saved working task to: {dest}")
             except Exception as e:
                 self._log(f"Warning: Could not save working task: {e}")
+
+    def _save_context_window(self) -> None:
+        """Save the entire context window to prompt.txt for debugging."""
+        prompt_file = self.log_dir / "prompt.txt"
+        try:
+            with open(prompt_file, "w") as f:
+                for i, msg in enumerate(self.messages):
+                    role = msg["role"].upper()
+                    content = msg["content"]
+                    f.write(f"=== {role} [{i}] ===\n\n")
+                    f.write(content)
+                    f.write("\n\n")
+        except Exception as e:
+            self._log(f"Warning: Could not save context window: {e}")
 
     def _create_working_task_from_template(self) -> None:
         """Create working_task.json from template with scene fields pre-populated."""
