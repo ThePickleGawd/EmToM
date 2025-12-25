@@ -149,6 +149,48 @@ def validate_dag(subtasks: List["Subtask"]) -> Tuple[bool, List[str]]:
                         f"success_condition ({s_cond}). Each step should represent distinct progress."
                     )
 
+    # Check for duplicate success conditions across ALL subtasks
+    seen_conditions: Dict[str, str] = {}  # normalized_condition -> subtask_id
+    for s in subtasks:
+        sid = get_subtask_id(s)
+        if not s.success_condition:
+            continue
+        s_cond = _normalize_condition(s.success_condition)
+        if s_cond in seen_conditions:
+            errors.append(
+                f"Subtasks '{seen_conditions[s_cond]}' and '{sid}' have identical "
+                f"success_condition. Each subtask must have a unique condition."
+            )
+        else:
+            seen_conditions[s_cond] = sid
+
+    # Check for predicates that cause "free progress" (true at start)
+    # unless properly gated by a preceding complementary predicate
+    for s in subtasks:
+        sid = get_subtask_id(s)
+        if not s.success_condition:
+            continue
+        prop = s.success_condition.get("property", "")
+        entity = s.success_condition.get("entity", "")
+
+        # is_closed is only valid if preceded by is_open on the same entity
+        if prop == "is_closed":
+            has_open_predecessor = _has_predecessor_with_property(
+                subtasks, subtask_map, s, entity, "is_open"
+            )
+            if not has_open_predecessor:
+                errors.append(
+                    f"Subtask '{sid}' uses 'is_closed' on {entity} without a preceding "
+                    f"'is_open' subtask. Containers start closed, so this completes instantly."
+                )
+
+        # is_locked should never be used - use is_unlocked instead
+        if prop == "is_locked":
+            errors.append(
+                f"Subtask '{sid}' uses 'is_locked'. Use 'is_unlocked' instead to "
+                f"track unlocking progress."
+            )
+
     return len(errors) == 0, errors
 
 
@@ -166,6 +208,43 @@ def _normalize_condition(condition: Dict[str, Any]) -> str:
     # Use 'target' if present, otherwise 'value'
     target_or_value = condition.get("target", condition.get("value", ""))
     return f"{entity}:{prop}:{target_or_value}"
+
+
+def _has_predecessor_with_property(
+    subtasks: List["Subtask"],
+    subtask_map: Dict[str, "Subtask"],
+    current: "Subtask",
+    entity: str,
+    required_prop: str,
+) -> bool:
+    """
+    Check if there's a predecessor subtask with the given property on the same entity.
+
+    Uses BFS to traverse dependency chain backwards.
+    """
+    visited: Set[str] = set()
+    queue = list(current.depends_on)
+
+    while queue:
+        dep_id = queue.pop(0)
+        if dep_id in visited:
+            continue
+        visited.add(dep_id)
+
+        dep = subtask_map.get(dep_id)
+        if not dep or not dep.success_condition:
+            continue
+
+        # Check if this predecessor has the required property on the same entity
+        dep_entity = dep.success_condition.get("entity", "")
+        dep_prop = dep.success_condition.get("property", "")
+        if dep_entity == entity and dep_prop == required_prop:
+            return True
+
+        # Add this predecessor's dependencies to the queue
+        queue.extend(dep.depends_on)
+
+    return False
 
 
 def _has_cycle(subtasks: List["Subtask"]) -> bool:

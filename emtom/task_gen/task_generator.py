@@ -362,13 +362,23 @@ Articulated Furniture (can be opened/closed): {articulated}
 - Adapt the escape room themes to work with the REAL objects and items listed
 - Create MULTI-STEP puzzles (3-5 steps) where each step unlocks the next
 
-## MULTI-STEP PUZZLE DESIGN
-Design puzzles where progress is GATED by previous steps:
-- Step 1: Search a drawer to find item_small_key_1
-- Step 2: UseItem[item_small_key_1, cabinet] to unlock
-- Step 3: Open the cabinet to find item_big_key_1
-- Step 4: UseItem[item_big_key_1, chest] to unlock the final chest
-- Step 5: Retrieve the goal object from the chest
+## MULTI-STEP PUZZLE DESIGN (DAG Structure)
+Design puzzles where progress is GATED by previous steps. Subtasks form a DAG:
+- Each subtask has `depends_on` linking to prerequisites ([] for root nodes)
+- Step 1: Search drawer → agent has item_small_key_1 (depends_on: [])
+- Step 2: UseItem to unlock cabinet (depends_on: ["s1"])
+- Step 3: Open cabinet (depends_on: ["s2"])
+- Step 4: Retrieve treasure (depends_on: ["s3"])
+
+**CRITICAL - FORBIDDEN predicates** (cause instant "free progress"):
+- `is_closed`: Only valid if preceded by `is_open` on same container (open→close sequence)
+- `is_locked`: Always use `is_unlocked` instead to track unlocking
+- Duplicate conditions: Each subtask needs UNIQUE success_condition.
+
+**VALID predicates for milestones**:
+- `has_item`: Agent acquired an item
+- `is_unlocked`: Container was unlocked (starts locked)
+- `is_open`: Container was opened (starts closed)
 
 ## Item Placement (use "items" array)
 Place items using `hidden_in` or `inside`:
@@ -437,19 +447,11 @@ Create an immersive MULTI-STEP puzzle scenario. The "story" field is REQUIRED.
         "agent_1": ["Navigate", "Open", "Close", "Pick", "Place", "Communicate"]
     }},
     "subtasks": [
-        "Step 1: Search drawer_1 to find small_key_1",
-        "Step 2: UseItem[small_key_1, cabinet_2] to unlock",
-        "Step 3: Search cabinet_2 to find small_key_2",
-        "Step 4: UseItem[small_key_2, chest_3] to unlock",
-        "Step 5: Retrieve goal_item from chest_3 and place on table"
+        {{"id": "s1_get_key", "description": "Find key in drawer", "depends_on": [], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_small_key_1"}}}},
+        {{"id": "s2_unlock_cabinet", "description": "Unlock cabinet", "depends_on": ["s1_get_key"], "success_condition": {{"entity": "cabinet_2", "property": "is_unlocked"}}}},
+        {{"id": "s3_open_cabinet", "description": "Open cabinet", "depends_on": ["s2_unlock_cabinet"], "success_condition": {{"entity": "cabinet_2", "property": "is_open"}}}},
+        {{"id": "s4_get_treasure", "description": "Retrieve treasure", "depends_on": ["s3_open_cabinet"], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_treasure_1"}}}}
     ],
-    "success_condition": {{
-        "description": "What success looks like",
-        "required_states": [
-            {{"entity": "REAL_object", "property": "location", "value": "REAL_target"}},
-            {{"entity": "agent_0", "property": "has_item", "value": "big_key_1"}}
-        ]
-    }},
     "category": "knowledge_asymmetry"
 }}
 

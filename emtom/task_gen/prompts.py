@@ -66,15 +66,37 @@ Read the template file for the full JSON structure. Key fields:
 - `public_goal`: What agents need to do (generic, no object IDs)
 - `agent_secrets`: Per-agent private knowledge (location hints, etc.)
 - `agent_actions`: Per-agent available actions
-- `subtasks`: Goal-oriented success conditions (2-5 goals). Each subtask MUST be a dict with:
+- `subtasks`: Milestone conditions forming a DAG. Each subtask MUST be a dict with:
   - `id`: Unique identifier (e.g., "s1_find_key")
   - `description`: What needs to be achieved
   - `success_condition`: Dict with `entity`, `property`, `target` (see Predicates below)
+  - `depends_on`: List of prerequisite subtask IDs (e.g., ["s1_find_key"]) - REQUIRED for DAG!
 - `golden_trajectory`: Step-by-step solution with all agents' actions per timestep
 
-**Example subtask**:
+## Subtask DAG Design (CRITICAL!)
+Subtasks form a dependency graph. Each subtask MUST:
+1. Have `depends_on` linking to prerequisite subtasks (empty list [] only for root nodes)
+2. Track PROGRESS MILESTONES, not end states
+3. NEVER use predicates that are TRUE at start (see below)
+
+**FORBIDDEN default-true predicates** (cause instant "free progress"):
+- `is_closed`: Only valid if preceded by `is_open` on same container (open→close sequence)
+- `is_locked`: Always use `is_unlocked` instead to track unlocking
+- `is_clean`: Objects may start clean - only use after explicit dirty→clean
+
+**VALID progress predicates**:
+- `is_open`: Container was opened (starts closed)
+- `is_unlocked`: Container was unlocked (starts locked)
+- `has_item`: Agent acquired an item
+- `is_on_top`, `is_inside`: Object was moved
+
+**Example DAG subtasks**:
 ```json
-{{"id": "s1_place_cup", "description": "Place cup on table", "success_condition": {{"entity": "cup_5", "property": "is_on_top", "target": "table_22"}}}}
+"subtasks": [
+  {{"id": "s1_get_key", "description": "Find key in drawer", "depends_on": [], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_small_key_1"}}}},
+  {{"id": "s2_unlock_cabinet", "description": "Unlock cabinet with key", "depends_on": ["s1_get_key"], "success_condition": {{"entity": "cabinet_33", "property": "is_unlocked"}}}},
+  {{"id": "s3_get_treasure", "description": "Retrieve treasure from cabinet", "depends_on": ["s2_unlock_cabinet"], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_treasure_1"}}}}
+]
 ```
 
 ## Predicates (for success_condition)
