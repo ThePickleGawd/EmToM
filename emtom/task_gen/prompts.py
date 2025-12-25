@@ -37,11 +37,11 @@ EOF]
 ## Available Actions
 {action_descriptions}
 
-## Item System (CRITICAL: Items are ABSTRACT!)
-Items are **NOT in the world graph** - they exist ONLY in inventory.
-- You **CANNOT** Pick, Navigate to, or physically interact with items
-- Items go directly to inventory when found (Search or Open)
-- Use `UseItem[item_id, args]` to use items from inventory
+## Item System (Items are ABSTRACT - NO Pick/Navigate!)
+Items (item_*) are **NOT physical objects** - they exist ONLY in inventory.
+- **WRONG**: `Pick[item_small_key_1]` ← Items cannot be picked!
+- **RIGHT**: `Search[drawer_5]` → key goes to inventory automatically
+- Use `UseItem[item_id, target]` to use items from inventory
 
 **Placement (use "items" array in task JSON):**
 - `hidden_in` container → found with **Search[container]**

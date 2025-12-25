@@ -12,7 +12,6 @@ from emtom.task_gen.task_generator import (
     Subtask,
     SuccessCondition,
     TaskCategory,
-    TaskGenerator,
 )
 from emtom.task_gen.dag import (
     DAGProgress,
@@ -36,7 +35,6 @@ __all__ = [
     "Subtask",
     "SuccessCondition",
     "TaskCategory",
-    "TaskGenerator",
     # DAG utilities
     "DAGProgress",
     "find_root_nodes",
