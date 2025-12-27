@@ -110,10 +110,21 @@ class TaskGeneratorAgent:
 
         # Whitelisted bash commands (for safety)
         self.allowed_commands = [
-            # File operations
-            "ls", "cat", "head", "tail", "grep", "jq", "wc",
-            "echo", "sed", "awk", "sort", "uniq", "find",
-            # Shell control structures (for loops, conditionals)
+            # File reading/inspection
+            "ls", "cat", "head", "tail", "wc", "find",
+            # JSON editing
+            "jq",
+            # Text search/processing
+            "grep", "sed", "awk", "sort", "uniq",
+            # File operations (needed for jq pattern: > tmp.json && mv tmp.json file.json)
+            "mv", "cp", "rm",
+            # Comparison
+            "diff",
+            # Validation
+            "python3",
+            # Output
+            "echo",
+            # Shell control structures
             "for", "do", "done", "while", "if", "then", "else", "fi", "in",
         ]
 

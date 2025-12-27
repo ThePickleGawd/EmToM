@@ -144,11 +144,11 @@ def main():
 
         write_result({
             "success": True,
-            "sim_steps": results.get("sim_steps", 0),
+            "steps": results.get("steps", 0),
             "turns": results.get("turns", 0),
             "done": results.get("done", False),
             "episode_over": results.get("episode_over", False),
-            "summary": f"Task {'completed' if results.get('done') else 'not completed'} in {results.get('turns', 0)} turns ({results.get('sim_steps', 0)} sim steps)",
+            "summary": f"Task {'completed' if results.get('done') else 'not completed'} in {results.get('turns', 0)} turns ({results.get('steps', 0)} steps)",
             "action_history": action_history,
             "evaluation": evaluation,
             "planner_traces": planner_traces,
@@ -157,7 +157,7 @@ def main():
     except Exception as e:
         write_result({
             "success": False,
-            "sim_steps": 0,
+            "steps": 0,
             "turns": 0,
             "done": False,
             "error": str(e),

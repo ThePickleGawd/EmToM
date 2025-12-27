@@ -615,7 +615,8 @@ class EMTOMBaseRunner(ABC):
         Returns:
             Result dict from execute_action
         """
-        match = re.match(r'(\w+)\[([^\]]+)\]', action_str)
+        # Allow empty brackets for actions like Wait[]
+        match = re.match(r'(\w+)\[([^\]]*)\]', action_str)
         if not match:
             return {
                 "success": False,
@@ -623,6 +624,8 @@ class EMTOMBaseRunner(ABC):
             }
 
         action_name, target = match.groups()
+        # Handle empty target for actions like Wait[]
+        target = target if target else None
         return self.execute_action(uid, action_name, target)
 
     def save_video(self, suffix: str) -> Optional[str]:

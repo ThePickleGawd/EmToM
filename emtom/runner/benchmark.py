@@ -151,7 +151,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
             max_turns: Maximum rounds (each round = all agents act once)
 
         Returns:
-            Results dict with sim_steps, turns, done, action_history, evaluation
+            Results dict with steps, turns, done, action_history, evaluation
         """
         task_title = self.task.title if self.task else "Unknown Task"
         n_agents = len(self.agents)
@@ -174,13 +174,18 @@ class BenchmarkRunner(EMTOMBaseRunner):
         turn_count = 0
         agents_done: Set[int] = set()
 
-        # Main loop - each iteration is one turn (round)
-        while self.get_sim_steps() < max_steps and not done and not self._episode_done:
-            turn_count += 1
+        # Reset step count for this run
+        self._step_count = 0
 
-            if max_turns and turn_count > max_turns:
+        # Main loop - each iteration is one step where all agents act
+        while self._step_count < max_steps and not done and not self._episode_done:
+            # Check turn limit before processing
+            if max_turns and turn_count >= max_turns:
                 print(f"\n[Benchmark] Reached max turns ({max_turns})", flush=True)
                 break
+
+            self._step_count += 1
+            turn_count += 1
 
             print(f"\n{'='*60}", flush=True)
             print(f"TURN {turn_count}", flush=True)
@@ -216,7 +221,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                             print(f"Agent_{uid}_Observation: {observation}", flush=True)
 
                             self._action_history.append({
-                                "sim_step": self.get_sim_steps(),
+                                "sim_step": self._step_count,
                                 "turn": turn_count,
                                 "agent": agent_id,
                                 "action": action,
@@ -237,19 +242,16 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
                         high_level_action = self._extract_high_level_action(planner_info, uid)
                         if high_level_action:
-                            thought_dict = planner_info.get("thought", {})
+                            # Note: EmtomPlanner already logs Thought/Action via _log_high_level_actions()
                             responses_dict = planner_info.get("responses", {})
-                            thought = thought_dict.get(uid, "") if isinstance(thought_dict, dict) else ""
                             response = responses_dict.get(uid, "") if isinstance(responses_dict, dict) else ""
 
-                            if thought:
-                                print(f"Thought: {thought}", flush=True)
-                            print(f"Agent_{uid}: {high_level_action}", flush=True)
+                            # Print observation (not printed by EmtomPlanner)
                             if response:
                                 print(f"Agent_{uid}_Observation: {response}", flush=True)
 
                             self._action_history.append({
-                                "sim_step": self.get_sim_steps(),
+                                "sim_step": self._step_count,
                                 "turn": turn_count,
                                 "agent": agent_id,
                                 "action": high_level_action,
@@ -265,7 +267,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
                 except AssertionError as e:
                     if "Episode over" in str(e) or "call reset before calling step" in str(e):
-                        print(f"\n[Benchmark] Episode ended at sim step {self.get_sim_steps()}", flush=True)
+                        print(f"\n[Benchmark] Episode ended at step {self._step_count}", flush=True)
                         self._episode_done = True
                         break
                     raise
@@ -290,7 +292,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 observations = self.get_observations()
                 self.record_frame(observations)
 
-        print(f"\n[Benchmark] Finished: sim_steps={self.get_sim_steps()}, turns={turn_count}, done={done}", flush=True)
+        print(f"\n[Benchmark] Finished: steps={self._step_count}, turns={turn_count}, done={done}", flush=True)
 
         # Final evaluation
         evaluation = self._check_task_completion() or {}
@@ -299,7 +301,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         self._save_outputs(instruction, evaluation, turn_count)
 
         return {
-            "sim_steps": self.get_sim_steps(),
+            "steps": self._step_count,
             "turns": turn_count,
             "done": done,
             "episode_over": self._episode_done,
@@ -366,7 +368,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
     def _parse_action(self, text: str) -> Optional[str]:
         """Parse user input into action string."""
-        match = re.match(r'(\w+)\[([^\]]+)\]', text)
+        # Allow empty brackets for actions like Wait[]
+        match = re.match(r'(\w+)\[([^\]]*)\]', text)
         if match:
             return text
 
@@ -636,7 +639,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
     ) -> None:
         """Save video, planner log, and prompts."""
         task_id = self.task.task_id if self.task else "unknown"
-        sim_steps = self.get_sim_steps()
+        sim_steps = self._step_count
 
         # Save video
         mode = "human" if self.human_agents else "benchmark"

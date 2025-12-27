@@ -265,7 +265,7 @@ def main(config: DictConfig):
     # Run interactive test
     try:
         results = runner.run(instruction=instruction)
-        cprint(f"\nCompleted: {results['turns']} turns, {results['sim_steps']} sim steps", "green")
+        cprint(f"\nCompleted: {results['turns']} turns, {results['steps']} steps", "green")
         if results.get("success"):
             cprint("Task SUCCESS!", "green")
     except KeyboardInterrupt:
