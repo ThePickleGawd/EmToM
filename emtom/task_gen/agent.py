@@ -912,8 +912,8 @@ SUMMARY:"""
 
                     # For Place/UseItem, args is comma-separated - check all parts
                     # Place format: Place[obj, relation, target, constraint, ref]
-                    # Skip relation keywords (on, in, next_to, etc.)
-                    place_keywords = {"on", "in", "next_to", "under", "above", "near"}
+                    # Skip relation/constraint keywords (from habitat_llm/world_model/entities/furniture.py)
+                    place_keywords = {"on", "within", "next_to"}
                     parts = [p.strip() for p in args.split(",")]
                     for target_id in parts:
                         if not target_id or target_id == "None" or target_id in place_keywords:
