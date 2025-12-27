@@ -96,6 +96,7 @@ class TaskGeneratorAgent:
         self.last_verify_passed = False  # Track if golden trajectory verified
         self.failed = False  # Track if agent called fail[]
         self.fail_reason = ""  # Reason for failure
+        self.done = False  # Track if agent called done[] (successful completion)
 
         # Setup logging to file
         # Prefer log_dir (Hydra output), fallback to output_dir/logs
@@ -278,7 +279,7 @@ Start by reading the template, then create a task using the scene data above."""
         self._save_context_window()
 
         # Main ReAct loop
-        while len(self.submitted_tasks) < num_tasks_target and not self.failed:
+        while len(self.submitted_tasks) < num_tasks_target and not self.failed and not self.done:
             self.iteration_count += 1
 
             if self.iteration_count > self.max_iterations:
@@ -338,6 +339,10 @@ Start by reading the template, then create a task using the scene data above."""
         self._log(f"\n{'='*60}")
         if self.failed:
             self._log(f"Agent FAILED: {self.fail_reason}")
+        elif self.done:
+            self._log(f"Agent completed successfully. Submitted {len(self.submitted_tasks)} tasks:")
+            for task_path in self.submitted_tasks:
+                self._log(f"  - {task_path}")
         else:
             self._log(f"Agent finished. Submitted {len(self.submitted_tasks)} tasks:")
             for task_path in self.submitted_tasks:
@@ -676,8 +681,10 @@ SUMMARY:"""
             return self._submit_task()
         elif tool == "fail":
             return self._fail(args)
+        elif tool == "done":
+            return self._done(args)
         else:
-            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, submit_task, fail"
+            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, submit_task, fail, done"
 
     def _bash(self, command: str) -> str:
         """
@@ -1323,6 +1330,16 @@ SUMMARY:"""
         self.fail_reason = reason
         self._log(f"FAIL: {reason}")
         return f"Task generation aborted: {reason}"
+
+    def _done(self, message: str = "") -> str:
+        """
+        Signal successful completion of task generation.
+
+        Use this after submitting all required tasks to cleanly exit.
+        """
+        self.done = True
+        self._log(f"DONE: {message or 'Task generation complete'}")
+        return f"Task generation complete. Submitted {len(self.submitted_tasks)} task(s)."
 
     def _format_scene_data(self) -> str:
         """Format scene data for the LLM prompt."""
