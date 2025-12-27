@@ -143,12 +143,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
         max_turns: int = 20,
     ) -> Dict[str, Any]:
         """
-        Run benchmark task.
+        Run benchmark task. Each turn executes all agents' actions to completion.
 
         Args:
             instruction: Per-agent instruction dict (agent_id -> instruction)
-            max_steps: Maximum simulation steps
-            max_turns: Maximum rounds (each round = all agents act once)
+            max_steps: Maximum turns (legacy param name, same as max_turns)
+            max_turns: Maximum turns (each turn = all agents complete one action each)
 
         Returns:
             Results dict with steps, turns, done, action_history, evaluation
@@ -231,35 +231,74 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
                             self._check_subtasks()
                     else:
-                        # LLM agent - use planner
+                        # LLM agent - use planner, execute action to completion
                         if uid not in self.planners:
                             continue
 
                         planner = self.planners[uid]
+
+                        # Get high-level action from planner (triggers LLM call)
                         low_level_actions, planner_info, planner_done = planner.get_next_action(
                             agent_instruction, observations, world_graph
                         )
 
                         high_level_action = self._extract_high_level_action(planner_info, uid)
-                        if high_level_action:
-                            # Note: EmtomPlanner already logs Thought/Action via _log_high_level_actions()
-                            responses_dict = planner_info.get("responses", {})
-                            response = responses_dict.get(uid, "") if isinstance(responses_dict, dict) else ""
+                        if not high_level_action:
+                            if planner_done:
+                                agents_done.add(uid)
+                                print(f"[Agent {uid} DONE]", flush=True)
+                            continue
 
-                            # Print observation (not printed by EmtomPlanner)
-                            if response:
-                                print(f"Agent_{uid}_Observation: {response}", flush=True)
+                        # EmtomPlanner already printed Thought/Action
+                        # Now execute action to completion
+                        action_done = False
+                        skill_steps = 0
+                        max_skill_steps = 1500
+                        response = ""
 
-                            self._action_history.append({
-                                "sim_step": self._step_count,
-                                "turn": turn_count,
-                                "agent": agent_id,
-                                "action": high_level_action,
-                                "result": response,
-                                "mode": "llm",
-                            })
+                        high_level_skill_actions = {uid: planner_info.get("high_level_actions", {}).get(uid)}
 
-                            self._check_subtasks()
+                        while not action_done and skill_steps < max_skill_steps:
+                            # Get low-level actions
+                            low_level_actions, responses = planner.process_high_level_actions(
+                                high_level_skill_actions, observations
+                            )
+
+                            # Check if action completed (response returned)
+                            if responses.get(uid):
+                                response = responses[uid]
+                                action_done = True
+
+                            # Step the environment
+                            if low_level_actions:
+                                try:
+                                    obs, reward, done_flag, step_info = self.env_interface.step(low_level_actions)
+                                    observations = self.env_interface.parse_observations(obs)
+                                    self.record_frame(observations)
+                                except Exception as e:
+                                    print(f"[Agent {uid}] Step error: {e}", flush=True)
+                                    break
+
+                            skill_steps += 1
+
+                        # Log result
+                        print(f"Agent_{uid}_Observation: {response}", flush=True)
+                        print(f"  ({skill_steps} steps)", flush=True)
+
+                        self._action_history.append({
+                            "sim_step": self._step_count,
+                            "turn": turn_count,
+                            "agent": agent_id,
+                            "action": high_level_action,
+                            "result": response,
+                            "mode": "llm",
+                            "skill_steps": skill_steps,
+                        })
+
+                        self._check_subtasks()
+
+                        # Update world graph for next agent
+                        world_graph = self.get_world_graph()
 
                         if planner_done:
                             agents_done.add(uid)
