@@ -380,35 +380,6 @@ Start by reading the template, then create a task using the scene data above."""
 
         self._log(f"Created {self.task_file} with scene fields pre-populated")
 
-    def _fix_scene_fields(self) -> None:
-        """Auto-fix scene fields after any write to working_task.json.
-
-        The LLM sometimes overwrites these fields with wrong values/formats.
-        This ensures they always have the correct values from the loaded scene.
-        """
-        if not self.scene_data or not self.task_file.exists():
-            return
-
-        try:
-            with open(self.task_file) as f:
-                task = json.load(f)
-
-            # Fix the scene fields to match loaded scene
-            changed = False
-            if task.get("scene_id") != self.scene_data.scene_id:
-                task["scene_id"] = self.scene_data.scene_id
-                changed = True
-            if task.get("episode_id") != self.scene_data.episode_id:
-                task["episode_id"] = self.scene_data.episode_id
-                changed = True
-
-            if changed:
-                with open(self.task_file, 'w') as f:
-                    json.dump(task, f, indent=2)
-                self._log(f"Auto-fixed scene fields in {self.task_file.name}")
-        except Exception as e:
-            self._log(f"Warning: Could not fix scene fields: {e}")
-
     def _truncate_old_heredocs(self) -> None:
         """Truncate large heredoc content in PREVIOUS assistant messages.
 
@@ -770,10 +741,6 @@ SUMMARY:"""
             if len(output) > 5000:
                 self._log(f"[Full bash output ({len(output)} chars)]:\n{output}")
                 output = output[:5000] + f"\n... (truncated, full output in log file)"
-
-            # Auto-fix scene fields if working_task.json was modified
-            if "working_task.json" in command and (">" in command or "<<" in command):
-                self._fix_scene_fields()
 
             return output
         except subprocess.TimeoutExpired:

@@ -3,8 +3,8 @@
 """
 Human-in-the-loop (HITL) testing mode for EMTOM benchmark.
 
-This script mirrors the benchmark setup but allows human control
-of agents instead of (or alongside) LLM control.
+Uses the unified BenchmarkRunner with human_agents parameter to enable
+human control of agents instead of (or alongside) LLM control.
 
 Usage:
     # Run with task file (human controls all agents)
@@ -42,97 +42,64 @@ from habitat_llm.agent.env import (
 from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 
 from emtom import list_mechanics
+from emtom.task_gen import GeneratedTask
 
 
-def print_task_info(task_info: Dict[str, Any]) -> None:
+def print_task_info(task: GeneratedTask) -> None:
     """Pretty print task information for human readability."""
-    cprint("\n╔══════════════════════════════════════════════════════════════╗", "blue")
-    cprint("║                       TASK INFORMATION                        ║", "blue")
-    cprint("╚══════════════════════════════════════════════════════════════╝", "blue")
+    cprint("\n" + "=" * 66, "blue")
+    cprint("TASK INFORMATION", "blue")
+    cprint("=" * 66, "blue")
 
-    # Title and ID
-    if task_info.get("title"):
-        cprint(f"\nTitle: {task_info['title']}", "blue")
-    if task_info.get("task_id"):
-        cprint(f"Task ID: {task_info['task_id']}", "gray")
+    if task.title:
+        cprint(f"\nTitle: {task.title}", "blue")
+    if task.task_id:
+        cprint(f"Task ID: {task.task_id}", "gray")
 
-    # Story / atmosphere
-    if task_info.get("story"):
+    if task.story:
         cprint(f"\nStory:", "blue")
-        cprint(f"  {task_info['story']}", "gray")
+        cprint(f"  {task.story}", "gray")
 
-    # Public goal and context
-    if task_info.get("public_goal"):
-        cprint(f"\nPublic Goal: {task_info['public_goal']}", "blue")
-    if task_info.get("public_context"):
-        cprint(f"Context: {task_info['public_context']}", "gray")
+    if task.public_goal:
+        cprint(f"\nPublic Goal: {task.public_goal}", "blue")
+    if task.public_context:
+        cprint(f"Context: {task.public_context}", "gray")
 
-    # Agent roles
-    agent_roles = task_info.get("agent_roles", {})
-    if agent_roles:
+    if task.agent_roles:
         cprint("\nAgent Roles:", "blue")
-        for agent_id, role in agent_roles.items():
+        for agent_id, role in task.agent_roles.items():
             cprint(f"  {agent_id}: {role}", "gray")
 
-    # Agent secrets (the vital info!)
-    agent_secrets = task_info.get("agent_secrets", {})
-    if agent_secrets:
-        cprint("\n⚠️  Agent Secrets:", "yellow")
-        for agent_id, secrets in agent_secrets.items():
+    if task.agent_secrets:
+        cprint("\nAgent Secrets:", "yellow")
+        for agent_id, secrets in task.agent_secrets.items():
             cprint(f"  {agent_id}:", "yellow")
             for secret in secrets:
-                cprint(f"    • {secret}", "gray")
+                cprint(f"    - {secret}", "gray")
+
+    if task.agent_actions:
+        cprint("\nAgent Actions:", "blue")
+        for agent_id, actions in task.agent_actions.items():
+            cprint(f"  {agent_id}: {', '.join(actions)}", "gray")
 
     cprint("\n" + "-" * 66, "blue")
 
 
-def print_bindings_pretty(bindings: Dict[str, Any]) -> None:
-    """Pretty print auto-bound mechanics for human readability."""
-    cprint("\n╔══════════════════════════════════════════════════════════════╗", "green")
-    cprint("║                    AUTO-BOUND MECHANICS                       ║", "green")
-    cprint("╚══════════════════════════════════════════════════════════════╝", "green")
+def print_mechanics_info(task: GeneratedTask) -> None:
+    """Print mechanics from task."""
+    if not task.mechanic_bindings:
+        cprint("Mechanics: none", "gray")
+        return
 
-    # Standard mechanics
-    mechanics_printed = False
-    for mech in ["inverse_state", "remote_control", "state_mirroring", "conditional_unlock"]:
-        if mech in bindings:
-            if not mechanics_printed:
-                cprint("\nMechanics:", "blue")
-                mechanics_printed = True
-            info = bindings[mech]
-            if mech == "inverse_state":
-                cprint(f"   - Inverse State: {info.get('target')}", "gray")
-            elif mech == "remote_control":
-                cprint(f"   - Remote Control: {info.get('trigger')} -> {info.get('target')}", "gray")
-            elif mech == "state_mirroring":
-                pair = info.get('pair', [])
-                cprint(f"   - State Mirroring: {pair[0] if pair else '?'} <-> {pair[1] if len(pair) > 1 else '?'}", "gray")
-            elif mech == "conditional_unlock":
-                cprint(f"   - Conditional Unlock: {info.get('prerequisite')} unlocks -> {info.get('target')}", "gray")
-
-    # Hidden items
-    if "hidden_items" in bindings:
-        cprint("Hidden Items:", "blue")
-        for container, item in bindings["hidden_items"].items():
-            item_name = bindings.get("item_definitions", {}).get(item, item)
-            cprint(f"   - {item_name} hidden in {container}", "gray")
-
-    # Clues
-    if "clues" in bindings:
-        cprint("\nClues:", "blue")
-        for i, clue in enumerate(bindings["clues"], 1):
-            clue_type = clue.get("type", "unknown").capitalize()
-            cprint(f"   {i}. [{clue_type}] \"{clue.get('text', '')}\"", "gray")
-
-    # Suggested locations
-    if "suggested_locations" in bindings:
-        locs = bindings["suggested_locations"]
-        cprint(f"\nSuggested Locations: {', '.join(locs)}", "blue")
-
-    cprint("\n" + "-" * 66, "green")
+    cprint("\nMechanics:", "blue")
+    for binding in task.mechanic_bindings:
+        mech_type = binding.mechanic_type
+        trigger = binding.trigger_object or "?"
+        target = binding.target_object or "self"
+        cprint(f"  - {mech_type}: {trigger} -> {target}", "gray")
 
 
-def load_task(task_file: str) -> Optional[Dict[str, Any]]:
+def load_task(task_file: str) -> Optional[GeneratedTask]:
     """Load task from JSON file.
 
     Supports two formats:
@@ -146,45 +113,11 @@ def load_task(task_file: str) -> Optional[Dict[str, Any]]:
     if "tasks" in data:
         tasks = data["tasks"]
         if tasks:
-            return tasks[0]
+            return GeneratedTask.from_dict(tasks[0])
     elif "task_id" in data:
-        # Single task format - return as-is
-        return data
+        return GeneratedTask.from_dict(data)
 
     return None
-
-
-def task_to_instruction(task_info: Dict[str, Any]) -> Dict[str, str]:
-    """Convert task info to per-agent instructions."""
-    instructions = {}
-
-    agent_roles = task_info.get("agent_roles", {})
-    if not agent_roles:
-        agent_roles = {"agent_0": "Agent 0", "agent_1": "Agent 1"}
-
-    for agent_id in agent_roles.keys():
-        parts = []
-
-        # Add atmospheric story first (sets the scene)
-        if task_info.get("story"):
-            parts.append(task_info["story"])
-            parts.append("")  # blank line
-
-        parts.append(f"Goal: {task_info.get('public_goal', 'Complete the task')}")
-
-        if task_info.get("public_context"):
-            parts.append(task_info["public_context"])
-
-        # Per-agent secrets
-        secrets = task_info.get("agent_secrets", {}).get(agent_id, [])
-        if secrets:
-            parts.append("\nSecret Knowledge:")
-            for s in secrets:
-                parts.append(f"- {s}")
-
-        instructions[agent_id] = "\n".join(parts)
-
-    return instructions
 
 
 def parse_extra_args():
@@ -251,47 +184,33 @@ def main(config: DictConfig):
         llm_agents = extra_args.llm_agents
 
     # Calculate human agents (all agents minus LLM agents)
-    all_agent_ids = ["agent_0", "agent_1"]  # Assuming 2 agents
+    all_agent_ids = ["agent_0", "agent_1"]
     human_agents = [a for a in all_agent_ids if a not in llm_agents]
 
     cprint(f"Human-controlled: {human_agents}", "green")
     cprint(f"LLM-controlled: {llm_agents}", "green")
 
     # Load task or setup mechanics
-    task_info = None
+    task: Optional[GeneratedTask] = None
     task_data = {"mechanics": []}
-    is_task_mode = False  # Track if we're running a specific task
+    is_task_mode = False
 
     if extra_args and extra_args.task:
-        task_info = load_task(extra_args.task)
-        if task_info:
-            is_task_mode = True  # Running a specific task
+        task = load_task(extra_args.task)
+        if task:
+            is_task_mode = True
+            print_task_info(task)
 
-            # Print task information including agent secrets
-            print_task_info(task_info)
-
-            # Reset environment to the correct episode for this task
-            task_episode_id = task_info.get("episode_id")
-            if task_episode_id and task_episode_id != "unknown":
-                cprint(f"Resetting environment to episode: {task_episode_id}", "blue")
+            # Reset environment to the correct episode
+            if task.episode_id and task.episode_id != "unknown":
+                cprint(f"Resetting environment to episode: {task.episode_id}", "blue")
                 try:
-                    env_interface.reset_environment(episode_id=task_episode_id)
-                    cprint(f"Successfully loaded episode {task_episode_id}", "green")
+                    env_interface.reset_environment(episode_id=task.episode_id)
+                    cprint(f"Successfully loaded episode {task.episode_id}", "green")
                 except (ValueError, IndexError) as e:
-                    cprint(f"Warning: Could not load episode {task_episode_id}: {e}", "yellow")
-                    cprint("Continuing with current episode...", "yellow")
+                    cprint(f"Warning: Could not load episode {task.episode_id}: {e}", "yellow")
 
-            # Use mechanics from task (even if empty - we respect the task definition)
-            if task_info.get("mechanic_bindings"):
-                task_data["mechanics"] = task_info["mechanic_bindings"]
-                cprint(f"  Mechanics: {len(task_data['mechanics'])} from task", "green")
-                for binding in task_info["mechanic_bindings"]:
-                    mech_type = binding.get("mechanic_type", "unknown")
-                    trigger = binding.get("trigger_object", "?")
-                    target = binding.get("target_object", "self")
-                    print(f"    - {mech_type}: {trigger} -> {target}")
-            else:
-                cprint("  Mechanics: none (task has no mechanics)", "green")
+            print_mechanics_info(task)
 
     elif extra_args and extra_args.mechanics:
         cprint(f"Using mechanics from CLI: {extra_args.mechanics}", "green")
@@ -308,33 +227,35 @@ def main(config: DictConfig):
     # Output directory
     output_dir = config.paths.results_dir if hasattr(config, 'paths') else "outputs/emtom/human_test"
 
-    # Create and setup human test runner
-    from emtom.runner import HumanTestRunner
+    # Create and setup unified BenchmarkRunner with human_agents
+    from emtom.runner import BenchmarkRunner
+    from emtom.runner.benchmark import task_to_instruction
 
-    runner = HumanTestRunner(config)
+    runner = BenchmarkRunner(config)
     runner.setup(
         env_interface=env_interface,
-        # In task mode, always pass task_data (even if empty) to prevent auto-bind in base.py
-        # In exploration mode, pass task_data with all mechanics enabled
-        task_data=task_data,
+        task_data=task_data if not task else None,
         output_dir=output_dir,
-        task_info=task_info,
+        task=task,
         human_agents=human_agents,
+        save_video=True,
     )
 
-    # Only auto-bind mechanics if NOT in task mode (exploration mode only)
-    # When running a specific task, use ONLY the mechanics defined in the task
-    if not is_task_mode:
+    # Auto-bind mechanics only in exploration mode (not task mode)
+    if not is_task_mode and runner.game_manager:
         state, bindings = runner.game_manager.auto_bind_mechanics()
         if bindings:
-            print_bindings_pretty(bindings)
+            cprint("\nAuto-bound mechanics:", "green")
+            for mech_type, info in bindings.items():
+                cprint(f"  - {mech_type}: {info}", "gray")
 
-    active = runner.game_manager.get_debug_info()['active_mechanics']
-    cprint(f"⚙️  Active mechanics: {', '.join(active)}", "green")
+    if runner.game_manager:
+        active = runner.game_manager.get_debug_info()['active_mechanics']
+        cprint(f"Active mechanics: {', '.join(active)}", "green")
 
     # Build instruction
-    if task_info:
-        instruction = task_to_instruction(task_info)
+    if task:
+        instruction = task_to_instruction(task)
     else:
         instruction = {
             "agent_0": "Explore the environment and discover mechanics.",
@@ -344,7 +265,9 @@ def main(config: DictConfig):
     # Run interactive test
     try:
         results = runner.run(instruction=instruction)
-        cprint(f"\nTest completed: {results['steps']} steps", "green")
+        cprint(f"\nCompleted: {results['turns']} turns, {results['sim_steps']} sim steps", "green")
+        if results.get("success"):
+            cprint("Task SUCCESS!", "green")
     except KeyboardInterrupt:
         cprint("\nInterrupted by user", "yellow")
     except Exception as e:

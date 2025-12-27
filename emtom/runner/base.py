@@ -57,7 +57,6 @@ class EMTOMBaseRunner(ABC):
         self._save_video_override: Optional[bool] = None
 
         # State tracking
-        self._step_count = 0
         self._action_history: List[Dict[str, Any]] = []
         self._episode_done = False
 
@@ -467,7 +466,7 @@ class EMTOMBaseRunner(ABC):
         if mech_result.blocked:
             # Log blocked action
             self.event_log.log_action(
-                step=self._step_count,
+                step=self.get_sim_steps(),
                 agent_id=agent_id,
                 action=action_name,
                 target=target,
@@ -556,7 +555,7 @@ class EMTOMBaseRunner(ABC):
         if habitat_failed:
             # Log failed action
             self.event_log.log_action(
-                step=self._step_count,
+                step=self.get_sim_steps(),
                 agent_id=agent_id,
                 action=action_name,
                 target=target,
@@ -572,7 +571,7 @@ class EMTOMBaseRunner(ABC):
         # 5. Habitat action succeeded - now apply mechanic state changes
         # Log the successful action
         action_event = self.event_log.log_action(
-            step=self._step_count,
+            step=self.get_sim_steps(),
             agent_id=agent_id,
             action=action_name,
             target=target,
@@ -586,7 +585,7 @@ class EMTOMBaseRunner(ABC):
             self._sync_remote_effects_to_simulator(result.effects)
             # Log mechanic effect
             self.event_log.log_mechanic(
-                step=self._step_count,
+                step=self.get_sim_steps(),
                 mechanic=mech_result.mechanic_type or "unknown",
                 trigger=target,
                 effect=mechanic_observation or result.observation,
@@ -739,6 +738,21 @@ class EMTOMBaseRunner(ABC):
     def get_observations(self) -> Dict[str, Any]:
         """Get current observations from environment."""
         return self.env_interface.get_observations()
+
+    def get_sim_steps(self) -> int:
+        """
+        Get actual simulation step count from Habitat environment.
+
+        This is the true physics step count (up to max_steps like 20k),
+        not the number of LLM turns/actions.
+        """
+        try:
+            # Chain: env_interface.env (GymHabitatEnv) -> env (HabGymWrapper)
+            # -> env (RLTaskEnv) -> _env (Env with _elapsed_steps)
+            return self.env_interface.env.env.env._env._elapsed_steps
+        except AttributeError:
+            # Fallback if structure differs
+            return 0
 
     def get_world_graph(self) -> Dict[int, Any]:
         """

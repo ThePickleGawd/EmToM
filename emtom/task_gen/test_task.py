@@ -105,7 +105,7 @@ def main():
         dataset = CollaborationDatasetV0(config.habitat.dataset)
         env_interface = EnvironmentInterface(config, dataset=dataset, init_wg=False)
 
-        # Load the specific episode from the task
+        # Load the specific episode - reset_environment initializes world graph internally
         print(f"Loading episode: {task.episode_id} (scene: {task.scene_id})", file=sys.stderr)
         env_interface.reset_environment(episode_id=task.episode_id)
 
@@ -128,7 +128,10 @@ def main():
 
         # Generate instruction and run
         instruction = task_to_instruction(task)
-        results = runner.run(instruction=instruction, max_turns=args.max_turns)
+
+        # Get max_steps from config (same as run_habitat_benchmark.py)
+        max_steps = config.habitat.environment.get("max_episode_steps", 20000)
+        results = runner.run(instruction=instruction, max_steps=max_steps, max_turns=args.max_turns)
 
         # Get planner traces before cleanup
         planner_traces = runner.get_planner_traces()
@@ -141,11 +144,11 @@ def main():
 
         write_result({
             "success": True,
-            "steps": results.get("steps", 0),
+            "sim_steps": results.get("sim_steps", 0),
             "turns": results.get("turns", 0),
             "done": results.get("done", False),
             "episode_over": results.get("episode_over", False),
-            "summary": f"Task {'completed' if results.get('done') else 'not completed'} in {results.get('turns', 0)} turns",
+            "summary": f"Task {'completed' if results.get('done') else 'not completed'} in {results.get('turns', 0)} turns ({results.get('sim_steps', 0)} sim steps)",
             "action_history": action_history,
             "evaluation": evaluation,
             "planner_traces": planner_traces,
@@ -154,7 +157,8 @@ def main():
     except Exception as e:
         write_result({
             "success": False,
-            "steps": 0,
+            "sim_steps": 0,
+            "turns": 0,
             "done": False,
             "error": str(e),
             "summary": f"Benchmark error: {e}"

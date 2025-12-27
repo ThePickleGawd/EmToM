@@ -1,14 +1,16 @@
 """
-Benchmark runner for EMTOM evaluation.
+Unified benchmark runner for EMTOM evaluation.
 
-Uses LLMPlanner for multi-agent task execution with proper video recording
-and planner logging.
+Supports both LLM and human-controlled agents. Each agent can be configured
+as human or LLM via the human_agents parameter.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 from omegaconf import DictConfig
 
@@ -21,18 +23,21 @@ if TYPE_CHECKING:
 
 class BenchmarkRunner(EMTOMBaseRunner):
     """
-    Runner for benchmark evaluation with LLM planners.
+    Unified runner for EMTOM benchmark evaluation.
 
-    Each agent gets an EmtomPlanner (from emtom/planner.py) that uses
-    ReAct-style prompting with exploration-style logging.
+    Supports:
+    - All LLM agents (default)
+    - All human agents (human_agents=["agent_0", "agent_1", ...])
+    - Mixed mode (some human, some LLM)
     """
 
     def __init__(self, config: DictConfig):
         super().__init__(config)
 
-        self.planners: Dict[int, Any] = {}  # uid -> LLMPlanner
+        self.planners: Dict[int, Any] = {}
         self.task: Optional["GeneratedTask"] = None
-        self._completed_subtasks: set = set()  # Track completed subtask IDs
+        self.human_agents: Set[str] = set()
+        self._completed_subtasks: Set[str] = set()
 
     def setup(
         self,
@@ -41,31 +46,48 @@ class BenchmarkRunner(EMTOMBaseRunner):
         output_dir: Optional[str] = None,
         task: Optional["GeneratedTask"] = None,
         save_video: Optional[bool] = None,
+        human_agents: Optional[List[str]] = None,
     ) -> None:
         """
         Setup benchmark runner.
 
         Args:
             env_interface: Initialized EnvironmentInterface
-            task_data: Task data with mechanics/bindings (can be from task.to_mechanics_dict())
+            task_data: Task data with mechanics/bindings
             output_dir: Output directory
-            task: Optional GeneratedTask object for full task info
-            save_video: Whether to save video. If None, uses config.evaluation.save_video
+            task: Optional GeneratedTask object
+            save_video: Whether to save video
+            human_agents: List of agent IDs to be human-controlled (e.g., ["agent_0"])
+                         If None, all agents are LLM-controlled.
         """
         self.task = task
 
-        # If task provided but no task_data, convert task to mechanics format
         if task and not task_data:
             task_data = self._task_to_mechanics_dict(task)
 
-        # Get agent_actions from task if available
         agent_actions = task.agent_actions if task else None
 
         super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions, save_video=save_video)
-        self._setup_planners()
+
+        # Set human agents
+        if human_agents:
+            self.human_agents = set(human_agents)
+        else:
+            self.human_agents = set()
+
+        # Setup planners only for LLM agents
+        llm_agent_uids = [
+            uid for uid in self.agents.keys()
+            if f"agent_{uid}" not in self.human_agents
+        ]
+        self._setup_planners(llm_agent_uids)
+
+        if self.human_agents:
+            print(f"[BenchmarkRunner] Human agents: {self.human_agents}")
+            print(f"[BenchmarkRunner] LLM agents: {set(f'agent_{uid}' for uid in llm_agent_uids)}")
 
     def _task_to_mechanics_dict(self, task: "GeneratedTask") -> Dict[str, Any]:
-        """Convert GeneratedTask to task data for GameStateManager initialization."""
+        """Convert GeneratedTask to task data for GameStateManager."""
         result = {}
         if task.mechanic_bindings:
             result["mechanics"] = [
@@ -73,17 +95,18 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 for b in task.mechanic_bindings
             ]
         if task.items:
-            result["items"] = task.items  # Already list of dicts
+            result["items"] = task.items
         if task.locked_containers:
             result["locked_containers"] = task.locked_containers
         return result
 
-    def _setup_planners(self) -> None:
-        """Initialize LLM planner for each agent using our custom LLMPlanner."""
+    def _setup_planners(self, agent_uids: List[int]) -> None:
+        """Initialize LLM planners for specified agents."""
+        if not agent_uids:
+            return
+
         from hydra.utils import instantiate
         from omegaconf import OmegaConf
-
-        # Use our EmtomPlanner with custom logging
         from emtom.planner import EmtomPlanner
 
         if not hasattr(self.config, 'evaluation') or not hasattr(self.config.evaluation, 'agents'):
@@ -92,7 +115,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
         agent_confs = list(self.config.evaluation.agents.values())
 
-        for uid, agent in self.agents.items():
+        for uid in agent_uids:
+            if uid not in self.agents:
+                continue
             if uid >= len(agent_confs):
                 continue
 
@@ -101,15 +126,13 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 print(f"[BenchmarkRunner] Warning: No planner config for agent_{uid}")
                 continue
 
-            # Override _target_ to use our EmtomPlanner
             planner_conf = OmegaConf.to_container(agent_conf.planner, resolve=True)
             if '_target_' in planner_conf and 'LLMPlanner' in planner_conf['_target_']:
-                # Use our custom EmtomPlanner
                 planner_conf['_target_'] = 'emtom.planner.EmtomPlanner'
 
             planner = instantiate(OmegaConf.create(planner_conf))
             planner = planner(env_interface=self.env_interface)
-            planner.agents = [agent]
+            planner.agents = [self.agents[uid]]
             self.planners[uid] = planner
             print(f"[BenchmarkRunner] Created planner for agent_{uid}")
 
@@ -120,86 +143,129 @@ class BenchmarkRunner(EMTOMBaseRunner):
         max_turns: int = 20,
     ) -> Dict[str, Any]:
         """
-        Run benchmark task with LLM planners.
+        Run benchmark task.
 
         Args:
             instruction: Per-agent instruction dict (agent_id -> instruction)
-            max_steps: Maximum simulation steps (safety limit)
-            max_turns: Maximum LLM turns per agent (default: 20)
+            max_steps: Maximum simulation steps
+            max_turns: Maximum rounds (each round = all agents act once)
 
         Returns:
-            Results dict with steps, turns, success, history
+            Results dict with sim_steps, turns, done, action_history, evaluation
         """
-        n_agents = len(self.planners)
         task_title = self.task.title if self.task else "Unknown Task"
+        n_agents = len(self.agents)
+        has_humans = bool(self.human_agents)
 
         print(f"\n{'='*60}", flush=True)
         print(f"BENCHMARK: {task_title}", flush=True)
         print(f"Agents: {n_agents} | Max turns: {max_turns}", flush=True)
+        if has_humans:
+            print(f"Human: {list(self.human_agents)} | LLM: {[f'agent_{u}' for u in self.planners.keys()]}", flush=True)
         print(f"{'='*60}\n", flush=True)
+
+        if has_humans:
+            self._print_controls()
 
         observations = self.get_observations()
         self.record_frame(observations)
 
         done = False
-        all_planners_done = False
         turn_count = 0
-        planners_done: set = set()  # Track which planners have finished
+        agents_done: Set[int] = set()
 
-        while self._step_count < max_steps and not done and not self._episode_done:
-            # Check turn limit
-            if max_turns and turn_count >= max_turns:
-                print(f"\n[Benchmark] Reached max LLM turns ({max_turns})", flush=True)
+        # Main loop - each iteration is one turn (round)
+        while self.get_sim_steps() < max_steps and not done and not self._episode_done:
+            turn_count += 1
+
+            if max_turns and turn_count > max_turns:
+                print(f"\n[Benchmark] Reached max turns ({max_turns})", flush=True)
                 break
 
-            self._step_count += 1
+            print(f"\n{'='*60}", flush=True)
+            print(f"TURN {turn_count}", flush=True)
+            print(f"{'='*60}", flush=True)
 
             world_graph = self.get_world_graph()
 
-            for uid, planner in self.planners.items():
-                # Skip planners that are already done
-                if uid in planners_done:
+            for uid in sorted(self.agents.keys()):
+                if uid in agents_done:
                     continue
 
                 agent_id = f"agent_{uid}"
                 agent_instruction = instruction.get(agent_id, instruction.get(str(uid), ""))
 
+                # Print agent status for human agents
+                if agent_id in self.human_agents:
+                    self._print_agent_status(uid)
+
                 try:
-                    # Get action from planner (logging is handled by emtom_planner.py)
-                    low_level_actions, planner_info, planner_done = planner.get_next_action(
-                        agent_instruction, observations, world_graph
-                    )
+                    if agent_id in self.human_agents:
+                        # Human agent - get input from CLI
+                        action, agent_done = self._get_human_action(agent_id)
+                        if agent_done:
+                            done = True
+                            break
+                        if action == "skip":
+                            continue
 
-                    # Track high-level action in history
-                    high_level_action = self._extract_high_level_action(planner_info, uid)
-                    if high_level_action:
-                        turn_count += 1
-                        self._action_history.append({
-                            "step": self._step_count,
-                            "turn": turn_count,
-                            "agent": agent_id,
-                            "action": high_level_action,
-                        })
+                        # Execute action
+                        if action:
+                            result = self.execute_parsed_action(uid, action)
+                            observation = result.get("observation", "")
+                            print(f"Agent_{uid}_Observation: {observation}", flush=True)
 
-                        # Print thought + action + observation for debugging
-                        thought = planner_info.get("thought", "")
-                        response = planner_info.get("response", "")
-                        if thought:
-                            print(f"Thought: {thought}", flush=True)
-                        print(f"Agent_{uid}: {high_level_action}", flush=True)
-                        if response:
-                            print(f"  → {response}", flush=True)
+                            self._action_history.append({
+                                "sim_step": self.get_sim_steps(),
+                                "turn": turn_count,
+                                "agent": agent_id,
+                                "action": action,
+                                "result": observation,
+                                "mode": "human",
+                            })
 
-                        # Check for subtask completion after each action
-                        self._check_subtasks()
+                            self._check_subtasks()
+                    else:
+                        # LLM agent - use planner
+                        if uid not in self.planners:
+                            continue
 
-                    if planner_done:
-                        planners_done.add(uid)
-                        print(f"[Agent {uid} DONE]", flush=True)
+                        planner = self.planners[uid]
+                        low_level_actions, planner_info, planner_done = planner.get_next_action(
+                            agent_instruction, observations, world_graph
+                        )
+
+                        high_level_action = self._extract_high_level_action(planner_info, uid)
+                        if high_level_action:
+                            thought_dict = planner_info.get("thought", {})
+                            responses_dict = planner_info.get("responses", {})
+                            thought = thought_dict.get(uid, "") if isinstance(thought_dict, dict) else ""
+                            response = responses_dict.get(uid, "") if isinstance(responses_dict, dict) else ""
+
+                            if thought:
+                                print(f"Thought: {thought}", flush=True)
+                            print(f"Agent_{uid}: {high_level_action}", flush=True)
+                            if response:
+                                print(f"Agent_{uid}_Observation: {response}", flush=True)
+
+                            self._action_history.append({
+                                "sim_step": self.get_sim_steps(),
+                                "turn": turn_count,
+                                "agent": agent_id,
+                                "action": high_level_action,
+                                "result": response,
+                                "mode": "llm",
+                            })
+
+                            self._check_subtasks()
+
+                        if planner_done:
+                            agents_done.add(uid)
+                            print(f"[Agent {uid} DONE]", flush=True)
 
                 except AssertionError as e:
                     if "Episode over" in str(e) or "call reset before calling step" in str(e):
-                        print(f"\n[Benchmark] Episode ended at step {self._step_count}", flush=True)
+                        print(f"\n[Benchmark] Episode ended at sim step {self.get_sim_steps()}", flush=True)
                         self._episode_done = True
                         break
                     raise
@@ -207,48 +273,315 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     print(f"[Agent {uid} ERROR] {e}", flush=True)
                     continue
 
-            # Check if all planners are done
-            if len(planners_done) == len(self.planners):
-                all_planners_done = True
+                # Check task completion after each action
+                eval_result = self._check_task_completion()
+                if eval_result and eval_result.get("success"):
+                    print(f"\n{'='*60}", flush=True)
+                    print("TASK COMPLETE!", flush=True)
+                    print(f"{'='*60}", flush=True)
+                    done = True
+                    break
+
+            # Check if all agents done
+            if len(agents_done) == len(self.agents):
                 done = True
 
-            # Get new observations and record
-            if not self._episode_done:
+            if not self._episode_done and not done:
                 observations = self.get_observations()
                 self.record_frame(observations)
 
-        # Evaluate task with PARTNR-style metrics
-        evaluation = {}
-        if self.game_manager:
-            # Derive success condition from task's subtasks if available
-            success_condition = None
-            if self.task:
-                effective = self.task.get_effective_success_condition()
-                if effective:
-                    success_condition = {
-                        "description": effective.description,
-                        "required_states": effective.required_states,
-                    }
-            evaluation = self.game_manager.evaluate_task(success_condition)
+        print(f"\n[Benchmark] Finished: sim_steps={self.get_sim_steps()}, turns={turn_count}, done={done}", flush=True)
+
+        # Final evaluation
+        evaluation = self._check_task_completion() or {}
 
         # Save outputs
-        self._save_outputs(instruction, evaluation)
+        self._save_outputs(instruction, evaluation, turn_count)
 
         return {
-            "steps": self._step_count,
+            "sim_steps": self.get_sim_steps(),
             "turns": turn_count,
-            "done": done or all_planners_done,
+            "done": done,
             "episode_over": self._episode_done,
             "action_history": self._action_history,
             "evaluation": evaluation,
+            "success": evaluation.get("success", False),
         }
 
-    def _check_subtasks(self) -> List[str]:
-        """
-        Check all subtasks and return list of newly completed subtask IDs.
+    # -------------------------------------------------------------------------
+    # Human input methods
+    # -------------------------------------------------------------------------
 
-        Logs completion to console when a subtask is newly completed.
+    def _get_human_action(self, agent_id: str) -> tuple:
         """
+        Get action from human via CLI.
+
+        Returns:
+            (action_string, should_quit)
+        """
+        while True:
+            try:
+                user_input = input(f"{agent_id}> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return None, True
+
+            if not user_input:
+                continue
+
+            cmd = user_input.lower()
+
+            if cmd in ("quit", "q", "exit"):
+                return None, True
+            if cmd == "skip":
+                return "skip", False
+            if cmd == "status":
+                self._print_full_status()
+                continue
+            if cmd == "subtasks":
+                self._print_subtasks()
+                continue
+            if cmd == "mechanics":
+                self._print_mechanics()
+                continue
+            if cmd == "history":
+                self._print_history()
+                continue
+            if cmd == "world":
+                self._print_world_description(agent_id)
+                continue
+            if cmd == "prompt":
+                self._print_llm_prompt(agent_id)
+                continue
+            if cmd == "help":
+                self._print_help()
+                continue
+
+            # Parse action
+            action = self._parse_action(user_input)
+            if action:
+                return action, False
+
+            print(f"Invalid action: {user_input}")
+            print("Format: ActionName[target] (e.g., Navigate[kitchen_1])")
+
+    def _parse_action(self, text: str) -> Optional[str]:
+        """Parse user input into action string."""
+        match = re.match(r'(\w+)\[([^\]]+)\]', text)
+        if match:
+            return text
+
+        parts = text.split(maxsplit=1)
+        if len(parts) == 2:
+            return f"{parts[0]}[{parts[1]}]"
+
+        return None
+
+    def _print_agent_status(self, uid: int) -> None:
+        """Print status for an agent."""
+        agent_id = f"agent_{uid}"
+        mode = "human" if agent_id in self.human_agents else "LLM"
+
+        try:
+            room = self.world_adapter.get_agent_location(agent_id)
+        except Exception:
+            room = "unknown"
+
+        print(f"\n--- {agent_id} ({mode}) in {room} ---", flush=True)
+
+        # Show inventory
+        if self.game_manager:
+            inv_text = self.game_manager.get_inventory_text(agent_id)
+            print(f"Inventory: {inv_text}", flush=True)
+
+    def _print_controls(self) -> None:
+        """Print control instructions."""
+        print(f"{'='*60}")
+        print("CONTROLS")
+        print(f"{'='*60}")
+
+        if self.task and self.task.agent_actions:
+            for agent_id in sorted(self.task.agent_actions.keys()):
+                actions = self.task.agent_actions[agent_id]
+                mode = "human" if agent_id in self.human_agents else "LLM"
+                print(f"  {agent_id} ({mode}): {', '.join(actions)}")
+        else:
+            print("Actions: Navigate, Open, Close, Pick, Place, Search, UseItem, Communicate")
+
+        print(f"\nCommands: status, world, prompt, subtasks, mechanics, history, skip, quit, help")
+        print(f"{'='*60}\n")
+
+    def _print_full_status(self) -> None:
+        """Print full world status."""
+        print(f"\n{'='*50}")
+        print("WORLD STATUS")
+        print(f"{'='*50}")
+
+        if self.game_manager:
+            debug_info = self.game_manager.get_debug_info()
+            print(f"Active mechanics: {debug_info.get('active_mechanics', [])}")
+
+        try:
+            entities = self.world_adapter.get_interactable_entities()
+            furniture = [e["name"] for e in entities if e["type"] == "furniture"]
+            objects = [e["name"] for e in entities if e["type"] == "object"]
+            rooms = self.world_adapter.get_room_ids()
+
+            print(f"\nRooms: {', '.join(rooms)}")
+            print(f"Furniture ({len(furniture)}): {', '.join(furniture[:15])}...")
+            print(f"Objects ({len(objects)}): {', '.join(objects)}")
+        except Exception as e:
+            print(f"Error: {e}")
+
+    def _print_subtasks(self) -> None:
+        """Print subtask status."""
+        if not self.task or not self.task.subtasks:
+            print("No subtasks defined.")
+            return
+
+        subtasks = self.task.subtasks
+        print(f"\n{'='*50}")
+        print(f"SUBTASKS ({len(self._completed_subtasks)}/{len(subtasks)})")
+        print(f"{'='*50}")
+
+        for subtask in subtasks:
+            subtask_id = subtask.id if hasattr(subtask, 'id') else subtask.get("id", "")
+            desc = subtask.description if hasattr(subtask, 'description') else subtask.get("description", "")
+
+            if subtask_id in self._completed_subtasks:
+                status = "✓"
+            else:
+                depends = subtask.depends_on if hasattr(subtask, 'depends_on') else subtask.get("depends_on", [])
+                deps_met = all(d in self._completed_subtasks for d in depends)
+                status = "○" if deps_met else "◌"
+
+            print(f"  {status} {subtask_id}: {desc}")
+
+    def _print_mechanics(self) -> None:
+        """Print active mechanics."""
+        print(f"\n{'='*50}")
+        print("ACTIVE MECHANICS")
+        print(f"{'='*50}")
+
+        if self.game_manager:
+            debug_info = self.game_manager.get_debug_info()
+            for mech in debug_info.get('active_mechanics', []):
+                print(f"  - {mech}")
+        else:
+            print("No mechanics configured")
+
+    def _print_history(self) -> None:
+        """Print action history."""
+        print(f"\n{'='*50}")
+        print("ACTION HISTORY")
+        print(f"{'='*50}")
+
+        for record in self._action_history[-20:]:
+            mode = record.get("mode", "?")
+            turn = record.get("turn", "?")
+            print(f"  [T{turn}] {record['agent']} ({mode}): {record['action']}")
+
+    def _print_help(self) -> None:
+        """Print help."""
+        from emtom.actions.registry import STANDARD_ACTIONS
+
+        print(f"\n{'='*50}")
+        print("HELP")
+        print(f"{'='*50}")
+        print("\nActions:")
+        for name, desc in sorted(STANDARD_ACTIONS.items()):
+            print(f"  {desc}")
+        print("\nCommands:")
+        print("  status    - Show world status (rooms, furniture, objects)")
+        print("  world     - Show world description (what LLM sees in prompt)")
+        print("  prompt    - Show full LLM prompt (saves to file)")
+        print("  subtasks  - Show subtask progress")
+        print("  mechanics - Show active mechanics")
+        print("  history   - Show action history")
+        print("  skip      - Skip this agent's turn")
+        print("  quit      - Exit and save")
+
+    def _print_world_description(self, agent_id: str) -> None:
+        """Print world description matching what LLM sees in its prompt."""
+        from habitat_llm.llm.instruct.utils import get_world_descr
+
+        uid = int(agent_id.split("_")[1])
+
+        print(f"\n{'='*60}")
+        print(f"WORLD DESCRIPTION (what LLM sees for {agent_id})")
+        print(f"{'='*60}")
+
+        try:
+            world_graph = self.get_world_graph()
+            if uid in world_graph:
+                wg = world_graph[uid]
+                world_desc = get_world_descr(
+                    wg,
+                    agent_uid=uid,
+                    add_state_info=True,
+                    include_room_name=True,
+                    centralized=True,
+                )
+                print(world_desc)
+            else:
+                print(f"World graph not available for {agent_id}")
+        except Exception as e:
+            print(f"Error getting world description: {e}")
+
+        # Also show inventory
+        if self.game_manager:
+            print(f"\nInventory: {self.game_manager.get_inventory_text(agent_id)}")
+
+        print(f"{'='*60}")
+
+    def _print_llm_prompt(self, agent_id: str) -> None:
+        """Print and save the full LLM prompt for debugging."""
+        uid = int(agent_id.split("_")[1])
+
+        print(f"\n{'='*60}")
+        print(f"LLM PROMPT for {agent_id}")
+        print(f"{'='*60}")
+
+        if uid in self.planners:
+            planner = self.planners[uid]
+            if hasattr(planner, 'curr_prompt') and planner.curr_prompt:
+                prompt = planner.curr_prompt
+                print(prompt)
+
+                # Save to file
+                if self.output_dir:
+                    prompt_file = Path(self.output_dir) / f"prompt_{agent_id}.txt"
+                    prompt_file.write_text(prompt)
+                    print(f"\n[Saved to {prompt_file}]")
+            else:
+                print(f"No prompt available yet for {agent_id}")
+                print("(Prompt is built after first LLM call)")
+        else:
+            print(f"No LLM planner for {agent_id} (human-controlled)")
+            print("\nTo see what LLM would see, use 'world' command")
+
+        print(f"{'='*60}")
+
+    # -------------------------------------------------------------------------
+    # Task evaluation
+    # -------------------------------------------------------------------------
+
+    def _check_task_completion(self) -> Optional[Dict[str, Any]]:
+        """Check if task is complete."""
+        if not self.task:
+            return None
+
+        effective = self.task.get_effective_success_condition()
+        if not effective:
+            return None
+
+        success_condition = {
+            "description": effective.description,
+            "required_states": effective.required_states,
+        }
+        return self.evaluate_task(success_condition)
+
+    def _check_subtasks(self) -> List[str]:
+        """Check subtasks and return newly completed IDs."""
         if not self.task or not self.task.subtasks:
             return []
 
@@ -260,51 +593,30 @@ class BenchmarkRunner(EMTOMBaseRunner):
             if not subtask_id or subtask_id in self._completed_subtasks:
                 continue
 
-            # Check if all dependencies are completed first
-            if hasattr(subtask, 'depends_on'):
-                depends_on = subtask.depends_on
-            else:
-                depends_on = subtask.get("depends_on", [])
+            depends_on = subtask.depends_on if hasattr(subtask, 'depends_on') else subtask.get("depends_on", [])
             if not all(dep in self._completed_subtasks for dep in depends_on):
-                # Dependencies not met, skip this subtask
                 continue
 
-            # Get success condition
-            if hasattr(subtask, 'success_condition'):
-                success_condition = subtask.success_condition
-            else:
-                success_condition = subtask.get("success_condition")
-
+            success_condition = subtask.success_condition if hasattr(subtask, 'success_condition') else subtask.get("success_condition")
             if not success_condition:
                 continue
 
-            # Check this subtask's condition
             result = self.evaluate_task({"required_states": [success_condition]})
             if result and result.get("success"):
                 self._completed_subtasks.add(subtask_id)
                 newly_completed.append(subtask_id)
 
-                # Get description
-                if hasattr(subtask, 'description'):
-                    desc = subtask.description
-                else:
-                    desc = subtask.get("description", subtask_id)
-
-                # Log the completion
-                total = len(subtasks)
+                desc = subtask.description if hasattr(subtask, 'description') else subtask.get("description", subtask_id)
                 print(f"\n{'─'*50}", flush=True)
                 print(f"✓ SUBTASK COMPLETE: {subtask_id}", flush=True)
                 print(f"  {desc}", flush=True)
-                print(f"  Progress: {len(self._completed_subtasks)}/{total} subtasks", flush=True)
+                print(f"  Progress: {len(self._completed_subtasks)}/{len(subtasks)}", flush=True)
                 print(f"{'─'*50}", flush=True)
 
         return newly_completed
 
     def _extract_high_level_action(self, planner_info: Dict, uid: int) -> Optional[str]:
-        """Extract high-level action string from planner info.
-
-        LLMPlanner sets planner_info["high_level_actions"] = Dict[uid, (action_name, action_arg, ...)]
-        """
+        """Extract high-level action from planner info."""
         ha = planner_info.get("high_level_actions", {})
         if uid in ha:
             action_tuple = ha[uid]
@@ -312,64 +624,66 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 return f"{action_tuple[0]}[{action_tuple[1]}]"
         return None
 
+    # -------------------------------------------------------------------------
+    # Output saving
+    # -------------------------------------------------------------------------
+
     def _save_outputs(
         self,
         instruction: Dict[str, str],
-        evaluation: Optional[Dict[str, Any]] = None,
+        evaluation: Dict[str, Any],
+        turn_count: int,
     ) -> None:
-        """Save video and planner log."""
-        # Save video
+        """Save video, planner log, and prompts."""
         task_id = self.task.task_id if self.task else "unknown"
-        video_suffix = f"benchmark_{task_id}_{self._step_count}"
-        self.save_video(video_suffix)
+        sim_steps = self.get_sim_steps()
 
-        # Build planner log
+        # Save video
+        mode = "human" if self.human_agents else "benchmark"
+        self.save_video(f"{mode}_{task_id}_{sim_steps}")
+
+        # Build log data
         log_data = {
             "task_id": task_id,
             "task_title": self.task.title if self.task else "Unknown",
             "instruction": instruction,
             "mechanics_active": self.game_manager.get_state().active_mechanics if self.game_manager else [],
-            "total_steps": self._step_count,
+            "sim_steps": sim_steps,
+            "turns": turn_count,
             "episode_over": self._episode_done,
+            "human_agents": list(self.human_agents),
+            "llm_agents": [f"agent_{uid}" for uid in self.planners.keys()],
             "action_history": self._action_history,
         }
 
-        # Include PARTNR-style evaluation metrics
         if evaluation:
             log_data["evaluation"] = evaluation
             log_data["percent_complete"] = evaluation.get("percent_complete", 0.0)
             log_data["success"] = evaluation.get("success", False)
-            log_data["failure_explanations"] = evaluation.get("failure_explanations", [])
 
-        # Include mechanic bindings if from task
         if self.task and self.task.mechanic_bindings:
-            log_data["mechanic_bindings"] = [
-                b.to_dict() for b in self.task.mechanic_bindings
-            ]
+            log_data["mechanic_bindings"] = [b.to_dict() for b in self.task.mechanic_bindings]
 
         self.save_planner_log(log_data)
 
-        # Save prompts from planners
+        # Save prompts from LLM planners
         self._save_planner_prompts()
 
     def _save_planner_prompts(self) -> None:
-        """Save prompts from each LLM planner."""
+        """Save prompts from LLM planners."""
         prompts = {}
         traces = {}
 
         for uid, planner in self.planners.items():
             agent_id = f"agent_{uid}"
 
-            # Get prompt from planner
             if hasattr(planner, 'curr_prompt') and planner.curr_prompt:
                 prompts[agent_id] = planner.curr_prompt
 
-                # Extract trace (interaction part after system prompt)
                 prompt = planner.curr_prompt
                 task_marker = "Task:"
                 if task_marker in prompt:
-                    trace_start = prompt.find(task_marker)
-                    traces[agent_id] = prompt[trace_start:]
+                    traces[agent_id] = prompt[prompt.find(task_marker):]
                 else:
                     traces[agent_id] = prompt
 
@@ -377,58 +691,44 @@ class BenchmarkRunner(EMTOMBaseRunner):
             self.save_prompts(prompts, traces)
 
     def get_planner_traces(self) -> Dict[str, str]:
-        """Get the conversation traces from each planner for debugging."""
+        """Get conversation traces from planners."""
         traces = {}
         for uid, planner in self.planners.items():
             agent_id = f"agent_{uid}"
             if hasattr(planner, 'curr_prompt') and planner.curr_prompt:
-                # Extract trace (interaction part after system prompt)
                 prompt = planner.curr_prompt
                 task_marker = "Task:"
                 if task_marker in prompt:
-                    trace_start = prompt.find(task_marker)
-                    traces[agent_id] = prompt[trace_start:]
+                    traces[agent_id] = prompt[prompt.find(task_marker):]
                 else:
                     traces[agent_id] = prompt
         return traces
 
 
 def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
-    """
-    Convert a GeneratedTask to per-agent instructions.
-
-    Args:
-        task: GeneratedTask object
-
-    Returns:
-        Dict mapping agent_id -> instruction string
-    """
+    """Convert GeneratedTask to per-agent instructions."""
     instructions = {}
 
     for agent_id in task.agent_roles.keys():
         parts = []
 
-        # Add atmospheric story first (sets the scene)
         if task.story:
             parts.append(task.story)
-            parts.append("")  # blank line
+            parts.append("")
 
         parts.append(f"Goal: {task.public_goal}")
 
         if task.public_context:
             parts.append(task.public_context)
 
-        # Per-agent actions available
         actions = task.agent_actions.get(agent_id, [])
         if actions:
             parts.append(f"\nYour available actions: {', '.join(actions)}")
-            # Add hints about special actions
             if "Search" in actions:
                 parts.append("(Search finds hidden items and adds them to your inventory)")
             if "UseItem" in actions:
-                parts.append("(UseItem lets you use items from inventory, e.g., UseItem[item_key_1, cabinet] to unlock)")
+                parts.append("(UseItem lets you use items from inventory)")
 
-        # Per-agent secrets (only for ToM tasks)
         secrets = task.agent_secrets.get(agent_id, [])
         if secrets:
             parts.append("\nSecret Knowledge:")

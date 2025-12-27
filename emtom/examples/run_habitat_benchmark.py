@@ -205,7 +205,8 @@ def main(config: DictConfig) -> None:
         results = runner.run(instruction=instruction, max_steps=max_steps, max_turns=max_turns)
 
         cprint("\nTask execution completed!", "green")
-        print(f"Steps: {results['steps']}")
+        print(f"Simulation steps: {results['sim_steps']}")
+        print(f"LLM turns: {results['turns']}")
         print(f"Done: {results['done']}")
         print(f"Episode over: {results.get('episode_over', False)}")
 
