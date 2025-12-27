@@ -1008,6 +1008,52 @@ SUMMARY:"""
                 "summary": "Task validation failed - story not grounded"
             }
 
+        # Check that object IDs in story actually exist in scene
+        if self.scene_data:
+            valid_scene_ids = set(
+                self.scene_data.rooms +
+                self.scene_data.furniture +
+                self.scene_data.objects
+            )
+            # Also allow item_ prefixed IDs (custom items defined in task)
+            defined_items = {item.get("item_id") for item in task_data.get("items", []) if item.get("item_id")}
+            valid_scene_ids.update(defined_items)
+
+            invalid_story_refs = [ref for ref in object_refs if ref not in valid_scene_ids and not ref.startswith("item_")]
+            if invalid_story_refs:
+                return {
+                    "valid": False,
+                    "error": f"story references objects that don't exist in scene: {invalid_story_refs}. Use only: {list(self.scene_data.objects)[:10]}...",
+                    "summary": "Task validation failed - invented object IDs"
+                }
+
+            # Also check agent_secrets for invented object IDs
+            for agent_id, secrets in task_data.get("agent_secrets", {}).items():
+                for secret in secrets:
+                    secret_refs = re.findall(object_pattern, secret)
+                    invalid_secret_refs = [ref for ref in secret_refs if ref not in valid_scene_ids and not ref.startswith("item_")]
+                    if invalid_secret_refs:
+                        return {
+                            "valid": False,
+                            "error": f"agent_secrets[{agent_id}] references objects that don't exist in scene: {invalid_secret_refs}",
+                            "summary": "Task validation failed - invented object IDs in secrets"
+                        }
+
+            # Check subtask success_conditions for invented object IDs
+            for subtask in task_data.get("subtasks", []):
+                sc = subtask.get("success_condition", {})
+                for field in ["entity", "target"]:
+                    val = sc.get(field, "")
+                    if val and not val.startswith("agent_"):
+                        val_refs = re.findall(object_pattern, val)
+                        invalid_sc_refs = [ref for ref in val_refs if ref not in valid_scene_ids and not ref.startswith("item_")]
+                        if invalid_sc_refs:
+                            return {
+                                "valid": False,
+                                "error": f"subtask '{subtask.get('id')}' success_condition references objects that don't exist: {invalid_sc_refs}",
+                                "summary": "Task validation failed - invented object IDs in subtasks"
+                            }
+
         # Check mechanic_bindings structure
         for i, binding in enumerate(task_data.get("mechanic_bindings", [])):
             if "mechanic_type" not in binding:

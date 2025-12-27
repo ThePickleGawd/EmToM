@@ -301,24 +301,15 @@ class BenchmarkRunner(EMTOMBaseRunner):
         return newly_completed
 
     def _extract_high_level_action(self, planner_info: Dict, uid: int) -> Optional[str]:
-        """Extract high-level action string from planner info."""
-        try:
-            if "high_level_action" in planner_info:
-                ha = planner_info["high_level_action"]
-                if isinstance(ha, dict) and uid in ha:
-                    action_tuple = ha[uid]
-                    if action_tuple and len(action_tuple) >= 2:
-                        return f"{action_tuple[0]}[{action_tuple[1]}]"
+        """Extract high-level action string from planner info.
 
-            for key in ["action", "actions", f"agent_{uid}"]:
-                if key in planner_info:
-                    val = planner_info[key]
-                    if isinstance(val, str):
-                        return val
-                    if isinstance(val, tuple) and len(val) >= 2:
-                        return f"{val[0]}[{val[1]}]"
-        except Exception:
-            pass
+        LLMPlanner sets planner_info["high_level_actions"] = Dict[uid, (action_name, action_arg, ...)]
+        """
+        ha = planner_info.get("high_level_actions", {})
+        if uid in ha:
+            action_tuple = ha[uid]
+            if action_tuple and action_tuple[0]:
+                return f"{action_tuple[0]}[{action_tuple[1]}]"
         return None
 
     def _save_outputs(
