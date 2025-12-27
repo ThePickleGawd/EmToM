@@ -189,13 +189,17 @@ class TaskGeneratorAgent:
         self._create_working_task_from_template()
 
         # Load scenario inspirations - one per task target
+        # Truncate long scenarios to avoid confusing the agent
         from emtom.task_gen.task_generator import load_scenario_inspirations
         scenarios = load_scenario_inspirations(max_scenarios=num_tasks_target)
         scenario_text = ""
         if scenarios:
-            scenario_text = "\n\n## Story Inspiration\n"
+            scenario_text = "\n\n## Story Inspiration (for atmosphere only - do NOT copy!)\n"
+            scenario_text += "Use these themes as creative inspiration for your story. Write your OWN story using the REAL object IDs from the scene.\n"
             for i, s in enumerate(scenarios, 1):
-                scenario_text += f"\n--- Theme {i} ---\n{s}\n"
+                # Truncate to ~500 chars to avoid overwhelming context
+                truncated = s[:500] + "..." if len(s) > 500 else s
+                scenario_text += f"\n--- Theme {i} ---\n{truncated}\n"
 
         # Get available items from registry
         from emtom.state.item_registry import ItemRegistry
@@ -307,7 +311,11 @@ Start by reading the template, then create a task using the scene data above."""
             tool, args = action
             observation = self._execute_action(tool, args)
 
-            # Add to conversation
+            # Truncate heredocs in PREVIOUS assistant messages to save context
+            # (keep current response full so LLM sees what it just did)
+            self._truncate_old_heredocs()
+
+            # Add current turn to conversation (full content)
             self.messages.append({"role": "assistant", "content": response})
             self.messages.append({"role": "user", "content": f"Observation: {observation}"})
 
@@ -400,6 +408,44 @@ Start by reading the template, then create a task using the scene data above."""
                 self._log(f"Auto-fixed scene fields in {self.task_file.name}")
         except Exception as e:
             self._log(f"Warning: Could not fix scene fields: {e}")
+
+    def _truncate_old_heredocs(self) -> None:
+        """Truncate large heredoc content in PREVIOUS assistant messages.
+
+        When the LLM writes a file via heredoc, the entire file content
+        appears in the response. For older messages, we truncate to save context.
+        The most recent messages are kept full.
+        """
+        # Pattern: cat > file << 'EOF' ... EOF (or << "EOF" or << EOF)
+        heredoc_pattern = re.compile(
+            r"(cat\s*>\s*[^\s]+\s*<<\s*['\"]?EOF['\"]?\n)"  # Opening
+            r"(.*?)"  # Content (non-greedy)
+            r"(\nEOF)",  # Closing
+            re.DOTALL
+        )
+
+        def truncate_match(match):
+            opening = match.group(1)
+            content = match.group(2)
+            closing = match.group(3)
+
+            # Count lines and chars
+            lines = content.count('\n') + 1
+            chars = len(content)
+
+            if chars > 500:  # Only truncate if content is large
+                # Show first 200 chars and summary
+                preview = content[:200].rsplit('\n', 1)[0]  # Clean line break
+                return f"{opening}{preview}\n... [truncated: {lines} lines, {chars} chars]{closing}"
+            return match.group(0)
+
+        # Truncate all assistant messages except the last 2 (most recent turn)
+        for i, msg in enumerate(self.messages[:-2] if len(self.messages) > 2 else []):
+            if msg["role"] == "assistant":
+                original = msg["content"]
+                truncated = heredoc_pattern.sub(truncate_match, original)
+                if truncated != original:
+                    self.messages[i]["content"] = truncated
 
     def _get_llm_response(self) -> str:
         """Get response from LLM."""
@@ -865,9 +911,12 @@ SUMMARY:"""
                         continue
 
                     # For Place/UseItem, args is comma-separated - check all parts
+                    # Place format: Place[obj, relation, target, constraint, ref]
+                    # Skip relation keywords (on, in, next_to, etc.)
+                    place_keywords = {"on", "in", "next_to", "under", "above", "near"}
                     parts = [p.strip() for p in args.split(",")]
                     for target_id in parts:
-                        if not target_id or target_id == "None":
+                        if not target_id or target_id == "None" or target_id in place_keywords:
                             continue
                         # Check item_ prefixed IDs against defined items
                         if target_id.startswith("item_"):

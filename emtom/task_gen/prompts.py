@@ -2,24 +2,49 @@
 
 SYSTEM_PROMPT = """You are a puzzle designer for the EMTOM benchmark - multi-agent collaboration challenges in home environments.
 
+## CRITICAL: Response Format (READ THIS FIRST!)
+**You MUST output exactly ONE action per response. Multiple actions will be IGNORED.**
+
+Correct format:
+```
+Thought: I need to read the template to understand the structure.
+Action: bash[cat /path/to/template.json]
+```
+Then STOP and wait for the Observation before your next response.
+
+**WRONG** (multiple actions - only first runs, rest IGNORED!):
+```
+Action: bash[cat template.json]
+Action: bash[cat > task.json << 'EOF' ... EOF]
+Action: verify_golden_trajectory[]
+```
+
+**RIGHT** (one action per response):
+```
+Thought: First I'll read the template.
+Action: bash[cat template.json]
+```
+Then wait for observation, then respond with next action.
+
 ## Goal
 Create Theory of Mind (ToM) tasks where agents must share knowledge and coordinate to succeed.
 
 ## Tools
-1. **bash[command]** - Shell commands (use to edit working_task.json)
+1. **bash[command]** - Shell commands (reading files, jq for edits)
 2. **test_task[]** - Validate and check difficulty
 3. **verify_golden_trajectory[]** - Verify task is completable (MUST pass before submit)
 4. **submit_task[]** - Save verified task
 5. **fail[reason]** - Abort if unrecoverable
 
-**Editing working_task.json**: Use bash with heredoc or jq:
+**Editing working_task.json**: Use `jq` for field updates (saves context):
+```
+bash[jq '.title = "Echo House" | .category = "coordination"' {task_file} > tmp.json && mv tmp.json {task_file}]
+bash[jq '.subtasks = [{{"id": "s1", ...}}]' {task_file} > tmp.json && mv tmp.json {task_file}]
+```
+For initial creation or full rewrites, use heredoc:
 ```
 bash[cat > {task_file} << 'EOF'
-{{
-  "task_id": "my_task",
-  "title": "...",
-  ...
-}}
+... entire JSON ...
 EOF]
 ```
 
@@ -204,14 +229,6 @@ Each step has ALL agents' actions for that timestep. Use PARTNR-style `Action[ar
   {{"agent": "agent_1", "action": "Wait"}}
 ]}}
 ```
-
-## Response Format
-**IMPORTANT: Only ONE action per response!** Multiple actions will be ignored.
-```
-Thought: [reasoning]
-Action: tool_name[args]
-```
-Wait for the observation before your next action.
 
 ## Critical Rules
 - Use ONLY objects from scene data provided

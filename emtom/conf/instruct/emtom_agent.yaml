@@ -1,4 +1,4 @@
-# EMTOM Agent Prompt - Clean prompts for EMTOM benchmark
+# EMTOM Agent Prompt - Clean separation from PARTNR
 # Uses only EMTOM-available actions: Navigate, Open, Close, Pick, Place, Search, UseItem, Communicate, Wait
 prompt: |-
     {system_tag}
@@ -68,7 +68,7 @@ prompt: |-
     Assigned!
     {eot_tag}
     {user_tag}
-    Agent_{id}_Observation: You unlock cabinet_45 with the Small Key.
+    Agent_{id}_Observation: You unlock cabinet_45 with the Small Key. The key crumbles to dust after unlocking.
     {eot_tag}
     {assistant_tag}
     Thought: Cabinet is unlocked. I should tell my teammate and then open it.
@@ -84,7 +84,7 @@ prompt: |-
     Assigned!
     {eot_tag}
     {user_tag}
-    Agent_{id}_Observation: Successful execution!
+    Agent_{id}_Observation: Successful execution! You see item_radio_1 inside.
     {eot_tag}
     {assistant_tag}
     Thought: Task complete - cabinet is open and radio is accessible.
@@ -101,7 +101,7 @@ prompt: |-
     Assigned!
     {eot_tag}
     {user_tag}
-    Agent_{id}_Observation: Message delivered. Your teammate said: The key is in drawer_5. I'm getting it.
+    Agent_{id}_Observation: Message delivered. Your teammate said: The key is hidden in drawer_5. I'm getting it now.
     {eot_tag}
     {assistant_tag}
     Thought: My teammate is getting the key. I should wait here at the fridge.
@@ -109,7 +109,7 @@ prompt: |-
     Assigned!
     {eot_tag}
     {user_tag}
-    Agent_{id}_Observation: Waited. Your teammate said: Got the key! Using it now.
+    Agent_{id}_Observation: Waited. Your teammate said: Got the key! Using it on fridge_50 now.
     {eot_tag}
     {assistant_tag}
     Thought: Teammate used the key. I should try opening the fridge now.
