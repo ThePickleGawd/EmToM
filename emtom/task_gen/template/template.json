@@ -55,7 +55,7 @@
   "golden_trajectory": [
     {
       "actions": [
-        {"agent": "agent_0", "action": "ACTION_NAME", "target": "REPLACE_TARGET"},
+        {"agent": "agent_0", "action": "ACTION_NAME[TARGET]"},
         {"agent": "agent_1", "action": "Wait"}
       ]
     }

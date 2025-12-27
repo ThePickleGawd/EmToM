@@ -93,82 +93,38 @@
   "golden_trajectory": [
     {
       "actions": [
-        {
-          "agent": "agent_0",
-          "action": "Communicate",
-          "message": "I know the laptop is inside cabinet_35."
-        },
-        {
-          "agent": "agent_1",
-          "action": "Communicate",
-          "message": "I can carry the laptop and place it on table_19 once it's accessible."
-        }
+        {"agent": "agent_0", "action": "Communicate[I know the laptop is inside cabinet_35.]"},
+        {"agent": "agent_1", "action": "Communicate[I can carry the laptop and place it on table_19 once it's accessible.]"}
       ]
     },
     {
       "actions": [
-        {
-          "agent": "agent_0",
-          "action": "Navigate",
-          "target": "cabinet_35"
-        },
-        {
-          "agent": "agent_1",
-          "action": "Navigate",
-          "target": "laptop_0"
-        }
+        {"agent": "agent_0", "action": "Navigate[cabinet_35]"},
+        {"agent": "agent_1", "action": "Navigate[laptop_0]"}
       ]
     },
     {
       "actions": [
-        {
-          "agent": "agent_0",
-          "action": "Open",
-          "target": "cabinet_35"
-        },
-        {
-          "agent": "agent_1",
-          "action": "Wait"
-        }
+        {"agent": "agent_0", "action": "Open[cabinet_35]"},
+        {"agent": "agent_1", "action": "Wait"}
       ]
     },
     {
       "actions": [
-        {
-          "agent": "agent_0",
-          "action": "Wait"
-        },
-        {
-          "agent": "agent_1",
-          "action": "Pick",
-          "target": "laptop_0"
-        }
+        {"agent": "agent_0", "action": "Wait"},
+        {"agent": "agent_1", "action": "Pick[laptop_0]"}
       ]
     },
     {
       "actions": [
-        {
-          "agent": "agent_0",
-          "action": "Wait"
-        },
-        {
-          "agent": "agent_1",
-          "action": "Navigate",
-          "target": "table_19"
-        }
+        {"agent": "agent_0", "action": "Wait"},
+        {"agent": "agent_1", "action": "Navigate[table_19]"}
       ]
     },
     {
       "actions": [
-        {
-          "agent": "agent_0",
-          "action": "Wait"
-        },
-        {
-          "agent": "agent_1",
-          "action": "Place",
-          "target": "laptop_0, on, table_19, None, None"
-        }
+        {"agent": "agent_0", "action": "Wait"},
+        {"agent": "agent_1", "action": "Place[laptop_0, on, table_19, None, None]"}
       ]
     }
   ]

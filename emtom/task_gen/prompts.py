@@ -90,12 +90,44 @@ Subtasks form a dependency graph. Each subtask MUST:
 - `has_item`: Agent acquired an item
 - `is_on_top`, `is_inside`: Object was moved
 
-**Example DAG subtasks**:
+**DAG Patterns** (use these shapes for interesting task structures):
+
+```
+LINEAR:           DIAMOND:           FORK-JOIN:          AGENT-PARALLEL:
+s1 → s2 → s3      s1 ──┐             ┌─ s2 ─┐            A0: s1 → s2 ─┐
+                       ├─→ s3    s1 ─┤      ├─→ s4                    ├─→ s5
+                  s2 ──┘             └─ s3 ─┘            A1: s3 → s4 ─┘
+```
+
+**Example 1 - Linear** (simple sequence):
 ```json
 "subtasks": [
-  {{"id": "s1_get_key", "description": "Find key in drawer", "depends_on": [], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_small_key_1"}}}},
-  {{"id": "s2_unlock_cabinet", "description": "Unlock cabinet with key", "depends_on": ["s1_get_key"], "success_condition": {{"entity": "cabinet_33", "property": "is_unlocked"}}}},
-  {{"id": "s3_get_treasure", "description": "Retrieve treasure from cabinet", "depends_on": ["s2_unlock_cabinet"], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_treasure_1"}}}}
+  {{"id": "s1_get_key", "depends_on": [], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_small_key_1"}}}},
+  {{"id": "s2_unlock", "depends_on": ["s1_get_key"], "success_condition": {{"entity": "cabinet_33", "property": "is_unlocked"}}}},
+  {{"id": "s3_get_radio", "depends_on": ["s2_unlock"], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_radio_1"}}}}
+]
+```
+
+**Example 2 - Diamond** (parallel roots converging - great for ToM!):
+Why ToM: Agent 0 knows key location, Agent 1 knows radio location. Each discovers their item independently,
+then must COMMUNICATE to coordinate the final unlock. Neither can complete alone.
+```json
+"subtasks": [
+  {{"id": "s1_agent0_finds_key", "depends_on": [], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_small_key_1"}}}},
+  {{"id": "s2_agent1_finds_radio", "depends_on": [], "success_condition": {{"entity": "agent_1", "property": "has_item", "target": "item_radio_1"}}}},
+  {{"id": "s3_unlock_cabinet", "depends_on": ["s1_agent0_finds_key", "s2_agent1_finds_radio"], "success_condition": {{"entity": "cabinet_42", "property": "is_unlocked"}}}}
+]
+```
+
+**Example 3 - Fork-Join** (one unlock enables parallel placement tasks):
+Why ToM: After unlocking, agents work in parallel on their own placements. Agent 0 places cup, Agent 1 places book.
+Both must complete before final goal. Agents must coordinate who does what.
+```json
+"subtasks": [
+  {{"id": "s1_unlock_cabinet", "depends_on": [], "success_condition": {{"entity": "cabinet_15", "property": "is_unlocked"}}}},
+  {{"id": "s2_agent0_places_cup", "depends_on": ["s1_unlock_cabinet"], "success_condition": {{"entity": "cup_5", "property": "is_on_top", "target": "table_22"}}}},
+  {{"id": "s3_agent1_places_book", "depends_on": ["s1_unlock_cabinet"], "success_condition": {{"entity": "book_1", "property": "is_on_top", "target": "table_22"}}}},
+  {{"id": "s4_get_crystal", "depends_on": ["s2_agent0_places_cup", "s3_agent1_places_book"], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_oracle_crystal_1"}}}}
 ]
 ```
 
@@ -156,16 +188,22 @@ Agents don't know object IDs upfront - they must discover them!
 7. `submit_task[]`
 
 ## Golden Trajectory Format
-Each step has ALL agents' actions for that timestep:
+Each step has ALL agents' actions for that timestep. Use PARTNR-style `Action[args]` format:
+
+**Action formats** (use bracket notation):
+- `Navigate/Pick/Open/Close/Search`: `{{"agent": "agent_0", "action": "Pick[cup_5]"}}`
+- `Place`: `{{"agent": "agent_0", "action": "Place[cup_5, on, table_22, None, None]"}}`
+- `UseItem`: `{{"agent": "agent_0", "action": "UseItem[item_key_1, cabinet_30]"}}`
+- `Communicate`: `{{"agent": "agent_0", "action": "Communicate[The key is in drawer_5]"}}`
+- `Wait`: `{{"agent": "agent_0", "action": "Wait"}}`
+
+**Example step**:
 ```json
 {{"actions": [
-  {{"agent": "agent_0", "action": "Navigate", "target": "table_22"}},
+  {{"agent": "agent_0", "action": "Place[cup_5, on, table_22, None, None]"}},
   {{"agent": "agent_1", "action": "Wait"}}
 ]}}
 ```
-
-**Place format**: `"target": "cup_1, on, table_22, None, None"` (object, relation, furniture, constraint, ref)
-**Communicate**: Use `"message"` field instead of `"target"`
 
 ## Response Format
 **IMPORTANT: Only ONE action per response!** Multiple actions will be ignored.

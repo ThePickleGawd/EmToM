@@ -10,8 +10,28 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
+
+
+def parse_action_string(action_str: str) -> tuple:
+    """
+    Parse PARTNR-style action string.
+
+    Examples:
+        'Navigate[table_22]' -> ('Navigate', 'table_22')
+        'Place[cup_5, on, table_22, None, None]' -> ('Place', 'cup_5, on, table_22, None, None')
+        'Communicate[Hello there]' -> ('Communicate', 'Hello there')
+        'Wait' -> ('Wait', None)
+
+    Returns:
+        Tuple of (action_name, args_string or None)
+    """
+    match = re.match(r'(\w+)(?:\[(.+)\])?$', action_str)
+    if match:
+        return match.group(1), match.group(2)
+    return action_str, None
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
@@ -156,56 +176,43 @@ def main():
             for action_entry in actions:
                 agent_str = action_entry.get("agent", "agent_0")
                 agent_id = int(agent_str.split("_")[1])
-                action = action_entry.get("action")
-                target = action_entry.get("target")
-                message = action_entry.get("message")
+
+                # Parse PARTNR-style action: "Navigate[table_22]" -> ("Navigate", "table_22")
+                action_str = action_entry.get("action", "")
+                action, target = parse_action_string(action_str)
 
                 # Skip Wait actions
                 if action == "Wait":
                     print(f"    {agent_str}: Wait [SKIP]", file=sys.stderr)
                     step_results.append({
-                        "agent": agent_str, "action": action,
+                        "agent": agent_str, "action": action_str,
                         "success": True, "skipped": True
                     })
                     continue
 
-                # Handle Place action - needs 5 comma-separated arguments
-                # Support both formats:
-                # 1. Full format: {"target": "obj, on, furniture, None, None"}
-                # 2. Legacy format: {"target": "obj", "receptacle": "furniture"}
-                if action == "Place" and target:
-                    # Check if target already has commas (full format)
-                    if "," not in str(target):
-                        # Legacy format - build the full argument string
-                        receptacle = action_entry.get("receptacle", "")
-                        spatial_relation = action_entry.get("spatial_relation", "on")
-                        spatial_constraint = action_entry.get("spatial_constraint", "None")
-                        reference_object = action_entry.get("reference_object", "None")
-                        target = f"{target}, {spatial_relation}, {receptacle}, {spatial_constraint}, {reference_object}"
-
-                # Skip Communicate
+                # Skip Communicate (but log the message)
                 if action == "Communicate":
-                    msg_preview = message[:50] if message else ""
-                    print(f"    {agent_str}: Communicate(\"{msg_preview}...\") [SKIP]", file=sys.stderr)
+                    msg_preview = (target or "")[:50]
+                    print(f"    {agent_str}: Communicate[\"{msg_preview}...\"] [SKIP]", file=sys.stderr)
                     step_results.append({
-                        "agent": agent_str, "action": action,
-                        "message": message, "success": True, "skipped": True
+                        "agent": agent_str, "action": action_str,
+                        "success": True, "skipped": True
                     })
                     continue
 
-                result = runner.execute_action(uid=agent_id, action_name=action, target=target)
+                result = runner.execute_action(uid=agent_id, action_name=action, target=target or "")
                 success = result.get("success", False)
                 obs = result.get("observation", "")
 
                 # Print action + observation
                 status = "✓" if success else "✗"
-                print(f"    {agent_str}: {action}[{target}] {status}", file=sys.stderr)
+                print(f"    {agent_str}: {action_str} {status}", file=sys.stderr)
                 if obs:
                     print(f"      → {obs}", file=sys.stderr)
 
                 step_results.append({
-                    "agent": agent_str, "action": action,
-                    "target": target, "success": success,
+                    "agent": agent_str, "action": action_str,
+                    "success": success,
                     "observation": result.get("observation", "")[:200]
                 })
 
@@ -214,7 +221,7 @@ def main():
                     write_result({
                         "valid": False,
                         "failed_step": step_idx,
-                        "action": f"{agent_str}: {action}({target})",
+                        "action": f"{agent_str}: {action_str}",
                         "error": result.get("observation", "Action failed"),
                         "executed_steps": executed_steps + [{"step": step_idx, "actions": step_results}],
                     })

@@ -819,19 +819,28 @@ SUMMARY:"""
             for step in task_data["golden_trajectory"]:
                 actions = step.get("actions", [])
                 for action_entry in actions:
-                    target = action_entry.get("target", "")
-                    if target and action_entry.get("action") not in ["Communicate", "Wait"]:
-                        # For Place/Use action, target is comma-separated - check all parts
-                        parts = [p.strip() for p in str(target).split(",")]
-                        for target_id in parts:
-                            if not target_id or target_id == "None":
-                                continue
-                            # Check item_ prefixed IDs against defined items
-                            if target_id.startswith("item_"):
-                                if target_id not in defined_items:
-                                    invalid_items.append(target_id)
-                            elif target_id not in all_valid_ids:
-                                invalid_ids.append(target_id)
+                    # Parse PARTNR-style action: "Navigate[table_22]" -> args = "table_22"
+                    action_str = action_entry.get("action", "")
+                    match = re.match(r'(\w+)(?:\[(.+)\])?$', action_str)
+                    if not match:
+                        continue
+                    action_name, args = match.group(1), match.group(2)
+
+                    # Skip actions without args or communication/wait
+                    if not args or action_name in ["Communicate", "Wait"]:
+                        continue
+
+                    # For Place/UseItem, args is comma-separated - check all parts
+                    parts = [p.strip() for p in args.split(",")]
+                    for target_id in parts:
+                        if not target_id or target_id == "None":
+                            continue
+                        # Check item_ prefixed IDs against defined items
+                        if target_id.startswith("item_"):
+                            if target_id not in defined_items:
+                                invalid_items.append(target_id)
+                        elif target_id not in all_valid_ids:
+                            invalid_ids.append(target_id)
 
             if invalid_ids:
                 return {
