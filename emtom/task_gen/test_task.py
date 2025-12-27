@@ -111,16 +111,8 @@ def main():
 
         runner = BenchmarkRunner(config)
 
-        task_mechanics = {
-            "mechanics": [
-                {"mechanic_type": b.mechanic_type, **b.to_dict()}
-                for b in task.mechanic_bindings
-            ]
-        } if task.mechanic_bindings else None
-
         runner.setup(
             env_interface=env_interface,
-            task_data=task_mechanics,
             output_dir=output_dir,
             task=task,
             save_video=False,

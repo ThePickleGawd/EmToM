@@ -153,6 +153,7 @@ run_benchmark() {
     echo "=============================================="
     echo "Max simulation steps: $MAX_SIM_STEPS"
     echo "Max LLM calls per agent: $MAX_LLM_CALLS"
+    echo "Task file: ${TASK_FILE:-most recent in data/emtom/tasks/}"
     echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
     echo "=============================================="
 
@@ -165,11 +166,18 @@ run_benchmark() {
         REPLANNING_OVERRIDES="$REPLANNING_OVERRIDES ++evaluation.agents.agent_${i}.planner.plan_config.replanning_threshold=$MAX_LLM_CALLS"
     done
 
+    # Build task file override if specified
+    TASK_OVERRIDE=""
+    if [ -n "$TASK_FILE" ]; then
+        TASK_OVERRIDE="+task=$TASK_FILE"
+    fi
+
     python emtom/examples/run_habitat_benchmark.py \
         --config-name $CONFIG_NAME \
         habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
         +max_turns=$MAX_LLM_CALLS \
         $REPLANNING_OVERRIDES \
+        $TASK_OVERRIDE \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-benchmark"
 }
 

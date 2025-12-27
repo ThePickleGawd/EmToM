@@ -222,8 +222,22 @@ class UseItemAction(EMTOMAction):
                 observation=f"You don't have {item_id}.",
             )
 
-        # Get item to check if it's a key (special unlock handling)
+        # Strip "None" from args (LLM sometimes outputs "None" as literal)
+        item_args = [a for a in item_args if a.lower() != "none"]
+
+        # Get item to check type
         item = self._game_manager.get_item(item_id)
+
+        # Check if this is a TOOL-type item that grants an action
+        # These items work passively - you don't "use" them directly
+        if item and hasattr(item, 'grants_action') and item.grants_action:
+            action_name = item.grants_action
+            return ActionResult(
+                success=False,
+                observation=f"The {item.name} works passively. Use {action_name}[...] instead of UseItem.",
+            )
+
+        # Key usage - delegate to unlock helper
         if item and "key" in item_id.lower() and item_args:
             # Key usage - delegate to unlock helper
             container = item_args[0]
@@ -520,6 +534,9 @@ class DynamicItemTool(EMTOMAction):
 
         # Communicate: Send a radio message to other agents
         if action == "Communicate":
+            # Actually post the message so other agents receive it
+            if self._env_interface:
+                self._env_interface.post_agent_message(self.agent_uid, target)
             return ActionResult(
                 success=True,
                 observation=f"You speak into the radio: \"{target}\"",

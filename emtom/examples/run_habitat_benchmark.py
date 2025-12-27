@@ -114,30 +114,40 @@ def main(config: DictConfig) -> None:
 
     cprint("Environment initialized!", "green")
 
-    # Load EMTOM task from curated directory
-    # Uses most recently modified task file if multiple exist
-    task_dir = Path("data/emtom/tasks")
+    # Load EMTOM task - either from --task argument or most recent in task_dir
+    task_file_arg = config.get("task", None)
 
-    if not task_dir.exists():
-        cprint(f"ERROR: Task directory not found: {task_dir}", "red")
-        cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
-        sys.exit(1)
+    if task_file_arg:
+        # Use explicitly specified task file
+        task_file = Path(task_file_arg)
+        if not task_file.exists():
+            cprint(f"ERROR: Task file not found: {task_file}", "red")
+            sys.exit(1)
+        cprint(f"Loading specified task: {task_file}", "blue")
+    else:
+        # Fall back to most recent task in task_dir
+        task_dir = Path("data/emtom/tasks")
 
-    # Find all task JSON files and sort by modification time (most recent first)
-    task_files = list(task_dir.glob("*.json"))
-    if not task_files:
-        cprint(f"ERROR: No task files found in {task_dir}", "red")
-        cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
-        sys.exit(1)
+        if not task_dir.exists():
+            cprint(f"ERROR: Task directory not found: {task_dir}", "red")
+            cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
+            sys.exit(1)
 
-    task_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-    most_recent_file = task_files[0]
+        # Find all task JSON files and sort by modification time (most recent first)
+        task_files = list(task_dir.glob("*.json"))
+        if not task_files:
+            cprint(f"ERROR: No task files found in {task_dir}", "red")
+            cprint("Run task generation first: ./emtom/run_emtom.sh generate", "yellow")
+            sys.exit(1)
 
-    cprint(f"Loading most recent task: {most_recent_file.name}", "blue")
-    tasks = load_tasks(str(most_recent_file))
+        task_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        task_file = task_files[0]
+        cprint(f"Loading most recent task: {task_file.name}", "blue")
+
+    tasks = load_tasks(str(task_file))
 
     if not tasks:
-        cprint(f"ERROR: Failed to parse task file: {most_recent_file}", "red")
+        cprint(f"ERROR: Failed to parse task file: {task_file}", "red")
         sys.exit(1)
 
     task = tasks[0]

@@ -62,7 +62,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
         """
         self.task = task
 
-        if task and not task_data:
+        # If task is provided, always extract task_data from it (items, mechanics, locked_containers)
+        # This ensures items are never missing when a GeneratedTask is available
+        if task:
             task_data = self._task_to_mechanics_dict(task)
 
         agent_actions = task.agent_actions if task else None
@@ -230,6 +232,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
                             })
 
                             self._check_subtasks()
+
+                            # Check if action granted items that provide new tools
+                            self.check_and_inject_item_tools(uid)
                     else:
                         # LLM agent - use planner, execute action to completion
                         if uid not in self.planners:
@@ -300,6 +305,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
                             })
 
                             self._check_subtasks()
+
+                            # Check if action granted items that provide new tools
+                            self.check_and_inject_item_tools(uid)
 
                         # Update world graph for next agent
                         world_graph = self.get_world_graph()
