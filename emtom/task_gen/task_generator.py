@@ -164,8 +164,7 @@ class GeneratedTask:
 
     # SCENE & ENVIRONMENT
     scene_id: str  # Habitat scene ID (e.g., "102817140")
-    episode_id: str  # Trajectory timestamp (e.g., "20251219_194151")
-    dataset_episode_id: str  # Actual Habitat dataset episode ID (e.g., "1") for loading
+    episode_id: str  # PARTNR dataset episode ID (e.g., "1944")
     active_mechanics: List[str]
     mechanic_bindings: List[MechanicBinding]
 
@@ -256,7 +255,6 @@ class GeneratedTask:
             category=TaskCategory(data.get("category", "knowledge_asymmetry")),
             scene_id=data.get("scene_id", "unknown"),
             episode_id=data.get("episode_id", "unknown"),
-            dataset_episode_id=data.get("dataset_episode_id", ""),  # Required - must be set explicitly
             active_mechanics=data.get("active_mechanics", []) if isinstance(data.get("active_mechanics"), list) else [],
             mechanic_bindings=bindings,
             story=data.get("story"),

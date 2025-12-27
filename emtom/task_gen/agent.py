@@ -243,7 +243,7 @@ class TaskGeneratorAgent:
 **Episode ID**: {self.scene_data.episode_id}
 **Scene ID**: {self.scene_data.scene_id}
 
-NOTE: scene_id, episode_id, and dataset_episode_id are ALREADY SET in working_task.json. Do not modify them.
+NOTE: scene_id and episode_id are ALREADY SET in working_task.json. Do not modify them.
 
 {scene_info}
 
@@ -365,7 +365,6 @@ Start by reading the template, then create a task using the scene data above."""
         if self.scene_data:
             task["scene_id"] = self.scene_data.scene_id
             task["episode_id"] = self.scene_data.episode_id
-            task["dataset_episode_id"] = self.scene_data.episode_id
 
         # Write to working_task.json
         with open(self.task_file, 'w') as f:
@@ -393,9 +392,6 @@ Start by reading the template, then create a task using the scene data above."""
                 changed = True
             if task.get("episode_id") != self.scene_data.episode_id:
                 task["episode_id"] = self.scene_data.episode_id
-                changed = True
-            if task.get("dataset_episode_id") != self.scene_data.episode_id:
-                task["dataset_episode_id"] = self.scene_data.episode_id
                 changed = True
 
             if changed:
@@ -810,7 +806,7 @@ SUMMARY:"""
         """Validate task JSON structure without running benchmark."""
         # Core required fields (success_condition is optional if subtasks have valid DAG)
         required_fields = [
-            "task_id", "title", "story", "episode_id", "dataset_episode_id",
+            "task_id", "title", "story", "episode_id",
             "public_goal", "category", "mechanic_bindings", "agent_secrets",
             "agent_roles", "agent_actions"
         ]
@@ -823,14 +819,14 @@ SUMMARY:"""
                 "summary": "Task validation failed"
             }
 
-        # Validate dataset_episode_id matches the loaded scene
+        # Validate episode_id matches the loaded scene
         if self.scene_data:
             expected_episode = self.scene_data.episode_id
-            task_episode = task_data.get("dataset_episode_id", "")
+            task_episode = task_data.get("episode_id", "")
             if task_episode != expected_episode:
                 return {
                     "valid": False,
-                    "error": f"dataset_episode_id must be '{expected_episode}' (from loaded scene), got '{task_episode}'",
+                    "error": f"episode_id must be '{expected_episode}' (from loaded scene), got '{task_episode}'",
                     "summary": "Task validation failed - wrong episode"
                 }
 
@@ -858,6 +854,7 @@ SUMMARY:"""
                 for action_entry in actions:
                     # Parse PARTNR-style action: "Navigate[table_22]" -> args = "table_22"
                     action_str = action_entry.get("action", "")
+                    import re
                     match = re.match(r'(\w+)(?:\[(.+)\])?$', action_str)
                     if not match:
                         continue

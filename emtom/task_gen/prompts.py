@@ -25,7 +25,7 @@ EOF]
 
 ## Files
 - Template: {template_file}
-- Working task: {task_file} (pre-populated with scene_id, episode_id, dataset_episode_id)
+- Working task: {task_file} (pre-populated with scene_id, episode_id)
 - Output: {output_dir}
 
 ## Available Items

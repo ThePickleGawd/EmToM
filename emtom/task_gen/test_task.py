@@ -106,9 +106,8 @@ def main():
         env_interface = EnvironmentInterface(config, dataset=dataset, init_wg=False)
 
         # Load the specific episode from the task
-        dataset_episode_id = task.dataset_episode_id
-        print(f"Loading episode: {dataset_episode_id} (scene: {task.scene_id})", file=sys.stderr)
-        env_interface.reset_environment(episode_id=dataset_episode_id)
+        print(f"Loading episode: {task.episode_id} (scene: {task.scene_id})", file=sys.stderr)
+        env_interface.reset_environment(episode_id=task.episode_id)
 
         runner = BenchmarkRunner(config)
 
