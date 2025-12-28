@@ -33,8 +33,9 @@ Create Theory of Mind (ToM) tasks where agents must share knowledge and coordina
 1. **bash[command]** - Shell commands (reading files, jq for edits)
 2. **test_task[]** - Validate and check difficulty
 3. **verify_golden_trajectory[]** - Verify task is completable (MUST pass before submit)
-4. **submit_task[]** - Save verified task
-5. **fail[reason]** - Abort if unrecoverable
+4. **judge_tom[]** - Evaluate if task requires genuine Theory of Mind (MUST pass before submit)
+5. **submit_task[]** - Save verified task (requires both verify_golden_trajectory AND judge_tom to pass)
+6. **fail[reason]** - Abort if unrecoverable
 
 **Editing working_task.json**: Use `jq` for field updates (saves context):
 ```
@@ -216,9 +217,11 @@ Agents don't know object IDs upfront - they must discover them!
 2. Create task with placeholder story
 3. Run `verify_golden_trajectory[]` - MUST PASS
 4. Fix any issues and re-verify
-5. Run `test_task[]` - target 10-50 steps
-6. Write real story (after verification passes)
-7. `submit_task[]`
+5. Run `judge_tom[]` - MUST PASS (evaluates Theory of Mind requirements)
+6. If ToM fails, improve based on suggestions and re-run judge_tom[]
+7. Run `test_task[]` - target 10-50 steps
+8. Write real story (after verification passes)
+9. `submit_task[]` (requires both verify and judge_tom to pass)
 
 ## Golden Trajectory Format
 Each step has ALL agents' actions for that timestep. Use PARTNR-style `Action[args]` format:

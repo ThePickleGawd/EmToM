@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from omegaconf import DictConfig
 
 from .prompts import SYSTEM_PROMPT
+from .tom_judge import ToMJudge, ToMJudgment
 from emtom.actions import ActionRegistry
 
 if TYPE_CHECKING:
@@ -97,6 +98,9 @@ class TaskGeneratorAgent:
         self.messages: List[Dict[str, str]] = []
         self.iteration_count = 0
         self.last_verify_passed = False  # Track if golden trajectory verified
+        self.last_tom_passed = False  # Track if ToM judgment passed
+        self.last_tom_judgment: Optional[ToMJudgment] = None  # Last ToM judgment result
+        self.tom_judge = ToMJudge(llm_client, verbose=verbose)  # ToM judge instance
         self.failed = False  # Track if agent called fail[]
         self.fail_reason = ""  # Reason for failure
 
@@ -678,17 +682,20 @@ SUMMARY:"""
             # Reset verification on any bash edit to task file
             if "working_task.json" in args and (">" in args or "cat" in args):
                 self.last_verify_passed = False
+                self.last_tom_passed = False  # Also reset ToM judgment
             return self._bash(args)
         elif tool == "test_task":
             return self._test_task()
         elif tool == "verify_golden_trajectory":
             return self._verify_golden_trajectory()
+        elif tool == "judge_tom":
+            return self._judge_tom()
         elif tool == "submit_task":
             return self._submit_task()
         elif tool == "fail":
             return self._fail(args)
         else:
-            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, submit_task, fail"
+            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, judge_tom, submit_task, fail"
 
     def _bash(self, command: str) -> str:
         """
@@ -1287,17 +1294,93 @@ SUMMARY:"""
                 "summary": f"Subprocess error: {e}"
             })
 
+    def _judge_tom(self) -> str:
+        """
+        Evaluate whether the task truly requires Theory of Mind reasoning.
+
+        Uses an LLM judge to score the task on ToM criteria:
+        - Information asymmetry
+        - Interdependence
+        - Communication necessity
+        - Mental state reasoning
+        - Coordination requirement
+
+        Returns detailed feedback and suggestions for improvement.
+        """
+        if not self.task_file.exists():
+            return json.dumps({
+                "valid": False,
+                "error": "working_task.json does not exist. Create and test it first."
+            })
+
+        # Load task
+        try:
+            with open(self.task_file) as f:
+                task_data = json.load(f)
+        except json.JSONDecodeError as e:
+            return json.dumps({
+                "valid": False,
+                "error": f"Invalid JSON: {e}"
+            })
+
+        self._log("[ToM Judge] Evaluating task for Theory of Mind requirements...")
+
+        # Run ToM evaluation
+        try:
+            judgment = self.tom_judge.evaluate(task_data)
+            self.last_tom_judgment = judgment
+            self.last_tom_passed = judgment.is_valid_tom
+
+            # Format result for agent feedback
+            result = {
+                "valid": judgment.is_valid_tom,
+                "overall_score": judgment.overall_score,
+                "threshold": self.tom_judge.overall_threshold,
+                "criteria": {
+                    name: {"score": c.score, "reasoning": c.reasoning}
+                    for name, c in judgment.criteria.items()
+                },
+                "overall_reasoning": judgment.overall_reasoning,
+                "suggestions": judgment.suggestions,
+            }
+
+            if judgment.is_valid_tom:
+                result["summary"] = f"PASS - Task requires genuine Theory of Mind (score: {judgment.overall_score:.2f})"
+            else:
+                result["summary"] = f"FAIL - Task does not sufficiently require Theory of Mind (score: {judgment.overall_score:.2f})"
+                result["action_required"] = "Modify the task based on suggestions and run judge_tom[] again."
+
+            self._log(f"[ToM Judge] Result: {'PASS' if judgment.is_valid_tom else 'FAIL'} (score: {judgment.overall_score:.2f})")
+
+            return json.dumps(result, indent=2)
+
+        except Exception as e:
+            self._log(f"[ToM Judge] Error: {e}")
+            return json.dumps({
+                "valid": False,
+                "error": f"ToM evaluation failed: {e}",
+                "summary": "Evaluation error - try again"
+            })
+
     def _submit_task(self) -> str:
         """
         Copy working task to output directory.
 
         Called when the agent determines task quality is good.
-        Requires verify_golden_trajectory[] to pass first.
+        Requires both verify_golden_trajectory[] and judge_tom[] to pass first.
         """
         if not self.last_verify_passed:
             return json.dumps({
                 "error": "Must run verify_golden_trajectory[] first and pass before submitting.",
                 "hint": "Run verify_golden_trajectory[] to prove the golden trajectory works."
+            })
+
+        if not self.last_tom_passed:
+            return json.dumps({
+                "error": "Must run judge_tom[] first and pass before submitting.",
+                "hint": "Run judge_tom[] to verify the task requires genuine Theory of Mind reasoning.",
+                "last_tom_score": self.last_tom_judgment.overall_score if self.last_tom_judgment else None,
+                "suggestions": self.last_tom_judgment.suggestions if self.last_tom_judgment else []
             })
 
         if not self.task_file.exists():

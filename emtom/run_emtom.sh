@@ -23,6 +23,8 @@ MAX_ITERATIONS=100
 NUM_AGENTS=2
 AGENT_TYPE="robot"  # robot or human
 QUERY=""  # seed query for task generation
+THRESHOLD=0.7  # ToM judge threshold
+JSON_OUTPUT=false  # Output JSON from judge
 
 print_usage() {
     echo "EMTOM Benchmark Pipeline"
@@ -34,6 +36,7 @@ print_usage() {
     echo "  generate    Generate tasks iteratively with testing loop"
     echo "  benchmark   Run benchmark with generated tasks"
     echo "  test        Human-in-the-loop testing mode (manual command input)"
+    echo "  judge       Evaluate a task for Theory of Mind requirements"
     echo "  all         Run full pipeline: explore -> generate -> benchmark"
     echo ""
     echo "Agent Options:"
@@ -60,6 +63,12 @@ print_usage() {
     echo "  --task FILE          Task file to load (uses task's mechanic bindings automatically)"
     echo "  --llm-agents A1 A2   Agents to make LLM-controlled (e.g., agent_1)"
     echo ""
+    echo "Judge Options:"
+    echo "  --task FILE          Task file to evaluate (required for judge command)"
+    echo "  --model MODEL        LLM model for evaluation (default: gpt-5)"
+    echo "  --threshold N        Overall score threshold for passing (default: 0.7)"
+    echo "  --json               Output raw JSON instead of formatted text"
+    echo ""
     echo "Examples:"
     echo "  ./emtom/run_emtom.sh explore --steps 30"
     echo "  ./emtom/run_emtom.sh explore --num-agents 3 --agent-type human"
@@ -70,6 +79,8 @@ print_usage() {
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
     echo "  ./emtom/run_emtom.sh benchmark --num-agents 4"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
+    echo "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
+    echo "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --json"
 }
 
 # Get config name based on number of agents and type
@@ -240,11 +251,36 @@ run_all() {
     run_benchmark
 }
 
+run_judge() {
+    if [ -z "$TASK_FILE" ]; then
+        echo "Error: --task is required for judge command"
+        echo "Usage: ./emtom/run_emtom.sh judge --task <path_to_task.json>"
+        exit 1
+    fi
+
+    echo "=============================================="
+    echo "Running EMTOM Theory of Mind Judge"
+    echo "=============================================="
+    echo "Task: $TASK_FILE"
+    echo "Model: $MODEL"
+    echo "Threshold: $THRESHOLD"
+    echo "=============================================="
+    echo ""
+
+    # Build command arguments
+    CMD_ARGS="--task $TASK_FILE --model $MODEL --threshold $THRESHOLD"
+    if [ "$JSON_OUTPUT" = true ]; then
+        CMD_ARGS="$CMD_ARGS --json"
+    fi
+
+    python -m emtom.task_gen.judge_cli $CMD_ARGS
+}
+
 # Parse command line arguments
 COMMAND=""
 while [[ $# -gt 0 ]]; do
     case $1 in
-        explore|generate|benchmark|test|all)
+        explore|generate|benchmark|test|judge|all)
             COMMAND=$1
             shift
             ;;
@@ -305,6 +341,14 @@ while [[ $# -gt 0 ]]; do
             TASK_FILE=$2
             shift 2
             ;;
+        --threshold)
+            THRESHOLD=$2
+            shift 2
+            ;;
+        --json)
+            JSON_OUTPUT=true
+            shift
+            ;;
         --llm-agents)
             # Collect all agents until next flag or end
             shift
@@ -343,6 +387,9 @@ case $COMMAND in
         ;;
     test)
         run_test
+        ;;
+    judge)
+        run_judge
         ;;
     all)
         run_all
