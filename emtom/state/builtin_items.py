@@ -93,7 +93,7 @@ class Radio(BaseItem):
     """
 
     name = "Two-Way Radio"
-    description = "A handheld radio. Grants Communicate[message] action when obtained."
+    description = "A handheld radio. Grants Communicate[message] action when obtained. Useful for agents who DO NOT start with Communicate tool in their actions."
     consumable = False
     use_args = []  # No args needed (uses granted Communicate action instead)
 

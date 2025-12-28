@@ -243,19 +243,20 @@ class ItemRegistry:
                 "passive_effects": getattr(cls, "passive_effects", {}),
             }
 
-            # Item header
+            # Item header - mark TOOL items that grant actions
             consumable_str = "consumable" if info["consumable"] else "reusable"
-            lines.append(f"- {info['item_id']}: {info['name']} ({consumable_str})")
+            item_type = "[TOOL]" if info["grants_action"] else ""
+            lines.append(f"- {info['item_id']}: {info['name']} ({consumable_str}) {item_type}".rstrip())
             lines.append(f"    {info['description']}")
 
-            # Show use_args
+            # Show use_args for non-TOOL items
             if info["use_args"]:
                 usage = f"UseItem[{info['item_id']}_N, {', '.join(info['use_args'])}]"
                 lines.append(f"    Usage: {usage}")
 
-            # Show granted action
+            # Show granted action for TOOL items
             if info["grants_action"]:
-                lines.append(f"    Grants action: {info['grants_action']}")
+                lines.append(f"    Grants: {info['grants_action']} (remove from agent_actions for agent who unlocks this)")
                 if info["action_description"]:
                     lines.append(f"    Action: {info['action_description']}")
 

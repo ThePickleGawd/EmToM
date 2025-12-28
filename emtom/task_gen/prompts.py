@@ -58,7 +58,9 @@ Item IDs always use 'item_' prefix (e.g., item_small_key_1)
 This distinguishes them from scene objects (e.g., cup_1)
 There are two types of items:
 1. Items that can be used via UseItem[item_id, target] (e.g., keys)
-2. Items that provide passive effects or unlock new actions (e.g., oracle crystal, radio). In this case, UseItem cannot be used. Moreover, do not give the intended action directly at the start; they must unlock it through this item.
+2. Items that provide passive effects or unlock new actions (e.g., oracle crystal, radio)
+
+**RULE**: For the agent intended to unlock a TOOL item, you MUST remove the granted action from their `agent_actions`. Other agents may still start with that action. The point of TOOL items is that agents discover them to unlock abilities - if an agent starts with both the item AND the action, the item serves no purpose.
 
 {available_items}
 

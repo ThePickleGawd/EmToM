@@ -142,17 +142,16 @@ run_generate() {
     echo "=============================================="
     echo ""
 
-    # Build query arg if specified (passed before Hydra args)
-    QUERY_ARG=""
+    # Build query args array (handles spaces/quotes properly without eval)
+    QUERY_ARGS=()
     if [ -n "$QUERY" ]; then
-        QUERY_ARG="--query \"$QUERY\""
+        QUERY_ARGS=(--query "$QUERY")
     fi
 
     # Use Hydra config system with custom overrides
     # Scene is loaded live from PARTNR dataset - no trajectories needed
-    # Note: --query is parsed before Hydra to handle quoted strings properly
-    eval python emtom/task_gen/runner.py \
-        $QUERY_ARG \
+    python emtom/task_gen/runner.py \
+        "${QUERY_ARGS[@]}" \
         --config-name examples/emtom_2_robots \
         +num_tasks=$NUM_TASKS \
         +model=$MODEL \
