@@ -16,6 +16,16 @@ from omegaconf import OmegaConf
 from emtom.task_gen.tom_judge import ToMJudge
 
 
+# ANSI color codes
+class Colors:
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    CYAN = "\033[96m"
+    YELLOW = "\033[93m"
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
+
+
 def create_llm_client(model: str):
     """Create an LLM client for the specified model."""
     from habitat_llm.llm.openai_chat import OpenAIChat
@@ -131,7 +141,16 @@ def main():
 
     # Print JSON to stdout
     print(json_output)
-    print(f"\nSaved to: {output_file}", file=sys.stderr)
+
+    # Print colored output path
+    print(f"\nSaved to: {Colors.CYAN}{output_file}{Colors.RESET}", file=sys.stderr)
+
+    # Print pass/fail status with colors
+    if judgment.is_valid_tom:
+        print(f"\n{Colors.BOLD}{Colors.GREEN}PASSED ToM Task Verification{Colors.RESET}\n", file=sys.stderr)
+    else:
+        print(f"\n{Colors.BOLD}{Colors.RED}FAILED ToM Task Verification{Colors.RESET}", file=sys.stderr)
+        print(f"{Colors.YELLOW}The generator will now create a new task...{Colors.RESET}\n", file=sys.stderr)
 
     # Exit code based on pass/fail
     sys.exit(0 if judgment.is_valid_tom else 1)
