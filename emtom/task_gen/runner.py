@@ -11,6 +11,7 @@ Or via shell script:
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import shutil
@@ -33,9 +34,23 @@ from omegaconf import DictConfig
 from habitat_llm.utils import cprint, setup_config, fix_config
 
 
+def parse_extra_args():
+    """Parse extra CLI arguments before Hydra."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--query", type=str, default=None,
+                        help="Seed query to guide task generation")
+
+    args, remaining = parser.parse_known_args()
+    sys.argv = [sys.argv[0]] + remaining
+
+    return args
+
+
 @hydra.main(version_base=None, config_path="../../habitat_llm/conf")
 def main(config: DictConfig) -> None:
     """Main entry point with Hydra configuration."""
+    extra_args = getattr(main, "_extra_args", None)
+
     # Get Hydra output directory for logging
     from hydra.core.hydra_config import HydraConfig
     try:
@@ -52,6 +67,9 @@ def main(config: DictConfig) -> None:
     subtasks = config.get("subtasks", 3)
     seed = config.get("seed", None)
 
+    # Get query from extra_args (parsed before Hydra to handle quoted strings)
+    query = extra_args.query if extra_args else None
+
     # Create unique temp working directory for this instance (allows parallel runs)
     instance_id = uuid.uuid4().hex[:8]
     working_dir = Path(tempfile.gettempdir()) / f"emtom_taskgen_{instance_id}"
@@ -67,6 +85,8 @@ def main(config: DictConfig) -> None:
     cprint(f"Instance: {instance_id}", "blue")
     cprint(f"Target tasks: {num_tasks}", "blue")
     cprint(f"Model: {model}", "blue")
+    if query:
+        cprint(f"Query: {query}", "green")
     cprint(f"Working dir: {working_dir}", "blue")
     cprint(f"Output: {output_dir}", "blue")
     cprint("=" * 60, "blue")
@@ -126,6 +146,7 @@ def main(config: DictConfig) -> None:
         subtasks=subtasks,
         scene_data=scene_data,  # Pass live scene data
         log_dir=hydra_output_dir,  # Pass Hydra output directory for logs
+        query=query,  # Optional seed query for task generation
     )
 
     # Run agent
@@ -149,4 +170,6 @@ def main(config: DictConfig) -> None:
 
 
 if __name__ == "__main__":
+    extra_args = parse_extra_args()
+    main._extra_args = extra_args
     main()

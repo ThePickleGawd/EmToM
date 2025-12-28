@@ -50,6 +50,7 @@ class TaskGeneratorAgent:
         scene_data: Optional[Any] = None,
         log_dir: Optional[str] = None,
         max_context_chars: Optional[int] = None,
+        query: Optional[str] = None,
     ):
         """
         Initialize the agent.
@@ -65,6 +66,7 @@ class TaskGeneratorAgent:
             scene_data: Live scene data from SceneLoader (required)
             log_dir: Directory for log files (defaults to Hydra output or output_dir/logs)
             max_context_chars: Max context size before summarizing. Auto-detected from model if None.
+            query: Optional seed query to guide task generation (e.g., "A task where agents use the radio")
         """
         self.llm = llm_client
         self.config = config
@@ -75,6 +77,7 @@ class TaskGeneratorAgent:
         self.verbose = verbose
         self.scene_data = scene_data
         self.max_context_chars = max_context_chars or self._get_model_context_limit()
+        self.query = query
 
         # Task file paths
         self.task_file = self.working_dir / "working_task.json"
@@ -96,7 +99,6 @@ class TaskGeneratorAgent:
         self.last_verify_passed = False  # Track if golden trajectory verified
         self.failed = False  # Track if agent called fail[]
         self.fail_reason = ""  # Reason for failure
-        self.done = False  # Track if agent called done[] (successful completion)
 
         # Setup logging to file
         # Prefer log_dir (Hydra output), fallback to output_dir/logs
@@ -248,9 +250,17 @@ class TaskGeneratorAgent:
         # Format scene data for the prompt
         scene_info = self._format_scene_data()
 
+        # Build query section if provided
+        query_section = ""
+        if self.query:
+            query_section = f"""
+## User Requirements
+{self.query}
+"""
+
         # Initial user message with scene data
         user_msg = f"""Create {num_tasks_target} quality benchmark tasks.
-
+{query_section}
 ## Task Requirements
 - **Subtasks**: Exactly {self.subtasks} steps per task
 - Each subtask should be a distinct action that gates progress to the next
@@ -279,7 +289,7 @@ Start by reading the template, then create a task using the scene data above."""
         self._save_context_window()
 
         # Main ReAct loop
-        while len(self.submitted_tasks) < num_tasks_target and not self.failed and not self.done:
+        while len(self.submitted_tasks) < num_tasks_target and not self.failed:
             self.iteration_count += 1
 
             if self.iteration_count > self.max_iterations:
@@ -339,10 +349,6 @@ Start by reading the template, then create a task using the scene data above."""
         self._log(f"\n{'='*60}")
         if self.failed:
             self._log(f"Agent FAILED: {self.fail_reason}")
-        elif self.done:
-            self._log(f"Agent completed successfully. Submitted {len(self.submitted_tasks)} tasks:")
-            for task_path in self.submitted_tasks:
-                self._log(f"  - {task_path}")
         else:
             self._log(f"Agent finished. Submitted {len(self.submitted_tasks)} tasks:")
             for task_path in self.submitted_tasks:
@@ -681,10 +687,8 @@ SUMMARY:"""
             return self._submit_task()
         elif tool == "fail":
             return self._fail(args)
-        elif tool == "done":
-            return self._done(args)
         else:
-            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, submit_task, fail, done"
+            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, submit_task, fail"
 
     def _bash(self, command: str) -> str:
         """
@@ -1330,16 +1334,6 @@ SUMMARY:"""
         self.fail_reason = reason
         self._log(f"FAIL: {reason}")
         return f"Task generation aborted: {reason}"
-
-    def _done(self, message: str = "") -> str:
-        """
-        Signal successful completion of task generation.
-
-        Use this after submitting all required tasks to cleanly exit.
-        """
-        self.done = True
-        self._log(f"DONE: {message or 'Task generation complete'}")
-        return f"Task generation complete. Submitted {len(self.submitted_tasks)} task(s)."
 
     def _format_scene_data(self) -> str:
         """Format scene data for the LLM prompt."""

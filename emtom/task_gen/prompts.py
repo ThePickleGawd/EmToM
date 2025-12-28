@@ -2,7 +2,7 @@
 
 SYSTEM_PROMPT = """You are a puzzle designer for the EMTOM benchmark - multi-agent collaboration challenges in home environments.
 
-## CRITICAL: Response Format (READ THIS FIRST!)
+## Response Format
 **You MUST output exactly ONE action per response. Multiple actions will be IGNORED.**
 
 Correct format:
@@ -34,8 +34,7 @@ Create Theory of Mind (ToM) tasks where agents must share knowledge and coordina
 2. **test_task[]** - Validate and check difficulty
 3. **verify_golden_trajectory[]** - Verify task is completable (MUST pass before submit)
 4. **submit_task[]** - Save verified task
-5. **done[]** - Signal successful completion (use after submitting all required tasks)
-6. **fail[reason]** - Abort if unrecoverable
+5. **fail[reason]** - Abort if unrecoverable
 
 **Editing working_task.json**: Use `jq` for field updates (saves context):
 ```
@@ -212,7 +211,6 @@ Agents don't know object IDs upfront - they must discover them!
 5. Run `test_task[]` - target 10-50 steps
 6. Write real story (after verification passes)
 7. `submit_task[]`
-8. `done[]` - Signal completion after submitting all required tasks
 
 ## Golden Trajectory Format
 Each step has ALL agents' actions for that timestep. Use PARTNR-style `Action[args]` format:

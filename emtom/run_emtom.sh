@@ -22,6 +22,7 @@ SUBTASKS=3
 MAX_ITERATIONS=100
 NUM_AGENTS=2
 AGENT_TYPE="robot"  # robot or human
+QUERY=""  # seed query for task generation
 
 print_usage() {
     echo "EMTOM Benchmark Pipeline"
@@ -48,6 +49,7 @@ print_usage() {
     echo "  --model MODEL        LLM model for the agent (default: gpt-5)"
     echo "  --subtasks N         Exact number of subtasks/steps per task (default: 3)"
     echo "  --max-iterations N   Max agent iterations before stopping (default: 100)"
+    echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
     echo ""
     echo "Benchmark Options:"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
@@ -63,6 +65,7 @@ print_usage() {
     echo "  ./emtom/run_emtom.sh explore --num-agents 3 --agent-type human"
     echo "  ./emtom/run_emtom.sh generate --num-tasks 5"
     echo "  ./emtom/run_emtom.sh generate --model gpt-5-mini"
+    echo "  ./emtom/run_emtom.sh generate --query \"A task where agents use the radio to communicate\""
     echo "  ./emtom/run_emtom.sh all"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
     echo "  ./emtom/run_emtom.sh benchmark --num-agents 4"
@@ -132,12 +135,24 @@ run_generate() {
     echo "Model: $MODEL"
     echo "Subtasks: $SUBTASKS"
     echo "Max iterations: $MAX_ITERATIONS"
+    if [ -n "$QUERY" ]; then
+        echo "Query: $QUERY"
+    fi
     echo "(Loads random scene from PARTNR dataset)"
     echo "=============================================="
     echo ""
+
+    # Build query arg if specified (passed before Hydra args)
+    QUERY_ARG=""
+    if [ -n "$QUERY" ]; then
+        QUERY_ARG="--query \"$QUERY\""
+    fi
+
     # Use Hydra config system with custom overrides
     # Scene is loaded live from PARTNR dataset - no trajectories needed
-    python emtom/task_gen/runner.py \
+    # Note: --query is parsed before Hydra to handle quoted strings properly
+    eval python emtom/task_gen/runner.py \
+        $QUERY_ARG \
         --config-name examples/emtom_2_robots \
         +num_tasks=$NUM_TASKS \
         +model=$MODEL \
@@ -260,6 +275,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --max-iterations)
             MAX_ITERATIONS=$2
+            shift 2
+            ;;
+        --query)
+            QUERY=$2
             shift 2
             ;;
         --num-agents)
