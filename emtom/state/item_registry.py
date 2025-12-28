@@ -227,8 +227,6 @@ class ItemRegistry:
             Formatted string for LLM prompts
         """
         lines = []
-        lines.append("Item IDs always use 'item_' prefix (e.g., item_small_key_1).")
-        lines.append("This distinguishes them from scene objects (e.g., cup_1).")
         lines.append("")
 
         for item_id in sorted(_ITEM_REGISTRY.keys()):
