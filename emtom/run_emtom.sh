@@ -24,6 +24,8 @@ NUM_AGENTS=2
 AGENT_TYPE="robot"  # robot or human
 QUERY=""  # seed query for task generation
 THRESHOLD=0.7  # ToM judge threshold
+RETRY_VERIFICATION=""  # Path to failed ToM verification file
+NO_AUTO_RETRY=false  # Disable automatic retry on judge failure
 
 print_usage() {
     echo "EMTOM Benchmark Pipeline"
@@ -52,6 +54,7 @@ print_usage() {
     echo "  --subtasks N         Exact number of subtasks/steps per task (default: 3)"
     echo "  --max-iterations N   Max agent iterations before stopping (default: 100)"
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
+    echo "  --retry-verification FILE  Retry generation using suggestions from failed ToM verification"
     echo ""
     echo "Benchmark Options:"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
@@ -66,6 +69,7 @@ print_usage() {
     echo "  --task FILE          Task file to evaluate (required for judge command)"
     echo "  --model MODEL        LLM model for evaluation (default: gpt-5)"
     echo "  --threshold N        Overall score threshold for passing (default: 0.7)"
+    echo "  --no-auto-retry      Disable automatic retry on failure (just show suggestions)"
     echo ""
     echo "Examples:"
     echo "  ./emtom/run_emtom.sh explore --steps 30"
@@ -146,20 +150,26 @@ run_generate() {
     if [ -n "$QUERY" ]; then
         echo "Query: $QUERY"
     fi
+    if [ -n "$RETRY_VERIFICATION" ]; then
+        echo "Retry from: $RETRY_VERIFICATION"
+    fi
     echo "(Loads random scene from PARTNR dataset)"
     echo "=============================================="
     echo ""
 
-    # Build query args array (handles spaces/quotes properly without eval)
-    QUERY_ARGS=()
+    # Build extra args array (handles spaces/quotes properly without eval)
+    EXTRA_ARGS=()
     if [ -n "$QUERY" ]; then
-        QUERY_ARGS=(--query "$QUERY")
+        EXTRA_ARGS+=(--query "$QUERY")
+    fi
+    if [ -n "$RETRY_VERIFICATION" ]; then
+        EXTRA_ARGS+=(--retry-verification "$RETRY_VERIFICATION")
     fi
 
     # Use Hydra config system with custom overrides
     # Scene is loaded live from PARTNR dataset - no trajectories needed
     python emtom/task_gen/runner.py \
-        "${QUERY_ARGS[@]}" \
+        "${EXTRA_ARGS[@]}" \
         --config-name examples/emtom_2_robots \
         +num_tasks=$NUM_TASKS \
         +model=$MODEL \
@@ -266,6 +276,9 @@ run_judge() {
 
     # Build command arguments (always outputs JSON)
     CMD_ARGS="--task $TASK_FILE --model $MODEL --threshold $THRESHOLD"
+    if [ "$NO_AUTO_RETRY" = true ]; then
+        CMD_ARGS="$CMD_ARGS --no-auto-retry"
+    fi
 
     python -m emtom.task_gen.judge_cli $CMD_ARGS
 }
@@ -310,6 +323,10 @@ while [[ $# -gt 0 ]]; do
             QUERY=$2
             shift 2
             ;;
+        --retry-verification)
+            RETRY_VERIFICATION=$2
+            shift 2
+            ;;
         --num-agents)
             NUM_AGENTS=$2
             shift 2
@@ -338,6 +355,10 @@ while [[ $# -gt 0 ]]; do
         --threshold)
             THRESHOLD=$2
             shift 2
+            ;;
+        --no-auto-retry)
+            NO_AUTO_RETRY=true
+            shift
             ;;
         --llm-agents)
             # Collect all agents until next flag or end

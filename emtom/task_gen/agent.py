@@ -52,6 +52,7 @@ class TaskGeneratorAgent:
         log_dir: Optional[str] = None,
         max_context_chars: Optional[int] = None,
         query: Optional[str] = None,
+        verification_feedback: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the agent.
@@ -68,6 +69,7 @@ class TaskGeneratorAgent:
             log_dir: Directory for log files (defaults to Hydra output or output_dir/logs)
             max_context_chars: Max context size before summarizing. Auto-detected from model if None.
             query: Optional seed query to guide task generation (e.g., "A task where agents use the radio")
+            verification_feedback: Optional dict with suggestions from a failed ToM verification to incorporate
         """
         self.llm = llm_client
         self.config = config
@@ -79,6 +81,7 @@ class TaskGeneratorAgent:
         self.scene_data = scene_data
         self.max_context_chars = max_context_chars or self._get_model_context_limit()
         self.query = query
+        self.verification_feedback = verification_feedback
 
         # Task file paths
         self.task_file = self.working_dir / "working_task.json"
@@ -262,9 +265,37 @@ class TaskGeneratorAgent:
 {self.query}
 """
 
+        # Build verification feedback section if retrying from failed verification
+        verification_section = ""
+        if self.verification_feedback:
+            suggestions = self.verification_feedback.get("suggestions", [])
+            overall_reasoning = self.verification_feedback.get("overall_reasoning", "")
+            criteria = self.verification_feedback.get("criteria", {})
+
+            verification_section = f"""
+## IMPORTANT: Previous Task Failed Theory of Mind Verification
+
+Your previous task did not pass the ToM verification. You MUST address these issues in the new task.
+
+**Overall Assessment**: {overall_reasoning}
+
+**Criteria Scores**:
+"""
+            for criterion, data in criteria.items():
+                score = data.get("score", 0)
+                reasoning = data.get("reasoning", "")
+                status = "✓" if score >= 0.5 else "✗"
+                verification_section += f"- {criterion}: {score:.2f} {status} - {reasoning}\n"
+
+            verification_section += "\n**Suggestions to Incorporate**:\n"
+            for i, suggestion in enumerate(suggestions, 1):
+                verification_section += f"{i}. {suggestion}\n"
+
+            verification_section += "\nCreate a NEW task that specifically addresses these issues.\n"
+
         # Initial user message with scene data
         user_msg = f"""Create {num_tasks_target} quality benchmark tasks.
-{query_section}
+{query_section}{verification_section}
 ## Task Requirements
 - **Subtasks**: Exactly {self.subtasks} steps per task
 - Each subtask should be a distinct action that gates progress to the next

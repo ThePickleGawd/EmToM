@@ -8,6 +8,7 @@ Usage:
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -82,6 +83,11 @@ def main():
         action="store_true",
         help="Print verbose output"
     )
+    parser.add_argument(
+        "--no-auto-retry",
+        action="store_true",
+        help="Disable automatic retry with generator on failure"
+    )
 
     args = parser.parse_args()
 
@@ -148,12 +154,42 @@ def main():
     # Print pass/fail status with colors
     if judgment.is_valid_tom:
         print(f"\n{Colors.BOLD}{Colors.GREEN}PASSED ToM Task Verification{Colors.RESET}\n", file=sys.stderr)
+        sys.exit(0)
     else:
         print(f"\n{Colors.BOLD}{Colors.RED}FAILED ToM Task Verification{Colors.RESET}", file=sys.stderr)
-        print(f"{Colors.YELLOW}The generator will now create a new task...{Colors.RESET}\n", file=sys.stderr)
+        print(f"\n{Colors.YELLOW}Suggestions for improvement:{Colors.RESET}", file=sys.stderr)
+        for i, suggestion in enumerate(judgment.suggestions, 1):
+            print(f"  {i}. {suggestion}", file=sys.stderr)
 
-    # Exit code based on pass/fail
-    sys.exit(0 if judgment.is_valid_tom else 1)
+        if args.no_auto_retry:
+            # Manual retry mode - just print the command
+            print(f"\n{Colors.BOLD}{Colors.YELLOW}Run the generator to create a new task based on these suggestions:{Colors.RESET}", file=sys.stderr)
+            print(f"  ./emtom/run_emtom.sh generate --retry-verification {output_file}\n", file=sys.stderr)
+            sys.exit(1)
+        else:
+            # Auto-retry mode - spawn the generator
+            print(f"\n{Colors.BOLD}{Colors.CYAN}Automatically generating a new task based on suggestions...{Colors.RESET}\n", file=sys.stderr)
+
+            # Find project root (where run_emtom.sh lives)
+            project_root = Path(__file__).resolve().parent.parent.parent
+
+            # Build the command
+            cmd = [
+                str(project_root / "emtom" / "run_emtom.sh"),
+                "generate",
+                "--retry-verification", str(output_file),
+                "--model", args.model,
+            ]
+
+            # Run the generator
+            try:
+                result = subprocess.run(cmd, cwd=str(project_root))
+                sys.exit(result.returncode)
+            except Exception as e:
+                print(f"{Colors.RED}Error running generator: {e}{Colors.RESET}", file=sys.stderr)
+                print(f"You can manually retry with:", file=sys.stderr)
+                print(f"  ./emtom/run_emtom.sh generate --retry-verification {output_file}", file=sys.stderr)
+                sys.exit(1)
 
 
 if __name__ == "__main__":

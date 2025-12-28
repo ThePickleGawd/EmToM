@@ -39,6 +39,8 @@ def parse_extra_args():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--query", type=str, default=None,
                         help="Seed query to guide task generation")
+    parser.add_argument("--retry-verification", type=str, default=None,
+                        help="Path to failed ToM verification JSON to retry with suggestions")
 
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
@@ -69,6 +71,30 @@ def main(config: DictConfig) -> None:
 
     # Get query from extra_args (parsed before Hydra to handle quoted strings)
     query = extra_args.query if extra_args else None
+    retry_verification = extra_args.retry_verification if extra_args else None
+
+    # Load failed verification suggestions if retrying
+    verification_feedback = None
+    if retry_verification:
+        retry_path = Path(retry_verification)
+        if retry_path.exists():
+            try:
+                with open(retry_path) as f:
+                    verification_data = json.load(f)
+                if not verification_data.get("is_valid_tom", True):
+                    verification_feedback = {
+                        "suggestions": verification_data.get("suggestions", []),
+                        "criteria": verification_data.get("criteria", {}),
+                        "overall_reasoning": verification_data.get("overall_reasoning", ""),
+                    }
+                    cprint(f"Loaded failed verification from: {retry_path}", "yellow")
+                    cprint(f"Suggestions to incorporate:", "yellow")
+                    for i, s in enumerate(verification_feedback["suggestions"], 1):
+                        cprint(f"  {i}. {s}", "yellow")
+                else:
+                    cprint(f"Verification already passed, ignoring: {retry_path}", "green")
+            except Exception as e:
+                cprint(f"Warning: Could not load verification file: {e}", "red")
 
     # Create unique temp working directory for this instance (allows parallel runs)
     instance_id = uuid.uuid4().hex[:8]
@@ -147,6 +173,7 @@ def main(config: DictConfig) -> None:
         scene_data=scene_data,  # Pass live scene data
         log_dir=hydra_output_dir,  # Pass Hydra output directory for logs
         query=query,  # Optional seed query for task generation
+        verification_feedback=verification_feedback,  # Failed ToM verification suggestions
     )
 
     # Run agent
