@@ -58,45 +58,40 @@ class ToMJudgment:
 EVALUATION_PROMPT = """You are an expert evaluator for Theory of Mind (ToM) tasks in multi-agent environments.
 
 ## Your Task
-Evaluate whether the following task truly requires Theory of Mind reasoning. A valid ToM task requires agents to reason about each other's mental states (beliefs, knowledge, intentions) to succeed.
+Evaluate whether the following task truly requires Theory of Mind (ToM) reasoning. A valid ToM task requires agents to reason about each other's mental states (beliefs, knowledge, intentions) to succeed.
 
 ## Evaluation Criteria
 
-Score each criterion from 0.0 to 1.0:
+Score each criterion from 0.0 to 1.0. There will also be an AUTOMATIC FAIL score, if you decide an AUTOMATIC FAIL is appropriate please automatically fail the task. 
 
 ### 1. Information Asymmetry (0.0-1.0)
-Do different agents have meaningfully different private knowledge?
+Do different agents have meaningfully different private knowledge/information?
 - 0.0: All agents have identical information, or secrets are trivial/empty
 - 0.5: Some asymmetry exists but it's minor or not task-critical
-- 1.0: Each agent has unique, critical information that others need
+- 1.0: Each agent has unique, critical information that others needs to complete the generated task
 
-Look at: `agent_secrets`, `agent_roles`, initial positions
+For information asymmetry look at: `agent_secrets`, `agent_roles`, initial positions, and any other categories that you need to. 
 
 ### 2. Interdependence (0.0-1.0)
 Can a single agent complete the task alone, or is genuine collaboration required?
 - 0.0: One agent could do everything (others are redundant)
-- 0.5: Collaboration helps but isn't strictly necessary
-- 1.0: Task is impossible without combining multiple agents' unique contributions
+- 0.5: Collaboration helps but isn't strictly required
+- 1.0: Task is impossible without combining multiple agents' unique knowledge, information, and or abilities
 
-Look at: `agent_actions`, `subtasks` dependencies, `mechanic_bindings`
+For Interdependence look at: `agent_actions`, `subtasks` dependencies, `mechanic_bindings`
 
-### 3. Communication Necessity (0.0-1.0)
-Must agents genuinely share information to succeed?
-- 0.0: No communication needed, or just "tell me what to do" instructions
-- 0.5: Communication helps efficiency but isn't critical
-- 1.0: Private knowledge MUST be communicated for others to act correctly
+Criterion #3 is **CRITIAL**
 
-Look at: `agent_secrets` content, whether success requires sharing discoveries
+Ask your self if the task can only be solved once the agents **REASON** (without explictly telling the other agent) that they have differing levels, amounts, and types of knowledge and abilities
 
-### 4. Mental State Reasoning (0.0-1.0)
-Must agents model what others know/believe to make decisions?
-- 0.0: Agents can act without considering others' knowledge states
+### 3. Mental State Reasoning (0.0-1.0) 
+Agents must REASON about the abilities, private information, and mental states of the other agents in order to complete the task. **REMEMBER** the private information given to the agents should not be shared with the other agents. Agents must **REASON** for themselves the private information, abilities, and mental states of the other agents by looking at their actions. 
+- AUTOMATIC FAIL: Agents can act without considering others' knowledge states 
 - 0.5: Some benefit from modeling others, but not required
-- 1.0: Decisions depend critically on reasoning about others' beliefs
+- 1.0: Decisions depend critically on **REASONING** about others' private knowledge, abilities, and mental states 
 
-Look at: Whether agent A must consider "what does agent B know?" to act correctly
 
-### 5. Coordination Requirement (0.0-1.0)
+### 4. Coordination Requirement (0.0-1.0)
 Do actions need to be carefully sequenced across agents?
 - 0.0: Agents can work completely independently
 - 0.5: Some coordination helps but parallel work is possible
@@ -136,12 +131,8 @@ You MUST respond with ONLY a valid JSON object (no markdown, no explanation outs
     "score": <float 0.0-1.0>,
     "reasoning": "<1-2 sentences explaining score>"
   }},
-  "communication_necessity": {{
-    "score": <float 0.0-1.0>,
-    "reasoning": "<1-2 sentences explaining score>"
-  }},
   "mental_state_reasoning": {{
-    "score": <float 0.0-1.0>,
+    "score": <float 0.0-1.0> or <float -1.0 for Automatic Fail>,
     "reasoning": "<1-2 sentences explaining score>"
   }},
   "coordination_requirement": {{
@@ -149,7 +140,7 @@ You MUST respond with ONLY a valid JSON object (no markdown, no explanation outs
     "reasoning": "<1-2 sentences explaining score>"
   }},
   "overall_reasoning": "<2-3 sentences summarizing whether this is a valid ToM task>",
-  "suggestions": ["<suggestion 1 to improve ToM if score is low>", "<suggestion 2>"]
+  "suggestions": ["<suggestion 1 to improve ToM if score is low>", "<suggestion 2>", ... ,"<suggestion n"]
 }}
 """
 
@@ -159,8 +150,11 @@ class ToMJudge:
     LLM-based judge for Theory of Mind task validation.
 
     Evaluates whether a task genuinely requires ToM reasoning
-    based on five criteria: information asymmetry, interdependence,
-    communication necessity, mental state reasoning, and coordination.
+    based on four criteria: information asymmetry, interdependence,
+    mental state reasoning, and coordination.
+
+    Mental state reasoning can trigger an automatic fail (-1.0) if
+    agents can act without considering others' knowledge states.
     """
 
     # Thresholds for passing
@@ -245,44 +239,59 @@ class ToMJudge:
                 suggestions=["Re-run evaluation"],
             )
 
-        # Extract criteria scores
+        # Extract criteria scores (communication_necessity removed, automatic fail added for mental_state_reasoning)
         criteria_names = [
             "information_asymmetry",
             "interdependence",
-            "communication_necessity",
             "mental_state_reasoning",
             "coordination_requirement",
         ]
 
         criteria = {}
         scores = []
+        automatic_fail = False
 
         for name in criteria_names:
             if name in data and isinstance(data[name], dict):
                 score = float(data[name].get("score", 0.0))
                 reasoning = data[name].get("reasoning", "No reasoning provided")
+
+                # Check for automatic fail (-1.0) on mental_state_reasoning
+                if name == "mental_state_reasoning" and score == -1.0:
+                    automatic_fail = True
+                    reasoning = f"AUTOMATIC FAIL: {reasoning}"
+
                 criteria[name] = CriterionScore(score=score, reasoning=reasoning)
                 scores.append(score)
             else:
                 criteria[name] = CriterionScore(score=0.0, reasoning="Missing from response")
                 scores.append(0.0)
 
-        # Calculate overall score (average)
-        overall_score = sum(scores) / len(scores) if scores else 0.0
+        # Calculate overall score (average of non-negative scores)
+        valid_scores = [s for s in scores if s >= 0]
+        overall_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
 
-        # Check if passes thresholds
-        passes_overall = overall_score >= self.overall_threshold
-        passes_all_criteria = all(s >= self.min_criterion_threshold for s in scores)
-        is_valid_tom = passes_overall and passes_all_criteria
+        # Check if passes thresholds (automatic fail overrides everything)
+        if automatic_fail:
+            is_valid_tom = False
+        else:
+            passes_overall = overall_score >= self.overall_threshold
+            passes_all_criteria = all(s >= self.min_criterion_threshold for s in scores)
+            is_valid_tom = passes_overall and passes_all_criteria
 
         # Extract suggestions
         suggestions = data.get("suggestions", [])
         if not isinstance(suggestions, list):
             suggestions = [str(suggestions)]
 
-        # Add automatic suggestions for low-scoring criteria
+        # Add automatic suggestions for low-scoring criteria or automatic fail
         for name, criterion in criteria.items():
-            if criterion.score < self.min_criterion_threshold:
+            if criterion.score == -1.0:
+                readable_name = name.replace("_", " ").title()
+                suggestions.insert(0,
+                    f"AUTOMATIC FAIL on {readable_name}: {criterion.reasoning}"
+                )
+            elif criterion.score < self.min_criterion_threshold:
                 readable_name = name.replace("_", " ").title()
                 suggestions.append(
                     f"Improve {readable_name} (score: {criterion.score:.2f}): {criterion.reasoning}"
@@ -312,8 +321,17 @@ class ToMJudge:
 
         for name, criterion in judgment.criteria.items():
             readable_name = name.replace("_", " ").title()
-            status_icon = "+" if criterion.score >= self.min_criterion_threshold else "!"
-            lines.append(f"  [{status_icon}] {readable_name}: {criterion.score:.2f}")
+            # Handle automatic fail (-1.0) for mental_state_reasoning
+            if criterion.score == -1.0:
+                status_icon = "X"
+                score_display = "AUTO-FAIL"
+            elif criterion.score >= self.min_criterion_threshold:
+                status_icon = "+"
+                score_display = f"{criterion.score:.2f}"
+            else:
+                status_icon = "!"
+                score_display = f"{criterion.score:.2f}"
+            lines.append(f"  [{status_icon}] {readable_name}: {score_display}")
             lines.append(f"      {criterion.reasoning}")
 
         lines.append("\nOverall Assessment:")

@@ -20,13 +20,18 @@ def create_llm_client(model: str):
     """Create an LLM client for the specified model."""
     from habitat_llm.llm.openai_chat import OpenAIChat
 
-    # Build config for OpenAI client
+    # Build config for OpenAI client (must match OpenAIChat expectations)
     config = OmegaConf.create({
         "llm": {
-            "model": model,
+            "verbose": False,
+            "keep_message_history": False,
+            "system_message": "You are an expert evaluator for Theory of Mind tasks.",
             "generation_params": {
+                "model": model,
                 "temperature": 0.0,  # Deterministic for evaluation
                 "max_tokens": 2000,
+                "stream": False,
+                "stop": [],
             }
         }
     })
@@ -67,11 +72,6 @@ def main():
         action="store_true",
         help="Print verbose output"
     )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
-    )
 
     args = parser.parse_args()
 
@@ -104,11 +104,34 @@ def main():
     # Run evaluation
     judgment = judge.evaluate(task_data)
 
-    # Output results
-    if args.json:
-        print(judgment.to_json())
+    # Get JSON output
+    json_output = judgment.to_json()
+
+    # Save to file in same directory as input task
+    output_dir = task_path.parent
+
+    # Find next available verification number
+    existing = list(output_dir.glob("ToM_verification_*.json"))
+    if existing:
+        # Extract numbers and find max
+        numbers = []
+        for f in existing:
+            try:
+                num = int(f.stem.split("_")[-1])
+                numbers.append(num)
+            except ValueError:
+                pass
+        next_num = max(numbers) + 1 if numbers else 1
     else:
-        print(judge.format_result(judgment))
+        next_num = 1
+
+    output_file = output_dir / f"ToM_verification_{next_num}.json"
+    with open(output_file, "w") as f:
+        f.write(json_output)
+
+    # Print JSON to stdout
+    print(json_output)
+    print(f"\nSaved to: {output_file}", file=sys.stderr)
 
     # Exit code based on pass/fail
     sys.exit(0 if judgment.is_valid_tom else 1)

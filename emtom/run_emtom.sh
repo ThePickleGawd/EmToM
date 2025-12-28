@@ -24,7 +24,6 @@ NUM_AGENTS=2
 AGENT_TYPE="robot"  # robot or human
 QUERY=""  # seed query for task generation
 THRESHOLD=0.7  # ToM judge threshold
-JSON_OUTPUT=false  # Output JSON from judge
 
 print_usage() {
     echo "EMTOM Benchmark Pipeline"
@@ -67,7 +66,6 @@ print_usage() {
     echo "  --task FILE          Task file to evaluate (required for judge command)"
     echo "  --model MODEL        LLM model for evaluation (default: gpt-5)"
     echo "  --threshold N        Overall score threshold for passing (default: 0.7)"
-    echo "  --json               Output raw JSON instead of formatted text"
     echo ""
     echo "Examples:"
     echo "  ./emtom/run_emtom.sh explore --steps 30"
@@ -80,7 +78,6 @@ print_usage() {
     echo "  ./emtom/run_emtom.sh benchmark --num-agents 4"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
     echo "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
-    echo "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --json"
 }
 
 # Get config name based on number of agents and type
@@ -267,11 +264,8 @@ run_judge() {
     echo "=============================================="
     echo ""
 
-    # Build command arguments
+    # Build command arguments (always outputs JSON)
     CMD_ARGS="--task $TASK_FILE --model $MODEL --threshold $THRESHOLD"
-    if [ "$JSON_OUTPUT" = true ]; then
-        CMD_ARGS="$CMD_ARGS --json"
-    fi
 
     python -m emtom.task_gen.judge_cli $CMD_ARGS
 }
@@ -344,10 +338,6 @@ while [[ $# -gt 0 ]]; do
         --threshold)
             THRESHOLD=$2
             shift 2
-            ;;
-        --json)
-            JSON_OUTPUT=true
-            shift
             ;;
         --llm-agents)
             # Collect all agents until next flag or end
