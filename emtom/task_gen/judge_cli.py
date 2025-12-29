@@ -4,6 +4,7 @@ Standalone CLI for Theory of Mind task evaluation.
 
 Usage:
     python -m emtom.task_gen.judge_cli --task <path_to_task.json> [--model gpt-5]
+    python -m emtom.task_gen.judge_cli --task <path_to_task.json> --llm bedrock_claude --model sonnet
 """
 
 import argparse
@@ -12,8 +13,6 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-
-from omegaconf import OmegaConf
 
 from emtom.task_gen.tom_judge import ToMJudge
 
@@ -28,27 +27,18 @@ class Colors:
     RESET = "\033[0m"
 
 
-def create_llm_client(model: str):
-    """Create an LLM client for the specified model."""
-    from habitat_llm.llm.openai_chat import OpenAIChat
+def create_llm_client(model: str, llm_provider: str = "openai_chat"):
+    """Create an LLM client for the specified model and provider."""
+    from habitat_llm.llm import instantiate_llm
 
-    # Build config for OpenAI client (must match OpenAIChat expectations)
-    config = OmegaConf.create({
-        "llm": {
-            "verbose": False,
-            "keep_message_history": False,
-            "system_message": "You are an expert evaluator for Theory of Mind tasks.",
-            "generation_params": {
-                "model": model,
-                "temperature": 0.0,  # Deterministic for evaluation
-                "max_tokens": 2000,
-                "stream": False,
-                "stop": [],
-            }
+    return instantiate_llm(
+        llm_provider,
+        generation_params={
+            "model": model,
+            "temperature": 0.0,  # Deterministic for evaluation
+            "max_tokens": 2000,
         }
-    })
-
-    return OpenAIChat(config.llm)
+    )
 
 
 def main():
@@ -66,6 +56,12 @@ def main():
         type=str,
         default="gpt-5",
         help="LLM model to use for evaluation (default: gpt-5)"
+    )
+    parser.add_argument(
+        "--llm",
+        type=str,
+        default="openai_chat",
+        help="LLM provider: openai_chat, bedrock_claude (default: openai_chat)"
     )
     parser.add_argument(
         "--threshold",
@@ -107,10 +103,10 @@ def main():
 
     # Create LLM client and judge
     if args.verbose:
-        print(f"Using model: {args.model}")
+        print(f"Using LLM: {args.llm} ({args.model})")
         print(f"Evaluating task: {task_path}")
 
-    llm_client = create_llm_client(args.model)
+    llm_client = create_llm_client(args.model, args.llm)
     judge = ToMJudge(
         llm_client,
         overall_threshold=args.threshold,
@@ -170,6 +166,7 @@ def main():
                 "generate",
                 "--retry-verification", str(output_file),
                 "--model", args.model,
+                "--llm", args.llm,
             ]
 
             # Run the generator

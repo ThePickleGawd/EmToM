@@ -7,6 +7,7 @@ Usage:
 
 Or via shell script:
     ./emtom/run_emtom.sh generate --num-tasks 5 --model gpt-5
+    ./emtom/run_emtom.sh generate --llm bedrock_claude --model sonnet
 """
 
 from __future__ import annotations
@@ -63,6 +64,7 @@ def main(config: DictConfig) -> None:
     # Extract custom args from config (passed as +arg=value)
     num_tasks = config.get("num_tasks", 1)
     model = config.get("model", "gpt-5")
+    llm_provider = config.get("llm_provider", "openai_chat")  # LLM provider: openai_chat, bedrock_claude
     output_dir = config.get("output_dir", "data/emtom/tasks")  # Final output location
     max_iterations = config.get("max_iterations", 100)
     quiet = config.get("quiet", False)
@@ -110,7 +112,7 @@ def main(config: DictConfig) -> None:
     cprint("=" * 60, "blue")
     cprint(f"Instance: {instance_id}", "blue")
     cprint(f"Target tasks: {num_tasks}", "blue")
-    cprint(f"Model: {model}", "blue")
+    cprint(f"LLM: {llm_provider} ({model})", "blue")
     if query:
         cprint(f"Query: {query}", "green")
     cprint(f"Working dir: {working_dir}", "blue")
@@ -153,7 +155,7 @@ def main(config: DictConfig) -> None:
     cprint("Initializing LLM client...", "blue")
     try:
         from habitat_llm.llm import instantiate_llm
-        llm_client = instantiate_llm("openai_chat", generation_params={"model": model})
+        llm_client = instantiate_llm(llm_provider, generation_params={"model": model})
         cprint(f"Using model: {llm_client.generation_params.model}", "green")
     except Exception as e:
         cprint(f"Error initializing LLM: {e}", "red")

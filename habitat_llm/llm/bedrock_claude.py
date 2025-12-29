@@ -6,6 +6,7 @@
 
 import json
 import os
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import boto3
@@ -13,12 +14,54 @@ from omegaconf import DictConfig
 
 from habitat_llm.llm.base_llm import BaseLLM, Prompt
 
+# Load .env file if it exists (for AWS credentials)
+_env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+if _env_file.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_file)
+    except ImportError:
+        # Fallback: manually parse .env if dotenv not installed
+        with open(_env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, value = line.partition("=")
+                    os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
 
 class BedrockClaude(BaseLLM):
     """
     LLM implementation using AWS Bedrock with Claude models.
     Uses environment variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+
+    Supports model aliases for convenience:
+        sonnet, sonnet-4.5, sonnet4.5  -> us.anthropic.claude-sonnet-4-5-20250929-v1:0
+        haiku, haiku-4.5, haiku4.5     -> us.anthropic.claude-haiku-4-5-20251001-v1:0
+        opus, opus-4.5, opus4.5        -> us.anthropic.claude-opus-4-5-20251101-v1:0
     """
+
+    # Model aliases mapping short names to full Bedrock inference profile IDs
+    # Note: Newer Claude models require regional inference profiles (us. prefix)
+    MODEL_ALIASES: Dict[str, str] = {
+        # Claude Sonnet 4.5
+        "sonnet": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "sonnet-4.5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "sonnet4.5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        # Claude Haiku 4.5
+        "haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "haiku-4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "haiku4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        # Claude Opus 4.5
+        "opus": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+        "opus-4.5": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+        "opus4.5": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+    }
+
+    @classmethod
+    def resolve_model_alias(cls, model: str) -> str:
+        """Resolve a model alias to the full Bedrock model ID."""
+        return cls.MODEL_ALIASES.get(model.lower(), model)
 
     def __init__(self, conf: DictConfig):
         """
@@ -53,8 +96,8 @@ class BedrockClaude(BaseLLM):
         :param request_timeout: maximum time before timeout (not used directly by boto3)
         :param generation_args: contains arguments like the grammar definition. Not used here.
         """
-        # Get model ID
-        model_id = self.generation_params.model
+        # Get model ID (resolve alias if provided)
+        model_id = self.resolve_model_alias(self.generation_params.model)
 
         # Override stop if provided
         if stop is None and hasattr(self.generation_params, "stop") and self.generation_params.stop:

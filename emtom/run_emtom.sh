@@ -18,6 +18,7 @@ TASK_FILE=""
 LLM_AGENTS=""
 NUM_TASKS=1
 MODEL="gpt-5.2"
+LLM_PROVIDER="openai_chat"  # LLM provider: openai_chat, bedrock_claude
 SUBTASKS=3
 MAX_ITERATIONS=100
 NUM_AGENTS=2
@@ -51,6 +52,8 @@ print_usage() {
     echo "Generation Options:"
     echo "  --num-tasks N        Number of tasks to generate (default: 1)"
     echo "  --model MODEL        LLM model for the agent (default: gpt-5)"
+    echo "                       For bedrock_claude, supports aliases: sonnet, haiku, opus"
+    echo "  --llm PROVIDER       LLM provider: openai_chat, bedrock_claude (default: openai_chat)"
     echo "  --subtasks N         Exact number of subtasks/steps per task (default: 3)"
     echo "  --max-iterations N   Max agent iterations before stopping (default: 100)"
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
@@ -68,6 +71,7 @@ print_usage() {
     echo "Judge Options:"
     echo "  --task FILE          Task file to evaluate (required for judge command)"
     echo "  --model MODEL        LLM model for evaluation (default: gpt-5)"
+    echo "  --llm PROVIDER       LLM provider: openai_chat, bedrock_claude (default: openai_chat)"
     echo "  --threshold N        Overall score threshold for passing (default: 0.7)"
     echo "  --no-auto-retry      Disable automatic retry on failure (just show suggestions)"
     echo ""
@@ -76,6 +80,7 @@ print_usage() {
     echo "  ./emtom/run_emtom.sh explore --num-agents 3 --agent-type human"
     echo "  ./emtom/run_emtom.sh generate --num-tasks 5"
     echo "  ./emtom/run_emtom.sh generate --model gpt-5-mini"
+    echo "  ./emtom/run_emtom.sh generate --llm bedrock_claude --model sonnet"
     echo "  ./emtom/run_emtom.sh generate --query \"A task where agents use the radio to communicate\""
     echo "  ./emtom/run_emtom.sh all"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
@@ -144,7 +149,7 @@ run_generate() {
     echo "Running EMTOM Task Generation (Live Scene Mode)"
     echo "=============================================="
     echo "Target tasks: $NUM_TASKS"
-    echo "Model: $MODEL"
+    echo "LLM: $LLM_PROVIDER ($MODEL)"
     echo "Subtasks: $SUBTASKS"
     echo "Max iterations: $MAX_ITERATIONS"
     if [ -n "$QUERY" ]; then
@@ -173,6 +178,7 @@ run_generate() {
         --config-name examples/emtom_2_robots \
         +num_tasks=$NUM_TASKS \
         +model=$MODEL \
+        +llm_provider=$LLM_PROVIDER \
         +subtasks=$SUBTASKS \
         +max_iterations=$MAX_ITERATIONS \
         +output_dir=data/emtom/tasks \
@@ -269,13 +275,13 @@ run_judge() {
     echo "Running EMTOM Theory of Mind Judge"
     echo "=============================================="
     echo "Task: $TASK_FILE"
-    echo "Model: $MODEL"
+    echo "LLM: $LLM_PROVIDER ($MODEL)"
     echo "Threshold: $THRESHOLD"
     echo "=============================================="
     echo ""
 
     # Build command arguments (always outputs JSON)
-    CMD_ARGS="--task $TASK_FILE --model $MODEL --threshold $THRESHOLD"
+    CMD_ARGS="--task $TASK_FILE --model $MODEL --llm $LLM_PROVIDER --threshold $THRESHOLD"
     if [ "$NO_AUTO_RETRY" = true ]; then
         CMD_ARGS="$CMD_ARGS --no-auto-retry"
     fi
@@ -309,6 +315,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --model)
             MODEL=$2
+            shift 2
+            ;;
+        --llm)
+            LLM_PROVIDER=$2
             shift 2
             ;;
         --subtasks)
