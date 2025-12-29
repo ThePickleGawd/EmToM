@@ -1,10 +1,40 @@
 # EMTOM: Embodied Theory of Mind Benchmark
 
-EMTOM tests whether AI agents can reason about others' mental states by introducing "surprise mechanics" - unexpected behaviors that require agents to update beliefs and communicate discoveries.
+EMTOM tests whether AI agents can reason about others' mental states in embodied environments. Tasks are designed to require agents to track what others know, communicate discoveries, and coordinate based on asymmetric information.
 
-## Install
+## Installation
 
-See [Installation.md](INSTALLATION.md) for conda setup.
+See [INSTALLATION.md](INSTALLATION.md) for conda setup.
+
+## Quick Start
+
+```bash
+# Generate a task using OpenAI
+./emtom/run_emtom.sh generate --llm openai_chat --model gpt-5.2
+
+# Generate a task using Claude (AWS Bedrock)
+./emtom/run_emtom.sh generate --llm bedrock_claude --model sonnet
+
+# Run benchmark on generated tasks
+./emtom/run_emtom.sh benchmark
+
+# Evaluate a task for Theory of Mind requirements
+./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --llm openai_chat --model gpt-5
+```
+
+## Environment Setup
+
+Create a `.env` file in the project root with your API keys:
+
+```bash
+# For OpenAI
+OPENAI_API_KEY=your-openai-key
+
+# For AWS Bedrock Claude
+AWS_ACCESS_KEY_ID=your-access-key
+AWS_SECRET_ACCESS_KEY=your-secret-key
+AWS_REGION=us-east-1
+```
 
 ## Pipeline Overview
 
@@ -13,127 +43,197 @@ See [Installation.md](INSTALLATION.md) for conda setup.
 │   1. EXPLORATION    │────▶│  2. TASK GENERATION │────▶│    3. BENCHMARK     │
 │                     │     │                     │     │                     │
 │  LLM explores env   │     │  Agent creates &    │     │  Multi-agent eval   │
-│  discovers mechanics│     │  tests tasks        │     │  on generated tasks │
+│  discovers mechanics│     │  validates tasks    │     │  on generated tasks │
 │                     │     │                     │     │                     │
 │  Output: trajectory │     │  Output: task.json  │     │  Output: metrics    │
 └─────────────────────┘     └─────────────────────┘     └─────────────────────┘
+                                     │
+                                     ▼
+                            ┌─────────────────────┐
+                            │    ToM JUDGE        │
+                            │                     │
+                            │  Validates tasks    │
+                            │  require ToM        │
+                            └─────────────────────┘
 ```
 
-**Quick Start:**
+---
+
+## Commands
+
+### 1. Exploration
+
+Discover how mechanics work through LLM-guided exploration.
+
 ```bash
-./emtom/run_emtom.sh exploration      # Step 1
-./emtom/run_emtom.sh generate # Step 2
-./emtom/run_emtom.sh benchmark        # Step 3
+./emtom/run_emtom.sh explore --steps 30
+./emtom/run_emtom.sh explore --num-agents 3 --agent-type human
 ```
+
+**Options:**
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--steps N` | Number of exploration steps | 20 |
+| `--num-agents N` | Number of agents (2-5) | 2 |
+| `--agent-type TYPE` | `robot` or `human` | robot |
 
 ---
 
-## 1. Exploration
+### 2. Task Generation
 
-**Goal:** Discover how mechanics work through LLM-guided exploration.
+Create benchmark tasks using an LLM agent that iteratively designs and tests tasks.
 
-**How it works:**
-1. Agent explores Habitat environment using ReAct prompting
-2. Mechanics transform actions (e.g., "open" becomes "close")
-3. Agent detects surprises and logs discoveries
-4. Output: trajectory JSON + video
+```bash
+./emtom/run_emtom.sh generate --llm openai_chat --model gpt-5.2
+./emtom/run_emtom.sh generate --llm bedrock_claude --model sonnet --num-tasks 5
+./emtom/run_emtom.sh generate --llm openai_chat --model gpt-5 --query "A task using the radio"
+```
 
-**Key Components:**
-- `HabitatExplorer` - Main exploration loop
-- `CuriosityModel` - LLM selects actions based on curiosity
-- `GameStateManager` - Applies mechanics to actions
+**Options:**
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--llm PROVIDER` | LLM provider (required) | - |
+| `--model MODEL` | Model name (required) | - |
+| `--num-tasks N` | Number of tasks to generate | 1 |
+| `--subtasks N` | Steps per task | 3 |
+| `--max-iterations N` | Max agent iterations | 100 |
+| `--query "TEXT"` | Seed query to guide generation | - |
+| `--retry-verification FILE` | Retry with ToM judge suggestions | - |
 
-**Mechanics Available:**
-| Mechanic | Effect |
+**Supported Models:**
+
+| Provider | Models |
 |----------|--------|
-| `inverse_state` | Actions have opposite effects |
-| `remote_control` | Actions affect a different object |
-| `counting_state` | Object needs N interactions to respond |
-
-**Output Format** (`data/emtom/trajectories/`):
-```json
-{
-  "steps": [...],
-  "surprises": [...],
-  "mechanic_bindings": {"inverse_state": {"targets": ["drawer_1"]}}
-}
-```
-
----
-
-## 2. Task Generation (Agentic)
-
-**Goal:** Create quality benchmark tasks by iteratively testing them.
+| `openai_chat` | `gpt-5`, `gpt-5-mini`, `gpt-5.1`, `gpt-5.2` |
+| `bedrock_claude` | `sonnet`, `haiku`, `opus` |
 
 **How it works:**
+1. Loads a random scene from the PARTNR dataset
+2. LLM agent designs a task using available objects and mechanics
+3. Task is tested in simulation to verify it's completable
+4. ToM judge validates the task requires Theory of Mind reasoning
+5. If validation fails, agent retries with suggestions
 
-The agent edits a task file, tests it in the benchmark, and iterates until quality is good.
-
-```
-┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│  bash            │────▶│  test_task       │────▶│  submit_task     │
-│                  │     │                  │     │                  │
-│  Read trajectory │     │  Run benchmark   │     │  Save if good    │
-│  Edit task.json  │     │  Get metrics     │     │  Move to next    │
-└──────────────────┘     └──────────────────┘     └──────────────────┘
-        │                        │
-        │◀───────────────────────┘
-        │     (iterate if bad)
-```
-
-**Tools (only 3):**
+**Agent Tools:**
 | Tool | Purpose |
 |------|---------|
-| `bash` | Read trajectories, edit `working_task.json` |
-| `test_task` | Run benchmark, return {steps, done, episode_over} |
-| `submit_task` | Save task to output directory |
+| `bash` | Read files, edit `working_task.json` |
+| `test_task` | Run task in simulation, get completion metrics |
+| `verify_golden_trajectory` | Verify the golden solution works |
+| `judge_tom` | Evaluate task for ToM requirements |
+| `submit_task` | Save validated task to output |
 
-**Quality Criteria:**
-| Metric | Good | Bad |
-|--------|------|-----|
-| Steps | 10-50 | <10 (too easy) or >100 (too hard) |
-| done | True | False (agents couldn't complete) |
-| episode_over | False | True (environment crashed) |
+---
 
-**Task Structure:**
+### 3. ToM Judge
+
+Evaluate whether a task genuinely requires Theory of Mind reasoning.
+
+```bash
+./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --llm openai_chat --model gpt-5
+./emtom/run_emtom.sh judge --task my_task.json --llm bedrock_claude --model sonnet --no-auto-retry
+```
+
+**Options:**
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--task FILE` | Task file to evaluate (required) | - |
+| `--llm PROVIDER` | LLM provider (required) | - |
+| `--model MODEL` | Model name (required) | - |
+| `--threshold N` | Score threshold for passing | 0.7 |
+| `--no-auto-retry` | Don't auto-retry on failure | false |
+
+**Evaluation Criteria:**
+| Criterion | Description |
+|-----------|-------------|
+| Information Asymmetry | Agents have different knowledge/access |
+| Interdependence | Agents must rely on each other |
+| Mental State Reasoning | Agents must track others' beliefs |
+| Coordination Requirement | Success requires joint action |
+
+Tasks must score above the threshold on all criteria to pass. A score of -1.0 on mental state reasoning triggers an automatic fail.
+
+---
+
+### 4. Benchmark
+
+Run multi-agent evaluation on generated tasks.
+
+```bash
+./emtom/run_emtom.sh benchmark
+./emtom/run_emtom.sh benchmark --task data/emtom/tasks/my_task.json
+./emtom/run_emtom.sh benchmark --max-sim-steps 1000 --num-agents 4
+```
+
+**Options:**
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--task FILE` | Specific task file | most recent |
+| `--max-sim-steps N` | Max simulation steps | 200000 |
+| `--max-llm-calls N` | Max LLM calls per agent | 20 |
+| `--num-agents N` | Number of agents (2-5) | 2 |
+| `--agent-type TYPE` | `robot` or `human` | robot |
+
+---
+
+### 5. Human Test Mode
+
+Interactive testing with manual command input.
+
+```bash
+./emtom/run_emtom.sh test --task data/emtom/tasks/my_task.json
+./emtom/run_emtom.sh test --mechanics inverse_state remote_control
+./emtom/run_emtom.sh test --llm-agents agent_1  # Make agent_1 LLM-controlled
+```
+
+**Available Actions:**
+- `Navigate[target]`, `Open[target]`, `Close[target]`
+- `Pick[target]`, `Place[target]`, `Use[target]`
+- `Inspect[target]`, `Communicate[message]`
+
+**Commands:** `status`, `mechanics`, `history`, `skip`, `quit`, `help`
+
+---
+
+## Task Structure
+
+Generated tasks are saved to `data/emtom/tasks/` as JSON:
+
 ```json
 {
   "task_id": "task_001",
-  "public_goal": "Open the drawer",
-  "mechanic_bindings": [{"mechanic_type": "inverse_state", "target": "drawer_1"}],
-  "agent_secrets": {"agent_0": ["The drawer closes when you open it"], "agent_1": []}
+  "task_name": "Hidden Radio Message",
+  "task_description": "Agent 0 must find and relay a radio message to Agent 1",
+  "public_goal": "Coordinate to complete the objective",
+  "subtasks": [
+    {
+      "description": "Agent 0 finds the radio",
+      "success_criteria": {...}
+    }
+  ],
+  "mechanic_bindings": [
+    {
+      "mechanic_type": "inverse_state",
+      "target": "drawer_1"
+    }
+  ],
+  "agent_secrets": {
+    "agent_0": ["The drawer opens when you try to close it"],
+    "agent_1": []
+  },
+  "golden_trajectory": [...]
 }
 ```
 
 ---
 
-## 3. Benchmark
+## Mechanics
 
-**Goal:** Evaluate multi-agent performance on generated tasks.
-
-**How it works:**
-1. Load task and initialize Habitat environment
-2. Agents execute using ReAct planning
-3. Mechanics apply to actions (same as exploration)
-4. Measure success based on goal completion
-
-**Key Components:**
-- `EMTOMBaseRunner` - Runs tasks with mechanics
-- `GameStateManager` - Tracks state, applies mechanics
-- Goal checking via `object_properties` overlay
-
-**Action Execution Order:**
-```
-1. Check mechanics (block/transform?)
-2. Execute in Habitat (physical action)
-3. If Habitat fails (too far) → return failure, no state change
-4. If Habitat succeeds → apply mechanic state changes
-```
-
-**Metrics:**
-- Success rate (goals completed)
-- Steps to completion
-- Communication effectiveness
+| Mechanic | Effect |
+|----------|--------|
+| `inverse_state` | Actions have opposite effects (open→close) |
+| `remote_control` | Actions affect a different object |
+| `counting_state` | Object needs N interactions to respond |
 
 ---
 
@@ -141,32 +241,36 @@ The agent edits a task file, tests it in the benchmark, and iterates until quali
 
 ```
 emtom/
-├── exploration/           # Step 1
-│   ├── habitat_explorer.py
-│   └── curiosity.py
-├── task_gen/              # Step 2
-│   └── agentic/
-│       ├── agent.py       # 3-tool ReAct agent
-│       └── runner.py
-├── runner/                # Step 3
-│   └── base.py            # EMTOMBaseRunner
-├── mechanics/
-│   └── handlers.py        # inverse_state, remote_control, etc.
-└── state/
-    └── manager.py         # GameStateManager
+├── run_emtom.sh           # Main entry point
+├── task_gen/              # Task generation
+│   ├── runner.py          # Generation entry point
+│   ├── agent.py           # ReAct agent with tools
+│   ├── tom_judge.py       # ToM validation
+│   └── judge_cli.py       # Standalone judge CLI
+├── exploration/           # Environment exploration
+├── examples/              # Runner scripts
+│   ├── run_habitat_exploration.py
+│   ├── run_habitat_benchmark.py
+│   └── run_human_test.py
+├── mechanics/             # Mechanic handlers
+└── actions/               # Custom EMTOM actions
+
+habitat_llm/
+├── llm/                   # LLM implementations
+│   ├── openai_chat.py     # OpenAI provider
+│   └── bedrock_claude.py  # AWS Bedrock Claude
+└── conf/                  # Hydra configs
 ```
 
 ---
 
-## Configuration
+## Outputs
 
-```bash
-# Exploration
-./emtom/run_emtom.sh exploration --steps 50 --num-agents 2
+All outputs are saved to `outputs/emtom/` with timestamps:
 
-# Task Generation
-./emtom/run_emtom.sh generate --num-tasks 10
+- `YYYY-MM-DD_HH-MM-SS-exploration/` - Exploration trajectories and videos
+- `YYYY-MM-DD_HH-MM-SS-generate/` - Generation logs
+- `YYYY-MM-DD_HH-MM-SS-benchmark/` - Benchmark results
+- `YYYY-MM-DD_HH-MM-SS-judge/` - ToM verification results
 
-# Benchmark
-./emtom/run_emtom.sh benchmark --max-sim-steps 2000
-```
+Generated tasks are saved to `data/emtom/tasks/`.
