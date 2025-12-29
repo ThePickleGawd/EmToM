@@ -120,6 +120,7 @@ class TaskGeneratorAgent:
         self.tom_judge = ToMJudge(llm_client, verbose=verbose)  # ToM judge instance
         self.failed = False  # Track if agent called fail[]
         self.fail_reason = ""  # Reason for failure
+        self.task_memories: List[str] = []  # Learnings from completed tasks
 
         # Setup logging to file
         # Prefer log_dir (Hydra output), fallback to output_dir/logs
@@ -1490,7 +1491,97 @@ SUMMARY:"""
         self.last_tom_passed = False
         self.last_tom_judgment = None
 
-        return f"Task saved to:\n  - {output_path} (permanent)\n  - {submitted_path} (session)\nTotal submitted: {len(self.submitted_tasks)}\n\nFor next task: Use new_scene[] for a fresh scene, or modify working_task.json to build on a previous task from submitted_tasks/."
+        # Extract what to remember from this task and reset context
+        task_title = task_data.get("title", "untitled")
+        memory = self._extract_task_memory(task_title)
+        self.task_memories.append(memory)
+        self._reset_context_for_next_task()
+
+        return f"Task '{task_title}' saved!\n  - {output_path} (permanent)\n  - {submitted_path} (session)\nTotal submitted: {len(self.submitted_tasks)}\n\n[Context reset for next task. Your learnings have been preserved.]\n\nFor next task: Use new_scene[] for a fresh scene, or modify working_task.json to build on a previous task from submitted_tasks/."
+
+    def _extract_task_memory(self, task_title: str) -> str:
+        """
+        Ask LLM what to remember from the completed task.
+
+        Returns a concise memory string to carry forward.
+        """
+        self._log(f"Extracting memory from task: {task_title}")
+
+        # Get recent conversation context
+        recent_messages = self.messages[-10:] if len(self.messages) > 10 else self.messages[2:]
+        conversation_snippet = []
+        for msg in recent_messages:
+            content = msg["content"][:300] + "..." if len(msg["content"]) > 300 else msg["content"]
+            conversation_snippet.append(f"{msg['role']}: {content}")
+
+        memory_prompt = f"""You just completed task: "{task_title}"
+
+Recent conversation:
+{chr(10).join(conversation_snippet)}
+
+What are the 2-3 most important learnings to remember for future tasks?
+Focus on: patterns that worked, mistakes to avoid, useful techniques.
+Be very concise (2-3 bullet points, max 100 words total).
+
+LEARNINGS:"""
+
+        try:
+            memory = self.llm.generate(memory_prompt)
+            # Keep it concise
+            if len(memory) > 500:
+                memory = memory[:500] + "..."
+            self._log(f"Task memory: {memory}")
+            return f"Task {len(self.submitted_tasks)}: '{task_title}'\n{memory}"
+        except Exception as e:
+            self._log(f"Memory extraction failed: {e}")
+            return f"Task {len(self.submitted_tasks)}: '{task_title}' - completed successfully"
+
+    def _reset_context_for_next_task(self) -> None:
+        """
+        Reset conversation context for the next task.
+
+        Preserves:
+        - System prompt
+        - Task memories (learnings from completed tasks)
+        - Current scene info
+        """
+        self._log("Resetting context for next task...")
+
+        # Keep system prompt
+        system_prompt = self.messages[0]["content"] if self.messages else ""
+
+        # Build memories summary
+        if self.task_memories:
+            memories_text = "\n\n".join(self.task_memories[-5:])  # Keep last 5 task memories
+            memories_msg = f"""## Learnings from Previous Tasks ({len(self.submitted_tasks)} completed)
+
+{memories_text}
+
+Use these learnings to improve your next task. Avoid repeating mistakes."""
+        else:
+            memories_msg = ""
+
+        # Build fresh scene info
+        scene_info = self._format_scene_data()
+
+        # Reset messages with fresh context
+        self.messages = [
+            {"role": "system", "content": system_prompt},
+        ]
+
+        if memories_msg:
+            self.messages.append({"role": "user", "content": memories_msg})
+            self.messages.append({"role": "assistant", "content": "I'll apply these learnings to create better tasks. What's next?"})
+
+        # Add current scene context
+        scene_msg = f"""## Current Scene (Ready for Next Task)
+{scene_info}
+
+working_task.json is ready. Use new_scene[] if you want a different scene, or start creating your next task."""
+        self.messages.append({"role": "user", "content": scene_msg})
+
+        new_size = self._estimate_context_size()
+        self._log(f"Context reset. New size: {new_size} chars. Memories preserved: {len(self.task_memories)}")
 
     def _new_scene(self) -> str:
         """
@@ -1533,8 +1624,12 @@ SUMMARY:"""
             self.last_tom_passed = False
             self.last_tom_judgment = None
 
+            # Reset context with fresh scene data (old scene data is now stale)
+            self._reset_context_for_next_task()
+
             # Return scene summary
-            return f"""New scene loaded!
+            return f"""New scene loaded! Context refreshed with new scene data.
+
 Scene ID: {self.scene_data.scene_id}
 Episode ID: {self.scene_data.episode_id}
 Rooms: {', '.join(self.scene_data.rooms)}
