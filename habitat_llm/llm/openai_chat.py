@@ -5,12 +5,28 @@
 # LICENSE file in the root directory of this source tree
 
 import os
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from omegaconf import DictConfig, OmegaConf
 from openai import OpenAI
 
 from habitat_llm.llm.base_llm import BaseLLM, Prompt
+
+# Load .env file if it exists (for API keys)
+_env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+if _env_file.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_file)
+    except ImportError:
+        # Fallback: manually parse .env if dotenv not installed
+        with open(_env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, value = line.partition("=")
+                    os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def generate_message(multimodal_prompt, image_detail="auto"):
@@ -32,6 +48,34 @@ def generate_message(multimodal_prompt, image_detail="auto"):
 
 
 class OpenAIChat(BaseLLM):
+    """
+    LLM implementation using OpenAI's Chat API.
+    Uses environment variable: OPENAI_API_KEY
+
+    Supports model aliases for convenience:
+        gpt5, gpt-5           -> gpt-5
+        gpt5-mini, gpt-5-mini -> gpt-5-mini
+        gpt5.1, gpt-5.1       -> gpt-5.1
+        gpt5.2, gpt-5.2       -> gpt-5.2
+    """
+
+    # Model aliases mapping short names to full OpenAI model IDs
+    MODEL_ALIASES: Dict[str, str] = {
+        # GPT-5
+        "gpt5": "gpt-5",
+        # GPT-5 Mini
+        "gpt5-mini": "gpt-5-mini",
+        # GPT-5.1
+        "gpt5.1": "gpt-5.1",
+        # GPT-5.2
+        "gpt5.2": "gpt-5.2",
+    }
+
+    @classmethod
+    def resolve_model_alias(cls, model: str) -> str:
+        """Resolve a model alias to the full OpenAI model ID."""
+        return cls.MODEL_ALIASES.get(model.lower(), model)
+
     def __init__(self, conf: DictConfig):
         """
         Initialize the chat model.
@@ -75,6 +119,9 @@ class OpenAIChat(BaseLLM):
         """
 
         params = OmegaConf.to_object(self.generation_params)
+
+        # Resolve model alias
+        params["model"] = self.resolve_model_alias(params["model"])
 
         # Override stop if provided
         if stop is None and len(self.generation_params.stop) > 0:

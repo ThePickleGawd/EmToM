@@ -3,8 +3,8 @@
 Standalone CLI for Theory of Mind task evaluation.
 
 Usage:
-    python -m emtom.task_gen.judge_cli --task <path_to_task.json> [--model gpt-5]
-    python -m emtom.task_gen.judge_cli --task <path_to_task.json> --llm bedrock_claude --model sonnet
+    python -m emtom.task_gen.judge_cli --task <path> --llm openai_chat --model gpt-5
+    python -m emtom.task_gen.judge_cli --task <path> --llm bedrock_claude --model sonnet
 """
 
 import argparse
@@ -27,7 +27,7 @@ class Colors:
     RESET = "\033[0m"
 
 
-def create_llm_client(model: str, llm_provider: str = "openai_chat"):
+def create_llm_client(model: str, llm_provider: str):
     """Create an LLM client for the specified model and provider."""
     from habitat_llm.llm import instantiate_llm
 
@@ -52,16 +52,16 @@ def main():
         help="Path to task JSON file"
     )
     parser.add_argument(
-        "--model",
-        type=str,
-        default="gpt-5",
-        help="LLM model to use for evaluation (default: gpt-5)"
-    )
-    parser.add_argument(
         "--llm",
         type=str,
-        default="openai_chat",
-        help="LLM provider: openai_chat, bedrock_claude (default: openai_chat)"
+        required=True,
+        help="LLM provider: openai_chat, bedrock_claude"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        help="LLM model name (e.g., gpt-5, sonnet, opus)"
     )
     parser.add_argument(
         "--threshold",

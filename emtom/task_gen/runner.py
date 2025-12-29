@@ -3,10 +3,10 @@
 Entry point for the agentic task generator.
 
 Usage:
-    python emtom/task_gen/runner.py --config-name examples/emtom_2_robots +num_tasks=5 +model=gpt-5
+    python emtom/task_gen/runner.py --config-name examples/emtom_2_robots +llm_provider=openai_chat +model=gpt-5
 
 Or via shell script:
-    ./emtom/run_emtom.sh generate --num-tasks 5 --model gpt-5
+    ./emtom/run_emtom.sh generate --llm openai_chat --model gpt-5
     ./emtom/run_emtom.sh generate --llm bedrock_claude --model sonnet
 """
 
@@ -63,8 +63,16 @@ def main(config: DictConfig) -> None:
 
     # Extract custom args from config (passed as +arg=value)
     num_tasks = config.get("num_tasks", 1)
-    model = config.get("model", "gpt-5")
-    llm_provider = config.get("llm_provider", "openai_chat")  # LLM provider: openai_chat, bedrock_claude
+    model = config.get("model", None)
+    llm_provider = config.get("llm_provider", None)
+
+    # Validate required parameters
+    if not llm_provider:
+        cprint("Error: llm_provider is required. Use +llm_provider=openai_chat or +llm_provider=bedrock_claude", "red")
+        sys.exit(1)
+    if not model:
+        cprint("Error: model is required. Use +model=<model_name>", "red")
+        sys.exit(1)
     output_dir = config.get("output_dir", "data/emtom/tasks")  # Final output location
     max_iterations = config.get("max_iterations", 100)
     quiet = config.get("quiet", False)

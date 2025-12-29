@@ -17,8 +17,8 @@ MECHANICS=""
 TASK_FILE=""
 LLM_AGENTS=""
 NUM_TASKS=1
-MODEL="gpt-5.2"
-LLM_PROVIDER="openai_chat"  # LLM provider: openai_chat, bedrock_claude
+MODEL=""
+LLM_PROVIDER=""  # LLM provider: openai_chat, bedrock_claude (required)
 SUBTASKS=3
 MAX_ITERATIONS=100
 NUM_AGENTS=2
@@ -51,9 +51,10 @@ print_usage() {
     echo ""
     echo "Generation Options:"
     echo "  --num-tasks N        Number of tasks to generate (default: 1)"
-    echo "  --model MODEL        LLM model for the agent (default: gpt-5)"
-    echo "                       For bedrock_claude, supports aliases: sonnet, haiku, opus"
-    echo "  --llm PROVIDER       LLM provider: openai_chat, bedrock_claude (default: openai_chat)"
+    echo "  --llm PROVIDER       LLM provider: openai_chat, bedrock_claude (required)"
+    echo "  --model MODEL        LLM model name (required)"
+    echo "                       openai_chat: gpt-5, gpt-5-mini, gpt-5.1, gpt-5.2"
+    echo "                       bedrock_claude: sonnet, haiku, opus"
     echo "  --subtasks N         Exact number of subtasks/steps per task (default: 3)"
     echo "  --max-iterations N   Max agent iterations before stopping (default: 100)"
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
@@ -69,24 +70,22 @@ print_usage() {
     echo "  --llm-agents A1 A2   Agents to make LLM-controlled (e.g., agent_1)"
     echo ""
     echo "Judge Options:"
-    echo "  --task FILE          Task file to evaluate (required for judge command)"
-    echo "  --model MODEL        LLM model for evaluation (default: gpt-5)"
-    echo "  --llm PROVIDER       LLM provider: openai_chat, bedrock_claude (default: openai_chat)"
+    echo "  --task FILE          Task file to evaluate (required)"
+    echo "  --llm PROVIDER       LLM provider: openai_chat, bedrock_claude (required)"
+    echo "  --model MODEL        LLM model name (required)"
     echo "  --threshold N        Overall score threshold for passing (default: 0.7)"
     echo "  --no-auto-retry      Disable automatic retry on failure (just show suggestions)"
     echo ""
     echo "Examples:"
     echo "  ./emtom/run_emtom.sh explore --steps 30"
     echo "  ./emtom/run_emtom.sh explore --num-agents 3 --agent-type human"
-    echo "  ./emtom/run_emtom.sh generate --num-tasks 5"
-    echo "  ./emtom/run_emtom.sh generate --model gpt-5-mini"
+    echo "  ./emtom/run_emtom.sh generate --llm openai_chat --model gpt-5"
     echo "  ./emtom/run_emtom.sh generate --llm bedrock_claude --model sonnet"
-    echo "  ./emtom/run_emtom.sh generate --query \"A task where agents use the radio to communicate\""
-    echo "  ./emtom/run_emtom.sh all"
+    echo "  ./emtom/run_emtom.sh generate --llm bedrock_claude --model opus --num-tasks 5"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
     echo "  ./emtom/run_emtom.sh benchmark --num-agents 4"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
-    echo "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
+    echo "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --llm openai_chat --model gpt-5"
 }
 
 # Get config name based on number of agents and type
@@ -145,6 +144,17 @@ run_exploration() {
 }
 
 run_generate() {
+    if [ -z "$LLM_PROVIDER" ]; then
+        echo "Error: --llm is required for generate command"
+        echo "Usage: ./emtom/run_emtom.sh generate --llm <openai_chat|bedrock_claude> --model <model_name>"
+        exit 1
+    fi
+    if [ -z "$MODEL" ]; then
+        echo "Error: --model is required for generate command"
+        echo "Usage: ./emtom/run_emtom.sh generate --llm <openai_chat|bedrock_claude> --model <model_name>"
+        exit 1
+    fi
+
     echo "=============================================="
     echo "Running EMTOM Task Generation (Live Scene Mode)"
     echo "=============================================="
@@ -267,7 +277,17 @@ run_all() {
 run_judge() {
     if [ -z "$TASK_FILE" ]; then
         echo "Error: --task is required for judge command"
-        echo "Usage: ./emtom/run_emtom.sh judge --task <path_to_task.json>"
+        echo "Usage: ./emtom/run_emtom.sh judge --task <path> --llm <provider> --model <model>"
+        exit 1
+    fi
+    if [ -z "$LLM_PROVIDER" ]; then
+        echo "Error: --llm is required for judge command"
+        echo "Usage: ./emtom/run_emtom.sh judge --task <path> --llm <openai_chat|bedrock_claude> --model <model>"
+        exit 1
+    fi
+    if [ -z "$MODEL" ]; then
+        echo "Error: --model is required for judge command"
+        echo "Usage: ./emtom/run_emtom.sh judge --task <path> --llm <openai_chat|bedrock_claude> --model <model>"
         exit 1
     fi
 
@@ -281,7 +301,7 @@ run_judge() {
     echo ""
 
     # Build command arguments (always outputs JSON)
-    CMD_ARGS="--task $TASK_FILE --model $MODEL --llm $LLM_PROVIDER --threshold $THRESHOLD"
+    CMD_ARGS="--task $TASK_FILE --llm $LLM_PROVIDER --model $MODEL --threshold $THRESHOLD"
     if [ "$NO_AUTO_RETRY" = true ]; then
         CMD_ARGS="$CMD_ARGS --no-auto-retry"
     fi
