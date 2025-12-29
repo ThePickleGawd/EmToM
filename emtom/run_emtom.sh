@@ -24,11 +24,11 @@ print_llm_options() {
     echo ""
     echo -e "${BOLD}Available LLM providers and models:${NC}"
     echo ""
-    echo -e "  ${CYAN}--llm openai_chat${NC}"
+    echo -e "  ${CYAN}--llm openai_chat${NC} (default)"
     echo -e "    ${GREEN}--model gpt-5${NC}        GPT-5"
     echo -e "    ${GREEN}--model gpt-5-mini${NC}   GPT-5 Mini (faster, cheaper)"
     echo -e "    ${GREEN}--model gpt-5.1${NC}      GPT-5.1"
-    echo -e "    ${GREEN}--model gpt-5.2${NC}      GPT-5.2"
+    echo -e "    ${GREEN}--model gpt-5.2${NC}      GPT-5.2 (default)"
     echo ""
     echo -e "  ${CYAN}--llm bedrock_claude${NC}"
     echo -e "    ${GREEN}--model sonnet${NC}       Claude Sonnet"
@@ -49,9 +49,10 @@ MECHANICS=""
 TASK_FILE=""
 LLM_AGENTS=""
 NUM_TASKS=1
-MODEL=""
-LLM_PROVIDER=""  # LLM provider: openai_chat, bedrock_claude (required)
-SUBTASKS=3
+MODEL="gpt-5.2"
+LLM_PROVIDER=""  # LLM provider: openai_chat, bedrock_claude (defaults to openai_chat)
+SUBTASKS_MIN=2
+SUBTASKS_MAX=5
 MAX_ITERATIONS=100
 NUM_AGENTS=2
 AGENT_TYPE="robot"  # robot or human
@@ -83,11 +84,13 @@ print_usage() {
     echo ""
     echo "Generation Options:"
     echo "  --num-tasks N        Number of tasks to generate (default: 1)"
-    echo "  --llm PROVIDER       LLM provider: openai_chat, bedrock_claude (required)"
-    echo "  --model MODEL        LLM model name (required)"
+    echo "  --llm PROVIDER       LLM provider: openai_chat, bedrock_claude (default: openai_chat)"
+    echo "  --model MODEL        LLM model name (default: gpt-5.2)"
     echo "                       openai_chat: gpt-5, gpt-5-mini, gpt-5.1, gpt-5.2"
     echo "                       bedrock_claude: sonnet, haiku, opus"
-    echo "  --subtasks N         Exact number of subtasks/steps per task (default: 3)"
+    echo "  --subtasks N         Exact number of subtasks per task (sets both min and max)"
+    echo "  --subtasks-min N     Minimum subtasks per task (default: $SUBTASKS_MIN)"
+    echo "  --subtasks-max N     Maximum subtasks per task (default: $SUBTASKS_MAX)"
     echo "  --max-iterations N   Max agent iterations before stopping (default: 100)"
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
     echo "  --retry-verification FILE  Retry generation using suggestions from failed ToM verification"
@@ -103,21 +106,23 @@ print_usage() {
     echo ""
     echo "Judge Options:"
     echo "  --task FILE          Task file to evaluate (required)"
-    echo "  --llm PROVIDER       LLM provider: openai_chat, bedrock_claude (required)"
-    echo "  --model MODEL        LLM model name (required)"
+    echo "  --llm PROVIDER       LLM provider: openai_chat, bedrock_claude (default: openai_chat)"
+    echo "  --model MODEL        LLM model name (default: gpt-5.2)"
     echo "  --threshold N        Overall score threshold for passing (default: 0.7)"
     echo "  --no-auto-retry      Disable automatic retry on failure (just show suggestions)"
     echo ""
     echo "Examples:"
     echo "  ./emtom/run_emtom.sh explore --steps 30"
     echo "  ./emtom/run_emtom.sh explore --num-agents 3 --agent-type human"
+    echo "  ./emtom/run_emtom.sh generate --num-tasks 5"
     echo "  ./emtom/run_emtom.sh generate --llm openai_chat --model gpt-5"
     echo "  ./emtom/run_emtom.sh generate --llm bedrock_claude --model sonnet"
-    echo "  ./emtom/run_emtom.sh generate --llm bedrock_claude --model opus --num-tasks 5"
+    echo "  ./emtom/run_emtom.sh generate --query \"A task where agents use the radio to communicate\""
+    echo "  ./emtom/run_emtom.sh all"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
     echo "  ./emtom/run_emtom.sh benchmark --num-agents 4"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
-    echo "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --llm openai_chat --model gpt-5"
+    echo "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
 }
 
 # Get config name based on number of agents and type
@@ -176,9 +181,9 @@ run_exploration() {
 }
 
 run_generate() {
-    if [ -z "$LLM_PROVIDER" ] || [ -z "$MODEL" ]; then
-        print_llm_options
-        exit 1
+    # Default LLM provider to openai_chat if not specified
+    if [ -z "$LLM_PROVIDER" ]; then
+        LLM_PROVIDER="openai_chat"
     fi
 
     echo "=============================================="
@@ -186,7 +191,7 @@ run_generate() {
     echo "=============================================="
     echo "Target tasks: $NUM_TASKS"
     echo "LLM: $LLM_PROVIDER ($MODEL)"
-    echo "Subtasks: $SUBTASKS"
+    echo "Subtasks: $SUBTASKS_MIN - $SUBTASKS_MAX"
     echo "Max iterations: $MAX_ITERATIONS"
     if [ -n "$QUERY" ]; then
         echo "Query: $QUERY"
@@ -215,7 +220,8 @@ run_generate() {
         +num_tasks=$NUM_TASKS \
         +model=$MODEL \
         +llm_provider=$LLM_PROVIDER \
-        +subtasks=$SUBTASKS \
+        +subtasks_min=$SUBTASKS_MIN \
+        +subtasks_max=$SUBTASKS_MAX \
         +max_iterations=$MAX_ITERATIONS \
         +output_dir=data/emtom/tasks \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-generate"
@@ -303,12 +309,13 @@ run_all() {
 run_judge() {
     if [ -z "$TASK_FILE" ]; then
         echo "Error: --task is required for judge command"
-        echo "Usage: ./emtom/run_emtom.sh judge --task <path> --llm <provider> --model <model>"
+        echo "Usage: ./emtom/run_emtom.sh judge --task <path_to_task.json>"
         exit 1
     fi
-    if [ -z "$LLM_PROVIDER" ] || [ -z "$MODEL" ]; then
-        print_llm_options
-        exit 1
+
+    # Default LLM provider to openai_chat if not specified
+    if [ -z "$LLM_PROVIDER" ]; then
+        LLM_PROVIDER="openai_chat"
     fi
 
     echo "=============================================="
@@ -349,7 +356,7 @@ while [[ $# -gt 0 ]]; do
             EXPLORATION_STEPS=$2
             shift 2
             ;;
-        --num-tasks)
+        --num-tasks|--tasks)
             NUM_TASKS=$2
             shift 2
             ;;
@@ -362,7 +369,16 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --subtasks)
-            SUBTASKS=$2
+            SUBTASKS_MIN=$2
+            SUBTASKS_MAX=$2
+            shift 2
+            ;;
+        --subtasks-min)
+            SUBTASKS_MIN=$2
+            shift 2
+            ;;
+        --subtasks-max)
+            SUBTASKS_MAX=$2
             shift 2
             ;;
         --max-iterations)

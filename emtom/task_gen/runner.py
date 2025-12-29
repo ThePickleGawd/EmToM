@@ -76,7 +76,8 @@ def main(config: DictConfig) -> None:
     output_dir = config.get("output_dir", "data/emtom/tasks")  # Final output location
     max_iterations = config.get("max_iterations", 100)
     quiet = config.get("quiet", False)
-    subtasks = config.get("subtasks", 3)
+    subtasks_min = config.get("subtasks_min", 2)
+    subtasks_max = config.get("subtasks_max", 5)
     seed = config.get("seed", None)
 
     # Get query from extra_args (parsed before Hydra to handle quoted strings)
@@ -110,6 +111,20 @@ def main(config: DictConfig) -> None:
     instance_id = uuid.uuid4().hex[:8]
     working_dir = Path(tempfile.gettempdir()) / f"emtom_taskgen_{instance_id}"
     working_dir.mkdir(parents=True, exist_ok=True)
+
+    # Sample reference tasks from existing pool for agent inspiration
+    import random
+    sampled_tasks_dir = working_dir / "sampled_tasks"
+    sampled_tasks_dir.mkdir(parents=True, exist_ok=True)
+    tasks_source = Path(output_dir)
+    if tasks_source.exists():
+        existing_tasks = list(tasks_source.glob("*.json"))
+        if existing_tasks:
+            sample_count = min(10, len(existing_tasks))
+            sampled = random.sample(existing_tasks, sample_count)
+            for i, task_path in enumerate(sampled, 1):
+                dest = sampled_tasks_dir / f"task_{i}.json"
+                shutil.copy(task_path, dest)
 
     # Setup config (registers Habitat plugins, sets seed, etc.)
     fix_config(config)
@@ -179,7 +194,8 @@ def main(config: DictConfig) -> None:
         output_dir=output_dir,  # Shared output for all instances
         max_iterations=max_iterations,
         verbose=not quiet,
-        subtasks=subtasks,
+        subtasks_min=subtasks_min,
+        subtasks_max=subtasks_max,
         scene_data=scene_data,  # Pass live scene data
         log_dir=hydra_output_dir,  # Pass Hydra output directory for logs
         query=query,  # Optional seed query for task generation

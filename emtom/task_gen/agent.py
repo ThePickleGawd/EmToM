@@ -47,7 +47,8 @@ class TaskGeneratorAgent:
         output_dir: str = "data/emtom/tasks",
         max_iterations: int = 100,
         verbose: bool = True,
-        subtasks: int = 3,
+        subtasks_min: int = 2,
+        subtasks_max: int = 5,
         scene_data: Optional[Any] = None,
         log_dir: Optional[str] = None,
         max_context_chars: Optional[int] = None,
@@ -64,7 +65,8 @@ class TaskGeneratorAgent:
             output_dir: Directory for curated output tasks
             max_iterations: Max ReAct iterations before stopping
             verbose: Print agent thoughts and actions
-            subtasks: Exact number of subtasks/steps per task
+            subtasks_min: Minimum number of subtasks per task
+            subtasks_max: Maximum number of subtasks per task
             scene_data: Live scene data from SceneLoader (required)
             log_dir: Directory for log files (defaults to Hydra output or output_dir/logs)
             max_context_chars: Max context size before summarizing. Auto-detected from model if None.
@@ -74,7 +76,8 @@ class TaskGeneratorAgent:
         self.llm = llm_client
         self.config = config
         self.working_dir = Path(working_dir)
-        self.subtasks = subtasks
+        self.subtasks_min = subtasks_min
+        self.subtasks_max = subtasks_max
         self.output_dir = Path(output_dir)
         self.max_iterations = max_iterations
         self.verbose = verbose
@@ -90,6 +93,17 @@ class TaskGeneratorAgent:
         # Create directories
         self.working_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create submitted_tasks directory for multi-task runs
+        self.submitted_tasks_dir = self.working_dir / "submitted_tasks"
+        self.submitted_tasks_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create agent_trajectories directory for benchmark traces
+        self.trajectories_dir = self.working_dir / "agent_trajectories"
+        self.trajectories_dir.mkdir(parents=True, exist_ok=True)
+
+        # Track run count for trajectory folders
+        self._test_run_count = 0
 
         # Copy fresh template from source to working directory
         source_template = Path(__file__).parent / "template" / "template.json"
@@ -209,18 +223,16 @@ class TaskGeneratorAgent:
         # Create working_task.json from template with scene fields pre-populated
         self._create_working_task_from_template()
 
-        # Load scenario inspirations - one per task target
-        # Truncate long scenarios to avoid confusing the agent
-        from emtom.task_gen.task_generator import load_scenario_inspirations
-        scenarios = load_scenario_inspirations(max_scenarios=num_tasks_target)
+        # Story sampling disabled - uncomment to re-enable:
+        # from emtom.task_gen.task_generator import load_scenario_inspirations
+        # scenarios = load_scenario_inspirations(max_scenarios=num_tasks_target)
+        # if scenarios:
+        #     scenario_text = "\n\n## Story Inspiration (for atmosphere only - do NOT copy!)\n"
+        #     scenario_text += "Use these themes as creative inspiration for your story. Write your OWN story using the REAL object IDs from the scene.\n"
+        #     for i, s in enumerate(scenarios, 1):
+        #         truncated = s[:500] + "..." if len(s) > 500 else s
+        #         scenario_text += f"\n--- Theme {i} ---\n{truncated}\n"
         scenario_text = ""
-        if scenarios:
-            scenario_text = "\n\n## Story Inspiration (for atmosphere only - do NOT copy!)\n"
-            scenario_text += "Use these themes as creative inspiration for your story. Write your OWN story using the REAL object IDs from the scene.\n"
-            for i, s in enumerate(scenarios, 1):
-                # Truncate to ~500 chars to avoid overwhelming context
-                truncated = s[:500] + "..." if len(s) > 500 else s
-                scenario_text += f"\n--- Theme {i} ---\n{truncated}\n"
 
         # Get available items from registry
         from emtom.state.item_registry import ItemRegistry
@@ -243,6 +255,9 @@ class TaskGeneratorAgent:
         ).replace(
             "{output_dir}",
             str(self.output_dir)
+        ).replace(
+            "{working_dir}",
+            str(self.working_dir)
         ).replace(
             "{available_items}",
             available_items
@@ -297,7 +312,7 @@ Your previous task did not pass the ToM verification. You MUST address these iss
         user_msg = f"""Create {num_tasks_target} quality benchmark tasks.
 {query_section}{verification_section}
 ## Task Requirements
-- **Subtasks**: Exactly {self.subtasks} steps per task
+- **Subtasks**: Between {self.subtasks_min} and {self.subtasks_max} steps per task (choose based on task complexity)
 - Each subtask should be a distinct action that gates progress to the next
 
 ## Scene Data (from PARTNR dataset - these objects EXIST!)
@@ -723,10 +738,12 @@ SUMMARY:"""
             return self._judge_tom()
         elif tool == "submit_task":
             return self._submit_task()
+        elif tool == "new_scene":
+            return self._new_scene()
         elif tool == "fail":
             return self._fail(args)
         else:
-            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, judge_tom, submit_task, fail"
+            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, judge_tom, submit_task, new_scene, fail"
 
     def _bash(self, command: str) -> str:
         """
@@ -798,9 +815,9 @@ SUMMARY:"""
             if not output.strip():
                 output = "(no output)"
             # Log full output to file, but truncate for LLM context
-            if len(output) > 5000:
+            if len(output) > 20000:
                 self._log(f"[Full bash output ({len(output)} chars)]:\n{output}")
-                output = output[:5000] + f"\n... (truncated, full output in log file)"
+                output = output[:20000] + f"\n... (truncated, full output in log file)"
 
             return output
         except subprocess.TimeoutExpired:
@@ -1130,10 +1147,18 @@ SUMMARY:"""
 
         Uses subprocess to get a fresh GL context (avoids context corruption
         when running multiple tests in the same process).
+
+        Saves agent trajectories to agent_trajectories/run_N/ directory.
+        Returns result with trajectory_dir path and result.txt content included.
         """
-        # Write task to temp file for subprocess
         import tempfile
 
+        # Increment run counter and create trajectory directory
+        self._test_run_count += 1
+        run_dir = self.trajectories_dir / f"run_{self._test_run_count}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write task to temp file for subprocess
         try:
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
                 json.dump(task_data, f)
@@ -1149,13 +1174,14 @@ SUMMARY:"""
                 "summary": f"Setup error: {e}"
             }
 
-        # Run test in subprocess
+        # Run test in subprocess with trajectory output directory
         script_path = Path(__file__).parent / "test_task.py"
         cmd = [
             sys.executable,
             str(script_path),
             "--task-file", temp_task_file,
             "--result-file", temp_result_file,
+            "--trajectory-dir", str(run_dir),
             "--config-name", "examples/emtom_2_robots",
             "--max-turns", "20",
         ]
@@ -1189,6 +1215,22 @@ SUMMARY:"""
                 except Exception:
                     pass
 
+            # Add trajectory directory path to result
+            result["trajectory_dir"] = str(run_dir)
+
+            # Read result.txt content and include in observation (saves agent a turn)
+            result_txt_path = run_dir / "result.txt"
+            if result_txt_path.exists():
+                try:
+                    with open(result_txt_path) as f:
+                        result["result_txt"] = f.read()
+                except Exception:
+                    pass
+
+            # Remove full traces from result (agent reads files instead via bash)
+            result.pop("planner_traces", None)
+            result.pop("action_history", None)
+
             return result
 
         except subprocess.TimeoutExpired:
@@ -1201,7 +1243,8 @@ SUMMARY:"""
                 "steps": 0,
                 "done": False,
                 "error": "Test timed out after 10 minutes",
-                "summary": "Timeout"
+                "summary": "Timeout",
+                "trajectory_dir": str(run_dir)
             }
         except Exception as e:
             for temp_file in [temp_task_file, temp_result_file]:
@@ -1213,7 +1256,8 @@ SUMMARY:"""
                 "steps": 0,
                 "done": False,
                 "error": f"Subprocess error: {e}",
-                "summary": f"Subprocess error: {e}"
+                "summary": f"Subprocess error: {e}",
+                "trajectory_dir": str(run_dir)
             }
 
     def _verify_golden_trajectory(self) -> str:
@@ -1395,7 +1439,7 @@ SUMMARY:"""
 
     def _submit_task(self) -> str:
         """
-        Copy working task to output directory.
+        Copy working task to output directory AND submitted_tasks/.
 
         Called when the agent determines task quality is good.
         Requires both verify_golden_trajectory[] and judge_tom[] to pass first.
@@ -1432,11 +1476,78 @@ SUMMARY:"""
         output_filename = f"{timestamp}_{title_slug}.json"
         output_path = self.output_dir / output_filename
 
-        # Copy file
+        # Copy to main output directory (permanent storage)
         shutil.copy(self.task_file, output_path)
+
+        # Also copy to submitted_tasks/ for this session's tracking
+        submitted_path = self.submitted_tasks_dir / output_filename
+        shutil.copy(self.task_file, submitted_path)
+
         self.submitted_tasks.append(str(output_path))
 
-        return f"Task saved to {output_path}. Total submitted: {len(self.submitted_tasks)}"
+        # Reset verification state for next task
+        self.last_verify_passed = False
+        self.last_tom_passed = False
+        self.last_tom_judgment = None
+
+        return f"Task saved to:\n  - {output_path} (permanent)\n  - {submitted_path} (session)\nTotal submitted: {len(self.submitted_tasks)}\n\nFor next task: Use new_scene[] for a fresh scene, or modify working_task.json to build on a previous task from submitted_tasks/."
+
+    def _new_scene(self) -> str:
+        """
+        Load a new random scene for the next task.
+
+        Updates scene_data, resets working_task.json, and clears verification state.
+        Returns scene info for the agent.
+        """
+        from emtom.task_gen.scene_loader import load_random_scene
+        from habitat_llm.utils import get_random_seed
+
+        self._log("Loading new random scene...")
+
+        try:
+            # Load a new random scene
+            new_seed = get_random_seed()
+            self.scene_data = load_random_scene(self.config, seed=new_seed)
+
+            self._log(f"Loaded scene {self.scene_data.scene_id} (episode {self.scene_data.episode_id})")
+            self._log(f"  Rooms: {len(self.scene_data.rooms)}, Furniture: {len(self.scene_data.furniture)}, Objects: {len(self.scene_data.objects)}")
+
+            # Save new scene data to working directory
+            scene_file = self.working_dir / "current_scene.json"
+            with open(scene_file, "w") as f:
+                json.dump(self.scene_data.to_dict(), f, indent=2)
+
+            # Reset working_task.json with new scene info
+            source_template = Path(__file__).parent / "template" / "template.json"
+            if source_template.exists():
+                with open(source_template) as f:
+                    template_data = json.load(f)
+                # Pre-populate with new scene info
+                template_data["scene_id"] = self.scene_data.scene_id
+                template_data["episode_id"] = self.scene_data.episode_id
+                with open(self.task_file, "w") as f:
+                    json.dump(template_data, f, indent=2)
+
+            # Reset verification state for new task
+            self.last_verify_passed = False
+            self.last_tom_passed = False
+            self.last_tom_judgment = None
+
+            # Return scene summary
+            return f"""New scene loaded!
+Scene ID: {self.scene_data.scene_id}
+Episode ID: {self.scene_data.episode_id}
+Rooms: {', '.join(self.scene_data.rooms)}
+Furniture: {len(self.scene_data.furniture)} items
+Objects: {len(self.scene_data.objects)} items
+Articulated: {len(self.scene_data.articulated_furniture)} items
+
+working_task.json has been reset with new scene_id and episode_id.
+Full scene data saved to: {scene_file}"""
+
+        except Exception as e:
+            self._log(f"Error loading new scene: {e}")
+            return f"Error loading new scene: {e}"
 
     def _fail(self, reason: str) -> str:
         """

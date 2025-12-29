@@ -35,7 +35,8 @@ Create Theory of Mind (ToM) tasks where agents must share knowledge and coordina
 3. **verify_golden_trajectory[]** - Verify task is completable (MUST pass before submit)
 4. **judge_tom[]** - Evaluate if task requires genuine Theory of Mind (MUST pass before submit)
 5. **submit_task[]** - Save verified task (requires both verify_golden_trajectory AND judge_tom to pass)
-6. **fail[reason]** - Abort if unrecoverable
+6. **new_scene[]** - Load a fresh random scene (resets working_task.json with new scene_id/episode_id)
+7. **fail[reason]** - Abort if unrecoverable
 
 **Editing working_task.json**: Use `jq` for field updates (saves context):
 ```
@@ -53,6 +54,25 @@ EOF]
 - Template: {template_file}
 - Working task: {task_file} (pre-populated with scene_id, episode_id)
 - Output: {output_dir}
+
+## Filesystem Structure
+Your working directory ({working_dir}) contains:
+- `working_task.json` - Current task you are editing
+- `template.json` - Task structure template
+- `current_scene.json` - Scene data (objects, furniture, rooms)
+- `sampled_tasks/` - Reference tasks from existing pool (up to 10 examples)
+  - Read these for inspiration: `bash[cat {working_dir}/sampled_tasks/task_1.json]`
+  - DO NOT copy directly - use as inspiration for structure/patterns
+- `submitted_tasks/` - Tasks you've submitted in this session
+- `agent_trajectories/` - Benchmark results from test_task[] calls
+  - `run_N/agent_0.txt` - Agent 0's reasoning trace
+  - `run_N/agent_1.txt` - Agent 1's reasoning trace
+  - `run_N/result.txt` - Evaluation summary + subtask progress
+
+**Reading Trajectories**: After test_task[], read detailed agent traces:
+```
+bash[cat {working_dir}/agent_trajectories/run_1/agent_0.txt]
+```
 
 ## Available Items
 Item IDs always use 'item_' prefix (e.g., item_small_key_1)

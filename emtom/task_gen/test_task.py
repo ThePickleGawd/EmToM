@@ -22,6 +22,7 @@ def main():
     parser = argparse.ArgumentParser(description="Test task with LLM agents")
     parser.add_argument("--task-file", required=True, help="Path to task JSON")
     parser.add_argument("--result-file", required=True, help="Path to write result JSON")
+    parser.add_argument("--trajectory-dir", default=None, help="Directory to save agent trajectory files")
     parser.add_argument("--config-name", default="examples/emtom_2_robots")
     parser.add_argument("--max-turns", type=int, default=20, help="Max LLM turns per agent")
     args = parser.parse_args()
@@ -133,6 +134,44 @@ def main():
         # Include action history for debugging
         action_history = results.get("action_history", [])
         evaluation = results.get("evaluation", {})
+
+        # Save trajectory files if directory specified
+        if args.trajectory_dir:
+            trajectory_dir = Path(args.trajectory_dir)
+            trajectory_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save agent planner traces
+            for agent_id, trace in planner_traces.items():
+                trace_file = trajectory_dir / f"{agent_id}.txt"
+                with open(trace_file, 'w') as f:
+                    f.write(trace)
+
+            # Save result.txt with evaluation summary
+            result_file = trajectory_dir / "result.txt"
+            with open(result_file, 'w') as f:
+                f.write("=== BENCHMARK RESULT ===\n\n")
+                f.write(f"Success: {results.get('done', False)}\n")
+                f.write(f"Steps: {results.get('steps', 0)}\n")
+                f.write(f"Turns: {results.get('turns', 0)}\n")
+                f.write(f"\n=== EVALUATION ===\n")
+                f.write(f"Percent Complete: {evaluation.get('percent_complete', 0):.1%}\n")
+                f.write(f"Success: {evaluation.get('success', False)}\n")
+
+                if evaluation.get('failure_explanations'):
+                    f.write(f"\nFailure Reasons:\n")
+                    for reason in evaluation['failure_explanations']:
+                        f.write(f"  - {reason}\n")
+
+                # Include subtask progress if available
+                if evaluation.get('proposition_status'):
+                    f.write(f"\n=== SUBTASK PROGRESS ===\n")
+                    for prop_id, status in evaluation['proposition_status'].items():
+                        status_str = "COMPLETE" if status else "INCOMPLETE"
+                        f.write(f"  {prop_id}: {status_str}\n")
+
+                f.write(f"\n=== ACTION HISTORY ===\n")
+                for record in action_history:
+                    f.write(f"[T{record.get('turn', '?')}] {record.get('agent', '?')}: {record.get('action', '?')}\n")
 
         write_result({
             "success": True,
