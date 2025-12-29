@@ -10,6 +10,7 @@ import argparse
 import json
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from omegaconf import OmegaConf
@@ -123,25 +124,15 @@ def main():
     # Get JSON output
     json_output = judgment.to_json()
 
-    # Save to file in same directory as input task
-    output_dir = task_path.parent
+    # Save to timestamped output directory (like other commands)
+    project_root = Path(__file__).resolve().parent.parent.parent
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_dir = project_root / "outputs" / "emtom" / f"{timestamp}-judge"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find next available verification number
-    existing = list(output_dir.glob("ToM_verification_*.json"))
-    if existing:
-        # Extract numbers and find max
-        numbers = []
-        for f in existing:
-            try:
-                num = int(f.stem.split("_")[-1])
-                numbers.append(num)
-            except ValueError:
-                pass
-        next_num = max(numbers) + 1 if numbers else 1
-    else:
-        next_num = 1
-
-    output_file = output_dir / f"ToM_verification_{next_num}.json"
+    # Use task name in output filename
+    task_name = task_path.stem
+    output_file = output_dir / f"ToM_verification_{task_name}.json"
     with open(output_file, "w") as f:
         f.write(json_output)
 
