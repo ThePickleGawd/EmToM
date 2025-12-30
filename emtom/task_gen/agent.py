@@ -102,7 +102,7 @@ class TaskGeneratorAgent:
         self.trajectories_dir = self.working_dir / "agent_trajectories"
         self.trajectories_dir.mkdir(parents=True, exist_ok=True)
 
-        # Track run count for trajectory folders
+        # Track run count for trajectory folders (reset per task)
         self._test_run_count = 0
 
         # Copy fresh template from source to working directory
@@ -204,8 +204,17 @@ class TaskGeneratorAgent:
         self._log(f"\n{'='*60}")
         self._log(f"Starting TaskGeneratorAgent")
         self._log(f"Target: {num_tasks_target} tasks")
+        self._log(f"Max iterations: {self.max_iterations} (TOTAL, not per task)")
         self._log(f"Output: {self.output_dir}")
         self._log(f"{'='*60}\n")
+
+        # Warn if max_iterations seems too low for target tasks
+        # Typical task takes 10-20 iterations (create, verify, fix, test, submit)
+        min_recommended = num_tasks_target * 15
+        if self.max_iterations < min_recommended:
+            self._log(f"WARNING: max_iterations ({self.max_iterations}) may be too low for {num_tasks_target} tasks.")
+            self._log(f"         Recommended: at least {min_recommended} iterations (15 per task)")
+            self._log(f"         Use --max-iterations {min_recommended} to increase")
 
         if not self.scene_data:
             self._log("ERROR: No scene_data provided!")
@@ -312,6 +321,15 @@ Your previous task did not pass the ToM verification. You MUST address these iss
         # Initial user message with scene data
         user_msg = f"""Create {num_tasks_target} quality benchmark tasks.
 {query_section}{verification_section}
+## WORKFLOW (IMPORTANT!)
+1. Create ONE task at a time using working_task.json
+2. Verify with verify_golden_trajectory[] and judge_tom[]
+3. Submit with submit_task[] - context will reset automatically
+4. Call new_scene[] for a fresh scene, then create your next task
+5. Repeat until you've submitted {num_tasks_target} tasks
+
+**NEVER call fail[]** - if a task repeatedly fails judge_tom (2-3 attempts), use new_scene[] to get a fresh scene and try a completely different task design. Don't keep iterating on a broken design.
+
 ## Task Requirements
 - **Subtasks**: Between {self.subtasks_min} and {self.subtasks_max} steps per task (choose based on task complexity)
 - Each subtask should be a distinct action that gates progress to the next
@@ -1154,9 +1172,12 @@ SUMMARY:"""
         """
         import tempfile
 
-        # Increment run counter and create trajectory directory
+        # Current task number (1-indexed: task being worked on, not yet submitted)
+        current_task_num = len(self.submitted_tasks) + 1
+
+        # Increment run counter and create task-scoped trajectory directory
         self._test_run_count += 1
-        run_dir = self.trajectories_dir / f"run_{self._test_run_count}"
+        run_dir = self.trajectories_dir / f"task_{current_task_num}" / f"run_{self._test_run_count}"
         run_dir.mkdir(parents=True, exist_ok=True)
 
         # Write task to temp file for subprocess
@@ -1544,8 +1565,14 @@ LEARNINGS:"""
         - System prompt
         - Task memories (learnings from completed tasks)
         - Current scene info
+
+        Resets:
+        - Run counter (for fresh task_N/run_1 paths)
         """
         self._log("Resetting context for next task...")
+
+        # Reset run counter for new task (trajectories use task_N/run_M structure)
+        self._test_run_count = 0
 
         # Keep system prompt
         system_prompt = self.messages[0]["content"] if self.messages else ""
@@ -1573,11 +1600,13 @@ Use these learnings to improve your next task. Avoid repeating mistakes."""
             self.messages.append({"role": "user", "content": memories_msg})
             self.messages.append({"role": "assistant", "content": "I'll apply these learnings to create better tasks. What's next?"})
 
-        # Add current scene context
-        scene_msg = f"""## Current Scene (Ready for Next Task)
+        # Add current scene context with task number
+        next_task_num = len(self.submitted_tasks) + 1
+        scene_msg = f"""## Task {next_task_num} - Current Scene
 {scene_info}
 
-working_task.json is ready. Use new_scene[] if you want a different scene, or start creating your next task."""
+working_task.json is ready. Trajectories will be saved to agent_trajectories/task_{next_task_num}/run_N/.
+Use new_scene[] if you want a different scene, or start creating your next task."""
         self.messages.append({"role": "user", "content": scene_msg})
 
         new_size = self._estimate_context_size()
@@ -1587,18 +1616,64 @@ working_task.json is ready. Use new_scene[] if you want a different scene, or st
         """
         Load a new random scene for the next task.
 
+        Uses subprocess to get a fresh GL context (avoids sensor registry conflicts).
         Updates scene_data, resets working_task.json, and clears verification state.
         Returns scene info for the agent.
         """
-        from emtom.task_gen.scene_loader import load_random_scene
+        import tempfile
+        from emtom.task_gen.scene_loader import SceneData
         from habitat_llm.utils import get_random_seed
 
-        self._log("Loading new random scene...")
+        self._log("Loading new random scene via subprocess...")
 
         try:
-            # Load a new random scene
+            # Use subprocess to load scene (fresh GL context)
             new_seed = get_random_seed()
-            self.scene_data = load_random_scene(self.config, seed=new_seed)
+            script_path = Path(__file__).parent / "load_scene.py"
+
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                result_file = f.name
+
+            cmd = [
+                sys.executable,
+                str(script_path),
+                "--result-file", result_file,
+                "--config-name", "examples/emtom_2_robots",
+                "--seed", str(new_seed),
+            ]
+
+            self._log(f"Running: {' '.join(cmd)}")
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+
+            # Read result
+            try:
+                with open(result_file) as f:
+                    result_data = json.load(f)
+            finally:
+                Path(result_file).unlink(missing_ok=True)
+
+            if not result_data.get("success"):
+                error = result_data.get("error", "Unknown error")
+                self._log(f"Scene loading failed: {error}")
+                return f"Error loading new scene: {error}"
+
+            # Convert dict back to SceneData
+            scene_dict = result_data["scene_data"]
+            self.scene_data = SceneData(
+                episode_id=scene_dict["episode_id"],
+                scene_id=scene_dict["scene_id"],
+                rooms=scene_dict["rooms"],
+                furniture=scene_dict["furniture"],
+                objects=scene_dict["objects"],
+                articulated_furniture=scene_dict["articulated_furniture"],
+                furniture_in_rooms=scene_dict["furniture_in_rooms"],
+                objects_on_furniture=scene_dict["objects_on_furniture"],
+            )
 
             self._log(f"Loaded scene {self.scene_data.scene_id} (episode {self.scene_data.episode_id})")
             self._log(f"  Rooms: {len(self.scene_data.rooms)}, Furniture: {len(self.scene_data.furniture)}, Objects: {len(self.scene_data.objects)}")

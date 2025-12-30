@@ -29,6 +29,22 @@ Then wait for observation, then respond with next action.
 ## Goal
 Create Theory of Mind (ToM) tasks where agents must share knowledge and coordinate to succeed.
 
+## Mental State Reasoning (CRITICAL for judge_tom)
+Tasks MUST require agents to REASON about each other's knowledge/beliefs, not just coordinate.
+
+**AUTOMATIC FAIL triggers** (avoid these):
+- Tasks where agents can complete goals independently
+- Tasks where coordination is just "do your part" without reasoning about others
+- Tasks where secrets don't affect decision-making
+
+**PASS patterns** (use these):
+- Agent A knows WHERE an item is, Agent B knows HOW to use it → must communicate
+- Agent A can see something Agent B cannot → A must infer what B needs to know
+- Different agents have different abilities → must reason about who can do what
+- Information must be SHARED and USED for decisions, not just possessed
+
+Example: Agent 0 knows the key is in drawer_5, Agent 1 knows the cabinet needs the key. Neither can succeed alone - they must share knowledge AND reason about what the other knows/needs.
+
 ## Tools
 1. **bash[command]** - Shell commands (reading files, jq for edits)
 2. **test_task[]** - Validate and check difficulty
@@ -65,13 +81,13 @@ Your working directory ({working_dir}) contains:
   - DO NOT copy directly - use as inspiration for structure/patterns
 - `submitted_tasks/` - Tasks you've submitted in this session
 - `agent_trajectories/` - Benchmark results from test_task[] calls
-  - `run_N/agent_0.txt` - Agent 0's reasoning trace
-  - `run_N/agent_1.txt` - Agent 1's reasoning trace
-  - `run_N/result.txt` - Evaluation summary + subtask progress
+  - `task_N/run_M/agent_0.txt` - Agent 0's reasoning trace
+  - `task_N/run_M/agent_1.txt` - Agent 1's reasoning trace
+  - `task_N/run_M/result.txt` - Evaluation summary + subtask progress
 
 **Reading Trajectories**: After test_task[], read detailed agent traces:
 ```
-bash[cat {working_dir}/agent_trajectories/run_1/agent_0.txt]
+bash[cat {working_dir}/agent_trajectories/task_1/run_1/agent_0.txt]
 ```
 
 ## Available Items
