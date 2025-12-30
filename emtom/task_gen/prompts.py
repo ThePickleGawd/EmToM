@@ -84,11 +84,13 @@ Your working directory ({working_dir}) contains:
   - `task_N/run_M/agent_0.txt` - Agent 0's reasoning trace
   - `task_N/run_M/agent_1.txt` - Agent 1's reasoning trace
   - `task_N/run_M/result.txt` - Evaluation summary + subtask progress
+  - `task_N/run_M/behavior_analysis.json` - ToM behavior observations
 
-**Reading Trajectories**: After test_task[], read detailed agent traces:
-```
-bash[cat {working_dir}/agent_trajectories/task_1/run_1/agent_0.txt]
-```
+**Behavior Analysis**: After test_task[], the response includes `behavior_analysis` with observations:
+- Whether agents shared/used asymmetric information
+- Whether they actually depended on each other
+- Whether they appeared to reason about each other's knowledge
+- Whether ToM reasoning was utilized (may be false - that's an interesting finding about LLM capabilities)
 
 ## Available Items
 Item IDs always use 'item_' prefix (e.g., item_small_key_1)

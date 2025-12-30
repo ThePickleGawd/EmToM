@@ -121,6 +121,7 @@ class TaskGeneratorAgent:
         self.failed = False  # Track if agent called fail[]
         self.fail_reason = ""  # Reason for failure
         self.task_memories: List[str] = []  # Learnings from completed tasks
+        self.consecutive_tom_failures = 0  # Track failures to suggest new_scene
 
         # Setup logging to file
         # Prefer log_dir (Hydra output), fallback to output_dir/logs
@@ -1249,6 +1250,42 @@ SUMMARY:"""
                 except Exception:
                     pass
 
+            # Analyze agent behavior for ToM-relevant patterns
+            try:
+                from emtom.task_gen.behavior_analyzer import BehaviorAnalyzer
+
+                # Load task data for context
+                with open(self.task_file) as f:
+                    task_data = json.load(f)
+
+                # Read agent traces from files
+                agent_traces = {}
+                for agent_id in ["agent_0", "agent_1"]:
+                    trace_path = run_dir / f"{agent_id}.txt"
+                    if trace_path.exists():
+                        with open(trace_path) as f:
+                            agent_traces[agent_id] = f.read()
+
+                # Get subtask progress from evaluation
+                subtask_progress = result.get("evaluation", {}).get("proposition_status", {})
+
+                # Run behavior analysis
+                analyzer = BehaviorAnalyzer(self.llm, verbose=self.verbose)
+                behavior = analyzer.analyze(task_data, agent_traces, subtask_progress)
+
+                result["behavior_analysis"] = behavior.to_dict()
+                self._log(f"[Behavior] ToM utilized: {behavior.tom_utilized}")
+                self._log(f"[Behavior] Summary: {behavior.summary}")
+
+                # Save behavior analysis to file
+                behavior_path = run_dir / "behavior_analysis.json"
+                with open(behavior_path, "w") as f:
+                    json.dump(behavior.to_dict(), f, indent=2)
+
+            except Exception as e:
+                self._log(f"[Behavior] Analysis failed: {e}")
+                result["behavior_analysis"] = {"error": str(e)}
+
             # Remove full traces from result (agent reads files instead via bash)
             result.pop("planner_traces", None)
             result.pop("action_history", None)
@@ -1443,11 +1480,23 @@ SUMMARY:"""
 
             if judgment.is_valid_tom:
                 result["summary"] = f"PASS - Task requires genuine Theory of Mind (score: {judgment.overall_score:.2f})"
+                self.consecutive_tom_failures = 0  # Reset on success
             else:
+                self.consecutive_tom_failures += 1
                 result["summary"] = f"FAIL - Task does not sufficiently require Theory of Mind (score: {judgment.overall_score:.2f})"
                 result["action_required"] = "Modify the task based on suggestions and run judge_tom[] again."
+                result["failure_count"] = self.consecutive_tom_failures
 
-            self._log(f"[ToM Judge] Result: {'PASS' if judgment.is_valid_tom else 'FAIL'} (score: {judgment.overall_score:.2f})")
+                # After 3+ failures, suggest considering new_scene
+                if self.consecutive_tom_failures >= 3:
+                    result["recommendation"] = (
+                        f"You've failed judge_tom {self.consecutive_tom_failures} times on this task. "
+                        "Consider whether the core design can actually support ToM, or if a fresh start would be faster. "
+                        "If you're confident you're close to a solution, keep iterating. "
+                        "Otherwise, new_scene[] gives you a fresh scene to try a different approach."
+                    )
+
+            self._log(f"[ToM Judge] Result: {'PASS' if judgment.is_valid_tom else 'FAIL'} (score: {judgment.overall_score:.2f}) [failures: {self.consecutive_tom_failures}]")
 
             return json.dumps(result, indent=2)
 
@@ -1511,6 +1560,7 @@ SUMMARY:"""
         self.last_verify_passed = False
         self.last_tom_passed = False
         self.last_tom_judgment = None
+        self.consecutive_tom_failures = 0  # Reset failure counter for new task
 
         # Extract what to remember from this task and reset context
         task_title = task_data.get("title", "untitled")
@@ -1698,6 +1748,7 @@ Use new_scene[] if you want a different scene, or start creating your next task.
             self.last_verify_passed = False
             self.last_tom_passed = False
             self.last_tom_judgment = None
+            self.consecutive_tom_failures = 0  # Reset failure counter for new task
 
             # Reset context with fresh scene data (old scene data is now stale)
             self._reset_context_for_next_task()
