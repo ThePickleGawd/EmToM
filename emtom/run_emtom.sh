@@ -18,26 +18,69 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
+# Expand short model names to full model IDs
+expand_model_name() {
+    local model=$1
+    case $model in
+        kimi-k2-thinking)       echo "moonshot.kimi-k2-thinking" ;;
+        ministral-3-8b)         echo "mistral.ministral-3-8b-instruct" ;;
+        ministral-3-14b)        echo "mistral.ministral-3-14b-instruct" ;;
+        mistral-large-3)        echo "mistral.mistral-large-3-675b-instruct" ;;
+        qwen3-next-80b)         echo "qwen.qwen3-next-80b-a3b" ;;
+        qwen3-vl-235b)          echo "qwen.qwen3-vl-235b-a22b" ;;
+        *)                      echo "$model" ;;  # Return as-is if no mapping
+    esac
+}
+
+# Auto-detect LLM provider from model name
+detect_llm_provider() {
+    local model=$1
+    case $model in
+        gpt-5|gpt-5-mini|gpt-5.1|gpt-5.2)
+            echo "openai_chat" ;;
+        sonnet|haiku|opus)
+            echo "bedrock_claude" ;;
+        kimi-k2-thinking|moonshot.kimi-k2-thinking)
+            echo "bedrock_kimi" ;;
+        ministral-3-8b|ministral-3-14b|mistral-large-3|mistral.ministral-3-8b-instruct|mistral.ministral-3-14b-instruct|mistral.mistral-large-3-675b-instruct)
+            echo "bedrock_mistral" ;;
+        qwen3-next-80b|qwen3-vl-235b|qwen.qwen3-next-80b-a3b|qwen.qwen3-vl-235b-a22b)
+            echo "bedrock_qwen" ;;
+        *)
+            echo "" ;;  # Unknown model
+    esac
+}
+
 print_llm_options() {
     echo ""
     echo -e "${RED}Error: LLM model must be specified${NC}"
     echo ""
-    echo -e "${BOLD}Available LLM providers and models:${NC}"
-    echo ""
-    echo -e "  ${CYAN}--llm openai_chat${NC} (default)"
-    echo -e "    ${GREEN}--model gpt-5${NC}        GPT-5"
-    echo -e "    ${GREEN}--model gpt-5-mini${NC}   GPT-5 Mini (faster, cheaper)"
-    echo -e "    ${GREEN}--model gpt-5.1${NC}      GPT-5.1"
-    echo -e "    ${GREEN}--model gpt-5.2${NC}      GPT-5.2 (default)"
-    echo ""
-    echo -e "  ${CYAN}--llm bedrock_claude${NC}"
-    echo -e "    ${GREEN}--model sonnet${NC}       Claude Sonnet"
-    echo -e "    ${GREEN}--model haiku${NC}        Claude Haiku (faster, cheaper)"
-    echo -e "    ${GREEN}--model opus${NC}         Claude Opus (most capable)"
+    echo -e "${BOLD}Available Models:${NC}"
+    echo -e "┌───────────────────────────┬────────────────────┐"
+    echo -e "│ ${BOLD}Model Name${NC}                │ ${BOLD}--model${NC}            │"
+    echo -e "├───────────────────────────┼────────────────────┤"
+    echo -e "│ GPT-5                     │ ${GREEN}gpt-5${NC}              │"
+    echo -e "│ GPT-5 Mini                │ ${GREEN}gpt-5-mini${NC}         │"
+    echo -e "│ GPT-5.1                   │ ${GREEN}gpt-5.1${NC}            │"
+    echo -e "│ GPT-5.2 (default)         │ ${GREEN}gpt-5.2${NC}            │"
+    echo -e "├───────────────────────────┼────────────────────┤"
+    echo -e "│ Claude Sonnet             │ ${GREEN}sonnet${NC}             │"
+    echo -e "│ Claude Haiku              │ ${GREEN}haiku${NC}              │"
+    echo -e "│ Claude Opus               │ ${GREEN}opus${NC}               │"
+    echo -e "├───────────────────────────┼────────────────────┤"
+    echo -e "│ Kimi K2 Thinking          │ ${GREEN}kimi-k2-thinking${NC}   │"
+    echo -e "├───────────────────────────┼────────────────────┤"
+    echo -e "│ Ministral 3 8B            │ ${GREEN}ministral-3-8b${NC}     │"
+    echo -e "│ Ministral 3 14B           │ ${GREEN}ministral-3-14b${NC}    │"
+    echo -e "│ Mistral Large 3           │ ${GREEN}mistral-large-3${NC}    │"
+    echo -e "├───────────────────────────┼────────────────────┤"
+    echo -e "│ Qwen3 Next 80B            │ ${GREEN}qwen3-next-80b${NC}     │"
+    echo -e "│ Qwen3 VL 235B             │ ${GREEN}qwen3-vl-235b${NC}      │"
+    echo -e "└───────────────────────────┴────────────────────┘"
     echo ""
     echo -e "${YELLOW}Example usage:${NC}"
-    echo -e "  ./emtom/run_emtom.sh generate ${CYAN}--llm openai_chat${NC} ${GREEN}--model gpt-5${NC}"
-    echo -e "  ./emtom/run_emtom.sh judge --task task.json ${CYAN}--llm bedrock_claude${NC} ${GREEN}--model sonnet${NC}"
+    echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model gpt-5${NC}"
+    echo -e "  ./emtom/run_emtom.sh judge --task task.json ${GREEN}--model mistral-large-3${NC}"
     echo ""
 }
 
@@ -50,7 +93,7 @@ TASK_FILE=""
 LLM_AGENTS=""
 NUM_TASKS=1
 MODEL="gpt-5.2"
-LLM_PROVIDER=""  # LLM provider: openai_chat, bedrock_claude (defaults to openai_chat)
+LLM_PROVIDER=""  # LLM provider: auto-detected from model
 SUBTASKS_MIN=2
 SUBTASKS_MAX=5
 MAX_ITERATIONS=100
@@ -62,11 +105,11 @@ RETRY_VERIFICATION=""  # Path to failed ToM verification file
 NO_AUTO_RETRY=false  # Disable automatic retry on judge failure
 
 print_usage() {
-    echo "EMTOM Benchmark Pipeline"
+    echo -e "${BOLD}EMTOM Benchmark Pipeline${NC}"
     echo ""
-    echo "Usage: ./emtom/run_emtom.sh <command> [options]"
+    echo -e "Usage: ./emtom/run_emtom.sh ${YELLOW}<command>${NC} [options]"
     echo ""
-    echo "Commands:"
+    echo -e "${BOLD}Commands:${NC}"
     echo "  explore     Run LLM-guided exploration in Habitat"
     echo "  generate    Generate tasks iteratively with testing loop"
     echo "  benchmark   Run benchmark with generated tasks"
@@ -74,20 +117,41 @@ print_usage() {
     echo "  judge       Evaluate a task for Theory of Mind requirements"
     echo "  all         Run full pipeline: explore -> generate -> benchmark"
     echo ""
-    echo "Agent Options:"
+    echo -e "${BOLD}Agent Options:${NC}"
     echo "  --num-agents N       Number of agents (default: $NUM_AGENTS)"
     echo "  --agent-type TYPE    Agent type: human or robot (default: $AGENT_TYPE)"
     echo ""
-    echo "Exploration Options:"
+    echo -e "${BOLD}Exploration Options:${NC}"
     echo "  --steps N            Number of exploration steps (default: $EXPLORATION_STEPS)"
     echo "                       (Episodes are always randomly selected for diversity)"
     echo ""
-    echo "Generation Options:"
+    echo -e "${BOLD}Generation Options:${NC}"
     echo "  --num-tasks N        Number of tasks to generate (default: 1)"
-    echo "  --llm PROVIDER       LLM provider: openai_chat, bedrock_claude (default: openai_chat)"
-    echo "  --model MODEL        LLM model name (default: gpt-5.2)"
-    echo "                       openai_chat: gpt-5, gpt-5-mini, gpt-5.1, gpt-5.2"
-    echo "                       bedrock_claude: sonnet, haiku, opus"
+    echo "  --model MODEL        LLM model name (default: gpt-5.2, provider auto-detected)"
+    echo ""
+    echo -e "  ${BOLD}Available Models:${NC}"
+    echo -e "  ┌───────────────────────────┬────────────────────┐"
+    echo -e "  │ ${BOLD}Model Name${NC}                │ ${BOLD}--model${NC}            │"
+    echo -e "  ├───────────────────────────┼────────────────────┤"
+    echo -e "  │ GPT-5                     │ ${GREEN}gpt-5${NC}              │"
+    echo -e "  │ GPT-5 Mini                │ ${GREEN}gpt-5-mini${NC}         │"
+    echo -e "  │ GPT-5.1                   │ ${GREEN}gpt-5.1${NC}            │"
+    echo -e "  │ GPT-5.2 (default)         │ ${GREEN}gpt-5.2${NC}            │"
+    echo -e "  ├───────────────────────────┼────────────────────┤"
+    echo -e "  │ Claude Sonnet             │ ${GREEN}sonnet${NC}             │"
+    echo -e "  │ Claude Haiku              │ ${GREEN}haiku${NC}              │"
+    echo -e "  │ Claude Opus               │ ${GREEN}opus${NC}               │"
+    echo -e "  ├───────────────────────────┼────────────────────┤"
+    echo -e "  │ Kimi K2 Thinking          │ ${GREEN}kimi-k2-thinking${NC}   │"
+    echo -e "  ├───────────────────────────┼────────────────────┤"
+    echo -e "  │ Ministral 3 8B            │ ${GREEN}ministral-3-8b${NC}     │"
+    echo -e "  │ Ministral 3 14B           │ ${GREEN}ministral-3-14b${NC}    │"
+    echo -e "  │ Mistral Large 3           │ ${GREEN}mistral-large-3${NC}    │"
+    echo -e "  ├───────────────────────────┼────────────────────┤"
+    echo -e "  │ Qwen3 Next 80B            │ ${GREEN}qwen3-next-80b${NC}     │"
+    echo -e "  │ Qwen3 VL 235B             │ ${GREEN}qwen3-vl-235b${NC}      │"
+    echo -e "  └───────────────────────────┴────────────────────┘"
+    echo ""
     echo "  --subtasks N         Exact number of subtasks per task (sets both min and max)"
     echo "  --subtasks-min N     Minimum subtasks per task (default: $SUBTASKS_MIN)"
     echo "  --subtasks-max N     Maximum subtasks per task (default: $SUBTASKS_MAX)"
@@ -95,34 +159,32 @@ print_usage() {
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
     echo "  --retry-verification FILE  Retry generation using suggestions from failed ToM verification"
     echo ""
-    echo "Benchmark Options:"
+    echo -e "${BOLD}Benchmark Options:${NC}"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
     echo "  --max-llm-calls N    Max LLM calls per agent (default: $MAX_LLM_CALLS)"
     echo ""
-    echo "Test Options:"
+    echo -e "${BOLD}Test Options:${NC}"
     echo "  --mechanics M1 M2    Mechanics to enable (e.g., inverse_state remote_control)"
     echo "  --task FILE          Task file to load (uses task's mechanic bindings automatically)"
     echo "  --llm-agents A1 A2   Agents to make LLM-controlled (e.g., agent_1)"
     echo ""
-    echo "Judge Options:"
+    echo -e "${BOLD}Judge Options:${NC}"
     echo "  --task FILE          Task file to evaluate (required)"
-    echo "  --llm PROVIDER       LLM provider: openai_chat, bedrock_claude (default: openai_chat)"
-    echo "  --model MODEL        LLM model name (default: gpt-5.2)"
+    echo "  --model MODEL        LLM model name (default: gpt-5.2, provider auto-detected)"
     echo "  --threshold N        Overall score threshold for passing (default: 0.7)"
     echo "  --no-auto-retry      Disable automatic retry on failure (just show suggestions)"
     echo ""
-    echo "Examples:"
+    echo -e "${YELLOW}Examples:${NC}"
     echo "  ./emtom/run_emtom.sh explore --steps 30"
     echo "  ./emtom/run_emtom.sh explore --num-agents 3 --agent-type human"
-    echo "  ./emtom/run_emtom.sh generate --num-tasks 5"
-    echo "  ./emtom/run_emtom.sh generate --llm openai_chat --model gpt-5"
-    echo "  ./emtom/run_emtom.sh generate --llm bedrock_claude --model sonnet"
-    echo "  ./emtom/run_emtom.sh generate --query \"A task where agents use the radio to communicate\""
+    echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model gpt-5${NC}"
+    echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model sonnet${NC} --num-tasks 5"
+    echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model mistral-large-3${NC} --query \"A task using the radio\""
     echo "  ./emtom/run_emtom.sh all"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
     echo "  ./emtom/run_emtom.sh benchmark --num-agents 4"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
-    echo "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
+    echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json ${GREEN}--model qwen3-next-80b${NC}"
 }
 
 # Get config name based on number of agents and type
@@ -181,10 +243,18 @@ run_exploration() {
 }
 
 run_generate() {
-    # Default LLM provider to openai_chat if not specified
+    # Auto-detect LLM provider if not specified
     if [ -z "$LLM_PROVIDER" ]; then
-        LLM_PROVIDER="openai_chat"
+        LLM_PROVIDER=$(detect_llm_provider "$MODEL")
+        if [ -z "$LLM_PROVIDER" ]; then
+            echo -e "${RED}Error: Could not auto-detect provider for model '$MODEL'${NC}"
+            print_llm_options
+            exit 1
+        fi
     fi
+
+    # Expand short model names to full IDs
+    MODEL=$(expand_model_name "$MODEL")
 
     echo "=============================================="
     echo "Running EMTOM Task Generation (Live Scene Mode)"
@@ -313,10 +383,18 @@ run_judge() {
         exit 1
     fi
 
-    # Default LLM provider to openai_chat if not specified
+    # Auto-detect LLM provider if not specified
     if [ -z "$LLM_PROVIDER" ]; then
-        LLM_PROVIDER="openai_chat"
+        LLM_PROVIDER=$(detect_llm_provider "$MODEL")
+        if [ -z "$LLM_PROVIDER" ]; then
+            echo -e "${RED}Error: Could not auto-detect provider for model '$MODEL'${NC}"
+            print_llm_options
+            exit 1
+        fi
     fi
+
+    # Expand short model names to full IDs
+    MODEL=$(expand_model_name "$MODEL")
 
     echo "=============================================="
     echo "Running EMTOM Theory of Mind Judge"
