@@ -9,6 +9,38 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_ROOT"
 
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+print_llm_options() {
+    echo ""
+    echo -e "${RED}Error: LLM model must be specified${NC}"
+    echo ""
+    echo -e "${BOLD}Available LLM providers and models:${NC}"
+    echo ""
+    echo -e "  ${CYAN}--llm openai_chat${NC}"
+    echo -e "    ${GREEN}--model gpt-5${NC}        GPT-5"
+    echo -e "    ${GREEN}--model gpt-5-mini${NC}   GPT-5 Mini (faster, cheaper)"
+    echo -e "    ${GREEN}--model gpt-5.1${NC}      GPT-5.1"
+    echo -e "    ${GREEN}--model gpt-5.2${NC}      GPT-5.2"
+    echo ""
+    echo -e "  ${CYAN}--llm bedrock_claude${NC}"
+    echo -e "    ${GREEN}--model sonnet${NC}       Claude Sonnet"
+    echo -e "    ${GREEN}--model haiku${NC}        Claude Haiku (faster, cheaper)"
+    echo -e "    ${GREEN}--model opus${NC}         Claude Opus (most capable)"
+    echo ""
+    echo -e "${YELLOW}Example usage:${NC}"
+    echo -e "  ./emtom/run_emtom.sh generate ${CYAN}--llm openai_chat${NC} ${GREEN}--model gpt-5${NC}"
+    echo -e "  ./emtom/run_emtom.sh judge --task task.json ${CYAN}--llm bedrock_claude${NC} ${GREEN}--model sonnet${NC}"
+    echo ""
+}
+
 # Default values
 MAX_SIM_STEPS=200000
 MAX_LLM_CALLS=20
@@ -144,14 +176,8 @@ run_exploration() {
 }
 
 run_generate() {
-    if [ -z "$LLM_PROVIDER" ]; then
-        echo "Error: --llm is required for generate command"
-        echo "Usage: ./emtom/run_emtom.sh generate --llm <openai_chat|bedrock_claude> --model <model_name>"
-        exit 1
-    fi
-    if [ -z "$MODEL" ]; then
-        echo "Error: --model is required for generate command"
-        echo "Usage: ./emtom/run_emtom.sh generate --llm <openai_chat|bedrock_claude> --model <model_name>"
+    if [ -z "$LLM_PROVIDER" ] || [ -z "$MODEL" ]; then
+        print_llm_options
         exit 1
     fi
 
@@ -280,14 +306,8 @@ run_judge() {
         echo "Usage: ./emtom/run_emtom.sh judge --task <path> --llm <provider> --model <model>"
         exit 1
     fi
-    if [ -z "$LLM_PROVIDER" ]; then
-        echo "Error: --llm is required for judge command"
-        echo "Usage: ./emtom/run_emtom.sh judge --task <path> --llm <openai_chat|bedrock_claude> --model <model>"
-        exit 1
-    fi
-    if [ -z "$MODEL" ]; then
-        echo "Error: --model is required for judge command"
-        echo "Usage: ./emtom/run_emtom.sh judge --task <path> --llm <openai_chat|bedrock_claude> --model <model>"
+    if [ -z "$LLM_PROVIDER" ] || [ -z "$MODEL" ]; then
+        print_llm_options
         exit 1
     fi
 
