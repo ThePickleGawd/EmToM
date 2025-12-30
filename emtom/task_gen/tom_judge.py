@@ -140,8 +140,29 @@ You MUST respond with ONLY a valid JSON object (no markdown, no explanation outs
     "reasoning": "<1-2 sentences explaining score>"
   }},
   "overall_reasoning": "<2-3 sentences summarizing whether this is a valid ToM task>",
-  "suggestions": ["<suggestion 1 to improve ToM if score is low>", "<suggestion 2>", ... ,"<suggestion n"]
+  "suggestions": ["<specific suggestion>", ...]
 }}
+
+## Suggestion Requirements (CRITICAL)
+
+Your suggestions MUST be SPECIFIC and ACTIONABLE. The task generator cannot work with vague advice.
+
+**BAD suggestions (too vague):**
+- "Make Agent 0's correct action contingent on inferring Agent 1's belief"
+- "Introduce a risk/cost where opening at the wrong time has consequences"
+- "Add more information asymmetry"
+
+**GOOD suggestions (specific and actionable):**
+- "Give Agent 1 (not Agent 0) the secret about which container holds the target object. Agent 0 must observe which container Agent 1 approaches first to infer where the target is."
+- "Add a 'booby_trap' mechanic to cabinet_12: if Agent 0 opens it before Agent 1 has opened fridge_0, the target object is destroyed. Agent 0 must wait and observe Agent 1's actions."
+- "Split the unlock code between agents: Agent 0 knows digits 1-2 (e.g., '42'), Agent 1 knows digits 3-4 (e.g., '17'). Neither can unlock safe_0 alone. They must communicate or observe each other's attempts."
+- "Make the fridge require TWO keys: key_A in drawer_3 (only Agent 0 knows), key_B in stand_5 (only Agent 1 knows). Both agents must retrieve their key and coordinate to unlock."
+
+**Each suggestion MUST include:**
+1. **Specific objects** from the scene (e.g., "cabinet_12", "fridge_0", "stand_48")
+2. **Specific agents** and their roles (e.g., "Agent 0 must...", "Agent 1 knows...")
+3. **Concrete mechanic or constraint** (e.g., "booby_trap mechanic", "requires observing X before doing Y")
+4. **Why this creates ToM requirement** (e.g., "Agent 0 must infer Agent 1's belief by observing...")
 """
 
 

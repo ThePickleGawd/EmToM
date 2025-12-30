@@ -1,0 +1,127 @@
+{
+  "task_id": "emtom_1294_102344457_task1_echo_unlock",
+  "title": "Echo Protocol",
+  "story": "During a quiet house-call drill, the trainees discover the home has been retrofitted with a miswired stand that remotely pops open a cabinet elsewhere. The catch: only the person at the stand hears the confirmation click, and only the person at the cabinet can see it open. They must coordinate by interpreting what the other likely knows at each moment—or they will waste time yanking on the wrong doors.",
+  "public_goal": "Use the miswired remote-control stand to open a cabinet elsewhere, retrieve a key from it, and use that key to unlock the fridge.",
+  "public_context": "The house has a strange wiring fault: opening one articulated furniture can change the state of a different container. Each trainee has only part of the clue about which objects are linked, so they need to reason about what the other can and cannot observe to time their actions correctly.",
+  "theory_of_mind_required": true,
+  "category": "coordination",
+  "scene_id": "102344457",
+  "episode_id": "1294",
+  "active_mechanics": ["remote_control"],
+  "mechanic_bindings": [
+    {
+      "mechanic_type": "remote_control",
+      "trigger_object": "stand_42",
+      "target_object": "cabinet_39",
+      "target_state": "is_open"
+    }
+  ],
+  "items": [
+    { "item_id": "item_small_key_1", "inside": "cabinet_39" }
+  ],
+  "locked_containers": {
+    "fridge_37": "item_small_key_1"
+  },
+  "agent_secrets": {
+    "agent_0": [
+      "You saw a retrofit note: opening stand_42 causes a remote 'click' somewhere else in the house.",
+      "You do NOT know what object is affected, and you cannot see the remote location from the stand."
+    ],
+    "agent_1": [
+      "You previously struggled with cabinet_39 and suspect it can be opened remotely, but you never found the trigger.",
+      "You do NOT know which object triggers it."
+    ]
+  },
+  "agent_roles": {
+    "agent_0": "Trigger operator (knows the trigger stand_42, not the target)",
+    "agent_1": "Receiver/scout (knows the target cabinet_39, not the trigger)"
+  },
+  "agent_actions": {
+    "agent_0": ["Navigate", "Open", "Close", "Search", "Pick", "Place", "UseItem", "Communicate", "Inspect", "Wait"],
+    "agent_1": ["Navigate", "Open", "Close", "Search", "Pick", "Place", "UseItem", "Communicate", "Inspect", "Wait"]
+  },
+  "subtasks": [
+    {
+      "id": "s1_agent1_reaches_cabinet_39",
+      "description": "Agent 1 reaches cabinet_39 to check whether it reacts to a remote trigger.",
+      "success_condition": { "entity": "agent_1", "property": "is_next_to", "target": "cabinet_39" },
+      "depends_on": []
+    },
+    {
+      "id": "s2_remote_opens_cabinet_39",
+      "description": "Use the remote-control wiring so cabinet_39 becomes open.",
+      "success_condition": { "entity": "cabinet_39", "property": "is_open" },
+      "depends_on": ["s1_agent1_reaches_cabinet_39"]
+    },
+    {
+      "id": "s3_agent1_gets_small_key",
+      "description": "Agent 1 retrieves the small key from inside cabinet_39.",
+      "success_condition": { "entity": "agent_1", "property": "has_item", "target": "item_small_key_1" },
+      "depends_on": ["s2_remote_opens_cabinet_39"]
+    },
+    {
+      "id": "s4_unlock_fridge",
+      "description": "Use the small key to unlock fridge_37.",
+      "success_condition": { "entity": "fridge_37", "property": "is_unlocked" },
+      "depends_on": ["s3_agent1_gets_small_key"]
+    }
+  ],
+  "num_agents": 2,
+  "golden_trajectory": [
+    {
+      "actions": [
+        { "agent": "agent_1", "action": "Navigate[cabinet_39]" },
+        { "agent": "agent_0", "action": "Navigate[stand_42]" }
+      ]
+    },
+    {
+      "actions": [
+        { "agent": "agent_1", "action": "Communicate[I'm at cabinet_39 now. I can't see what you do—trigger whatever you think makes the remote click, and I’ll confirm if THIS cabinet changes.]" },
+        { "agent": "agent_0", "action": "Communicate[Okay. My note only said stand_42 causes a remote click, but I can't see the target. I’ll open stand_42 now; tell me if cabinet_39 reacts so I can update my belief about the link.]" }
+      ]
+    },
+    {
+      "actions": [
+        { "agent": "agent_0", "action": "Open[stand_42]" },
+        { "agent": "agent_1", "action": "Wait" }
+      ]
+    },
+    {
+      "actions": [
+        { "agent": "agent_1", "action": "Open[cabinet_39]" },
+        { "agent": "agent_0", "action": "Wait" }
+      ]
+    },
+    {
+      "actions": [
+        { "agent": "agent_1", "action": "Communicate[It opened right after your action—so stand_42 must be the trigger for cabinet_39. I'm searching inside now.]" },
+        { "agent": "agent_0", "action": "Communicate[Got it. Since only you can verify the cabinet state, I’ll stay here in case you need another open signal.]" }
+      ]
+    },
+    {
+      "actions": [
+        { "agent": "agent_1", "action": "Search[cabinet_39]" },
+        { "agent": "agent_0", "action": "Wait" }
+      ]
+    },
+    {
+      "actions": [
+        { "agent": "agent_1", "action": "Communicate[I found the small key. Heading to fridge_37 to unlock it.]" },
+        { "agent": "agent_0", "action": "Wait" }
+      ]
+    },
+    {
+      "actions": [
+        { "agent": "agent_1", "action": "Navigate[fridge_37]" },
+        { "agent": "agent_0", "action": "Wait" }
+      ]
+    },
+    {
+      "actions": [
+        { "agent": "agent_1", "action": "UseItem[item_small_key_1, fridge_37]" },
+        { "agent": "agent_0", "action": "Wait" }
+      ]
+    }
+  ]
+}

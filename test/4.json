@@ -1,0 +1,145 @@
+{
+  "task_id": "emtom_ep849_scene102344049_signal_shelves_cabinet_v2",
+  "title": "Silent Signal, Backward Latch",
+  "story": "The house feels paused mid-conversation. In living_room_1, shelves_51 sit too neatly against the wall, like they were shoved back in a hurry. Elsewhere, cabinet_49 waits with the stubbornness of old carpentry. Your phones have no service, and you can’t call out—if you’re going to coordinate, you’ll have to do it by interpreting what the other person is doing and why.",
+  "public_goal": "Coordinate without speaking: trigger the hidden mechanism so the cabinet can be accessed, then retrieve the two-way radio from inside.",
+  "public_context": "Two agents explore a partially observed home. They cannot communicate directly; one agent must signal a state change indirectly so the other can act at the right time.",
+  "theory_of_mind_required": true,
+  "category": "knowledge_asymmetry",
+  "scene_id": "102344049",
+  "episode_id": "849",
+  "active_mechanics": [
+    "remote_control",
+    "inverse_state"
+  ],
+  "mechanic_bindings": [
+    {
+      "mechanic_type": "remote_control",
+      "trigger_object": "shelves_51",
+      "target_object": "cabinet_49",
+      "target_state": "is_open"
+    },
+    {
+      "mechanic_type": "inverse_state",
+      "trigger_object": "cabinet_49"
+    }
+  ],
+  "items": [
+    {
+      "item_id": "item_radio_1",
+      "hidden_in": "cabinet_49"
+    }
+  ],
+  "locked_containers": {},
+  "agent_secrets": {
+    "agent_0": [
+      "You noticed shelves_51 look recently handled—like they might be a hidden release.",
+      "You remember a nasty quirk: cabinet_49’s latch is inverted (Open does the opposite)."
+    ],
+    "agent_1": [
+      "You’re already at cabinet_49. It seemed blocked earlier, so you currently believe it’s just jammed.",
+      "You cannot easily verify what Agent 0 is doing unless you interpret their repeated actions as intentional signals."
+    ]
+  },
+  "agent_roles": {
+    "agent_0": "Signal-sender (can trigger mechanisms but cannot speak).",
+    "agent_1": "Retriever (must infer when and how to access the cabinet)."
+  },
+  "agent_actions": {
+    "agent_0": [
+      "Navigate",
+      "Open",
+      "Close",
+      "Inspect",
+      "Search",
+      "Pick",
+      "Place",
+      "UseItem",
+      "Wait"
+    ],
+    "agent_1": [
+      "Navigate",
+      "Open",
+      "Close",
+      "Inspect",
+      "Search",
+      "Pick",
+      "Place",
+      "UseItem",
+      "Wait"
+    ]
+  },
+  "subtasks": [
+    {
+      "id": "s1_trigger_release",
+      "description": "Agent 0 opens shelves_51 to trigger the remote mechanism.",
+      "success_condition": {
+        "entity": "shelves_51",
+        "property": "is_open"
+      },
+      "depends_on": []
+    },
+    {
+      "id": "s2_remote_opens_cabinet",
+      "description": "The remote mechanism causes cabinet_49 to open.",
+      "success_condition": {
+        "entity": "cabinet_49",
+        "property": "is_open"
+      },
+      "depends_on": [
+        "s1_trigger_release"
+      ]
+    },
+    {
+      "id": "s3_retrieve_radio",
+      "description": "Agent 1 searches cabinet_49 and retrieves the radio.",
+      "success_condition": {
+        "entity": "agent_1",
+        "property": "has_item",
+        "target": "item_radio_1"
+      },
+      "depends_on": [
+        "s2_remote_opens_cabinet"
+      ]
+    }
+  ],
+  "num_agents": 2,
+  "golden_trajectory": [
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Navigate[shelves_51]"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Navigate[cabinet_49]"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Open[shelves_51]"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Wait"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        },
+        {
+          "agent": "agent_1",
+          "action": "Search[cabinet_49]"
+        }
+      ]
+    }
+  ]
+}

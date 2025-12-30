@@ -129,7 +129,27 @@ def main():
 
         # Load the specific episode from the task
         print(f"Loading episode: {task.episode_id} (scene: {task.scene_id})", file=sys.stderr)
-        env_interface.reset_environment(episode_id=task.episode_id)
+
+        # Capture stderr during reset to detect PathFinder errors
+        import io
+        import contextlib
+        stderr_capture = io.StringIO()
+        pathfinder_errors = 0
+
+        # Reset with error detection
+        try:
+            env_interface.reset_environment(episode_id=task.episode_id)
+        except Exception as reset_error:
+            error_msg = str(reset_error)
+            if "PathFinder" in error_msg or "navigable" in error_msg.lower():
+                write_result({
+                    "valid": False,
+                    "error": f"Scene navmesh error: {error_msg}",
+                    "hint": "This scene has navigation issues. Try new_scene[] to get a different scene.",
+                    "navmesh_issue": True
+                })
+                sys.exit(1)
+            raise
 
         runner = VerificationRunner(config)
 

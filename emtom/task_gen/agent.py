@@ -1440,7 +1440,16 @@ SUMMARY:"""
         - Coordination requirement
 
         Returns detailed feedback and suggestions for improvement.
+        Saves JSON output to tom_judgments/ directory.
         """
+        # ANSI color codes for terminal output
+        RED = "\033[91m"
+        GREEN = "\033[92m"
+        CYAN = "\033[96m"
+        YELLOW = "\033[93m"
+        BOLD = "\033[1m"
+        RESET = "\033[0m"
+
         if not self.task_file.exists():
             return json.dumps({
                 "valid": False,
@@ -1496,7 +1505,29 @@ SUMMARY:"""
                         "Otherwise, new_scene[] gives you a fresh scene to try a different approach."
                     )
 
-            self._log(f"[ToM Judge] Result: {'PASS' if judgment.is_valid_tom else 'FAIL'} (score: {judgment.overall_score:.2f}) [failures: {self.consecutive_tom_failures}]")
+            # Save JSON to tom_judgments directory
+            tom_judgments_dir = self.output_dir / "tom_judgments"
+            tom_judgments_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Use consecutive_tom_failures for attempt number (already incremented on failure)
+            attempt_num = self.consecutive_tom_failures if not judgment.is_valid_tom else self.consecutive_tom_failures + 1
+            judgment_file = tom_judgments_dir / f"tom_judgment_{timestamp}_attempt{attempt_num}.json"
+            with open(judgment_file, "w") as f:
+                json.dump(result, f, indent=2)
+
+            # Print colored output to stderr
+            status = "PASS" if judgment.is_valid_tom else "FAIL"
+            color = GREEN if judgment.is_valid_tom else RED
+            print(f"\n{BOLD}{CYAN}=== ToM Verification (attempt {attempt_num}) ==={RESET}", file=sys.stderr)
+            print(f"{BOLD}{color}{status}{RESET} - Score: {judgment.overall_score:.2f} (threshold: {self.tom_judge.overall_threshold})", file=sys.stderr)
+            print(f"Saved to: {CYAN}{judgment_file}{RESET}", file=sys.stderr)
+
+            if not judgment.is_valid_tom and judgment.suggestions:
+                print(f"\n{YELLOW}Suggestions for improvement:{RESET}", file=sys.stderr)
+                for i, suggestion in enumerate(judgment.suggestions, 1):
+                    print(f"  {i}. {suggestion}", file=sys.stderr)
+
+            self._log(f"[ToM Judge] Result: {status} (score: {judgment.overall_score:.2f}) [failures: {self.consecutive_tom_failures}]")
 
             return json.dumps(result, indent=2)
 

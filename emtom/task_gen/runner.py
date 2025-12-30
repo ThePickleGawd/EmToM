@@ -88,10 +88,13 @@ def main(config: DictConfig) -> None:
     verification_feedback = None
     if retry_verification:
         retry_path = Path(retry_verification)
+        cprint(f"[DEBUG] Looking for verification file: {retry_path}", "blue")
+        cprint(f"[DEBUG] File exists: {retry_path.exists()}", "blue")
         if retry_path.exists():
             try:
                 with open(retry_path) as f:
                     verification_data = json.load(f)
+                cprint(f"[DEBUG] is_valid_tom in file: {verification_data.get('is_valid_tom', 'MISSING')}", "blue")
                 if not verification_data.get("is_valid_tom", True):
                     verification_feedback = {
                         "suggestions": verification_data.get("suggestions", []),
@@ -99,13 +102,15 @@ def main(config: DictConfig) -> None:
                         "overall_reasoning": verification_data.get("overall_reasoning", ""),
                     }
                     cprint(f"Loaded failed verification from: {retry_path}", "yellow")
-                    cprint(f"Suggestions to incorporate:", "yellow")
+                    cprint(f"Suggestions to incorporate ({len(verification_feedback['suggestions'])}):", "yellow")
                     for i, s in enumerate(verification_feedback["suggestions"], 1):
                         cprint(f"  {i}. {s}", "yellow")
                 else:
                     cprint(f"Verification already passed, ignoring: {retry_path}", "green")
             except Exception as e:
                 cprint(f"Warning: Could not load verification file: {e}", "red")
+        else:
+            cprint(f"ERROR: Verification file not found: {retry_path}", "red")
 
     # Create unique temp working directory for this instance (allows parallel runs)
     instance_id = uuid.uuid4().hex[:8]

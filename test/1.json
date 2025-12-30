@@ -1,0 +1,151 @@
+{
+  "task_id": "tom_remote_fridge_radio_108736824_177263559_e2",
+  "title": "Which Stand Is It?",
+  "story": "Two roommates discover the kitchen setup is rigged: opening stand_48 remotely affects fridge_49, while opening stand_50 actually affects unknown_47. A misleading note near stand_50 causes the wrong stand to be tried first; the correct response is to use stand_48 so fridge_49 can be opened and the crystal inside can be retrieved.",
+  "public_goal": "Open the fridge using the correct stand, then have Agent 1 retrieve the glowing crystal from inside.",
+  "public_context": "There are two similar stands; only one remotely unlocks the fridge. Agents cannot message each other.",
+  "theory_of_mind_required": true,
+  "category": "communication",
+  "scene_id": "108736824_177263559",
+  "episode_id": "2",
+  "active_mechanics": [
+    "remote_control"
+  ],
+  "mechanic_bindings": [
+    {
+      "mechanic_type": "remote_control",
+      "trigger_object": "stand_48",
+      "target_object": "fridge_49",
+      "target_state": "is_unlocked"
+    },
+    {
+      "mechanic_type": "remote_control",
+      "trigger_object": "stand_50",
+      "target_object": "unknown_47",
+      "target_state": "is_open"
+    }
+  ],
+  "items": [
+    {
+      "item_id": "item_oracle_crystal_1",
+      "hidden_in": "fridge_49"
+    }
+  ],
+  "locked_containers": {},
+  "agent_secrets": {
+    "agent_0": [
+      "You tested earlier: opening stand_48 is what toggles the fridge latch (fridge_49 becomes usable). stand_50 seems to affect something else."
+    ],
+    "agent_1": [
+      "You saw a misleading note near stand_50 suggesting it controls the fridge latch. You plan to try stand_50 first."
+    ]
+  },
+  "agent_roles": {
+    "agent_0": "Observer/operator: must infer which stand Agent 1 is betting on by watching their movements, then use the correct stand.",
+    "agent_1": "Misled runner: will initially act on an incorrect belief about which stand controls the fridge."
+  },
+  "agent_actions": {
+    "agent_0": [
+      "Navigate",
+      "Open",
+      "Search",
+      "Pick",
+      "Place",
+      "Wait"
+    ],
+    "agent_1": [
+      "Navigate",
+      "Open",
+      "Search",
+      "Pick",
+      "Place",
+      "Wait"
+    ]
+  },
+  "subtasks": [
+    {
+      "id": "s1_fridge_unlocked",
+      "description": "The fridge is open.",
+      "depends_on": [],
+      "success_condition": {
+        "entity": "fridge_49",
+        "property": "is_open"
+      }
+    },
+    {
+      "id": "s2_agent1_gets_crystal",
+      "description": "Agent 1 retrieves the glowing crystal from the fridge.",
+      "depends_on": [
+        "s1_fridge_unlocked"
+      ],
+      "success_condition": {
+        "entity": "agent_1",
+        "property": "has_item",
+        "target": "item_oracle_crystal_1"
+      }
+    }
+  ],
+  "num_agents": 2,
+  "golden_trajectory": [
+    {
+      "actions": [
+        {
+          "agent": "agent_1",
+          "action": "Navigate[stand_50]"
+        },
+        {
+          "agent": "agent_0",
+          "action": "Navigate[stand_48]"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_1",
+          "action": "Open[stand_50]"
+        },
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_1",
+          "action": "Navigate[fridge_49]"
+        },
+        {
+          "agent": "agent_0",
+          "action": "Open[stand_48]"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_1",
+          "action": "Open[fridge_49]"
+        },
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "agent": "agent_1",
+          "action": "Search[fridge_49]"
+        },
+        {
+          "agent": "agent_0",
+          "action": "Wait"
+        }
+      ]
+    }
+  ]
+}
