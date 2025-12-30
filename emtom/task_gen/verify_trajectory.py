@@ -130,13 +130,7 @@ def main():
         # Load the specific episode from the task
         print(f"Loading episode: {task.episode_id} (scene: {task.scene_id})", file=sys.stderr)
 
-        # Capture stderr during reset to detect PathFinder errors
-        import io
-        import contextlib
-        stderr_capture = io.StringIO()
-        pathfinder_errors = 0
-
-        # Reset with error detection
+        # Reset with error detection for navmesh issues
         try:
             env_interface.reset_environment(episode_id=task.episode_id)
         except Exception as reset_error:

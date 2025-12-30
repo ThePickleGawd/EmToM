@@ -1376,7 +1376,7 @@ SUMMARY:"""
         ]
 
         try:
-            timeout = 1800 # 30 minutes
+            timeout = 300  # 5 minutes - should be plenty for golden trajectory
             # Stream stderr to terminal for live logging
             subprocess.run(
                 cmd,
@@ -1392,6 +1392,9 @@ SUMMARY:"""
                     result_data = json.load(f)
                 if result_data.get("valid", False):
                     self.last_verify_passed = True
+                # Add hint for navmesh issues
+                if result_data.get("navmesh_issue", False):
+                    result_data["recommendation"] = "This scene has navigation issues. Use new_scene[] to get a different scene."
             except (FileNotFoundError, json.JSONDecodeError) as e:
                 result_data = {
                     "valid": False,
@@ -1414,8 +1417,9 @@ SUMMARY:"""
                 pass
             return json.dumps({
                 "valid": False,
-                "error": f"Verification timed out after {timeout} seconds",
-                "summary": "Timeout"
+                "error": f"Verification timed out after {timeout} seconds. This often indicates navmesh/PathFinder issues with the scene.",
+                "hint": "The scene may have navigation problems. Consider using new_scene[] to get a different scene.",
+                "summary": "Timeout - possible navmesh issue"
             })
         except Exception as e:
             try:
