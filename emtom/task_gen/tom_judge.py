@@ -102,15 +102,24 @@ Can a single agent complete the task alone, or is genuine collaboration required
 
 For Interdependence look at: `agent_actions`, `subtasks` dependencies, `mechanic_bindings`
 
-Criterion #3 is **CRITIAL**
+Criterion #3 is **CRITICAL**
 
-Ask your self if the task can only be solved once the agents **REASON** (without explictly telling the other agent) that they have differing levels, amounts, and types of knowledge and abilities
+Ask yourself: Does success require an agent to recognize what the other agent knows or doesn't know? This includes deciding WHEN and WHAT to communicate based on understanding the other's knowledge state.
 
-### 3. Mental State Reasoning (0.0-1.0) 
-Agents must REASON about the abilities, private information, and mental states of the other agents in order to complete the task. **REMEMBER** the private information given to the agents should not be shared with the other agents. Agents must **REASON** for themselves the private information, abilities, and mental states of the other agents by looking at their actions. 
-- AUTOMATIC FAIL: Agents can act without considering others' knowledge states 
-- 0.5: Some benefit from modeling others, but not required
-- 1.0: Decisions depend critically on **REASONING** about others' private knowledge, abilities, and mental states 
+### 3. Mental State Reasoning (0.0-1.0)
+Agents must REASON about what the other agent knows or doesn't know, and act accordingly.
+
+**Key insight**: The decision to communicate IS mental state reasoning. When Agent 0 recognizes "Agent 1 doesn't know where the key is, and they need it" and decides to tell them - that's ToM.
+
+What to look for:
+- Does Agent A have information that Agent B needs but doesn't have?
+- Must Agent A recognize this knowledge gap to succeed?
+- Would the task fail if Agent A didn't understand Agent B's perspective?
+
+Scoring:
+- AUTOMATIC FAIL: Both agents have identical information, OR one agent can complete the task alone without any knowledge from the other
+- 0.5: Some benefit from understanding others' knowledge state, but not critical
+- 1.0: Success requires recognizing what the other agent knows/doesn't know and acting on it (including communicating critical information) 
 
 
 ### 4. Coordination Requirement (0.0-1.0)
@@ -124,15 +133,15 @@ Look at: `subtasks` DAG structure, `golden_trajectory` action ordering
 ## Examples
 
 ### Good ToM (scores ~0.8-1.0):
-- Agent 0 knows key location, Agent 1 knows cabinet location. Neither can complete alone.
-- Agent 0 discovers inverse_state mechanic, must warn Agent 1 before they try
-- Success requires Agent 0 to communicate discovery, Agent 1 to trust and act on it
+- Agent 0 knows key is in drawer_5, Agent 1 knows the locked cabinet contains the goal object. Neither can succeed alone - Agent 0 must recognize Agent 1 needs the key location and communicate it.
+- Agent 0 discovers inverse_state mechanic affects Agent 1's target. Agent 0 must understand this impacts Agent 1 and warn them.
+- Agent 0 has Search action, Agent 1 has UseItem action. Agent 0 must find the key and communicate its location; Agent 1 must use it. Each must understand what the other can/cannot do.
 
 ### Bad ToM (scores ~0.0-0.4):
-- Both agents have same information, just split the work
-- One agent has all knowledge, other just follows orders
-- No private discoveries that need sharing
-- Agents work independently with no interaction needed
+- Both agents have identical information and abilities - just splitting work, no knowledge gap to bridge
+- One agent has ALL the information and just gives orders - no mutual dependency
+- Agents can complete their parts independently without needing to understand what the other knows
+- No information asymmetry - nothing to communicate that the other doesn't already know
 
 ## Task to Evaluate
 
