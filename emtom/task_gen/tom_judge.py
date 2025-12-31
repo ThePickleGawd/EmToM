@@ -4,6 +4,10 @@ Theory of Mind (ToM) Judge for EMTOM task validation.
 Evaluates whether a generated task truly requires ToM reasoning
 by analyzing information asymmetry, interdependence, communication
 necessity, mental state reasoning, and coordination requirements.
+
+The judge is grounded with real system capabilities:
+- Available actions, mechanics, items, and predicates
+- Scene data (rooms, furniture, objects)
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from habitat_llm.llm.base_llm import BaseLLM
     from .task_generator import GeneratedTask
+    from .scene_loader import SceneData
 
 
 @dataclass
@@ -59,6 +64,23 @@ EVALUATION_PROMPT = """You are an expert evaluator for Theory of Mind (ToM) task
 
 ## Your Task
 Evaluate whether the following task truly requires Theory of Mind (ToM) reasoning. A valid ToM task requires agents to reason about each other's mental states (beliefs, knowledge, intentions) to succeed.
+
+## System Capabilities (IMPORTANT - suggestions must use these!)
+
+### Available Actions
+{available_actions}
+
+### Available Mechanics
+{available_mechanics}
+
+### Available Items
+{available_items}
+
+### Available Predicates (for success_condition)
+{available_predicates}
+
+### Scene Objects
+{scene_objects}
 
 ## Evaluation Criteria
 
@@ -145,24 +167,24 @@ You MUST respond with ONLY a valid JSON object (no markdown, no explanation outs
 
 ## Suggestion Requirements (CRITICAL)
 
-Your suggestions MUST be SPECIFIC and ACTIONABLE. The task generator cannot work with vague advice.
+Your suggestions MUST be SPECIFIC, ACTIONABLE, and USE ONLY the available system capabilities listed above.
 
-**BAD suggestions (too vague):**
+**BAD suggestions (too vague or use non-existent features):**
 - "Make Agent 0's correct action contingent on inferring Agent 1's belief"
-- "Introduce a risk/cost where opening at the wrong time has consequences"
+- "Add a 'booby_trap' mechanic" (if booby_trap is not in Available Mechanics)
 - "Add more information asymmetry"
 
-**GOOD suggestions (specific and actionable):**
-- "Give Agent 1 (not Agent 0) the secret about which container holds the target object. Agent 0 must observe which container Agent 1 approaches first to infer where the target is."
-- "Add a 'booby_trap' mechanic to cabinet_12: if Agent 0 opens it before Agent 1 has opened fridge_0, the target object is destroyed. Agent 0 must wait and observe Agent 1's actions."
-- "Split the unlock code between agents: Agent 0 knows digits 1-2 (e.g., '42'), Agent 1 knows digits 3-4 (e.g., '17'). Neither can unlock safe_0 alone. They must communicate or observe each other's attempts."
-- "Make the fridge require TWO keys: key_A in drawer_3 (only Agent 0 knows), key_B in stand_5 (only Agent 1 knows). Both agents must retrieve their key and coordinate to unlock."
+**GOOD suggestions (specific and use real capabilities):**
+- "Give Agent 1 the secret about where item_small_key_1 is hidden. Agent 0 must communicate with Agent 1 to learn the key location."
+- "Use the inverse_state mechanic on cabinet_12: when Agent 0 opens drawer_5, cabinet_12 closes. Agent 1 must tell Agent 0 to stop opening drawers."
+- "Hide item_radio_1 in drawer_52 (only Agent 0 knows). Agent 1 needs the radio to unlock abilities. They must coordinate."
+- "Make Agent 0 have Navigate and Search actions, Agent 1 have Open and UseItem. Neither can complete alone."
 
-**Each suggestion MUST include:**
-1. **Specific objects** from the scene (e.g., "cabinet_12", "fridge_0", "stand_48")
-2. **Specific agents** and their roles (e.g., "Agent 0 must...", "Agent 1 knows...")
-3. **Concrete mechanic or constraint** (e.g., "booby_trap mechanic", "requires observing X before doing Y")
-4. **Why this creates ToM requirement** (e.g., "Agent 0 must infer Agent 1's belief by observing...")
+**Each suggestion MUST:**
+1. Use **specific objects from Scene Objects** above (e.g., the actual furniture IDs in this scene)
+2. Use **only Available Actions, Mechanics, Items, and Predicates** listed above
+3. Specify **which agent** knows/does what
+4. Explain **why this creates ToM requirement**
 """
 
 
@@ -176,6 +198,9 @@ class ToMJudge:
 
     Mental state reasoning can trigger an automatic fail (-1.0) if
     agents can act without considering others' knowledge states.
+
+    The judge is grounded with real system capabilities (actions,
+    mechanics, items, predicates) and scene data to make actionable suggestions.
     """
 
     # Thresholds for passing
@@ -203,12 +228,84 @@ class ToMJudge:
         self.min_criterion_threshold = min_criterion_threshold
         self.verbose = verbose
 
-    def evaluate(self, task: "GeneratedTask | Dict[str, Any]") -> ToMJudgment:
+        # Cache grounding info (loaded once)
+        self._available_actions: Optional[str] = None
+        self._available_mechanics: Optional[str] = None
+        self._available_items: Optional[str] = None
+        self._available_predicates: Optional[str] = None
+
+    def _get_grounding_info(self) -> Dict[str, str]:
+        """Get cached grounding information about system capabilities."""
+        if self._available_actions is None:
+            # Load available actions
+            try:
+                from emtom.actions import ActionRegistry
+                self._available_actions = ActionRegistry.get_all_action_descriptions()
+            except Exception:
+                self._available_actions = "Navigate, Open, Close, Pick, Place, Search, UseItem, Communicate, Wait"
+
+        if self._available_mechanics is None:
+            # Load available mechanics
+            try:
+                from emtom.mechanics import get_mechanics_for_task_generation
+                self._available_mechanics = get_mechanics_for_task_generation()
+            except Exception:
+                self._available_mechanics = "inverse_state, remote_control, state_mirroring, conditional_unlock"
+
+        if self._available_items is None:
+            # Load available items
+            try:
+                from emtom.state.item_registry import ItemRegistry
+                self._available_items = ItemRegistry.get_items_for_task_generation()
+            except Exception:
+                self._available_items = "item_small_key_1, item_radio_1, item_oracle_crystal_1"
+
+        if self._available_predicates is None:
+            # Load available predicates
+            try:
+                from emtom.evaluation import PARTNR_PREDICATES, EMTOM_PREDICATES
+                all_predicates = PARTNR_PREDICATES | EMTOM_PREDICATES
+                # Add EMTOM game state predicates
+                all_predicates.add("has_item")
+                all_predicates.add("is_unlocked")
+                self._available_predicates = ", ".join(sorted(all_predicates))
+            except Exception:
+                self._available_predicates = "is_on_top, is_inside, is_in_room, is_on_floor, is_next_to, is_open, is_closed, is_clean, is_dirty, is_filled, is_empty, is_powered_on, is_held_by, has_item, is_unlocked"
+
+        return {
+            "available_actions": self._available_actions,
+            "available_mechanics": self._available_mechanics,
+            "available_items": self._available_items,
+            "available_predicates": self._available_predicates,
+        }
+
+    def _format_scene_objects(self, scene_data: Optional["SceneData"]) -> str:
+        """Format scene objects for the prompt."""
+        if scene_data is None:
+            return "Scene data not available. Use object IDs from the task JSON."
+
+        lines = []
+        lines.append(f"**Rooms**: {', '.join(scene_data.rooms[:10])}")
+        lines.append(f"**Furniture** (containers, surfaces): {', '.join(scene_data.furniture[:20])}")
+        if len(scene_data.furniture) > 20:
+            lines.append(f"  ... and {len(scene_data.furniture) - 20} more")
+        lines.append(f"**Objects** (pickable items): {', '.join(scene_data.objects[:20])}")
+        if len(scene_data.objects) > 20:
+            lines.append(f"  ... and {len(scene_data.objects) - 20} more")
+
+        return "\n".join(lines)
+
+    def evaluate(
+        self,
+        task: "GeneratedTask | Dict[str, Any]",
+        scene_data: Optional["SceneData"] = None,
+    ) -> ToMJudgment:
         """
         Evaluate a task for Theory of Mind requirements.
 
         Args:
             task: GeneratedTask object or task dictionary
+            scene_data: Optional scene data for grounded suggestions
 
         Returns:
             ToMJudgment with scores and analysis
@@ -219,9 +316,20 @@ class ToMJudge:
         else:
             task_dict = task
 
-        # Build prompt
+        # Get grounding info
+        grounding = self._get_grounding_info()
+        scene_objects = self._format_scene_objects(scene_data)
+
+        # Build prompt with grounding
         task_json = json.dumps(task_dict, indent=2)
-        prompt = EVALUATION_PROMPT.format(task_json=task_json)
+        prompt = EVALUATION_PROMPT.format(
+            task_json=task_json,
+            available_actions=grounding["available_actions"],
+            available_mechanics=grounding["available_mechanics"],
+            available_items=grounding["available_items"],
+            available_predicates=grounding["available_predicates"],
+            scene_objects=scene_objects,
+        )
 
         if self.verbose:
             print(f"[ToMJudge] Sending evaluation prompt ({len(prompt)} chars)")

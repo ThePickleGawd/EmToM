@@ -141,6 +141,7 @@ Read the template file for the full JSON structure. Key fields:
 - `subtasks`: Milestone conditions forming a DAG. Each subtask MUST be a dict with:
   - `id`: Unique identifier (e.g., "s1_find_key")
   - `description`: What needs to be achieved
+  - `required`: Boolean (default true) - if true, must be completed for task success
   - `success_condition`: Dict with `entity`, `property`, `target` (see Predicates below)
   - `depends_on`: List of prerequisite subtask IDs (e.g., ["s1_find_key"]) - REQUIRED for DAG!
 - `golden_trajectory`: Step-by-step solution with all agents' actions per timestep
@@ -202,6 +203,32 @@ Both must complete before final goal. Agents must coordinate who does what.
   {{"id": "s4_get_crystal", "depends_on": ["s2_agent0_places_cup", "s3_agent1_places_book"], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_oracle_crystal_1"}}}}
 ]
 ```
+
+## Required vs Progress Subtasks
+
+Each subtask has a `required` field:
+- `required: true` (default): MUST be completed for task success
+- `required: false`: Tracks progress but agents can skip it
+
+**Example**:
+```json
+"subtasks": [
+  {{"id": "s1_find_key", "required": false, "depends_on": [], ...}},       // Progress milestone
+  {{"id": "s2_unlock_cabinet", "required": false, "depends_on": ["s1"], ...}},  // Progress milestone
+  {{"id": "s3_cup_on_table", "required": true, "depends_on": [], ...}}     // Must achieve this
+]
+```
+
+**Why this matters**: Agents may find creative shortcuts. If they achieve the
+required outcomes without completing optional milestones, that's a success.
+
+**Smart dependency handling**:
+- Required subtasks with `depends_on` pointing to other required subtasks → temporal sequence enforced
+- Required subtasks with `depends_on` pointing only to optional subtasks → checked directly
+
+**Task Generator Responsibility**: Use optional subtasks to ensure tasks are
+genuinely long-horizon. The required subtasks define what must be achieved,
+while optional subtasks guide how you expect it to happen.
 
 ## Predicates (for success_condition)
 Format: `{{"entity": "X", "property": "predicate", "target": "Y"}}`

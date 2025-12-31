@@ -347,6 +347,10 @@ class DAGProgress:
     """
     Track progress through a subtask DAG with latching behavior.
 
+    NOTE: This class tracks PROGRESS, not task success. Task success is
+    determined by required subtasks in benchmark.py, which may use different
+    logic (e.g., checking required conditions directly without DAG gating).
+
     Subtasks "latch" when their condition is satisfied - once completed,
     they stay completed even if the state changes later. This is because
     intermediate states are transient (e.g., "holding kettle" -> "placed kettle").
@@ -356,7 +360,7 @@ class DAGProgress:
 
     subtasks: Dict[str, "Subtask"] = field(default_factory=dict)
     completed: Set[str] = field(default_factory=set)
-    terminal_ids: Set[str] = field(default_factory=set)
+    terminal_ids: Set[str] = field(default_factory=set)  # Legacy, kept for compatibility
 
     @classmethod
     def from_subtasks(cls, subtasks: List["Subtask"]) -> "DAGProgress":
@@ -406,14 +410,17 @@ class DAGProgress:
             "completed": list(self.completed),
             "newly_completed": newly_completed,
             "percent_complete": percent,
-            "success": self._is_success(),
+            "all_complete": self.all_subtasks_complete(),
         }
 
-    def _is_success(self) -> bool:
-        """Check if all terminal nodes have been completed."""
-        if not self.terminal_ids:
-            return len(self.completed) == len(self.subtasks)
-        return all(tid in self.completed for tid in self.terminal_ids)
+    def all_subtasks_complete(self) -> bool:
+        """
+        Check if all subtasks in the DAG have been completed.
+
+        NOTE: This is for progress tracking, not task success. Task success
+        is determined by required subtasks evaluated in benchmark.py.
+        """
+        return len(self.completed) == len(self.subtasks)
 
     def get_status(self) -> Dict[str, Any]:
         """Get current progress status without updating."""
@@ -421,7 +428,7 @@ class DAGProgress:
         return {
             "completed": list(self.completed),
             "percent_complete": len(self.completed) / total,
-            "success": self._is_success(),
+            "all_complete": self.all_subtasks_complete(),
             "remaining": [
                 sid for sid in self.subtasks.keys() if sid not in self.completed
             ],

@@ -104,9 +104,9 @@ class VerificationRunner(EMTOMBaseRunner):
         """
         Evaluate task completion using PARTNR-style predicates.
 
-        If no success_condition is provided, derives from task's terminal subtasks.
+        If no success_condition is provided, derives from task's required subtasks.
         """
-        # Try to derive success_condition from task's terminal subtasks
+        # Try to derive success_condition from task's required subtasks
         if success_condition is None and self.task:
             effective_condition = self.task.get_effective_success_condition()
             if effective_condition:

@@ -620,19 +620,63 @@ class BenchmarkRunner(EMTOMBaseRunner):
     # -------------------------------------------------------------------------
 
     def _check_task_completion(self) -> Optional[Dict[str, Any]]:
-        """Check if task is complete."""
-        if not self.task:
+        """
+        Check if task is complete using smart success evaluation.
+
+        Required subtasks are evaluated based on their dependencies:
+        - Required subtasks with required deps → must be latched via DAG
+        - Required subtasks with optional-only deps → check directly
+        - Required subtasks with no deps → check directly
+        """
+        if not self.task or not self.task.subtasks:
             return None
 
-        effective = self.task.get_effective_success_condition()
-        if not effective:
-            return None
+        # Get all required subtasks
+        required_subtasks = [
+            s for s in self.task.subtasks
+            if getattr(s, 'required', True)
+        ]
 
-        success_condition = {
-            "description": effective.description,
-            "required_states": effective.required_states,
+        if not required_subtasks:
+            return {"success": False, "error": "No required subtasks"}
+
+        # Build lookup for required subtask IDs
+        required_ids = {
+            s.id if hasattr(s, 'id') else s.get("id", "")
+            for s in required_subtasks
         }
-        return self.evaluate_task(success_condition)
+
+        all_satisfied = True
+        conditions_checked = []
+
+        for subtask in required_subtasks:
+            subtask_id = subtask.id if hasattr(subtask, 'id') else subtask.get("id", "")
+            depends_on = subtask.depends_on if hasattr(subtask, 'depends_on') else subtask.get("depends_on", [])
+            success_condition = subtask.success_condition if hasattr(subtask, 'success_condition') else subtask.get("success_condition")
+
+            if not success_condition:
+                continue
+
+            # Check if this subtask has any REQUIRED dependencies
+            required_deps = [dep for dep in depends_on if dep in required_ids]
+
+            if required_deps:
+                # Has required dependencies → must be latched via DAG
+                if subtask_id not in self._completed_subtasks:
+                    all_satisfied = False
+            else:
+                # No required dependencies → check directly
+                result = self.evaluate_task({"required_states": [success_condition]})
+                if not result or not result.get("success"):
+                    all_satisfied = False
+
+            conditions_checked.append(subtask_id)
+
+        return {
+            "success": all_satisfied,
+            "conditions_checked": conditions_checked,
+            "percent_complete": len(self._completed_subtasks) / len(self.task.subtasks) if self.task.subtasks else 0.0,
+        }
 
     def _check_subtasks(self) -> List[str]:
         """Check subtasks and return newly completed IDs."""

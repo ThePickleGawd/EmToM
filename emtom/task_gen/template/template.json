@@ -43,6 +43,8 @@
     {
       "id": "REPLACE_WITH_ID",
       "description": "REPLACE_WITH_DESCRIPTION",
+      "required": true,
+      "depends_on": [],
       "success_condition": {
         "entity": "REPLACE (agent_id for has_item, object_id for others)",
         "property": "REPLACE (ex. has_item)",

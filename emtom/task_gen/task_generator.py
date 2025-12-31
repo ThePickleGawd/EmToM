@@ -71,7 +71,8 @@ class Subtask:
     Subtasks form a DAG where:
     - Each node has a success_condition (PARTNR predicate)
     - Edges are defined by depends_on
-    - Terminal nodes (no dependents) define task success
+    - required=True subtasks must be completed for task success
+    - required=False subtasks track progress but don't block success
     """
 
     subtask_id: str
@@ -80,6 +81,7 @@ class Subtask:
     assigned_agent: Optional[str] = None
     depends_on: List[str] = field(default_factory=list)
     hints: List[str] = field(default_factory=list)
+    required: bool = True  # If True, must be completed for task success
 
     @property
     def id(self) -> str:
@@ -103,6 +105,7 @@ class Subtask:
             assigned_agent=data.get("assigned_agent"),
             depends_on=data.get("depends_on", []),
             hints=data.get("hints", []),
+            required=data.get("required", True),  # Default to True for backwards compat
         )
 
 
@@ -283,24 +286,33 @@ class GeneratedTask:
         terminals = self.get_terminal_subtasks()
         return [s.success_condition for s in terminals if s.has_valid_condition()]
 
+    def get_required_subtasks(self) -> List[Subtask]:
+        """Get subtasks marked as required for task success."""
+        return [s for s in self.subtasks if getattr(s, 'required', True)]
+
+    def get_required_conditions(self) -> List[Dict[str, Any]]:
+        """Get success conditions from required subtasks."""
+        required = self.get_required_subtasks()
+        return [s.success_condition for s in required if s.has_valid_condition()]
+
     def get_effective_success_condition(self) -> Optional[SuccessCondition]:
         """
         Get the effective success condition.
 
         If success_condition is explicitly set, return it.
-        Otherwise, derive from terminal subtasks.
+        Otherwise, derive from required subtasks.
         """
         if self.success_condition:
             return self.success_condition
 
-        # Derive from terminal subtasks
-        terminal_conditions = self.get_terminal_conditions()
-        if not terminal_conditions:
+        # Derive from required subtasks
+        required_conditions = self.get_required_conditions()
+        if not required_conditions:
             return None
 
         return SuccessCondition(
-            description=f"Complete all {len(terminal_conditions)} terminal subtask(s)",
-            required_states=terminal_conditions,
+            description=f"Complete all {len(required_conditions)} required subtask(s)",
+            required_states=required_conditions,
         )
 
     def validate_subtask_dag(self) -> Tuple[bool, List[str]]:

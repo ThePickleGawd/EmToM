@@ -1031,6 +1031,15 @@ SUMMARY:"""
                     "summary": "Task validation failed"
                 }
 
+            # Validate at least one required subtask exists
+            required_subtasks = [s for s in subtasks if getattr(s, 'required', True)]
+            if not required_subtasks:
+                return {
+                    "valid": False,
+                    "error": "At least one subtask must have 'required: true' for task success",
+                    "summary": "Task validation failed - no required subtasks"
+                }
+
             # Validate item IDs in subtask success conditions
             invalid_items_in_subtasks = []
             for s in task_data["subtasks"]:
@@ -1472,9 +1481,9 @@ SUMMARY:"""
 
         self._log("[ToM Judge] Evaluating task for Theory of Mind requirements...")
 
-        # Run ToM evaluation
+        # Run ToM evaluation with scene data for grounded suggestions
         try:
-            judgment = self.tom_judge.evaluate(task_data)
+            judgment = self.tom_judge.evaluate(task_data, scene_data=self.scene_data)
             self.last_tom_judgment = judgment
             self.last_tom_passed = judgment.is_valid_tom
 
