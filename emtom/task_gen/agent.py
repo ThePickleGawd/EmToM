@@ -407,8 +407,12 @@ Start by reading the template, then create a task using the scene data above."""
             # (keep current response full so LLM sees what it just did)
             self._truncate_old_heredocs()
 
-            # Add current turn to conversation (full content)
-            self.messages.append({"role": "assistant", "content": response})
+            # Truncate response after first action for clean context
+            # (LLM may generate multiple actions, we only execute the first)
+            response_for_history = self._truncate_after_first_action(response)
+
+            # Add current turn to conversation
+            self.messages.append({"role": "assistant", "content": response_for_history})
             self.messages.append({"role": "user", "content": f"Observation: {observation}"})
 
             self._log(f"Observation: {observation}", truncate_terminal=300)
@@ -517,6 +521,63 @@ Start by reading the template, then create a task using the scene data above."""
         response = self.llm.generate(prompt)
         self._log(f"Agent: {response}", truncate_terminal=300)
         return response
+
+    def _truncate_after_first_action(self, content: str) -> str:
+        """
+        Truncate content after the first Action: tool[args] line.
+        This keeps context clean when LLM generates multiple actions.
+        """
+        # Find Action: tool[ pattern
+        action_match = re.search(r'Action:\s*(\w+)\[', content)
+        if not action_match:
+            return content
+
+        # Find the end of the first action (closing bracket)
+        start_idx = action_match.end()
+        end_idx = self._find_action_end(content, start_idx)
+
+        if end_idx is None:
+            return content
+
+        # Return content up to end of first action
+        return content[:end_idx].rstrip()
+
+    def _find_action_end(self, text: str, start: int) -> Optional[int]:
+        """Find the end of an action (after closing bracket)."""
+        depth = 1
+        in_single_quote = False
+        in_double_quote = False
+        escape_next = False
+        i = start
+
+        while i < len(text) and depth > 0:
+            char = text[i]
+
+            if escape_next:
+                escape_next = False
+                i += 1
+                continue
+
+            if char == '\\':
+                escape_next = True
+                i += 1
+                continue
+
+            if char == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+            elif char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+            elif not in_single_quote and not in_double_quote:
+                if char == '[':
+                    depth += 1
+                elif char == ']':
+                    depth -= 1
+
+            i += 1
+
+        if depth == 0:
+            return i
+        return None
 
     def _format_messages_for_llm(self) -> str:
         """Format message history for the LLM."""
