@@ -1514,7 +1514,7 @@ SUMMARY:"""
         - Coordination requirement
 
         Returns detailed feedback and suggestions for improvement.
-        Saves JSON output to tom_judgments/ directory.
+        Saves JSON output to log_dir/tom_judgments/ directory.
         """
         # ANSI color codes for terminal output
         RED = "\033[91m"
@@ -1579,8 +1579,8 @@ SUMMARY:"""
                         "Otherwise, new_scene[] gives you a fresh scene to try a different approach."
                     )
 
-            # Save JSON to tom_judgments directory
-            tom_judgments_dir = self.output_dir / "tom_judgments"
+            # Save JSON to tom_judgments directory (in log dir for debugging)
+            tom_judgments_dir = self.log_dir / "tom_judgments"
             tom_judgments_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             # Use consecutive_tom_failures for attempt number (already incremented on failure)
