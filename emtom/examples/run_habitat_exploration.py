@@ -48,6 +48,12 @@ def main(config: DictConfig):
     # Get exploration parameters from config or defaults
     max_steps = config.get("exploration_steps", 50)
 
+    # Get LLM configuration
+    llm_provider = config.get("llm_provider", "openai_chat")
+    model = config.get("model", "gpt-5.2")
+    print(f"LLM Provider: {llm_provider}")
+    print(f"Model: {model}")
+
     # Register Habitat components
     print("Registering Habitat components...")
     register_sensors(config)
@@ -96,6 +102,8 @@ def main(config: DictConfig):
         max_steps=max_steps,
         save_video=getattr(config.evaluation, 'save_video', True),
         save_fpv=True,
+        llm_provider=llm_provider,
+        model=model,
     )
 
     # Run exploration

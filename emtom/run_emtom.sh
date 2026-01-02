@@ -123,6 +123,7 @@ print_usage() {
     echo ""
     echo -e "${BOLD}Exploration Options:${NC}"
     echo "  --steps N            Number of exploration steps (default: $EXPLORATION_STEPS)"
+    echo "  --model MODEL        LLM model name (default: gpt-5.2, provider auto-detected)"
     echo "                       (Episodes are always randomly selected for diversity)"
     echo ""
     echo -e "${BOLD}Generation Options:${NC}"
@@ -175,8 +176,8 @@ print_usage() {
     echo "  --no-auto-retry      Disable automatic retry on failure (just show suggestions)"
     echo ""
     echo -e "${YELLOW}Examples:${NC}"
-    echo "  ./emtom/run_emtom.sh explore --steps 30"
-    echo "  ./emtom/run_emtom.sh explore --num-agents 3 --agent-type human"
+    echo -e "  ./emtom/run_emtom.sh explore --steps 30 ${GREEN}--model gpt-5${NC}"
+    echo -e "  ./emtom/run_emtom.sh explore --num-agents 3 ${GREEN}--model sonnet${NC}"
     echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model gpt-5${NC}"
     echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model sonnet${NC} --num-tasks 5"
     echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model mistral-large-3${NC} --query \"A task using the radio\""
@@ -221,10 +222,24 @@ get_agent_config() {
 }
 
 run_exploration() {
+    # Auto-detect LLM provider if not specified
+    if [ -z "$LLM_PROVIDER" ]; then
+        LLM_PROVIDER=$(detect_llm_provider "$MODEL")
+        if [ -z "$LLM_PROVIDER" ]; then
+            echo -e "${RED}Error: Could not auto-detect provider for model '$MODEL'${NC}"
+            print_llm_options
+            exit 1
+        fi
+    fi
+
+    # Expand short model names to full IDs
+    MODEL=$(expand_model_name "$MODEL")
+
     echo "=============================================="
     echo "Running EMTOM Exploration (Habitat Backend)"
     echo "=============================================="
     echo "Mode: LLM-guided"
+    echo "LLM: $LLM_PROVIDER ($MODEL)"
     echo "Steps: $EXPLORATION_STEPS"
     echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
     echo "(Episodes randomly selected for diversity)"
@@ -238,6 +253,8 @@ run_exploration() {
     python emtom/examples/run_habitat_exploration.py \
         --config-name $CONFIG_NAME \
         +exploration_steps=$EXPLORATION_STEPS \
+        +model=$MODEL \
+        +llm_provider=$LLM_PROVIDER \
         evaluation.save_video=true \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-exploration"
 }

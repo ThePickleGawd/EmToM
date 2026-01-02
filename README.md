@@ -9,17 +9,23 @@ See [INSTALLATION.md](INSTALLATION.md) for conda setup.
 ## Quick Start
 
 ```bash
+# Explore the environment using GPT-5
+./emtom/run_emtom.sh explore --steps 30 --model gpt-5
+
+# Explore using Claude Sonnet (AWS Bedrock)
+./emtom/run_emtom.sh explore --steps 30 --model sonnet
+
 # Generate a task using OpenAI
-./emtom/run_emtom.sh generate --llm openai_chat --model gpt-5.2
+./emtom/run_emtom.sh generate --model gpt-5.2
 
 # Generate a task using Claude (AWS Bedrock)
-./emtom/run_emtom.sh generate --llm bedrock_claude --model sonnet
+./emtom/run_emtom.sh generate --model sonnet
 
 # Run benchmark on generated tasks
 ./emtom/run_emtom.sh benchmark
 
 # Evaluate a task for Theory of Mind requirements
-./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --llm openai_chat --model gpt-5
+./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --model gpt-5
 ```
 
 ## Environment Setup
@@ -66,16 +72,20 @@ AWS_REGION=us-east-1
 Discover how mechanics work through LLM-guided exploration.
 
 ```bash
-./emtom/run_emtom.sh explore --steps 30
-./emtom/run_emtom.sh explore --num-agents 3 --agent-type human
+./emtom/run_emtom.sh explore --steps 30 --model gpt-5
+./emtom/run_emtom.sh explore --num-agents 3 --model sonnet
+./emtom/run_emtom.sh explore --steps 50 --model opus --agent-type human
 ```
 
 **Options:**
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--steps N` | Number of exploration steps | 20 |
+| `--model MODEL` | LLM model (see table below) | gpt-5.2 |
 | `--num-agents N` | Number of agents (2-5) | 2 |
 | `--agent-type TYPE` | `robot` or `human` | robot |
+
+**Supported Models:** Same as Task Generation (see table below).
 
 ---
 
@@ -102,10 +112,15 @@ Create benchmark tasks using an LLM agent that iteratively designs and tests tas
 
 **Supported Models:**
 
-| Provider | Models |
-|----------|--------|
-| `openai_chat` | `gpt-5`, `gpt-5-mini`, `gpt-5.1`, `gpt-5.2` |
-| `bedrock_claude` | `sonnet`, `haiku`, `opus` |
+| Provider | Model Aliases | Full Model ID |
+|----------|---------------|---------------|
+| `openai_chat` | `gpt-5`, `gpt5` | gpt-5 |
+| `openai_chat` | `gpt-5-mini`, `gpt5-mini` | gpt-5-mini |
+| `openai_chat` | `gpt-5.1`, `gpt5.1` | gpt-5.1 |
+| `openai_chat` | `gpt-5.2`, `gpt5.2` | gpt-5.2 |
+| `bedrock_claude` | `sonnet`, `sonnet-4.5`, `sonnet4.5` | Claude Sonnet 4.5 |
+| `bedrock_claude` | `haiku`, `haiku-4.5`, `haiku4.5` | Claude Haiku 4.5 |
+| `bedrock_claude` | `opus`, `opus-4.5`, `opus4.5` | Claude Opus 4.5 |
 
 **How it works:**
 1. Loads a random scene from the PARTNR dataset
@@ -127,7 +142,7 @@ Create benchmark tasks using an LLM agent that iteratively designs and tests tas
 
 ### 3. ToM Judge
 
-Evaluate whether a task genuinely requires Theory of Mind reasoning.
+Evaluate whether a task genuinely requires Theory of Mind reasoning. The judge is grounded with real system capabilities (actions, mechanics, items, predicates) to provide actionable improvement suggestions.
 
 ```bash
 ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --llm openai_chat --model gpt-5
@@ -143,15 +158,17 @@ Evaluate whether a task genuinely requires Theory of Mind reasoning.
 | `--threshold N` | Score threshold for passing | 0.7 |
 | `--no-auto-retry` | Don't auto-retry on failure | false |
 
-**Evaluation Criteria:**
-| Criterion | Description |
-|-----------|-------------|
-| Information Asymmetry | Agents have different knowledge/access |
-| Interdependence | Agents must rely on each other |
-| Mental State Reasoning | Agents must track others' beliefs |
-| Coordination Requirement | Success requires joint action |
+**Supported Models:** Same as Task Generation (see table above).
 
-Tasks must score above the threshold on all criteria to pass. A score of -1.0 on mental state reasoning triggers an automatic fail.
+**Evaluation Criteria:**
+| Criterion | Description | Auto-Fail |
+|-----------|-------------|-----------|
+| Information Asymmetry | Agents have different knowledge/access | No |
+| Interdependence | Agents must rely on each other | No |
+| Mental State Reasoning | Agents must track others' beliefs/knowledge | Yes (-1.0) |
+| Coordination Requirement | Success requires joint action | No |
+
+Tasks must score ≥0.7 overall and ≥0.5 on each criterion to pass. Mental state reasoning can trigger an **automatic fail** (-1.0) if agents have identical information or one agent can complete the task alone.
 
 ---
 
