@@ -9,17 +9,23 @@ See [INSTALLATION.md](INSTALLATION.md) for conda setup.
 ## Quick Start
 
 ```bash
+# Explore the environment using GPT-5
+./emtom/run_emtom.sh explore --steps 30 --model gpt-5
+
+# Explore using Claude Sonnet (AWS Bedrock)
+./emtom/run_emtom.sh explore --steps 30 --model sonnet
+
 # Generate a task using OpenAI
-./emtom/run_emtom.sh generate --llm openai_chat --model gpt-5.2
+./emtom/run_emtom.sh generate --model gpt-5.2
 
 # Generate a task using Claude (AWS Bedrock)
-./emtom/run_emtom.sh generate --llm bedrock_claude --model sonnet
+./emtom/run_emtom.sh generate --model sonnet
 
 # Run benchmark on generated tasks
 ./emtom/run_emtom.sh benchmark
 
 # Evaluate a task for Theory of Mind requirements
-./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --llm openai_chat --model gpt-5
+./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --model gpt-5
 ```
 
 ## Environment Setup
@@ -66,16 +72,20 @@ AWS_REGION=us-east-1
 Discover how mechanics work through LLM-guided exploration.
 
 ```bash
-./emtom/run_emtom.sh explore --steps 30
-./emtom/run_emtom.sh explore --num-agents 3 --agent-type human
+./emtom/run_emtom.sh explore --steps 30 --model gpt-5
+./emtom/run_emtom.sh explore --num-agents 3 --model sonnet
+./emtom/run_emtom.sh explore --steps 50 --model opus --agent-type human
 ```
 
 **Options:**
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--steps N` | Number of exploration steps | 20 |
+| `--model MODEL` | LLM model (see table below) | gpt-5.2 |
 | `--num-agents N` | Number of agents (2-5) | 2 |
 | `--agent-type TYPE` | `robot` or `human` | robot |
+
+**Supported Models:** Same as Task Generation (see table below).
 
 ---
 

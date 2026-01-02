@@ -58,6 +58,8 @@ class CuriosityModel:
         instruct_config: Optional[Any] = None,
         llm_config: Optional[Any] = None,
         use_verbalized_sampling: bool = True,
+        llm_provider: str = "openai_chat",
+        model: str = "gpt-5.2",
     ):
         """
         Initialize the curiosity model.
@@ -69,7 +71,13 @@ class CuriosityModel:
             use_verbalized_sampling: If True, use Verbalized Sampling (VS) for action selection.
                                     VS prompts the LLM to output probability distributions
                                     over actions, then samples from them programmatically.
+            llm_provider: LLM provider name (e.g., 'openai_chat', 'bedrock_claude')
+            model: Model name/alias (e.g., 'gpt-5', 'sonnet')
         """
+        # Store LLM configuration for per-agent client creation
+        self._llm_provider = llm_provider
+        self._model = model
+
         # Per-agent LLM clients (each agent gets independent API calls with different temperatures)
         self._agent_llms: Dict[str, Any] = {}
 
@@ -204,12 +212,16 @@ class CuriosityModel:
             # Clamp temperature between 0.5 and 1.0 for good randomness
             temperature = max(0.5, min(temperature, 1.0))
 
+            # Use configured LLM provider and model
             self._agent_llms[agent_id] = instantiate_llm(
-                "openai_chat",
-                generation_params={"temperature": temperature},
+                self._llm_provider,
+                generation_params={
+                    "model": self._model,
+                    "temperature": temperature,
+                },
             )
 
-            # Check if model supports temperature (o1, o3, gpt-5 don't)
+            # Check if model supports temperature (o1, o3, gpt-5 don't for OpenAI)
             model_name = self._agent_llms[agent_id].generation_params.model.lower()
             fixed_temp_models = ["o1", "o3", "gpt-5"]
             uses_fixed_temp = any(m in model_name for m in fixed_temp_models)
@@ -217,9 +229,9 @@ class CuriosityModel:
             # Color code: agent in color, temperature in red
             agent_color = self._get_agent_color(agent_uid)
             if uses_fixed_temp:
-                print(f"[CuriosityModel] Created independent LLM client for {agent_color}{agent_id}\033[0m (model={model_name} uses fixed temperature=1)")
+                print(f"[CuriosityModel] Created {self._llm_provider} client for {agent_color}{agent_id}\033[0m (model={model_name} uses fixed temperature=1)")
             else:
-                print(f"[CuriosityModel] Created independent LLM client for {agent_color}{agent_id}\033[0m (temperature=\033[91m{temperature:.3f}\033[0m)")
+                print(f"[CuriosityModel] Created {self._llm_provider} client for {agent_color}{agent_id}\033[0m (model={model_name}, temperature=\033[91m{temperature:.3f}\033[0m)")
 
         return self._agent_llms[agent_id]
 

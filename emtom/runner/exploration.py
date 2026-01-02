@@ -43,6 +43,8 @@ class ExplorationRunner(EMTOMBaseRunner):
         max_steps: int = 50,
         save_video: bool = True,
         save_fpv: bool = True,
+        llm_provider: str = "openai_chat",
+        model: str = "gpt-5.2",
     ) -> None:
         """
         Setup exploration runner.
@@ -54,7 +56,13 @@ class ExplorationRunner(EMTOMBaseRunner):
             max_steps: Maximum exploration steps
             save_video: Whether to save third-person video
             save_fpv: Whether to save first-person video
+            llm_provider: LLM provider name (e.g., 'openai_chat', 'bedrock_claude')
+            model: Model name/alias (e.g., 'gpt-5', 'sonnet')
         """
+        # Store LLM config for later use
+        self._llm_provider = llm_provider
+        self._model = model
+
         # Use base setup for environment and game manager
         super().setup(env_interface, task_data, output_dir)
 
@@ -85,7 +93,13 @@ class ExplorationRunner(EMTOMBaseRunner):
         from emtom.exploration.surprise_detector import SurpriseDetector
 
         print("[ExplorationRunner] Setting up LLM client...")
-        self._llm_client = instantiate_llm("openai_chat")
+        print(f"[ExplorationRunner] Provider: {self._llm_provider}, Model: {self._model}")
+
+        # Create LLM client with configured provider and model
+        self._llm_client = instantiate_llm(
+            self._llm_provider,
+            generation_params={"model": self._model},
+        )
         print(f"[ExplorationRunner] Using model: {self._llm_client.generation_params.model}")
 
         # Get LLM config if available
@@ -95,7 +109,13 @@ class ExplorationRunner(EMTOMBaseRunner):
             if agent_list and hasattr(agent_list[0], 'planner') and hasattr(agent_list[0].planner, 'llm'):
                 llm_config = agent_list[0].planner.llm
 
-        self.curiosity_model = CuriosityModel(self._llm_client, llm_config=llm_config)
+        # Pass LLM provider and model to CuriosityModel so each agent gets the right client
+        self.curiosity_model = CuriosityModel(
+            self._llm_client,
+            llm_config=llm_config,
+            llm_provider=self._llm_provider,
+            model=self._model,
+        )
         self.surprise_detector = SurpriseDetector(self._llm_client)
 
         # Pass LLM to agent tools (required for FindReceptacleTool etc.)
