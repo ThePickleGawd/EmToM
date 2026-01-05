@@ -978,7 +978,7 @@ SUMMARY:"""
         # Core required fields (success_condition is optional if subtasks have valid DAG)
         required_fields = [
             "task_id", "title", "story", "episode_id",
-            "public_goal", "category", "mechanic_bindings", "agent_secrets",
+            "category", "mechanic_bindings", "agent_secrets",
             "agent_roles", "agent_actions"
         ]
 

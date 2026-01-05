@@ -183,8 +183,7 @@ def main(config: DictConfig) -> None:
     cprint(f"{'=' * 60}", "blue")
     print(f"Episode ID: {task.episode_id} (Scene: {task.scene_id})")
     if task.story:
-        print(f"\n{task.story}\n")
-    print(f"Goal: {task.public_goal}")
+        print(f"\n[Scenario]: {task.story}\n")
     print(f"Mechanics: {task.active_mechanics}")
     if task.mechanic_bindings:
         print(f"Mechanic bindings: {len(task.mechanic_bindings)} active")

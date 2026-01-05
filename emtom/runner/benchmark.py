@@ -810,28 +810,43 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
     for agent_id in task.agent_roles.keys():
         parts = []
 
+        # Header with agent identity
+        parts.append(f"You are {agent_id.replace('_', ' ').title()}. Given the following scenario, take a sequence of actions to solve and complete the task at hand.")
+        parts.append("")
+
+        # Scenario - the atmospheric story
         if task.story:
-            parts.append(task.story)
+            parts.append(f"[Scenario]: {task.story}")
             parts.append("")
 
-        parts.append(f"Goal: {task.public_goal}")
-
-        if task.public_context:
-            parts.append(task.public_context)
-
-        actions = task.agent_actions.get(agent_id, [])
-        if actions:
-            parts.append(f"\nYour available actions: {', '.join(actions)}")
-            if "Search" in actions:
-                parts.append("(Search finds hidden items and adds them to your inventory)")
-            if "UseItem" in actions:
-                parts.append("(UseItem lets you use items from inventory)")
-
+        # Known Information - what this agent knows
+        parts.append("[Known Information]:")
         secrets = task.agent_secrets.get(agent_id, [])
         if secrets:
-            parts.append("\nSecret Knowledge:")
             for s in secrets:
                 parts.append(f"- {s}")
+
+        # Add public context as shared knowledge if available
+        if task.public_context:
+            parts.append(f"- {task.public_context}")
+
+        parts.append("")
+
+        # Possible actions
+        actions = task.agent_actions.get(agent_id, [])
+        if actions:
+            parts.append("[Possible Actions]:")
+            for action in actions:
+                parts.append(f"- {action}")
+
+            # Add hints for special actions
+            hints = []
+            if "Search" in actions:
+                hints.append("Search finds hidden items and adds them to your inventory")
+            if "UseItem" in actions:
+                hints.append("UseItem lets you use items from inventory")
+            if hints:
+                parts.append(f"({'; '.join(hints)})")
 
         instructions[agent_id] = "\n".join(parts)
 

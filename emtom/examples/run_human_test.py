@@ -60,8 +60,6 @@ def print_task_info(task: GeneratedTask) -> None:
         cprint(f"\nStory:", "blue")
         cprint(f"  {task.story}", "gray")
 
-    if task.public_goal:
-        cprint(f"\nPublic Goal: {task.public_goal}", "blue")
     if task.public_context:
         cprint(f"Context: {task.public_context}", "gray")
 

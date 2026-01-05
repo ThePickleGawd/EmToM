@@ -197,9 +197,12 @@ class GeneratedTask:
     locked_containers: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
+        """Convert to dictionary for serialization."""
         d = asdict(self)
         d["category"] = self.category.value
+        # Exclude fields that shouldn't be in saved task files
+        d.pop("public_goal", None)
+        d.pop("theory_of_mind_required", None)
         return d
 
     def to_json(self) -> str:

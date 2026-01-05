@@ -133,10 +133,10 @@ Items (item_*) are **NOT physical objects** - they exist ONLY in inventory.
 
 ## Task Structure
 Read the template file for the full JSON structure. Key fields:
-- `task_id`, `title`, `story`: Task metadata
+- `task_id`, `title`, `story`: Task metadata (story = atmospheric scenario, NO solution hints!)
 - `category`: MUST be one of: coordination, knowledge_asymmetry, communication, sequential, resource_sharing, simple_action
-- `public_goal`: What agents need to do (generic, no object IDs)
-- `agent_secrets`: Per-agent private knowledge (location hints, etc.)
+- `public_context`: Shared context about what needs to happen (optional)
+- `agent_secrets`: Per-agent private knowledge (location hints, what they know)
 - `agent_actions`: Per-agent available actions
 - `subtasks`: Milestone conditions forming a DAG. Each subtask MUST be a dict with:
   - `id`: Unique identifier (e.g., "s1_find_key")
@@ -259,8 +259,8 @@ Agents don't know object IDs upfront - they must discover them!
 - `FindRoomTool[query]`: Find rooms → "bedroom_1"
 
 **Design Pattern**:
-- `public_goal`: Generic descriptions ("Place the book on the table")
-- `agent_secrets`: Location hints ("You saw a book on shelves_13")
+- `story`: Atmospheric scenario ("Two housemates prepare for a visitor...")
+- `agent_secrets`: What each agent knows ("You saw a book on shelves_13")
 - Agent must: Navigate → FindObjectTool → Pick/Place
 
 **Example**:
@@ -310,7 +310,25 @@ Each step has ALL agents' actions for that timestep. Use PARTNR-style `Action[ar
 - Use ONLY objects from scene data provided
 - Subtasks should be GOALS (2-5), not process steps
 - Each subtask needs a DIFFERENT success_condition
-- Story should explain WHY, not hint at mechanics
+
+## Story Guidelines (CRITICAL!)
+The `story` field sets the SCENE and MOOD - it is shown to both agents as shared context.
+
+**DO NOT include in story:**
+- Secrets of OTHER agents except the current agent (agent secrets belong in agent_secrets!)
+- The solution steps or action path the agents must take to solve the task
+- Instructions like "Agent 0 must tell Agent 1..." or "first do X, then Y"
+
+**DO include in story:**
+- WHY agents are there (returning something, preparing for a guest, etc.)
+- The atmosphere/mood (dusk, hurried, mysterious, etc.)
+- The overall goal WITHOUT revealing how to achieve it
+
+**BAD story** (reveals solution):
+"Agent 0 knows the key is in drawer_5. Agent 1 must get the radio from cabinet first. Then A0 tells A1 where the key is so A1 can unlock..."
+
+**GOOD story** (atmospheric, no hints):
+"At dusk, two housemates rush to prepare the study for an unexpected visitor. A borrowed book must be returned to the table before the guest arrives, but neither remembers exactly where everything was left."
 
 ## Helpful Hints
 - Agents must Navigate to objects before interacting (Pick, Open)
