@@ -56,7 +56,7 @@ Example: Agent 0 knows the key is in drawer_5, Agent 1 knows the cabinet needs t
 
 **Editing working_task.json**: Use `jq` for field updates (saves context):
 ```
-bash[jq '.title = "Echo House" | .category = "coordination"' {task_file} > tmp.json && mv tmp.json {task_file}]
+bash[jq '.title = "Echo House"' {task_file} > tmp.json && mv tmp.json {task_file}]
 bash[jq '.subtasks = [{{"id": "s1", ...}}]' {task_file} > tmp.json && mv tmp.json {task_file}]
 ```
 For initial creation or full rewrites, use heredoc:
@@ -133,9 +133,8 @@ Items (item_*) are **NOT physical objects** - they exist ONLY in inventory.
 
 ## Task Structure
 Read the template file for the full JSON structure. Key fields:
-- `task_id`, `title`, `story`: Task metadata (story = atmospheric scenario, NO solution hints!)
-- `category`: MUST be one of: coordination, knowledge_asymmetry, communication, sequential, resource_sharing, simple_action
-- `public_context`: Shared context about what needs to happen (optional)
+- `task_id`, `title`: Task metadata
+- `task`: The task description shown to both agents (NO solution hints!)
 - `agent_secrets`: Per-agent private knowledge (location hints, what they know)
 - `agent_actions`: Per-agent available actions
 - `subtasks`: Milestone conditions forming a DAG. Each subtask MUST be a dict with:
@@ -146,7 +145,7 @@ Read the template file for the full JSON structure. Key fields:
   - `depends_on`: List of prerequisite subtask IDs (e.g., ["s1_find_key"]) - REQUIRED for DAG!
 - `golden_trajectory`: Step-by-step solution with all agents' actions per timestep
 
-## Subtask DAG Design (CRITICAL!)
+## Subtask DAG Design
 Subtasks form a dependency graph. Each subtask MUST:
 1. Have `depends_on` linking to prerequisite subtasks (empty list [] only for root nodes)
 2. Track PROGRESS MILESTONES, not end states
@@ -175,9 +174,9 @@ s1 → s2 → s3      s1 ──┐             ┌─ s2 ─┐            A0: s
 **Example 1 - Linear** (simple sequence):
 ```json
 "subtasks": [
-  {{"id": "s1_get_key", "depends_on": [], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_small_key_1"}}}},
-  {{"id": "s2_unlock", "depends_on": ["s1_get_key"], "success_condition": {{"entity": "cabinet_33", "property": "is_unlocked"}}}},
-  {{"id": "s3_get_radio", "depends_on": ["s2_unlock"], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_radio_1"}}}}
+  {{"id": "s1_get_key", "required": false, "depends_on": [], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_small_key_1"}}}},
+  {{"id": "s2_unlock", "required": false, "depends_on": ["s1_get_key"], "success_condition": {{"entity": "cabinet_33", "property": "is_unlocked"}}}},
+  {{"id": "s3_get_radio", "required": true, "depends_on": ["s2_unlock"], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_radio_1"}}}}
 ]
 ```
 
@@ -186,9 +185,9 @@ Why ToM: Agent 0 knows key location, Agent 1 knows radio location. Each discover
 then must COMMUNICATE to coordinate the final unlock. Neither can complete alone.
 ```json
 "subtasks": [
-  {{"id": "s1_agent0_finds_key", "depends_on": [], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_small_key_1"}}}},
-  {{"id": "s2_agent1_finds_radio", "depends_on": [], "success_condition": {{"entity": "agent_1", "property": "has_item", "target": "item_radio_1"}}}},
-  {{"id": "s3_unlock_cabinet", "depends_on": ["s1_agent0_finds_key", "s2_agent1_finds_radio"], "success_condition": {{"entity": "cabinet_42", "property": "is_unlocked"}}}}
+  {{"id": "s1_agent0_finds_key", "required": false, "depends_on": [], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_small_key_1"}}}},
+  {{"id": "s2_agent1_finds_radio", "required": false, "depends_on": [], "success_condition": {{"entity": "agent_1", "property": "has_item", "target": "item_radio_1"}}}},
+  {{"id": "s3_unlock_cabinet", "required": true, "depends_on": ["s1_agent0_finds_key", "s2_agent1_finds_radio"], "success_condition": {{"entity": "cabinet_42", "property": "is_unlocked"}}}}
 ]
 ```
 
@@ -197,38 +196,28 @@ Why ToM: After unlocking, agents work in parallel on their own placements. Agent
 Both must complete before final goal. Agents must coordinate who does what.
 ```json
 "subtasks": [
-  {{"id": "s1_unlock_cabinet", "depends_on": [], "success_condition": {{"entity": "cabinet_15", "property": "is_unlocked"}}}},
-  {{"id": "s2_agent0_places_cup", "depends_on": ["s1_unlock_cabinet"], "success_condition": {{"entity": "cup_5", "property": "is_on_top", "target": "table_22"}}}},
-  {{"id": "s3_agent1_places_book", "depends_on": ["s1_unlock_cabinet"], "success_condition": {{"entity": "book_1", "property": "is_on_top", "target": "table_22"}}}},
-  {{"id": "s4_get_crystal", "depends_on": ["s2_agent0_places_cup", "s3_agent1_places_book"], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_oracle_crystal_1"}}}}
+  {{"id": "s1_unlock_cabinet", "required": false, "depends_on": [], "success_condition": {{"entity": "cabinet_15", "property": "is_unlocked"}}}},
+  {{"id": "s2_agent0_places_cup", "required": false, "depends_on": ["s1_unlock_cabinet"], "success_condition": {{"entity": "cup_5", "property": "is_on_top", "target": "table_22"}}}},
+  {{"id": "s3_agent1_places_book", "required": false, "depends_on": ["s1_unlock_cabinet"], "success_condition": {{"entity": "book_1", "property": "is_on_top", "target": "table_22"}}}},
+  {{"id": "s4_get_crystal", "required": true, "depends_on": ["s2_agent0_places_cup", "s3_agent1_places_book"], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_oracle_crystal_1"}}}}
 ]
 ```
 
 ## Required vs Progress Subtasks
 
-Each subtask has a `required` field:
-- `required: true` (default): MUST be completed for task success
-- `required: false`: Tracks progress but agents can skip it
+- `required: true`: Final goal - task success is measured by this
+- `required: false`: Intermediate step - tracks progress but not required for success
+
+Most subtasks should be `required: false`. Only 1-2 final outcomes should be `required: true`.
 
 **Example**:
 ```json
 "subtasks": [
-  {{"id": "s1_find_key", "required": false, "depends_on": [], ...}},       // Progress milestone
-  {{"id": "s2_unlock_cabinet", "required": false, "depends_on": ["s1"], ...}},  // Progress milestone
-  {{"id": "s3_cup_on_table", "required": true, "depends_on": [], ...}}     // Must achieve this
+  {{"id": "s1_find_key", "required": false, ...}},
+  {{"id": "s2_unlock_cabinet", "required": false, ...}},
+  {{"id": "s3_get_radio", "required": true, ...}}
 ]
 ```
-
-**Why this matters**: Agents may find creative shortcuts. If they achieve the
-required outcomes without completing optional milestones, that's a success.
-
-**Smart dependency handling**:
-- Required subtasks with `depends_on` pointing to other required subtasks → temporal sequence enforced
-- Required subtasks with `depends_on` pointing only to optional subtasks → checked directly
-
-**Task Generator Responsibility**: Use optional subtasks to ensure tasks are
-genuinely long-horizon. The required subtasks define what must be achieved,
-while optional subtasks guide how you expect it to happen.
 
 ## Predicates (for success_condition)
 Format: `{{"entity": "X", "property": "predicate", "target": "Y"}}`
@@ -259,7 +248,7 @@ Agents don't know object IDs upfront - they must discover them!
 - `FindRoomTool[query]`: Find rooms → "bedroom_1"
 
 **Design Pattern**:
-- `story`: Atmospheric scenario ("Two housemates prepare for a visitor...")
+- `task`: The task description ("Two housemates prepare for a visitor...")
 - `agent_secrets`: What each agent knows ("You saw a book on shelves_13")
 - Agent must: Navigate → FindObjectTool → Pick/Place
 
@@ -279,13 +268,13 @@ Agents don't know object IDs upfront - they must discover them!
 
 ## Process
 1. Read scene data (rooms, furniture, objects)
-2. Create task with placeholder story
+2. Create task with placeholder task description
 3. Run `verify_golden_trajectory[]` - MUST PASS
 4. Fix any issues and re-verify
 5. Run `judge_tom[]` - MUST PASS (evaluates Theory of Mind requirements)
 6. If ToM fails, improve based on suggestions and re-run judge_tom[]
 7. Run `test_task[]` - target 10-50 steps
-8. Write real story (after verification passes)
+8. Write real task description (after verification passes)
 9. `submit_task[]` (requires both verify and judge_tom to pass)
 
 ## Golden Trajectory Format
@@ -311,23 +300,23 @@ Each step has ALL agents' actions for that timestep. Use PARTNR-style `Action[ar
 - Subtasks should be GOALS (2-5), not process steps
 - Each subtask needs a DIFFERENT success_condition
 
-## Story Guidelines (CRITICAL!)
-The `story` field sets the SCENE and MOOD - it is shown to both agents as shared context.
+## Task Guidelines
+The `task` field sets the SCENE and MOOD - it is shown to both agents as shared context.
 
-**DO NOT include in story:**
+**DO NOT include in task:**
 - Secrets of OTHER agents except the current agent (agent secrets belong in agent_secrets!)
 - The solution steps or action path the agents must take to solve the task
 - Instructions like "Agent 0 must tell Agent 1..." or "first do X, then Y"
 
-**DO include in story:**
+**DO include in task:**
 - WHY agents are there (returning something, preparing for a guest, etc.)
 - The atmosphere/mood (dusk, hurried, mysterious, etc.)
 - The overall goal WITHOUT revealing how to achieve it
 
-**BAD story** (reveals solution):
+**BAD task** (reveals solution):
 "Agent 0 knows the key is in drawer_5. Agent 1 must get the radio from cabinet first. Then A0 tells A1 where the key is so A1 can unlock..."
 
-**GOOD story** (atmospheric, no hints):
+**GOOD task** (atmospheric, no hints):
 "At dusk, two housemates rush to prepare the study for an unexpected visitor. A borrowed book must be returned to the table before the guest arrives, but neither remembers exactly where everything was left."
 
 ## Helpful Hints

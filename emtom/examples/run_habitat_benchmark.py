@@ -182,8 +182,8 @@ def main(config: DictConfig) -> None:
     cprint(f"EMTOM TASK: {task.title}", "blue")
     cprint(f"{'=' * 60}", "blue")
     print(f"Episode ID: {task.episode_id} (Scene: {task.scene_id})")
-    if task.story:
-        print(f"\n[Scenario]: {task.story}\n")
+    if task.task:
+        print(f"\n[Task]: {task.task}\n")
     print(f"Mechanics: {task.active_mechanics}")
     if task.mechanic_bindings:
         print(f"Mechanic bindings: {len(task.mechanic_bindings)} active")

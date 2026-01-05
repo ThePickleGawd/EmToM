@@ -117,7 +117,7 @@ class BehaviorAnalyzer:
             BehaviorAnalysis with observations
         """
         # Format task info
-        task_description = f"{task_data.get('title', 'Untitled')}\n\n[Scenario]: {task_data.get('story', '')}"
+        task_description = f"{task_data.get('title', 'Untitled')}\n\n[Task]: {task_data.get('task', '')}"
 
         # Format agent secrets
         secrets = task_data.get("agent_secrets", {})

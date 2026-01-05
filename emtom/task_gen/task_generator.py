@@ -52,15 +52,6 @@ class TaskType(Enum):
     REGULAR = "regular"  # Simple everyday tasks without ToM requirements
 
 
-class TaskCategory(Enum):
-    """Categories of collaborative tasks."""
-
-    COORDINATION = "coordination"  # Agents must coordinate actions
-    KNOWLEDGE_ASYMMETRY = "knowledge_asymmetry"  # One agent knows something others don't
-    COMMUNICATION = "communication"  # Agents must share information to succeed
-    SEQUENTIAL = "sequential"  # Tasks must be done in order
-    RESOURCE_SHARING = "resource_sharing"  # Agents share limited resources/abilities
-    SIMPLE_ACTION = "simple_action"  # Single agent simple actions (for regular tasks)
 
 
 @dataclass
@@ -163,7 +154,6 @@ class GeneratedTask:
 
     task_id: str
     title: str
-    category: TaskCategory
 
     # SCENE & ENVIRONMENT
     scene_id: str  # Habitat scene ID (e.g., "102817140")
@@ -171,12 +161,8 @@ class GeneratedTask:
     active_mechanics: List[str]
     mechanic_bindings: List[MechanicBinding]
 
-    # NARRATIVE
-    story: Optional[str]  # Atmospheric narrative setting up the puzzle
-
-    # PUBLIC (shared, no secrets)
-    public_goal: str
-    public_context: Optional[str]
+    # TASK DESCRIPTION
+    task: Optional[str]  # The task description shown to agents
 
     # PER-AGENT CONFIG
     agent_secrets: Dict[str, List[str]]
@@ -189,7 +175,6 @@ class GeneratedTask:
 
     # METADATA
     num_agents: int
-    theory_of_mind_required: bool
 
     # Optional
     subtasks: List[Subtask] = field(default_factory=list)
@@ -198,12 +183,7 @@ class GeneratedTask:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
-        d = asdict(self)
-        d["category"] = self.category.value
-        # Exclude fields that shouldn't be in saved task files
-        d.pop("public_goal", None)
-        d.pop("theory_of_mind_required", None)
-        return d
+        return asdict(self)
 
     def to_json(self) -> str:
         """Convert to JSON string."""
@@ -258,20 +238,16 @@ class GeneratedTask:
         return cls(
             task_id=data.get("task_id", "unknown"),
             title=data.get("title", "Untitled"),
-            category=TaskCategory(data.get("category", "knowledge_asymmetry")),
             scene_id=data.get("scene_id", "unknown"),
             episode_id=data.get("episode_id", "unknown"),
             active_mechanics=data.get("active_mechanics", []) if isinstance(data.get("active_mechanics"), list) else [],
             mechanic_bindings=bindings,
-            story=data.get("story"),
-            public_goal=data.get("public_goal", ""),
-            public_context=data.get("public_context"),
+            task=data.get("task"),
             agent_secrets=data.get("agent_secrets", {}) if isinstance(data.get("agent_secrets"), dict) else {},
             agent_roles=data.get("agent_roles", {}) if isinstance(data.get("agent_roles"), dict) else {},
             agent_actions=data.get("agent_actions", {}) if isinstance(data.get("agent_actions"), dict) else {},
             success_condition=success_condition,
             num_agents=data.get("num_agents", 2),
-            theory_of_mind_required=data.get("theory_of_mind_required", False),
             subtasks=subtasks,
             items=items,
             locked_containers=locked_containers,

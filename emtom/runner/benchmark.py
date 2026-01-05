@@ -811,26 +811,21 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
         parts = []
 
         # Header with agent identity
-        parts.append(f"You are {agent_id.replace('_', ' ').title()}. Given the following scenario, take a sequence of actions to solve and complete the task at hand.")
+        parts.append(f"You are {agent_id.replace('_', ' ').title()}. Given the following task, take a sequence of actions to solve and complete the task at hand.")
         parts.append("")
 
-        # Scenario - the atmospheric story
-        if task.story:
-            parts.append(f"[Scenario]: {task.story}")
+        # Task description
+        if task.task:
+            parts.append(f"[Task]: {task.task}")
             parts.append("")
 
         # Known Information - what this agent knows
-        parts.append("[Known Information]:")
         secrets = task.agent_secrets.get(agent_id, [])
         if secrets:
+            parts.append("[Known Information]:")
             for s in secrets:
                 parts.append(f"- {s}")
-
-        # Add public context as shared knowledge if available
-        if task.public_context:
-            parts.append(f"- {task.public_context}")
-
-        parts.append("")
+            parts.append("")
 
         # Possible actions
         actions = task.agent_actions.get(agent_id, [])

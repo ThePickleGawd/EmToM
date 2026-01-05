@@ -348,7 +348,7 @@ Working task (pre-populated with scene fields): {self.task_file}
 {scenario_text}
 IMPORTANT:
 - Use ONLY the objects listed above - they are verified to exist in this scene
-- The story should be atmospheric and reference REAL object IDs from the scene
+- The task description should reference REAL object IDs from the scene
 - Choose mechanics to apply (inverse_state, remote_control, etc.) based on the articulated furniture available
 
 Start by reading the template, then create a task using the scene data above."""
@@ -977,8 +977,8 @@ SUMMARY:"""
         """Validate task JSON structure without running benchmark."""
         # Core required fields (success_condition is optional if subtasks have valid DAG)
         required_fields = [
-            "task_id", "title", "story", "episode_id",
-            "category", "mechanic_bindings", "agent_secrets",
+            "task_id", "title", "task", "episode_id",
+            "mechanic_bindings", "agent_secrets",
             "agent_roles", "agent_actions"
         ]
 
@@ -1121,28 +1121,28 @@ SUMMARY:"""
                     "summary": "Task validation failed - item ID mismatch in subtasks"
                 }
 
-        # Check story is not empty
-        if not task_data.get("story") or len(task_data.get("story", "")) < 20:
+        # Check task description is not empty
+        if not task_data.get("task") or len(task_data.get("task", "")) < 20:
             return {
                 "valid": False,
-                "error": "story field must be at least 20 characters of atmospheric narrative",
+                "error": "task field must be at least 20 characters",
                 "summary": "Task validation failed"
             }
 
-        # Check story is grounded in real objects (must contain at least one object ID pattern)
-        story = task_data.get("story", "")
+        # Check task is grounded in real objects (must contain at least one object ID pattern)
+        task_desc = task_data.get("task", "")
         # Look for patterns like "table_59", "chest_of_drawers_54", "kettle_3"
         import re
         object_pattern = r'\b[a-z_]+_\d+\b'
-        object_refs = re.findall(object_pattern, story)
+        object_refs = re.findall(object_pattern, task_desc)
         if not object_refs:
             return {
                 "valid": False,
-                "error": "story must reference real object IDs from scene_inventory (e.g., 'chest_of_drawers_54', 'table_59'). Do not use generic descriptions like 'a drawer' or 'the table'.",
-                "summary": "Task validation failed - story not grounded"
+                "error": "task must reference real object IDs from scene_inventory (e.g., 'chest_of_drawers_54', 'table_59'). Do not use generic descriptions like 'a drawer' or 'the table'.",
+                "summary": "Task validation failed - task not grounded"
             }
 
-        # Check that object IDs in story actually exist in scene
+        # Check that object IDs in task actually exist in scene
         if self.scene_data:
             valid_scene_ids = set(
                 self.scene_data.rooms +
@@ -1153,11 +1153,11 @@ SUMMARY:"""
             defined_items = {item.get("item_id") for item in task_data.get("items", []) if item.get("item_id")}
             valid_scene_ids.update(defined_items)
 
-            invalid_story_refs = [ref for ref in object_refs if ref not in valid_scene_ids and not ref.startswith("item_")]
-            if invalid_story_refs:
+            invalid_task_refs = [ref for ref in object_refs if ref not in valid_scene_ids and not ref.startswith("item_")]
+            if invalid_task_refs:
                 return {
                     "valid": False,
-                    "error": f"story references objects that don't exist in scene: {invalid_story_refs}. Use only: {list(self.scene_data.objects)[:10]}...",
+                    "error": f"task references objects that don't exist in scene: {invalid_task_refs}. Use only: {list(self.scene_data.objects)[:10]}...",
                     "summary": "Task validation failed - invented object IDs"
                 }
 

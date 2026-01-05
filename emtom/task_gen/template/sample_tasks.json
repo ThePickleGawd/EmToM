@@ -1,11 +1,9 @@
 {
   "task_id": "1512_laptop_on_table_19",
   "title": "The Evening Transfer",
-  "story": "At dusk you arrive to set up the study for a late meeting. The laptop (laptop_0) needs to be on table_19, but it is tucked away in cabinet_35. You and your partner must coordinate: one of you knows where the laptop is, the other can carry it to the table.",
+  "task": "At dusk you arrive to set up the study for a late meeting. The laptop (laptop_0) needs to be on table_19, but it is tucked away in cabinet_35. You and your partner must coordinate: one of you knows where the laptop is, the other can carry it to the table.",
   "episode_id": "1512",
   "scene_id": "107734449_176000403",
-  "public_context": "Both agents know the meeting needs the laptop on the table. How you achieve that is up to your coordination.",
-  "category": "knowledge_asymmetry",
   "active_mechanics": ["inverse_state"],
   "items": [],
   "locked_containers": {},
@@ -51,6 +49,7 @@
     {
       "id": "open_cabinet",
       "description": "Open cabinet_35 so its contents are accessible.",
+      "required": false,
       "success_condition": {
         "entity": "cabinet_35",
         "property": "is_open",
@@ -62,6 +61,7 @@
     {
       "id": "retrieve_laptop",
       "description": "Pick up laptop_0 (wherever it is) so it is held by agent_1.",
+      "required": false,
       "success_condition": {
         "entity": "laptop_0",
         "property": "is_held_by",
@@ -75,6 +75,7 @@
     {
       "id": "place_on_table",
       "description": "Place laptop_0 on table_19.",
+      "required": true,
       "success_condition": {
         "entity": "laptop_0",
         "property": "is_on_top",

@@ -1,9 +1,7 @@
 {
   "task_id": "REPLACE_WITH_UNIQUE_ID",
   "title": "REPLACE_WITH_TITLE",
-  "story": "REPLACE_WITH_STORY",
-  "public_context": "REPLACE_WITH_CONTEXT",
-  "category": "REPLACE_WITH_CATEGORY",
+  "task": "REPLACE_WITH_TASK_DESCRIPTION",
   "scene_id": "",
   "episode_id": "",
   "active_mechanics": [],

@@ -11,7 +11,6 @@ from emtom.task_gen.task_generator import (
     MechanicBinding,
     Subtask,
     SuccessCondition,
-    TaskCategory,
 )
 from emtom.task_gen.dag import (
     DAGProgress,
@@ -34,7 +33,6 @@ __all__ = [
     "MechanicBinding",
     "Subtask",
     "SuccessCondition",
-    "TaskCategory",
     # DAG utilities
     "DAGProgress",
     "find_root_nodes",

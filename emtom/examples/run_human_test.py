@@ -56,12 +56,9 @@ def print_task_info(task: GeneratedTask) -> None:
     if task.task_id:
         cprint(f"Task ID: {task.task_id}", "gray")
 
-    if task.story:
-        cprint(f"\nStory:", "blue")
-        cprint(f"  {task.story}", "gray")
-
-    if task.public_context:
-        cprint(f"Context: {task.public_context}", "gray")
+    if task.task:
+        cprint(f"\nTask:", "blue")
+        cprint(f"  {task.task}", "gray")
 
     if task.agent_roles:
         cprint("\nAgent Roles:", "blue")
