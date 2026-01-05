@@ -205,17 +205,17 @@ Both must complete before final goal. Agents must coordinate who does what.
 
 ## Required vs Progress Subtasks
 
-- `required: true`: Final goal - task success is measured by this
-- `required: false`: Intermediate step - tracks progress but not required for success
+- `required: true`: A goal that defines task success
+- `required: false`: An intermediate step that tracks progress
 
-Most subtasks should be `required: false`. Only 1-2 final outcomes should be `required: true`.
+Use `required: true` for outcomes that matter to the task. Use `required: false` for steps that are just means to achieve those outcomes.
 
-**Example**:
+**Example**: If the task is "get the radio from a locked cabinet":
 ```json
 "subtasks": [
-  {{"id": "s1_find_key", "required": false, ...}},
-  {{"id": "s2_unlock_cabinet", "required": false, ...}},
-  {{"id": "s3_get_radio", "required": true, ...}}
+  {{"id": "s1_find_key", "required": false, ...}},      // means to an end
+  {{"id": "s2_unlock_cabinet", "required": false, ...}}, // means to an end
+  {{"id": "s3_get_radio", "required": true, ...}}        // the actual goal
 ]
 ```
 
@@ -297,27 +297,28 @@ Each step has ALL agents' actions for that timestep. Use PARTNR-style `Action[ar
 
 ## Critical Rules
 - Use ONLY objects from scene data provided
-- Subtasks should be GOALS (2-5), not process steps
 - Each subtask needs a DIFFERENT success_condition
 
 ## Task Guidelines
-The `task` field sets the SCENE and MOOD - it is shown to both agents as shared context.
+The `task` field sets up the scenario and goals - it is shown to both agents as shared context.
 
 **DO NOT include in task:**
-- Secrets of OTHER agents except the current agent (agent secrets belong in agent_secrets!)
-- The solution steps or action path the agents must take to solve the task
+- Secrets of OTHER agents (those belong in agent_secrets)
+- The solution steps or how to achieve the goals
 - Instructions like "Agent 0 must tell Agent 1..." or "first do X, then Y"
 
 **DO include in task:**
-- WHY agents are there (returning something, preparing for a guest, etc.)
-- The atmosphere/mood (dusk, hurried, mysterious, etc.)
-- The overall goal WITHOUT revealing how to achieve it
+- WHY agents are there (preparing for an event, cleaning up, etc.)
+- The goals that need to be accomplished (can be multiple)
+- Enough context that the subtasks make sense
 
-**BAD task** (reveals solution):
-"Agent 0 knows the key is in drawer_5. Agent 1 must get the radio from cabinet first. Then A0 tells A1 where the key is so A1 can unlock..."
+**Scaling task complexity**: The task description should match the number of subtasks. More subtasks = richer scenario with multiple goals that connect logically, like stages in a video game.
 
-**GOOD task** (atmospheric, no hints):
-"At dusk, two housemates rush to prepare the study for an unexpected visitor. A borrowed book must be returned to the table before the guest arrives, but neither remembers exactly where everything was left."
+**Simple task** (few subtasks):
+"A borrowed book must be returned to the table before the guest arrives."
+
+**Complex task** (many subtasks):
+"The house needs to be prepared for tonight's dinner party. The dining table (table_19) must be set with the good plates from cabinet_35, the wine needs to be retrieved from the cellar storage (chest_42) and placed on the counter, and the living room lamp (lamp_12) should be moved to the dining area for ambiance. The hosts have split up to tackle different rooms but will need to coordinate access to locked storage areas."
 
 ## Helpful Hints
 - Agents must Navigate to objects before interacting (Pick, Open)
