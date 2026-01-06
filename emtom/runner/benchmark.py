@@ -825,23 +825,6 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
             parts.append("[Known Information]:")
             for s in secrets:
                 parts.append(f"- {s}")
-            parts.append("")
-
-        # Possible actions
-        actions = task.agent_actions.get(agent_id, [])
-        if actions:
-            parts.append("[Possible Actions]:")
-            for action in actions:
-                parts.append(f"- {action}")
-
-            # Add hints for special actions
-            hints = []
-            if "Search" in actions:
-                hints.append("Search finds hidden items and adds them to your inventory")
-            if "UseItem" in actions:
-                hints.append("UseItem lets you use items from inventory")
-            if hints:
-                parts.append(f"({'; '.join(hints)})")
 
         instructions[agent_id] = "\n".join(parts)
 

@@ -35,7 +35,7 @@ Tasks MUST require agents to REASON about each other's knowledge/beliefs, not ju
 **AUTOMATIC FAIL triggers** (avoid these):
 - Tasks where agents can complete goals independently
 - Tasks where coordination is just "do your part" without reasoning about others
-- Tasks where secrets don't affect decision-making
+- Information given to the agent that doesn't affect decision-making
 
 **PASS patterns** (use these):
 - Agent A knows WHERE an item is, Agent B knows HOW to use it → must communicate
@@ -135,7 +135,7 @@ Items (item_*) are **NOT physical objects** - they exist ONLY in inventory.
 Read the template file for the full JSON structure. Key fields:
 - `task_id`, `title`: Task metadata
 - `task`: The task description shown to both agents (NO solution hints!)
-- `agent_secrets`: Per-agent private knowledge (location hints, what they know)
+- `agent_secrets`: Per-agent knowledge (location hints, what they know)
 - `agent_actions`: Per-agent available actions
 - `subtasks`: Milestone conditions forming a DAG. Each subtask MUST be a dict with:
   - `id`: Unique identifier (e.g., "s1_find_key")

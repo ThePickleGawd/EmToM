@@ -66,11 +66,11 @@ def print_task_info(task: GeneratedTask) -> None:
             cprint(f"  {agent_id}: {role}", "gray")
 
     if task.agent_secrets:
-        cprint("\nAgent Secrets:", "yellow")
-        for agent_id, secrets in task.agent_secrets.items():
+        cprint("\nKnown Information:", "yellow")
+        for agent_id, info in task.agent_secrets.items():
             cprint(f"  {agent_id}:", "yellow")
-            for secret in secrets:
-                cprint(f"    - {secret}", "gray")
+            for item in info:
+                cprint(f"    - {item}", "gray")
 
     if task.agent_actions:
         cprint("\nAgent Actions:", "blue")

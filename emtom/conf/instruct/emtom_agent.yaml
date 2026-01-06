@@ -47,7 +47,7 @@ prompt: |-
     {assistant_tag}
     Example 1 - Finding and using a key:
     Task: Unlock the cabinet and retrieve the radio inside.
-    Thought: I need to find where the key might be hidden. My secret knowledge mentions chest_of_drawers_52.
+    Thought: I need to find where the key might be hidden. My known information mentions chest_of_drawers_52.
     Agent_{id}_Action: Navigate[chest_of_drawers_52]
     Assigned!
     {eot_tag}
