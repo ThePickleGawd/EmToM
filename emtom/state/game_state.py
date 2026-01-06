@@ -103,6 +103,38 @@ class EMTOMGameState:
     # remote_control: mappings from trigger -> (target, state)
     remote_mappings: Dict[str, Tuple[str, str]] = field(default_factory=dict)
 
+    # === Theory of Mind mechanics state ===
+    # location_change: tracks original locations and moves {obj_id: {"original": loc, "moved_to": loc, "moved_at_step": N, "absent_agents": [...]}}
+    location_changes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # container_swap: tracks swapped contents {container_id: {"original_contents": [...], "swapped_with": container_id, "swapped_at_step": N}}
+    container_swaps: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # state_change_unseen: tracks state changes agents haven't observed {obj_id: {"property": str, "old_value": Any, "new_value": Any, "changed_at_step": N, "unaware_agents": [...]}}
+    unseen_state_changes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # delayed_information: info revealed after N turns {info_id: {"content": str, "reveal_at_step": N, "target_agents": [...], "revealed": bool}}
+    delayed_info: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Track which room each agent was in at each step (for absence tracking)
+    agent_room_history: Dict[str, List[Tuple[int, str]]] = field(default_factory=dict)
+
+    # === Communication mechanics state ===
+    # limited_bandwidth: tracks message counts per agent {agent_id: count}
+    message_counts: Dict[str, int] = field(default_factory=dict)
+    # max messages allowed per agent (set via mechanic binding)
+    max_messages: Dict[str, int] = field(default_factory=dict)
+    # delayed_messages: messages waiting to be delivered [{msg_id, from, to, content, deliver_at_step, sent_at_step}, ...]
+    pending_messages: List[Dict[str, Any]] = field(default_factory=list)
+    # noisy_channel: tracks noise settings {"corruption_rate": 0.0-1.0, "drop_rate": 0.0-1.0}
+    channel_noise: Dict[str, float] = field(default_factory=dict)
+    # Message history for all agents
+    message_history: List[Dict[str, Any]] = field(default_factory=list)
+
+    # === Coordination mechanics state ===
+    # hidden_agenda: per-agent secret goals {agent_id: {"goal": str, "target": str, "achieved": bool, "conflicts_with": [agent_ids]}}
+    hidden_agendas: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # simultaneous_action: tracks coordinated action requirements {action_id: {"required_agents": [...], "action": str, "target": str, "pending_agents": [...], "window_start": step, "window_size": N}}
+    simultaneous_requirements: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Track actions taken this step for simultaneous checking {agent_id: {"action": str, "target": str}}
+    current_step_actions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
     # Per-agent observation history
     agent_observations: Dict[str, List[str]] = field(default_factory=dict)
     # Per-agent inventory (items collected, not in world graph)
@@ -219,6 +251,22 @@ class EMTOMGameState:
                 agent_id: list(items)
                 for agent_id, items in self.agent_inventory.items()
             },
+            # ToM mechanics state
+            "location_changes": self.location_changes,
+            "container_swaps": self.container_swaps,
+            "unseen_state_changes": self.unseen_state_changes,
+            "delayed_info": self.delayed_info,
+            "agent_room_history": self.agent_room_history,
+            # Communication mechanics state
+            "message_counts": self.message_counts,
+            "max_messages": self.max_messages,
+            "pending_messages": self.pending_messages,
+            "channel_noise": self.channel_noise,
+            "message_history": self.message_history,
+            # Coordination mechanics state
+            "hidden_agendas": self.hidden_agendas,
+            "simultaneous_requirements": self.simultaneous_requirements,
+            "current_step_actions": self.current_step_actions,
         }
 
     @classmethod
@@ -258,6 +306,22 @@ class EMTOMGameState:
             agent_id: set(items)
             for agent_id, items in data.get("agent_inventory", {}).items()
         }
+        # ToM mechanics state
+        state.location_changes = data.get("location_changes", {})
+        state.container_swaps = data.get("container_swaps", {})
+        state.unseen_state_changes = data.get("unseen_state_changes", {})
+        state.delayed_info = data.get("delayed_info", {})
+        state.agent_room_history = data.get("agent_room_history", {})
+        # Communication mechanics state
+        state.message_counts = data.get("message_counts", {})
+        state.max_messages = data.get("max_messages", {})
+        state.pending_messages = data.get("pending_messages", [])
+        state.channel_noise = data.get("channel_noise", {})
+        state.message_history = data.get("message_history", [])
+        # Coordination mechanics state
+        state.hidden_agendas = data.get("hidden_agendas", {})
+        state.simultaneous_requirements = data.get("simultaneous_requirements", {})
+        state.current_step_actions = data.get("current_step_actions", {})
         return state
 
     def to_json(self) -> str:

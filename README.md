@@ -246,11 +246,56 @@ Generated tasks are saved to `data/emtom/tasks/` as JSON:
 
 ## Mechanics
 
-| Mechanic | Effect |
-|----------|--------|
-| `inverse_state` | Actions have opposite effects (open→close) |
-| `remote_control` | Actions affect a different object |
-| `counting_state` | Object needs N interactions to respond |
+EMTOM uses a layered mechanic system that transforms actions and state to create Theory of Mind challenges. All mechanics are stateless handlers that operate on `EMTOMGameState`.
+
+### State Transform Mechanics
+Modify how actions affect object states.
+
+| Mechanic | Description |
+|----------|-------------|
+| `inverse_state` | Actions have opposite effects (open→close, turn_on→turn_off). Objects marked as "inverse" behave contrary to the agent's intent. |
+| `conditional_unlock` | Targets remain locked until a trigger object is interacted with. Enables prerequisite-based puzzles. |
+
+### Hidden Mapping Mechanics
+Create non-obvious connections between objects.
+
+| Mechanic | Description |
+|----------|-------------|
+| `remote_control` | Actions on a trigger object affect a different target object. The mapping is hidden from agents. |
+| `state_mirroring` | Paired objects mirror each other's state changes. Opening one container opens its paired counterpart. |
+
+### Belief Tracking Mechanics (Theory of Mind)
+Require agents to track what others know vs. reality.
+
+| Mechanic | Description |
+|----------|-------------|
+| `location_change` | Objects are moved while certain agents are absent. Creates false belief scenarios (Sally-Anne test pattern). Absent agents believe objects are in original locations. |
+| `container_swap` | Contents of containers are swapped while agents are away. Agents who didn't witness the swap have incorrect beliefs about container contents. |
+| `state_change_unseen` | Object properties change (locked→unlocked, on→off) while agents aren't observing. Creates belief-reality gaps about object states. |
+
+### Information Asymmetry Mechanics
+Control when and what information agents receive.
+
+| Mechanic | Description |
+|----------|-------------|
+| `delayed_information` | Information is revealed to specific agents only after N steps. Creates temporal knowledge gaps that require reasoning about what others know at different times. |
+
+### Communication Constraint Mechanics
+Limit or distort inter-agent communication.
+
+| Mechanic | Description |
+|----------|-------------|
+| `limited_bandwidth` | Agents have a maximum number of messages they can send. Forces strategic communication decisions. |
+| `delayed_messages` | Messages take N steps to be delivered. Recipients must reason about sender's state at send time vs. current time. |
+| `noisy_channel` | Messages may be corrupted (character substitution) or dropped entirely based on noise parameters. Agents must handle unreliable communication. |
+
+### Coordination Mechanics
+Require explicit multi-agent coordination.
+
+| Mechanic | Description |
+|----------|-------------|
+| `hidden_agenda` | Agents have secret goals that may conflict with the public objective or other agents' goals. Tests ability to infer others' motivations from behavior. |
+| `simultaneous_action` | Certain actions require multiple agents to act together within a time window. Agents must coordinate timing without explicit synchronization. |
 
 ---
 
