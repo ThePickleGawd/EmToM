@@ -1121,6 +1121,73 @@ SUMMARY:"""
                     "summary": "Task validation failed - item ID mismatch in subtasks"
                 }
 
+        # Validate locked_containers references
+        locked_containers = task_data.get("locked_containers", {})
+        if locked_containers and isinstance(locked_containers, dict):
+            # Keys should be valid scene furniture
+            if self.scene_data:
+                all_furniture = set(self.scene_data.furniture)
+                invalid_containers = [c for c in locked_containers.keys() if c not in all_furniture]
+                if invalid_containers:
+                    return {
+                        "valid": False,
+                        "error": f"locked_containers references containers not in scene: {invalid_containers}",
+                        "summary": "Task validation failed - invalid locked container"
+                    }
+            # Values should be defined items
+            invalid_key_items = [v for v in locked_containers.values() if v not in defined_items]
+            if invalid_key_items:
+                return {
+                    "valid": False,
+                    "error": f"locked_containers references undefined key items: {invalid_key_items}. Defined items: {list(defined_items)}",
+                    "summary": "Task validation failed - invalid key item"
+                }
+
+        # Validate items hidden_in references exist in scene
+        for item in task_data.get("items", []):
+            hidden_in = item.get("hidden_in")
+            if hidden_in and self.scene_data:
+                all_furniture = set(self.scene_data.furniture)
+                if hidden_in not in all_furniture:
+                    return {
+                        "valid": False,
+                        "error": f"item '{item.get('item_id')}' has hidden_in='{hidden_in}' which doesn't exist in scene furniture",
+                        "summary": "Task validation failed - invalid hidden_in container"
+                    }
+
+        # Validate agent IDs are consistent with num_agents
+        num_agents = task_data.get("num_agents", 2)
+        valid_agent_ids = {f"agent_{i}" for i in range(num_agents)}
+
+        # Check agent_actions keys
+        for agent_id in task_data.get("agent_actions", {}).keys():
+            if agent_id not in valid_agent_ids:
+                return {
+                    "valid": False,
+                    "error": f"agent_actions contains invalid agent ID '{agent_id}'. Valid: {sorted(valid_agent_ids)} (num_agents={num_agents})",
+                    "summary": "Task validation failed - invalid agent ID"
+                }
+
+        # Check agent_secrets keys
+        for agent_id in task_data.get("agent_secrets", {}).keys():
+            if agent_id not in valid_agent_ids:
+                return {
+                    "valid": False,
+                    "error": f"agent_secrets contains invalid agent ID '{agent_id}'. Valid: {sorted(valid_agent_ids)} (num_agents={num_agents})",
+                    "summary": "Task validation failed - invalid agent ID"
+                }
+
+        # Check subtask success_condition entity references valid agents
+        for subtask in task_data.get("subtasks", []):
+            sc = subtask.get("success_condition", {})
+            entity = sc.get("entity", "")
+            if entity.startswith("agent_") and entity not in valid_agent_ids:
+                return {
+                    "valid": False,
+                    "error": f"subtask '{subtask.get('id')}' references invalid agent '{entity}'. Valid: {sorted(valid_agent_ids)}",
+                    "summary": "Task validation failed - invalid agent in subtask"
+                }
+
         # Check task description is not empty
         if not task_data.get("task") or len(task_data.get("task", "")) < 20:
             return {
