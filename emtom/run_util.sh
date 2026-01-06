@@ -26,16 +26,33 @@ print_usage() {
     echo -e "${YELLOW}Usage:${NC} ./emtom/run_util.sh <command> [options]"
     echo ""
     echo -e "${YELLOW}Commands:${NC}"
-    echo "  dag <task.json>   Visualize the subtask DAG as a PNG graph"
-    echo "  list-tasks        List all curated task files"
+    echo "  prompt <task.json>  Show the built prompt for each agent"
+    echo "  dag <task.json>     Visualize the subtask DAG as a PNG graph"
+    echo "  list-tasks          List all curated task files"
     echo ""
     echo -e "${YELLOW}DAG Options:${NC}"
     echo "  -o, --output FILE   Output file path (default: /tmp/task_dag.png)"
     echo ""
     echo -e "${YELLOW}Examples:${NC}"
+    echo "  ./emtom/run_util.sh prompt data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_util.sh dag data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_util.sh dag my_task.json -o dag.png"
     echo "  ./emtom/run_util.sh list-tasks"
+}
+
+run_prompt() {
+    if [ -z "$TASK_FILE" ]; then
+        echo -e "${RED}Error: Please specify a task file${NC}"
+        echo "Usage: ./emtom/run_util.sh prompt <task.json>"
+        exit 1
+    fi
+
+    if [ ! -f "$TASK_FILE" ]; then
+        echo -e "${RED}Error: Task file not found: $TASK_FILE${NC}"
+        exit 1
+    fi
+
+    python -m emtom.utils.show_prompt "$TASK_FILE"
 }
 
 run_dag() {
@@ -96,6 +113,14 @@ COMMAND=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        prompt)
+            COMMAND="prompt"
+            shift
+            if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then
+                TASK_FILE=$1
+                shift
+            fi
+            ;;
         dag)
             COMMAND="dag"
             shift
@@ -137,6 +162,9 @@ if [ -z "$COMMAND" ]; then
 fi
 
 case $COMMAND in
+    prompt)
+        run_prompt
+        ;;
     dag)
         run_dag
         ;;
