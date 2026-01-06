@@ -1644,6 +1644,24 @@ SUMMARY:"""
         except json.JSONDecodeError as e:
             return f"Error: Invalid JSON: {e}"
 
+        # Validate subtask count
+        subtasks = task_data.get("subtasks", [])
+        num_subtasks = len(subtasks)
+        if num_subtasks < self.subtasks_min:
+            return json.dumps({
+                "error": f"Task has {num_subtasks} subtasks, minimum is {self.subtasks_min}.",
+                "hint": f"Add more subtasks to reach at least {self.subtasks_min}.",
+                "current": num_subtasks,
+                "required_min": self.subtasks_min,
+            })
+        if num_subtasks > self.subtasks_max:
+            return json.dumps({
+                "error": f"Task has {num_subtasks} subtasks, maximum is {self.subtasks_max}.",
+                "hint": f"Reduce subtasks to at most {self.subtasks_max}, or consolidate steps.",
+                "current": num_subtasks,
+                "required_max": self.subtasks_max,
+            })
+
         # Generate filename: {datetime}_{title_slug}.json
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         title = task_data.get("title", "untitled")
