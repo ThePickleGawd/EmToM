@@ -14,23 +14,6 @@ prompt: |-
     Assigned!
     ```
 
-    **WRONG** (multiple actions - IGNORED!):
-    ```
-    Thought: I'll do several things.
-    Agent_{id}_Action: Navigate[cabinet_1]
-    Agent_{id}_Action: Open[cabinet_1]
-    Agent_{id}_Action: Search[cabinet_1]
-    Assigned!
-    ```
-    Only the LAST action would run, wasting your turn!
-
-    **RIGHT** (single action):
-    ```
-    Thought: I need to navigate to the cabinet first before I can open it.
-    Agent_{id}_Action: Navigate[cabinet_1]
-    Assigned!
-    ```
-
     ## Your Tools
     {tool_descriptions}
 

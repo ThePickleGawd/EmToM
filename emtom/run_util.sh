@@ -11,6 +11,7 @@ cd "$PROJECT_ROOT"
 
 # Default values
 OUTPUT_FILE=""
+OUTPUT_DIR=""
 TASK_FILE=""
 
 # Colors for output
@@ -26,9 +27,10 @@ print_usage() {
     echo -e "${YELLOW}Usage:${NC} ./emtom/run_util.sh <command> [options]"
     echo ""
     echo -e "${YELLOW}Commands:${NC}"
-    echo "  prompt <task.json>  Show the built prompt for each agent"
-    echo "  dag <task.json>     Visualize the subtask DAG as a PNG graph"
-    echo "  list-tasks          List all curated task files"
+    echo "  prompt <task.json>     Show the built prompt for each agent"
+    echo "  dag <task.json>        Visualize the subtask DAG as a PNG graph"
+    echo "  summarize <output_dir> Summarize benchmark results from a run directory"
+    echo "  list-tasks             List all curated task files"
     echo ""
     echo -e "${YELLOW}DAG Options:${NC}"
     echo "  -o, --output FILE   Output file path (default: /tmp/task_dag.png)"
@@ -37,6 +39,7 @@ print_usage() {
     echo "  ./emtom/run_util.sh prompt data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_util.sh dag data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_util.sh dag my_task.json -o dag.png"
+    echo "  ./emtom/run_util.sh summarize outputs/emtom/2025-01-05_12-00-00-benchmark"
     echo "  ./emtom/run_util.sh list-tasks"
 }
 
@@ -53,6 +56,21 @@ run_prompt() {
     fi
 
     python -m emtom.utils.show_prompt "$TASK_FILE"
+}
+
+run_summarize() {
+    if [ -z "$OUTPUT_DIR" ]; then
+        echo -e "${RED}Error: Please specify an output directory${NC}"
+        echo "Usage: ./emtom/run_util.sh summarize <output_dir>"
+        exit 1
+    fi
+
+    if [ ! -d "$OUTPUT_DIR" ]; then
+        echo -e "${RED}Error: Directory not found: $OUTPUT_DIR${NC}"
+        exit 1
+    fi
+
+    python -m emtom.utils.summarize "$OUTPUT_DIR"
 }
 
 run_dag() {
@@ -121,6 +139,14 @@ while [[ $# -gt 0 ]]; do
                 shift
             fi
             ;;
+        summarize)
+            COMMAND="summarize"
+            shift
+            if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then
+                OUTPUT_DIR=$1
+                shift
+            fi
+            ;;
         dag)
             COMMAND="dag"
             shift
@@ -164,6 +190,9 @@ fi
 case $COMMAND in
     prompt)
         run_prompt
+        ;;
+    summarize)
+        run_summarize
         ;;
     dag)
         run_dag

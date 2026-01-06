@@ -672,10 +672,20 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
             conditions_checked.append(subtask_id)
 
+        # Calculate completion percentages
+        total_subtasks = len(self.task.subtasks)
+        required_count = len(required_subtasks)
+        completed_required = len([s for s in self._completed_subtasks if s in required_ids])
+
         return {
             "success": all_satisfied,
             "conditions_checked": conditions_checked,
-            "percent_complete": len(self._completed_subtasks) / len(self.task.subtasks) if self.task.subtasks else 0.0,
+            "completed_subtasks": list(self._completed_subtasks),
+            "total_subtasks": total_subtasks,
+            "required_subtasks": required_count,
+            "completed_required": completed_required,
+            "percent_complete": len(self._completed_subtasks) / total_subtasks if total_subtasks else 0.0,
+            "percent_required_complete": completed_required / required_count if required_count else 0.0,
         }
 
     def _check_subtasks(self) -> List[str]:
