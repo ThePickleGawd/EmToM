@@ -92,7 +92,7 @@ Do different agents have meaningfully different private knowledge/information?
 - 0.5: Some asymmetry exists but it's minor or not task-critical
 - 1.0: Each agent has unique, critical information that others needs to complete the generated task
 
-For information asymmetry look at: `agent_secrets`, `agent_roles`, initial positions, and any other categories that you need to. 
+For information asymmetry look at: `agent_secrets`, initial positions, and any other categories that you need to. 
 
 ### 2. Interdependence (0.0-1.0)
 Can a single agent complete the task alone, or is genuine collaboration required?

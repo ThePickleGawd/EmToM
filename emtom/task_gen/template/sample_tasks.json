@@ -24,10 +24,6 @@
       "I can carry the laptop and place it safely on table_19 (I have the carrying skill)."
     ]
   },
-  "agent_roles": {
-    "agent_0": "Finder / Opener — can open containers and inspect, but cannot pick up objects.",
-    "agent_1": "Carrier — can navigate, pick up, and place objects, but cannot open containers."
-  },
   "agent_actions": {
     "agent_0": [
       "Communicate",

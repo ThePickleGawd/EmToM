@@ -27,10 +27,6 @@
     "agent_0": ["REPLACE_WITH_SECRET_INFO"],
     "agent_1": ["REPLACE_WITH_SECRET_INFO"]
   },
-  "agent_roles": {
-    "agent_0": "REPLACE_WITH_ROLE",
-    "agent_1": "REPLACE_WITH_ROLE"
-  },
   "agent_actions": {
     "agent_0": ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"],
     "agent_1": ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]

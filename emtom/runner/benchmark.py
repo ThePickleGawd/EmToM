@@ -817,7 +817,7 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
     """Convert GeneratedTask to per-agent instructions."""
     instructions = {}
 
-    for agent_id in task.agent_roles.keys():
+    for agent_id in task.agent_actions.keys():
         parts = []
 
         # Header with agent identity

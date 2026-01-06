@@ -166,7 +166,6 @@ class GeneratedTask:
 
     # PER-AGENT CONFIG
     agent_secrets: Dict[str, List[str]]
-    agent_roles: Dict[str, str]
     agent_actions: Dict[str, List[str]]
 
     # INTERNAL (not shown to agents)
@@ -244,7 +243,6 @@ class GeneratedTask:
             mechanic_bindings=bindings,
             task=data.get("task"),
             agent_secrets=data.get("agent_secrets", {}) if isinstance(data.get("agent_secrets"), dict) else {},
-            agent_roles=data.get("agent_roles", {}) if isinstance(data.get("agent_roles"), dict) else {},
             agent_actions=data.get("agent_actions", {}) if isinstance(data.get("agent_actions"), dict) else {},
             success_condition=success_condition,
             num_agents=data.get("num_agents", 2),

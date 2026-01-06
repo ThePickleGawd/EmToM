@@ -266,6 +266,17 @@ Agents don't know object IDs upfront - they must discover them!
 **Good ToM**: Both agents have unique pieces - must share and coordinate
 **Bad ToM**: One agent dumps all info, other just follows instructions
 
+## Iterative Design
+Build tasks incrementally rather than creating complex multi-step tasks all at once.
+
+**Approach**: Start with a simple core that works, then layer on complexity:
+1. Begin with a basic task structure that passes verification
+2. Once verified, add additional subtasks or mechanics
+3. Re-verify after each significant addition
+4. Use sampled_tasks/ as reference for patterns that work well
+
+This is more reliable than attempting an elaborate task from scratch. Each iteration gives you feedback on what works in this scene with these objects.
+
 ## Process
 1. Read scene data (rooms, furniture, objects)
 2. Create task with placeholder task description

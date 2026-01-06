@@ -979,7 +979,7 @@ SUMMARY:"""
         required_fields = [
             "task_id", "title", "task", "episode_id",
             "mechanic_bindings", "agent_secrets",
-            "agent_roles", "agent_actions"
+            "agent_actions"
         ]
 
         missing = [f for f in required_fields if f not in task_data]
