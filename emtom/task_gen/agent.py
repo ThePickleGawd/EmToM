@@ -69,8 +69,8 @@ class TaskGeneratorAgent:
             verbose: Print agent thoughts and actions
             subtasks_min: Minimum number of subtasks per task
             subtasks_max: Maximum number of subtasks per task
-            agents_min: Minimum number of agents for task generation (2-5)
-            agents_max: Maximum number of agents for task generation (2-5)
+            agents_min: Minimum number of agents for task generation (2-10)
+            agents_max: Maximum number of agents for task generation (2-10)
             scene_data: Live scene data from SceneLoader (required)
             log_dir: Directory for log files (defaults to Hydra output or output_dir/logs)
             max_context_chars: Max context size before summarizing. Auto-detected from model if None.

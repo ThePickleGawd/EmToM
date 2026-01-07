@@ -119,7 +119,7 @@ print_usage() {
     echo "  all         Run full pipeline: explore -> generate -> benchmark"
     echo ""
     echo -e "${BOLD}Agent Options:${NC}"
-    echo "  --agents N           Exact number of agents (sets both min and max)"
+    echo "  --agents N           Exact number of agents (sets both min and max, 2-10 for robots, 2-5 for humans)"
     echo "  --agents-min N       Minimum agents for task generation (default: $AGENTS_MIN)"
     echo "  --agents-max N       Maximum agents for task generation (default: $AGENTS_MAX)"
     echo "  --agent-type TYPE    Agent type: human or robot (default: $AGENT_TYPE)"
@@ -203,21 +203,24 @@ get_agent_config() {
             4) echo "examples/emtom_4_humans" ;;
             5) echo "examples/emtom_5_humans" ;;
             *)
-                echo "Error: --num-agents must be 2, 3, 4, or 5 for humanoid agents" >&2
-                echo "To add more agents, create a new config file in habitat_llm/conf/examples/" >&2
+                echo "Error: --agents must be 2-5 for humanoid agents (human configs only go up to 5)" >&2
                 exit 1
                 ;;
         esac
     else
-        # Robot configs
+        # Robot configs (support 2-10 agents)
         case $num_agents in
             2) echo "examples/emtom_2_robots" ;;
             3) echo "examples/emtom_3_robots" ;;
             4) echo "examples/emtom_4_robots" ;;
             5) echo "examples/emtom_5_robots" ;;
+            6) echo "examples/emtom_6_robots" ;;
+            7) echo "examples/emtom_7_robots" ;;
+            8) echo "examples/emtom_8_robots" ;;
+            9) echo "examples/emtom_9_robots" ;;
+            10) echo "examples/emtom_10_robots" ;;
             *)
-                echo "Error: --num-agents must be 2, 3, 4, or 5 for robot agents" >&2
-                echo "To add more agents, create a new config file in habitat_llm/conf/examples/" >&2
+                echo "Error: --agents must be 2-10 for robot agents" >&2
                 exit 1
                 ;;
         esac

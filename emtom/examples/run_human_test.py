@@ -173,7 +173,7 @@ def main(config: DictConfig):
     if extra_args and extra_args.llm_agents:
         llm_agents = extra_args.llm_agents
 
-    # Get all agent IDs from config (supports 2-5 agents)
+    # Get all agent IDs from config (supports 2-10 agents)
     # Keys are already "agent_0", "agent_1", etc.
     all_agent_ids = sorted(config.evaluation.agents.keys())
     human_agents = [a for a in all_agent_ids if a not in llm_agents]
