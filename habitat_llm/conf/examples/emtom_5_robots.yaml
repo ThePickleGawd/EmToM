@@ -13,6 +13,10 @@ defaults:
   - /agent/@agents.agent_2.config: oracle_rearrange_object_states_agent
   - /agent/@agents.agent_3.config: oracle_rearrange_object_states_agent
   - /agent/@agents.agent_4.config: oracle_rearrange_object_states_agent
+  # Add planners for agents 2-4 (base config only has 2 agents)
+  - /planner@evaluation.agents.agent_2.planner: llm_planner_openai
+  - /planner@evaluation.agents.agent_3.planner: llm_planner_openai
+  - /planner@evaluation.agents.agent_4.planner: llm_planner_openai
   - /wandb_conf@                : own
   - override /hydra/output : output
   # Override planner instruct to use EMTOM-specific prompts (not PARTNR few-shot examples)

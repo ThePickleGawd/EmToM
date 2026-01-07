@@ -273,10 +273,14 @@ run_generate() {
     # Expand short model names to full IDs
     MODEL=$(expand_model_name "$MODEL")
 
+    # Get the appropriate config for the number of agents
+    CONFIG_NAME=$(get_agent_config $NUM_AGENTS $AGENT_TYPE)
+
     echo "=============================================="
     echo "Running EMTOM Task Generation (Live Scene Mode)"
     echo "=============================================="
     echo "Target tasks: $NUM_TASKS"
+    echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
     echo "LLM: $LLM_PROVIDER ($MODEL)"
     echo "Subtasks: $SUBTASKS_MIN - $SUBTASKS_MAX"
     echo "Max iterations: $MAX_ITERATIONS"
@@ -303,8 +307,9 @@ run_generate() {
     # Scene is loaded live from PARTNR dataset - no trajectories needed
     python emtom/task_gen/runner.py \
         "${EXTRA_ARGS[@]}" \
-        --config-name examples/emtom_2_robots \
+        --config-name $CONFIG_NAME \
         +num_tasks=$NUM_TASKS \
+        +num_agents=$NUM_AGENTS \
         +model=$MODEL \
         +llm_provider=$LLM_PROVIDER \
         +subtasks_min=$SUBTASKS_MIN \
@@ -315,47 +320,68 @@ run_generate() {
 }
 
 run_benchmark() {
+    # Determine task file (specified or most recent)
+    ACTUAL_TASK_FILE="$TASK_FILE"
+    if [ -z "$ACTUAL_TASK_FILE" ]; then
+        # Find most recent task file
+        ACTUAL_TASK_FILE=$(ls -t data/emtom/tasks/*.json 2>/dev/null | head -1)
+        if [ -z "$ACTUAL_TASK_FILE" ]; then
+            echo -e "${RED}ERROR: No task files found in data/emtom/tasks/${NC}"
+            echo "Run task generation first: ./emtom/run_emtom.sh generate"
+            exit 1
+        fi
+    fi
+
+    # Auto-detect num_agents from task file
+    TASK_NUM_AGENTS=$(python3 -c "import json; print(json.load(open('$ACTUAL_TASK_FILE')).get('num_agents', 2))" 2>/dev/null)
+    if [ -z "$TASK_NUM_AGENTS" ]; then
+        TASK_NUM_AGENTS=2
+    fi
+
     echo "=============================================="
     echo "Running EMTOM Habitat Benchmark"
     echo "=============================================="
     echo "Max simulation steps: $MAX_SIM_STEPS"
     echo "Max LLM calls per agent: $MAX_LLM_CALLS"
-    echo "Task file: ${TASK_FILE:-most recent in data/emtom/tasks/}"
-    echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
+    echo "Task file: $ACTUAL_TASK_FILE"
+    echo "Agents: $TASK_NUM_AGENTS (from task file)"
     echo "=============================================="
 
-    # Get the appropriate config for the number of agents
-    CONFIG_NAME=$(get_agent_config $NUM_AGENTS $AGENT_TYPE)
+    # Get the appropriate config for the number of agents (from task)
+    CONFIG_NAME=$(get_agent_config $TASK_NUM_AGENTS $AGENT_TYPE)
 
     # Build replanning threshold overrides for all agents
     REPLANNING_OVERRIDES=""
-    for ((i=0; i<NUM_AGENTS; i++)); do
+    for ((i=0; i<TASK_NUM_AGENTS; i++)); do
         REPLANNING_OVERRIDES="$REPLANNING_OVERRIDES ++evaluation.agents.agent_${i}.planner.plan_config.replanning_threshold=$MAX_LLM_CALLS"
     done
-
-    # Build task file override if specified
-    TASK_OVERRIDE=""
-    if [ -n "$TASK_FILE" ]; then
-        TASK_OVERRIDE="+task=$TASK_FILE"
-    fi
 
     python emtom/examples/run_habitat_benchmark.py \
         --config-name $CONFIG_NAME \
         habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
         +max_turns=$MAX_LLM_CALLS \
         $REPLANNING_OVERRIDES \
-        $TASK_OVERRIDE \
+        +task=$ACTUAL_TASK_FILE \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-benchmark"
 }
 
 run_test() {
+    # Auto-detect num_agents from task file if provided
+    TEST_NUM_AGENTS=$NUM_AGENTS
+    if [ -n "$TASK_FILE" ] && [ -f "$TASK_FILE" ]; then
+        TASK_NUM_AGENTS=$(python3 -c "import json; print(json.load(open('$TASK_FILE')).get('num_agents', 2))" 2>/dev/null)
+        if [ -n "$TASK_NUM_AGENTS" ]; then
+            TEST_NUM_AGENTS=$TASK_NUM_AGENTS
+        fi
+    fi
+
     echo "=============================================="
     echo "Running EMTOM Human Test Mode"
     echo "=============================================="
     echo "Mechanics: ${MECHANICS:-from task file or default}"
     echo "Task file: ${TASK_FILE:-none}"
     echo "LLM agents: ${LLM_AGENTS:-none (all human-controlled)}"
-    echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
+    echo "Agents: $TEST_NUM_AGENTS ($AGENT_TYPE)${TASK_FILE:+ (from task file)}"
     echo "=============================================="
     echo ""
     echo "Actions: Navigate[target], Open[target], Close[target], Pick[target], Place[target]"
@@ -364,7 +390,7 @@ run_test() {
     echo ""
 
     # Get the appropriate config for the number of agents
-    CONFIG_NAME=$(get_agent_config $NUM_AGENTS $AGENT_TYPE)
+    CONFIG_NAME=$(get_agent_config $TEST_NUM_AGENTS $AGENT_TYPE)
 
     # Build command arguments
     CMD_ARGS=""

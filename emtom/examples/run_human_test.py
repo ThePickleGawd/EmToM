@@ -173,8 +173,8 @@ def main(config: DictConfig):
     if extra_args and extra_args.llm_agents:
         llm_agents = extra_args.llm_agents
 
-    # Calculate human agents (all agents minus LLM agents)
-    all_agent_ids = ["agent_0", "agent_1"]
+    # Get all agent IDs from config (supports 2-5 agents)
+    all_agent_ids = [f"agent_{uid}" for uid in sorted(config.evaluation.agents.keys())]
     human_agents = [a for a in all_agent_ids if a not in llm_agents]
 
     cprint(f"Human-controlled: {human_agents}", "green")

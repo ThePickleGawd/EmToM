@@ -49,6 +49,7 @@ class TaskGeneratorAgent:
         verbose: bool = True,
         subtasks_min: int = 2,
         subtasks_max: int = 5,
+        num_agents: int = 2,
         scene_data: Optional[Any] = None,
         log_dir: Optional[str] = None,
         max_context_chars: Optional[int] = None,
@@ -67,6 +68,7 @@ class TaskGeneratorAgent:
             verbose: Print agent thoughts and actions
             subtasks_min: Minimum number of subtasks per task
             subtasks_max: Maximum number of subtasks per task
+            num_agents: Number of agents for task generation (2-5)
             scene_data: Live scene data from SceneLoader (required)
             log_dir: Directory for log files (defaults to Hydra output or output_dir/logs)
             max_context_chars: Max context size before summarizing. Auto-detected from model if None.
@@ -78,6 +80,7 @@ class TaskGeneratorAgent:
         self.working_dir = Path(working_dir)
         self.subtasks_min = subtasks_min
         self.subtasks_max = subtasks_max
+        self.num_agents = num_agents
         self.output_dir = Path(output_dir)
         self.max_iterations = max_iterations
         self.verbose = verbose
@@ -352,6 +355,7 @@ Your previous task did not pass the ToM verification. You MUST address these iss
 **NEVER call fail[]** - if a task repeatedly fails judge (2-3 attempts), use new_scene[] to get a fresh scene and try a completely different task design. Don't keep iterating on a broken design.
 
 ## Task Requirements
+- **Agents**: {self.num_agents} agents (agent_0 through agent_{self.num_agents - 1})
 - **Subtasks**: Between {self.subtasks_min} and {self.subtasks_max} steps per task (choose based on task complexity)
 - Each subtask should be a distinct action that gates progress to the next
 
@@ -480,7 +484,7 @@ Start by reading the template, then create a task using the scene data above."""
             self._log(f"Warning: Could not save context window: {e}")
 
     def _create_working_task_from_template(self) -> None:
-        """Create working_task.json from template with scene fields pre-populated."""
+        """Create working_task.json from template with scene fields and num_agents pre-populated."""
         # Load template
         with open(self.template_file) as f:
             task = json.load(f)
@@ -490,11 +494,35 @@ Start by reading the template, then create a task using the scene data above."""
             task["scene_id"] = self.scene_data.scene_id
             task["episode_id"] = self.scene_data.episode_id
 
+        # Set num_agents
+        task["num_agents"] = self.num_agents
+
+        # Generate agent_secrets and agent_actions for N agents
+        default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]
+        task["agent_secrets"] = {
+            f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
+            for i in range(self.num_agents)
+        }
+        task["agent_actions"] = {
+            f"agent_{i}": default_actions.copy()
+            for i in range(self.num_agents)
+        }
+
+        # Generate golden_trajectory template with N agents
+        task["golden_trajectory"] = [
+            {
+                "actions": [
+                    {"agent": f"agent_{i}", "action": "ACTION_NAME[TARGET]" if i == 0 else "Wait"}
+                    for i in range(self.num_agents)
+                ]
+            }
+        ]
+
         # Write to working_task.json
         with open(self.task_file, 'w') as f:
             json.dump(task, f, indent=2)
 
-        self._log(f"Created {self.task_file} with scene fields pre-populated")
+        self._log(f"Created {self.task_file} with {self.num_agents} agents pre-populated")
 
     def _truncate_old_heredocs(self) -> None:
         """Truncate large heredoc content in PREVIOUS assistant messages.
@@ -1355,6 +1383,9 @@ SUMMARY:"""
             }
 
         # Run test in subprocess with trajectory output directory
+        # Use appropriate config for num_agents
+        num_agents = task_data.get("num_agents", 2)
+        config_name = f"examples/emtom_{num_agents}_robots"
         script_path = Path(__file__).parent / "test_task.py"
         cmd = [
             sys.executable,
@@ -1362,7 +1393,7 @@ SUMMARY:"""
             "--task-file", temp_task_file,
             "--result-file", temp_result_file,
             "--trajectory-dir", str(run_dir),
-            "--config-name", "examples/emtom_2_robots",
+            "--config-name", config_name,
             "--max-turns", "20",
         ]
 
@@ -1415,9 +1446,11 @@ SUMMARY:"""
                 with open(self.task_file) as f:
                     task_data = json.load(f)
 
-                # Read agent traces from files
+                # Read agent traces from files (use task's num_agents)
                 agent_traces = {}
-                for agent_id in ["agent_0", "agent_1"]:
+                num_agents = task_data.get("num_agents", 2)
+                for i in range(num_agents):
+                    agent_id = f"agent_{i}"
                     trace_path = run_dir / f"{agent_id}.txt"
                     if trace_path.exists():
                         with open(trace_path) as f:
@@ -1523,13 +1556,16 @@ SUMMARY:"""
             })
 
         # Run verification in subprocess (fresh GL context)
+        # Use appropriate config for num_agents
+        num_agents = task_data.get("num_agents", 2)
+        config_name = f"examples/emtom_{num_agents}_robots"
         script_path = Path(__file__).parent / "verify_trajectory.py"
         cmd = [
             sys.executable,
             str(script_path),
             "--task-file", str(self.task_file),
             "--result-file", temp_result_file,
-            "--config-name", "examples/emtom_2_robots",
+            "--config-name", config_name,
         ]
 
         try:
@@ -1912,6 +1948,8 @@ Use new_scene[] if you want a different scene, or start creating your next task.
 
         try:
             # Use subprocess to load scene (fresh GL context)
+            # Use appropriate config for num_agents
+            config_name = f"examples/emtom_{self.num_agents}_robots"
             new_seed = get_random_seed()
             script_path = Path(__file__).parent / "load_scene.py"
 
@@ -1922,7 +1960,7 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                 sys.executable,
                 str(script_path),
                 "--result-file", result_file,
-                "--config-name", "examples/emtom_2_robots",
+                "--config-name", config_name,
                 "--seed", str(new_seed),
             ]
 

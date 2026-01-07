@@ -154,6 +154,14 @@ def main(config: DictConfig) -> None:
     cprint(f"Loaded task: {task.title}", "green")
     output_dir = config.paths.results_dir
 
+    # Validate num_agents matches config
+    task_num_agents = task.num_agents
+    config_num_agents = len(config.evaluation.agents)
+    if task_num_agents != config_num_agents:
+        cprint(f"ERROR: Task requires {task_num_agents} agents but config has {config_num_agents}", "red")
+        cprint(f"Use: ./emtom/run_emtom.sh benchmark --num-agents {task_num_agents} --task {task_file}", "yellow")
+        sys.exit(1)
+
     # Reset environment to the correct episode for this task
     if task.episode_id and task.episode_id != "unknown":
         cprint(f"Resetting environment to episode: {task.episode_id}", "blue")
