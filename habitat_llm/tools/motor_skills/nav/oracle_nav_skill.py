@@ -221,8 +221,9 @@ class OracleNavSkill(SkillPolicy):
             # track the nav point to object distance as we do rejection sampling
             obj_to_nav_point_dist = 0
             success = False
-            # NOTE: Alex set a threshold here empirically (obj_to_nav_point_dist > 1.8) based on expected ee dist for pick. Should be re-evaluated.
-            max_obj_to_nav_point_dist = 1.8
+            # NOTE: Reduced from 1.8 to 1.3 to ensure agents get close enough for pick.
+            # With dist_thresh=0.2, agent ends up 1.1-1.5m from object, well within 2.0m grasping_distance.
+            max_obj_to_nav_point_dist = 1.3
             # TODO: decide how to parameterize this distance or set from config
             while (
                 obj_to_nav_point_dist > max_obj_to_nav_point_dist or not success

@@ -174,7 +174,8 @@ def main(config: DictConfig):
         llm_agents = extra_args.llm_agents
 
     # Get all agent IDs from config (supports 2-5 agents)
-    all_agent_ids = [f"agent_{uid}" for uid in sorted(config.evaluation.agents.keys())]
+    # Keys are already "agent_0", "agent_1", etc.
+    all_agent_ids = sorted(config.evaluation.agents.keys())
     human_agents = [a for a in all_agent_ids if a not in llm_agents]
 
     cprint(f"Human-controlled: {human_agents}", "green")
