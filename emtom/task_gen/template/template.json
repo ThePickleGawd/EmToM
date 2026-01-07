@@ -4,6 +4,10 @@
   "task": "REPLACE_WITH_TASK_DESCRIPTION",
   "scene_id": "",
   "episode_id": "",
+  "initial_states": {
+    "EXAMPLE_cabinet_20": {"is_open": true},
+    "EXAMPLE_table_22": {"is_clean": false}
+  },
   "active_mechanics": [],
   "mechanic_bindings": [
     {

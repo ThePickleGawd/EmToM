@@ -114,7 +114,7 @@ print_usage() {
     echo "  generate    Generate tasks iteratively with testing loop"
     echo "  benchmark   Run benchmark with generated tasks"
     echo "  test        Human-in-the-loop testing mode (manual command input)"
-    echo "  judge       Evaluate a task for Theory of Mind requirements"
+    echo "  judge       Evaluate task quality + ToM with multi-model council (Claude Opus + GPT-5)"
     echo "  all         Run full pipeline: explore -> generate -> benchmark"
     echo ""
     echo -e "${BOLD}Agent Options:${NC}"
@@ -185,7 +185,7 @@ print_usage() {
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
     echo "  ./emtom/run_emtom.sh benchmark --num-agents 4"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
-    echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json ${GREEN}--model qwen3-next-80b${NC}"
+    echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
 }
 
 # Get config name based on number of agents and type
@@ -400,35 +400,22 @@ run_judge() {
         exit 1
     fi
 
-    # Auto-detect LLM provider if not specified
-    if [ -z "$LLM_PROVIDER" ]; then
-        LLM_PROVIDER=$(detect_llm_provider "$MODEL")
-        if [ -z "$LLM_PROVIDER" ]; then
-            echo -e "${RED}Error: Could not auto-detect provider for model '$MODEL'${NC}"
-            print_llm_options
-            exit 1
-        fi
-    fi
-
-    # Expand short model names to full IDs
-    MODEL=$(expand_model_name "$MODEL")
-
     echo "=============================================="
-    echo "Running EMTOM Theory of Mind Judge"
+    echo "Running EMTOM Task Judge (Council)"
     echo "=============================================="
     echo "Task: $TASK_FILE"
-    echo "LLM: $LLM_PROVIDER ($MODEL)"
+    echo "Models: opus, gpt-5 (multi-model council)"
     echo "Threshold: $THRESHOLD"
     echo "=============================================="
     echo ""
 
-    # Build command arguments (always outputs JSON)
-    CMD_ARGS="--task $TASK_FILE --llm $LLM_PROVIDER --model $MODEL --threshold $THRESHOLD"
-    if [ "$NO_AUTO_RETRY" = true ]; then
-        CMD_ARGS="$CMD_ARGS --no-auto-retry"
+    # Build command arguments
+    CMD_ARGS="--task $TASK_FILE --models opus,gpt-5 --threshold $THRESHOLD"
+    if [ "$VERBOSE" = true ]; then
+        CMD_ARGS="$CMD_ARGS --verbose"
     fi
 
-    python -m emtom.task_gen.judge_cli $CMD_ARGS
+    python -m emtom.task_gen.judge $CMD_ARGS
 }
 
 # Parse command line arguments

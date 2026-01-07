@@ -179,6 +179,7 @@ class GeneratedTask:
     subtasks: List[Subtask] = field(default_factory=list)
     items: List[Dict[str, Any]] = field(default_factory=list)
     locked_containers: Dict[str, str] = field(default_factory=dict)
+    initial_states: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Object -> {property: value}
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -234,6 +235,16 @@ class GeneratedTask:
         if isinstance(locked_containers, str):
             locked_containers = {}
 
+        # Parse initial_states (object -> {property: value})
+        initial_states = data.get("initial_states", {})
+        if isinstance(initial_states, str):
+            initial_states = {}
+        # Filter out placeholder examples
+        initial_states = {
+            k: v for k, v in initial_states.items()
+            if isinstance(v, dict) and not k.startswith("EXAMPLE_")
+        }
+
         return cls(
             task_id=data.get("task_id", "unknown"),
             title=data.get("title", "Untitled"),
@@ -249,6 +260,7 @@ class GeneratedTask:
             subtasks=subtasks,
             items=items,
             locked_containers=locked_containers,
+            initial_states=initial_states,
         )
 
     # DAG-related methods

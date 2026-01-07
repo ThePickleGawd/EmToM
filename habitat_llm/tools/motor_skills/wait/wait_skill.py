@@ -25,7 +25,7 @@ class WaitSkill(SkillPolicy):
         self.steps_elapsed = torch.zeros(self._batch_size)
         # TODO: Revert from hardcoded thresh to specific in future.
         # self.step_threshold = int(self._config.sim_freq) * self._config.default_wait_time * 60
-        self.step_threshold = int(self._config.sim_freq) * 5
+        self.step_threshold = int(self._config.sim_freq) * 1  # Reduced from 5 to speed up Wait[]
 
         # Get articulated agent
         self.articulated_agent = self.env.sim.agents_mgr[
@@ -38,13 +38,13 @@ class WaitSkill(SkillPolicy):
         self.steps_elapsed = torch.zeros(self._batch_size)
         # TODO: Revert from hardcoded thresh to specific in future.
         # self.step_threshold = int(self._config.sim_freq) * self._config.default_wait_time * 60
-        self.step_threshold = int(self._config.sim_freq) * 5
+        self.step_threshold = int(self._config.sim_freq) * 1  # Reduced from 5 to speed up Wait[]
         return
 
     def set_target(self, wait_time, env):
         # TODO: Revert from hardcoded thresh to specific in future.
         # self.step_threshold = int(self._config.sim_freq) * self.get_number(wait_time) * 60
-        self.step_threshold = int(self._config.sim_freq) * 5
+        self.step_threshold = int(self._config.sim_freq) * 1  # Reduced from 5 to speed up Wait[]
         return
 
     def get_number(self, string):

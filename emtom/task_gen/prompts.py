@@ -29,19 +29,25 @@ Then wait for observation, then respond with next action.
 ## Goal
 Create Theory of Mind (ToM) tasks where agents must share knowledge and coordinate to succeed.
 
-## Mental State Reasoning (CRITICAL for judge_tom)
-Tasks MUST require agents to REASON about each other's knowledge/beliefs, not just coordinate.
+## Task Quality (CRITICAL for judge)
+Tasks are evaluated on 8 criteria by a multi-model council (Claude Opus + GPT-5):
 
-**AUTOMATIC FAIL triggers** (avoid these):
+**ToM Criteria** (avoid low scores):
+- Information Asymmetry - agents must have different knowledge
+- Interdependence - agents can't complete alone
+- Mental State Reasoning - must reason about what others know
+- Coordination Requirement - precise cross-agent sequencing
+
+**Quality Criteria** (avoid low scores):
+- Narrative Consistency - description matches actual subtasks
+- Subtask Relevance - every subtask contributes to goal
+- Mechanic Utilization - listed mechanics are actually used
+- Trajectory Efficiency - no wasteful actions
+
+**AUTOMATIC FAIL triggers**:
 - Tasks where agents can complete goals independently
-- Tasks where coordination is just "do your part" without reasoning about others
-- Information given to the agent that doesn't affect decision-making
-
-**PASS patterns** (use these):
-- Agent A knows WHERE an item is, Agent B knows HOW to use it → must communicate
-- Agent A can see something Agent B cannot → A must infer what B needs to know
-- Different agents have different abilities → must reason about who can do what
-- Information must be SHARED and USED for decisions, not just possessed
+- Filler subtasks unrelated to main goal
+- Unused mechanics (listed but no bindings)
 
 Example: Agent 0 knows the key is in drawer_5, Agent 1 knows the cabinet needs the key. Neither can succeed alone - they must share knowledge AND reason about what the other knows/needs.
 
@@ -49,8 +55,8 @@ Example: Agent 0 knows the key is in drawer_5, Agent 1 knows the cabinet needs t
 1. **bash[command]** - Shell commands (reading files, jq for edits)
 2. **test_task[]** - Validate and check difficulty
 3. **verify_golden_trajectory[]** - Verify task is completable (MUST pass before submit)
-4. **judge_tom[]** - Evaluate if task requires genuine Theory of Mind (MUST pass before submit)
-5. **submit_task[]** - Save verified task (requires both verify_golden_trajectory AND judge_tom to pass)
+4. **judge[]** - Evaluate task quality + ToM with multi-model council (MUST pass before submit)
+5. **submit_task[]** - Save verified task (requires both verify_golden_trajectory AND judge to pass)
 6. **new_scene[]** - Load a fresh random scene (resets working_task.json with new scene_id/episode_id)
 7. **fail[reason]** - Abort if unrecoverable
 
@@ -76,9 +82,11 @@ Your working directory ({working_dir}) contains:
 - `working_task.json` - Current task you are editing
 - `template.json` - Task structure template
 - `current_scene.json` - Scene data (objects, furniture, rooms)
-- `sampled_tasks/` - Reference tasks from existing pool (up to 10 examples)
-  - Read these for inspiration: `bash[cat {working_dir}/sampled_tasks/task_1.json]`
-  - DO NOT copy directly - use as inspiration for structure/patterns
+- `reference_tasks/` - Simple planning task examples (NO Theory of Mind)
+  - `planning_examples.txt` - 10 diverse single-agent rearrangement tasks
+  - These show patterns for: task phrasing, success conditions, goal types
+  - Read for inspiration: `bash[cat {working_dir}/reference_tasks/planning_examples.txt]`
+  - Your tasks should ADD: agent secrets, coordination requirements, information asymmetry
 - `submitted_tasks/` - Tasks you've submitted in this session
 - `agent_trajectories/` - Benchmark results from test_task[] calls
   - `task_N/run_M/agent_0.txt` - Agent 0's reasoning trace
@@ -151,16 +159,38 @@ Subtasks form a dependency graph. Each subtask MUST:
 2. Track PROGRESS MILESTONES, not end states
 3. NEVER use predicates that are TRUE at start (see below)
 
-**FORBIDDEN default-true predicates** (cause instant "free progress"):
-- `is_closed`: Only valid if preceded by `is_open` on same container (open→close sequence)
-- `is_locked`: Always use `is_unlocked` instead to track unlocking
-- `is_clean`: Objects may start clean - only use after explicit dirty→clean
+**Conditional predicates** (require initial_states setup):
+- `is_closed`: Valid ONLY if container starts open via `initial_states`
+- `is_clean`: Valid ONLY if object starts dirty via `initial_states`
+- `is_locked`: Use `is_unlocked` instead to track unlocking
 
-**VALID progress predicates**:
-- `is_open`: Container was opened (starts closed)
+**VALID progress predicates** (always safe):
+- `is_open`: Container was opened (starts closed by default)
 - `is_unlocked`: Container was unlocked (starts locked)
 - `has_item`: Agent acquired an item
 - `is_on_top`, `is_inside`: Object was moved
+
+## Initial States (initial_states field)
+Set starting conditions for objects. Useful when you want:
+- Doors/drawers starting OPEN (so is_closed becomes a valid goal)
+- Objects starting DIRTY (so is_clean becomes a valid goal)
+- Laptops starting ON (so turning off is meaningful)
+
+**Format**: `"initial_states": {{"object_id": {{"property": value}}}}`
+
+**Example** - Cabinet starts open, table starts dirty:
+```json
+"initial_states": {{
+  "cabinet_20": {{"is_open": true}},
+  "table_22": {{"is_clean": false}}
+}},
+"subtasks": [
+  {{"id": "s1_close_cabinet", "success_condition": {{"entity": "cabinet_20", "property": "is_closed"}}}},
+  {{"id": "s2_clean_table", "success_condition": {{"entity": "table_22", "property": "is_clean"}}}}
+]
+```
+
+**Available properties**: `is_open`, `is_clean`, `is_powered_on`, `is_filled`, `is_dirty`, `is_locked`
 
 **DAG Patterns** (use these shapes for interesting task structures):
 
@@ -273,7 +303,7 @@ Build tasks incrementally rather than creating complex multi-step tasks all at o
 1. Begin with a basic task structure that passes verification
 2. Once verified, add additional subtasks or mechanics
 3. Re-verify after each significant addition
-4. Use sampled_tasks/ as reference for patterns that work well
+4. Check reference_tasks/ for patterns that work well in planning tasks
 
 This is more reliable than attempting an elaborate task from scratch. Each iteration gives you feedback on what works in this scene with these objects.
 
@@ -282,11 +312,11 @@ This is more reliable than attempting an elaborate task from scratch. Each itera
 2. Create task with placeholder task description
 3. Run `verify_golden_trajectory[]` - MUST PASS
 4. Fix any issues and re-verify
-5. Run `judge_tom[]` - MUST PASS (evaluates Theory of Mind requirements)
-6. If ToM fails, improve based on suggestions and re-run judge_tom[]
+5. Run `judge[]` - MUST PASS (evaluates ToM + Quality with multi-model council)
+6. If judge fails, improve based on suggestions and re-run judge[]
 7. Run `test_task[]` - target 10-50 steps
 8. Write real task description (after verification passes)
-9. `submit_task[]` (requires both verify and judge_tom to pass)
+9. `submit_task[]` (requires both verify and judge to pass)
 
 ## Golden Trajectory Format
 Each step has ALL agents' actions for that timestep. Use PARTNR-style `Action[args]` format:

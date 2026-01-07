@@ -21,6 +21,7 @@ from emtom.task_gen.dag import (
 )
 from emtom.task_gen.dag_visualizer import view_dag, view_task_dag
 from emtom.task_gen.agent import TaskGeneratorAgent
+from emtom.task_gen.judge import Judge, Judgment, CouncilVerdict, CriterionScore
 
 __all__ = [
     # Analyzer
@@ -44,4 +45,9 @@ __all__ = [
     "view_task_dag",
     # Agentic generator
     "TaskGeneratorAgent",
+    # Judge
+    "Judge",
+    "Judgment",
+    "CouncilVerdict",
+    "CriterionScore",
 ]

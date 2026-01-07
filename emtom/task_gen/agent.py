@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from omegaconf import DictConfig
 
 from .prompts import SYSTEM_PROMPT
-from .tom_judge import ToMJudge, ToMJudgment
+from .judge import Judge, Judgment, CouncilVerdict
 from emtom.actions import ActionRegistry
 
 if TYPE_CHECKING:
@@ -102,6 +102,10 @@ class TaskGeneratorAgent:
         self.trajectories_dir = self.working_dir / "agent_trajectories"
         self.trajectories_dir.mkdir(parents=True, exist_ok=True)
 
+        # Create reference_tasks directory with simple planning examples
+        self.reference_tasks_dir = self.working_dir / "reference_tasks"
+        self._sample_reference_tasks()
+
         # Track run count for trajectory folders (reset per task)
         self._test_run_count = 0
 
@@ -115,9 +119,9 @@ class TaskGeneratorAgent:
         self.messages: List[Dict[str, str]] = []
         self.iteration_count = 0
         self.last_verify_passed = False  # Track if golden trajectory verified
-        self.last_tom_passed = False  # Track if ToM judgment passed
-        self.last_tom_judgment: Optional[ToMJudgment] = None  # Last ToM judgment result
-        self.tom_judge = ToMJudge(llm_client, verbose=verbose)  # ToM judge instance
+        self.last_judge_passed = False  # Track if Judge passed
+        self.last_judgment: Optional[CouncilVerdict] = None  # Last judgment result
+        self.judge = Judge(verbose=verbose)  # Unified judge (council)
         self.failed = False  # Track if agent called fail[]
         self.fail_reason = ""  # Reason for failure
         self.task_memories: List[str] = []  # Learnings from completed tasks
@@ -153,6 +157,22 @@ class TaskGeneratorAgent:
             # Shell control structures
             "for", "do", "done", "while", "if", "then", "else", "fi", "in",
         ]
+
+    def _sample_reference_tasks(self) -> None:
+        """Sample simple planning tasks for reference into reference_tasks directory."""
+        from emtom.task_gen.sample_partnr import sample_planning_tasks_to_directory
+
+        # Only sample if directory doesn't exist or is empty
+        if self.reference_tasks_dir.exists() and any(self.reference_tasks_dir.iterdir()):
+            return
+
+        sample_planning_tasks_to_directory(
+            output_dir=self.reference_tasks_dir,
+            num_samples=10,
+            seed=42,
+            dataset='train',
+            verbose=self.verbose,
+        )
 
     def _get_model_context_limit(self) -> int:
         """
@@ -324,12 +344,12 @@ Your previous task did not pass the ToM verification. You MUST address these iss
 {query_section}{verification_section}
 ## WORKFLOW (IMPORTANT!)
 1. Create ONE task at a time using working_task.json
-2. Verify with verify_golden_trajectory[] and judge_tom[]
+2. Verify with verify_golden_trajectory[] and judge[]
 3. Submit with submit_task[] - context will reset automatically
 4. Call new_scene[] for a fresh scene, then create your next task
 5. Repeat until you've submitted {num_tasks_target} tasks
 
-**NEVER call fail[]** - if a task repeatedly fails judge_tom (2-3 attempts), use new_scene[] to get a fresh scene and try a completely different task design. Don't keep iterating on a broken design.
+**NEVER call fail[]** - if a task repeatedly fails judge (2-3 attempts), use new_scene[] to get a fresh scene and try a completely different task design. Don't keep iterating on a broken design.
 
 ## Task Requirements
 - **Subtasks**: Between {self.subtasks_min} and {self.subtasks_max} steps per task (choose based on task complexity)
@@ -809,14 +829,14 @@ SUMMARY:"""
             # Reset verification on any bash edit to task file
             if "working_task.json" in args and (">" in args or "cat" in args):
                 self.last_verify_passed = False
-                self.last_tom_passed = False  # Also reset ToM judgment
+                self.last_judge_passed = False  # Also reset judgment
             return self._bash(args)
         elif tool == "test_task":
             return self._test_task()
         elif tool == "verify_golden_trajectory":
             return self._verify_golden_trajectory()
-        elif tool == "judge_tom":
-            return self._judge_tom()
+        elif tool == "judge":
+            return self._judge()
         elif tool == "submit_task":
             return self._submit_task()
         elif tool == "new_scene":
@@ -824,7 +844,7 @@ SUMMARY:"""
         elif tool == "fail":
             return self._fail(args)
         else:
-            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, judge_tom, submit_task, new_scene, fail"
+            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, judge, submit_task, new_scene, fail"
 
     def _bash(self, command: str) -> str:
         """
@@ -1569,19 +1589,17 @@ SUMMARY:"""
                 "summary": f"Subprocess error: {e}"
             })
 
-    def _judge_tom(self) -> str:
+    def _judge(self) -> str:
         """
-        Evaluate whether the task truly requires Theory of Mind reasoning.
+        Evaluate task quality using multi-model council (Claude Opus + GPT-5).
 
-        Uses an LLM judge to score the task on ToM criteria:
-        - Information asymmetry
-        - Interdependence
-        - Communication necessity
-        - Mental state reasoning
-        - Coordination requirement
+        Scores task on 8 criteria:
+        - ToM: information asymmetry, interdependence, mental state reasoning, coordination
+        - Quality: narrative consistency, subtask relevance, mechanic utilization, trajectory efficiency
 
+        Both models must agree for task to pass.
         Returns detailed feedback and suggestions for improvement.
-        Saves JSON output to log_dir/tom_judgments/ directory.
+        Saves JSON output to log_dir/judgments/ directory.
         """
         # ANSI color codes for terminal output
         RED = "\033[91m"
@@ -1607,76 +1625,102 @@ SUMMARY:"""
                 "error": f"Invalid JSON: {e}"
             })
 
-        self._log("[ToM Judge] Evaluating task for Theory of Mind requirements...")
+        self._log("[Judge] Evaluating task with council (ToM + Quality)...")
 
-        # Run ToM evaluation with scene data for grounded suggestions
+        # Find latest trajectory dir for this task if available
+        trajectory_dir = None
+        task_dirs = sorted(self.trajectories_dir.glob("task_*"), key=lambda p: p.name)
+        if task_dirs:
+            latest_task = task_dirs[-1]
+            run_dirs = sorted(latest_task.glob("run_*"), key=lambda p: p.name)
+            if run_dirs:
+                trajectory_dir = run_dirs[-1]
+                self._log(f"[Judge] Including rollout data from: {trajectory_dir}")
+
+        # Run evaluation with council
         try:
-            judgment = self.tom_judge.evaluate(task_data, scene_data=self.scene_data)
-            self.last_tom_judgment = judgment
-            self.last_tom_passed = judgment.is_valid_tom
+            verdict = self.judge.evaluate(
+                task_data,
+                scene_data=self.scene_data,
+                trajectory_dir=trajectory_dir,
+            )
+            self.last_judgment = verdict
+            self.last_judge_passed = verdict.passed
 
             # Format result for agent feedback
             result = {
-                "valid": judgment.is_valid_tom,
-                "overall_score": judgment.overall_score,
-                "threshold": self.tom_judge.overall_threshold,
-                "criteria": {
-                    name: {"score": c.score, "reasoning": c.reasoning}
-                    for name, c in judgment.criteria.items()
+                "valid": verdict.passed,
+                "overall_score": verdict.overall_score,
+                "threshold": self.judge.overall_threshold,
+                "models": list(verdict.judgments.keys()),
+                "model_results": {
+                    model: {
+                        "passed": j.is_valid,
+                        "score": j.overall_score,
+                    }
+                    for model, j in verdict.judgments.items()
                 },
-                "overall_reasoning": judgment.overall_reasoning,
-                "suggestions": judgment.suggestions,
+                "suggestions": verdict.suggestions,
             }
 
-            if judgment.is_valid_tom:
-                result["summary"] = f"PASS - Task requires genuine Theory of Mind (score: {judgment.overall_score:.2f})"
+            if verdict.disagreements:
+                result["disagreements"] = verdict.disagreements
+
+            if verdict.passed:
+                result["summary"] = f"PASS - All models agree task is valid (score: {verdict.overall_score:.2f})"
                 self.consecutive_tom_failures = 0  # Reset on success
             else:
                 self.consecutive_tom_failures += 1
-                result["summary"] = f"FAIL - Task does not sufficiently require Theory of Mind (score: {judgment.overall_score:.2f})"
-                result["action_required"] = "Modify the task based on suggestions and run judge_tom[] again."
+                result["summary"] = f"FAIL - Task did not pass council (score: {verdict.overall_score:.2f})"
+                result["action_required"] = "Modify the task based on suggestions and run judge[] again."
                 result["failure_count"] = self.consecutive_tom_failures
 
                 # After 3+ failures, suggest considering new_scene
                 if self.consecutive_tom_failures >= 3:
                     result["recommendation"] = (
-                        f"You've failed judge_tom {self.consecutive_tom_failures} times on this task. "
-                        "Consider whether the core design can actually support ToM, or if a fresh start would be faster. "
-                        "If you're confident you're close to a solution, keep iterating. "
+                        f"You've failed judge {self.consecutive_tom_failures} times on this task. "
+                        "Consider whether the core design can actually work, or if a fresh start would be faster. "
                         "Otherwise, new_scene[] gives you a fresh scene to try a different approach."
                     )
 
-            # Save JSON to tom_judgments directory (in log dir for debugging)
-            tom_judgments_dir = self.log_dir / "tom_judgments"
-            tom_judgments_dir.mkdir(parents=True, exist_ok=True)
+            # Save JSON to judgments directory
+            judgments_dir = self.log_dir / "judgments"
+            judgments_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            # Use consecutive_tom_failures for attempt number (already incremented on failure)
-            attempt_num = self.consecutive_tom_failures if not judgment.is_valid_tom else self.consecutive_tom_failures + 1
-            judgment_file = tom_judgments_dir / f"tom_judgment_{timestamp}_attempt{attempt_num}.json"
+            attempt_num = self.consecutive_tom_failures if not verdict.passed else self.consecutive_tom_failures + 1
+            judgment_file = judgments_dir / f"judgment_{timestamp}_attempt{attempt_num}.json"
             with open(judgment_file, "w") as f:
-                json.dump(result, f, indent=2)
+                json.dump(verdict.to_dict(), f, indent=2)
 
             # Print colored output to stderr
-            status = "PASS" if judgment.is_valid_tom else "FAIL"
-            color = GREEN if judgment.is_valid_tom else RED
-            print(f"\n{BOLD}{CYAN}=== ToM Verification (attempt {attempt_num}) ==={RESET}", file=sys.stderr)
-            print(f"{BOLD}{color}{status}{RESET} - Score: {judgment.overall_score:.2f} (threshold: {self.tom_judge.overall_threshold})", file=sys.stderr)
+            status = "PASS" if verdict.passed else "FAIL"
+            color = GREEN if verdict.passed else RED
+            print(f"\n{BOLD}{CYAN}=== Task Evaluation (Council) - attempt {attempt_num} ==={RESET}", file=sys.stderr)
+            print(f"{BOLD}{color}{status}{RESET} - Score: {verdict.overall_score:.2f} (threshold: {self.judge.overall_threshold})", file=sys.stderr)
+            print(f"Models: {', '.join(verdict.judgments.keys())}", file=sys.stderr)
             print(f"Saved to: {CYAN}{judgment_file}{RESET}", file=sys.stderr)
 
-            if not judgment.is_valid_tom and judgment.suggestions:
+            if verdict.disagreements:
+                print(f"\n{YELLOW}Model disagreements:{RESET}", file=sys.stderr)
+                for d in verdict.disagreements:
+                    print(f"  - {d}", file=sys.stderr)
+
+            if not verdict.passed and verdict.suggestions:
                 print(f"\n{YELLOW}Suggestions for improvement:{RESET}", file=sys.stderr)
-                for i, suggestion in enumerate(judgment.suggestions, 1):
+                for i, suggestion in enumerate(verdict.suggestions[:10], 1):
                     print(f"  {i}. {suggestion}", file=sys.stderr)
 
-            self._log(f"[ToM Judge] Result: {status} (score: {judgment.overall_score:.2f}) [failures: {self.consecutive_tom_failures}]")
+            self._log(f"[Judge] Result: {status} (score: {verdict.overall_score:.2f}) [failures: {self.consecutive_tom_failures}]")
 
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            self._log(f"[ToM Judge] Error: {e}")
+            self._log(f"[Judge] Error: {e}")
+            import traceback
+            traceback.print_exc()
             return json.dumps({
                 "valid": False,
-                "error": f"ToM evaluation failed: {e}",
+                "error": f"Evaluation failed: {e}",
                 "summary": "Evaluation error - try again"
             })
 
@@ -1685,7 +1729,7 @@ SUMMARY:"""
         Copy working task to output directory AND submitted_tasks/.
 
         Called when the agent determines task quality is good.
-        Requires both verify_golden_trajectory[] and judge_tom[] to pass first.
+        Requires both verify_golden_trajectory[] and judge[] to pass first.
         """
         if not self.last_verify_passed:
             return json.dumps({
@@ -1693,12 +1737,12 @@ SUMMARY:"""
                 "hint": "Run verify_golden_trajectory[] to prove the golden trajectory works."
             })
 
-        if not self.last_tom_passed:
+        if not self.last_judge_passed:
             return json.dumps({
-                "error": "Must run judge_tom[] first and pass before submitting.",
-                "hint": "Run judge_tom[] to verify the task requires genuine Theory of Mind reasoning.",
-                "last_tom_score": self.last_tom_judgment.overall_score if self.last_tom_judgment else None,
-                "suggestions": self.last_tom_judgment.suggestions if self.last_tom_judgment else []
+                "error": "Must run judge[] first and pass before submitting.",
+                "hint": "Run judge[] to verify the task quality and ToM requirements.",
+                "last_score": self.last_judgment.overall_score if self.last_judgment else None,
+                "suggestions": self.last_judgment.suggestions if self.last_judgment else []
             })
 
         if not self.task_file.exists():
@@ -1748,8 +1792,8 @@ SUMMARY:"""
 
         # Reset verification state for next task
         self.last_verify_passed = False
-        self.last_tom_passed = False
-        self.last_tom_judgment = None
+        self.last_judge_passed = False
+        self.last_judgment = None
         self.consecutive_tom_failures = 0  # Reset failure counter for new task
 
         # Extract what to remember from this task and reset context

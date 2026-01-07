@@ -168,6 +168,14 @@ class GameStateManager:
             state = state.set_object_property(container_id, "is_locked", True)
             state = state.set_object_property(container_id, "required_key", key_type)
 
+        # Apply initial states (unified format: object_id -> {property: value})
+        # This allows tasks to start with doors open, objects dirty, etc.
+        initial_states = task_data.get("initial_states", {})
+        for object_id, properties in initial_states.items():
+            if isinstance(properties, dict):
+                for prop_name, prop_value in properties.items():
+                    state = state.set_object_property(object_id, prop_name, prop_value)
+
         self.state = state
 
         # Store success condition for evaluation
