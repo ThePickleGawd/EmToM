@@ -112,32 +112,8 @@ class TaskGeneratorAgent:
         # Track run count for trajectory folders (reset per task)
         self._test_run_count = 0
 
-        # Copy fresh template from source to working directory and update for num_agents
-        source_template = Path(__file__).parent / "template" / "template.json"
-        if source_template.exists():
-            with open(source_template) as f:
-                template = json.load(f)
-            # Update template for correct num_agents
-            template["num_agents"] = self.num_agents
-            default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]
-            template["agent_secrets"] = {
-                f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
-                for i in range(self.num_agents)
-            }
-            template["agent_actions"] = {
-                f"agent_{i}": default_actions.copy()
-                for i in range(self.num_agents)
-            }
-            template["golden_trajectory"] = [
-                {
-                    "actions": [
-                        {"agent": f"agent_{i}", "action": "ACTION_NAME[TARGET]" if i == 0 else "Wait"}
-                        for i in range(self.num_agents)
-                    ]
-                }
-            ]
-            with open(self.template_file, 'w') as f:
-                json.dump(template, f, indent=2)
+        # Generate dynamic template based on num_agents
+        self._generate_template()
 
         # Track state
         self.submitted_tasks: List[str] = []
@@ -199,6 +175,80 @@ class TaskGeneratorAgent:
             verbose=self.verbose,
         )
 
+    def _generate_template(self) -> None:
+        """
+        Generate a dynamic task template based on num_agents.
+
+        Creates template.json with appropriate agent_secrets, agent_actions,
+        and golden_trajectory structure for N agents.
+        """
+        # Default actions available to all agents
+        default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]
+
+        # Build agent_secrets and agent_actions for N agents
+        agent_secrets = {}
+        agent_actions = {}
+        for i in range(self.num_agents):
+            agent_id = f"agent_{i}"
+            agent_secrets[agent_id] = ["REPLACE_WITH_SECRET_INFO"]
+            agent_actions[agent_id] = default_actions.copy()
+
+        # Build golden_trajectory template with all agents
+        golden_trajectory_step = {
+            "actions": [
+                {"agent": f"agent_{i}", "action": "Wait" if i > 0 else "ACTION_NAME[TARGET]"}
+                for i in range(self.num_agents)
+            ]
+        }
+
+        template = {
+            "task_id": "REPLACE_WITH_UNIQUE_ID",
+            "title": "REPLACE_WITH_TITLE",
+            "task": "REPLACE_WITH_TASK_DESCRIPTION",
+            "scene_id": "",
+            "episode_id": "",
+            "active_mechanics": [],
+            "mechanic_bindings": [
+                {
+                    "mechanic_type": "REPLACE_WITH_MECHANIC_TYPE",
+                    "trigger_object": "REPLACE_WITH_OBJECT_ID",
+                    "target_object": "REPLACE_WITH_TARGET_ID",
+                    "target_state": "REPLACE_WITH_TARGET_STATE"
+                }
+            ],
+            "items": [
+                {
+                    "item_id": "item_small_key_1|item_radio_1|etc",
+                    "hidden_in": "REPLACE_WITH_CONTAINER (for Search)",
+                    "inside": "REPLACE_WITH_CONTAINER (for Open)"
+                }
+            ],
+            "locked_containers": {
+                "REPLACE_CONTAINER_ID": "REPLACE_ITEM_ID"
+            },
+            "agent_secrets": agent_secrets,
+            "agent_actions": agent_actions,
+            "subtasks": [
+                {
+                    "id": "REPLACE_WITH_ID",
+                    "description": "REPLACE_WITH_DESCRIPTION",
+                    "required": True,
+                    "depends_on": [],
+                    "success_condition": {
+                        "entity": "REPLACE (agent_id for has_item, object_id for others)",
+                        "property": "REPLACE (ex. has_item)",
+                        "target": "REPLACE (omit for unary: is_on_floor/is_open/etc)"
+                    }
+                }
+            ],
+            "num_agents": self.num_agents,
+            "golden_trajectory": [golden_trajectory_step]
+        }
+
+        # Write template to working directory
+        with open(self.template_file, "w") as f:
+            json.dump(template, f, indent=2)
+
     def _get_model_context_limit(self) -> int:
         """
         Get context limit based on model name.
@@ -250,6 +300,7 @@ class TaskGeneratorAgent:
         self._log(f"\n{'='*60}")
         self._log(f"Starting TaskGeneratorAgent")
         self._log(f"Target: {num_tasks_target} tasks")
+        self._log(f"Agents: {self.num_agents}")
         self._log(f"Max iterations: {self.max_iterations} (TOTAL, not per task)")
         self._log(f"Output: {self.output_dir}")
         self._log(f"{'='*60}\n")
@@ -320,6 +371,12 @@ class TaskGeneratorAgent:
         ).replace(
             "{available_mechanics}",
             available_mechanics
+        ).replace(
+            "{num_agents}",
+            str(self.num_agents)
+        ).replace(
+            "{max_agent_id}",
+            str(self.num_agents - 1)
         )
         self.messages = [
             {"role": "system", "content": system_prompt}
@@ -1409,6 +1466,8 @@ SUMMARY:"""
         num_agents = task_data.get("num_agents", 2)
         config_name = f"examples/emtom_{num_agents}_robots"
         script_path = Path(__file__).parent / "test_task.py"
+        # Select config based on num_agents
+        config_name = f"examples/emtom_{self.num_agents}_robots"
         cmd = [
             sys.executable,
             str(script_path),
@@ -1582,6 +1641,8 @@ SUMMARY:"""
         num_agents = task_data.get("num_agents", 2)
         config_name = f"examples/emtom_{num_agents}_robots"
         script_path = Path(__file__).parent / "verify_trajectory.py"
+        # Select config based on num_agents
+        config_name = f"examples/emtom_{self.num_agents}_robots"
         cmd = [
             sys.executable,
             str(script_path),
@@ -1978,6 +2039,8 @@ Use new_scene[] if you want a different scene, or start creating your next task.
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
                 result_file = f.name
 
+            # Select config based on num_agents
+            config_name = f"examples/emtom_{self.num_agents}_robots"
             cmd = [
                 sys.executable,
                 str(script_path),

@@ -63,8 +63,14 @@ def main(config: DictConfig) -> None:
 
     # Extract custom args from config (passed as +arg=value)
     num_tasks = config.get("num_tasks", 1)
+    num_agents = config.get("num_agents", 2)
     model = config.get("model", None)
     llm_provider = config.get("llm_provider", None)
+
+    # Validate num_agents
+    if num_agents < 2 or num_agents > 5:
+        cprint(f"Error: num_agents must be between 2 and 5 (got {num_agents})", "red")
+        sys.exit(1)
 
     # Validate required parameters
     if not llm_provider:
@@ -141,6 +147,7 @@ def main(config: DictConfig) -> None:
     cprint("=" * 60, "blue")
     cprint(f"Instance: {instance_id}", "blue")
     cprint(f"Target tasks: {num_tasks}", "blue")
+    cprint(f"Agents: {num_agents}", "blue")
     cprint(f"LLM: {llm_provider} ({model})", "blue")
     if query:
         cprint(f"Query: {query}", "green")

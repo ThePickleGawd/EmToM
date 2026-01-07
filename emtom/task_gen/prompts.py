@@ -2,6 +2,10 @@
 
 SYSTEM_PROMPT = """You are a puzzle designer for the EMTOM benchmark - multi-agent collaboration challenges in home environments.
 
+## Number of Agents
+You are generating tasks for **{num_agents} agents** (agent_0 through agent_{max_agent_id}).
+All agent_secrets, agent_actions, and golden_trajectory must include entries for ALL {num_agents} agents.
+
 ## Response Format
 **You MUST output exactly ONE action per response. Multiple actions will be IGNORED.**
 
@@ -91,6 +95,7 @@ Your working directory ({working_dir}) contains:
 - `agent_trajectories/` - Benchmark results from test_task[] calls
   - `task_N/run_M/agent_0.txt` - Agent 0's reasoning trace
   - `task_N/run_M/agent_1.txt` - Agent 1's reasoning trace
+  - (and agent_2.txt through agent_{max_agent_id}.txt if more agents)
   - `task_N/run_M/result.txt` - Evaluation summary + subtask progress
   - `task_N/run_M/behavior_analysis.json` - ToM behavior observations
 
@@ -199,6 +204,11 @@ LINEAR:           DIAMOND:           FORK-JOIN:          AGENT-PARALLEL:
 s1 → s2 → s3      s1 ──┐             ┌─ s2 ─┐            A0: s1 → s2 ─┐
                        ├─→ s3    s1 ─┤      ├─→ s4                    ├─→ s5
                   s2 ──┘             └─ s3 ─┘            A1: s3 → s4 ─┘
+
+MULTI-AGENT CONVERGENCE (for 3+ agents):
+A0: s1 ──┐
+A1: s2 ──┼─→ s4 (requires all 3)
+A2: s3 ──┘
 ```
 
 **Example 1 - Linear** (simple sequence):
@@ -230,6 +240,18 @@ Both must complete before final goal. Agents must coordinate who does what.
   {{"id": "s2_agent0_places_cup", "required": false, "depends_on": ["s1_unlock_cabinet"], "success_condition": {{"entity": "cup_5", "property": "is_on_top", "target": "table_22"}}}},
   {{"id": "s3_agent1_places_book", "required": false, "depends_on": ["s1_unlock_cabinet"], "success_condition": {{"entity": "book_1", "property": "is_on_top", "target": "table_22"}}}},
   {{"id": "s4_get_crystal", "required": true, "depends_on": ["s2_agent0_places_cup", "s3_agent1_places_book"], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_oracle_crystal_1"}}}}
+]
+```
+
+**Example 4 - Multi-Agent Convergence** (3+ agents each contribute to final goal):
+Why ToM: Each agent holds a unique piece of knowledge. Agent 0 knows where key_1 is, Agent 1 knows where key_2 is,
+Agent 2 knows which cabinet needs both keys. All three must share information and coordinate.
+```json
+"subtasks": [
+  {{"id": "s1_agent0_gets_key1", "required": false, "depends_on": [], "success_condition": {{"entity": "agent_0", "property": "has_item", "target": "item_small_key_1"}}}},
+  {{"id": "s2_agent1_gets_key2", "required": false, "depends_on": [], "success_condition": {{"entity": "agent_1", "property": "has_item", "target": "item_small_key_2"}}}},
+  {{"id": "s3_agent2_scouts", "required": false, "depends_on": [], "success_condition": {{"entity": "agent_2", "property": "has_item", "target": "item_radio_1"}}}},
+  {{"id": "s4_unlock_final", "required": true, "depends_on": ["s1_agent0_gets_key1", "s2_agent1_gets_key2", "s3_agent2_scouts"], "success_condition": {{"entity": "chest_42", "property": "is_unlocked"}}}}
 ]
 ```
 
@@ -319,7 +341,7 @@ This is more reliable than attempting an elaborate task from scratch. Each itera
 9. `submit_task[]` (requires both verify and judge to pass)
 
 ## Golden Trajectory Format
-Each step has ALL agents' actions for that timestep. Use PARTNR-style `Action[args]` format:
+Each step has ALL {num_agents} agents' actions for that timestep. Use PARTNR-style `Action[args]` format:
 
 **Action formats** (use bracket notation):
 - `Navigate/Pick/Open/Close/Search`: `{{"agent": "agent_0", "action": "Pick[cup_5]"}}`
@@ -328,11 +350,24 @@ Each step has ALL agents' actions for that timestep. Use PARTNR-style `Action[ar
 - `Communicate`: `{{"agent": "agent_0", "action": "Communicate[The key is in drawer_5]"}}`
 - `Wait`: `{{"agent": "agent_0", "action": "Wait"}}`
 
-**Example step**:
+**IMPORTANT**: Every step MUST include an action for ALL {num_agents} agents (agent_0 through agent_{max_agent_id}).
+Agents not doing anything should use `Wait`.
+
+**Example step (2 agents)**:
 ```json
 {{"actions": [
   {{"agent": "agent_0", "action": "Place[cup_5, on, table_22, None, None]"}},
   {{"agent": "agent_1", "action": "Wait"}}
+]}}
+```
+
+**Example step (4 agents)**:
+```json
+{{"actions": [
+  {{"agent": "agent_0", "action": "Navigate[kitchen]"}},
+  {{"agent": "agent_1", "action": "Pick[book_3]"}},
+  {{"agent": "agent_2", "action": "Communicate[I found the key in drawer_5]"}},
+  {{"agent": "agent_3", "action": "Wait"}}
 ]}}
 ```
 

@@ -282,6 +282,7 @@ run_generate() {
     echo "Target tasks: $NUM_TASKS"
     echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
     echo "LLM: $LLM_PROVIDER ($MODEL)"
+    echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
     echo "Subtasks: $SUBTASKS_MIN - $SUBTASKS_MAX"
     echo "Max iterations: $MAX_ITERATIONS"
     if [ -n "$QUERY" ]; then
@@ -293,6 +294,9 @@ run_generate() {
     echo "(Loads random scene from PARTNR dataset)"
     echo "=============================================="
     echo ""
+
+    # Get the appropriate config for the number of agents
+    CONFIG_NAME=$(get_agent_config $NUM_AGENTS $AGENT_TYPE)
 
     # Build extra args array (handles spaces/quotes properly without eval)
     EXTRA_ARGS=()
