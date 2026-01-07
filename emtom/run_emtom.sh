@@ -97,7 +97,8 @@ LLM_PROVIDER=""  # LLM provider: auto-detected from model
 SUBTASKS_MIN=2
 SUBTASKS_MAX=5
 MAX_ITERATIONS=100
-NUM_AGENTS=2
+AGENTS_MIN=2
+AGENTS_MAX=2
 AGENT_TYPE="robot"  # robot or human
 QUERY=""  # seed query for task generation
 THRESHOLD=0.7  # ToM judge threshold
@@ -118,7 +119,9 @@ print_usage() {
     echo "  all         Run full pipeline: explore -> generate -> benchmark"
     echo ""
     echo -e "${BOLD}Agent Options:${NC}"
-    echo "  --num-agents N       Number of agents (default: $NUM_AGENTS)"
+    echo "  --agents N           Exact number of agents (sets both min and max)"
+    echo "  --agents-min N       Minimum agents for task generation (default: $AGENTS_MIN)"
+    echo "  --agents-max N       Maximum agents for task generation (default: $AGENTS_MAX)"
     echo "  --agent-type TYPE    Agent type: human or robot (default: $AGENT_TYPE)"
     echo ""
     echo -e "${BOLD}Exploration Options:${NC}"
@@ -177,13 +180,13 @@ print_usage() {
     echo ""
     echo -e "${YELLOW}Examples:${NC}"
     echo -e "  ./emtom/run_emtom.sh explore --steps 30 ${GREEN}--model gpt-5${NC}"
-    echo -e "  ./emtom/run_emtom.sh explore --num-agents 3 ${GREEN}--model sonnet${NC}"
+    echo -e "  ./emtom/run_emtom.sh explore --agents 3 ${GREEN}--model sonnet${NC}"
     echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model gpt-5${NC}"
     echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model sonnet${NC} --num-tasks 5"
+    echo -e "  ./emtom/run_emtom.sh generate --agents-min 2 --agents-max 4 ${GREEN}--model gpt-5${NC}"
     echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model mistral-large-3${NC} --query \"A task using the radio\""
     echo "  ./emtom/run_emtom.sh all"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
-    echo "  ./emtom/run_emtom.sh benchmark --num-agents 4"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
     echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
 }
@@ -241,13 +244,13 @@ run_exploration() {
     echo "Mode: LLM-guided"
     echo "LLM: $LLM_PROVIDER ($MODEL)"
     echo "Steps: $EXPLORATION_STEPS"
-    echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
+    echo "Agents: $AGENTS_MAX ($AGENT_TYPE)"
     echo "(Episodes randomly selected for diversity)"
     echo "=============================================="
     echo ""
 
-    # Get the appropriate config for the number of agents
-    CONFIG_NAME=$(get_agent_config $NUM_AGENTS $AGENT_TYPE)
+    # Get the appropriate config for the number of agents (use max for exploration)
+    CONFIG_NAME=$(get_agent_config $AGENTS_MAX $AGENT_TYPE)
 
     # Use Hydra config system - pass parameters as config overrides
     python emtom/examples/run_habitat_exploration.py \
@@ -273,14 +276,14 @@ run_generate() {
     # Expand short model names to full IDs
     MODEL=$(expand_model_name "$MODEL")
 
-    # Get the appropriate config for the number of agents
-    CONFIG_NAME=$(get_agent_config $NUM_AGENTS $AGENT_TYPE)
+    # Get the appropriate config for the max number of agents (for verification)
+    CONFIG_NAME=$(get_agent_config $AGENTS_MAX $AGENT_TYPE)
 
     echo "=============================================="
     echo "Running EMTOM Task Generation (Live Scene Mode)"
     echo "=============================================="
     echo "Target tasks: $NUM_TASKS"
-    echo "Agents: $NUM_AGENTS ($AGENT_TYPE)"
+    echo "Agents: $AGENTS_MIN - $AGENTS_MAX ($AGENT_TYPE)"
     echo "LLM: $LLM_PROVIDER ($MODEL)"
     echo "Subtasks: $SUBTASKS_MIN - $SUBTASKS_MAX"
     echo "Max iterations: $MAX_ITERATIONS"
@@ -309,7 +312,8 @@ run_generate() {
         "${EXTRA_ARGS[@]}" \
         --config-name $CONFIG_NAME \
         +num_tasks=$NUM_TASKS \
-        +num_agents=$NUM_AGENTS \
+        +agents_min=$AGENTS_MIN \
+        +agents_max=$AGENTS_MAX \
         +model=$MODEL \
         +llm_provider=$LLM_PROVIDER \
         +subtasks_min=$SUBTASKS_MIN \
@@ -366,8 +370,8 @@ run_benchmark() {
 }
 
 run_test() {
-    # Auto-detect num_agents from task file if provided
-    TEST_NUM_AGENTS=$NUM_AGENTS
+    # Auto-detect num_agents from task file if provided, otherwise use AGENTS_MAX
+    TEST_NUM_AGENTS=$AGENTS_MAX
     if [ -n "$TASK_FILE" ] && [ -f "$TASK_FILE" ]; then
         TASK_NUM_AGENTS=$(python3 -c "import json; print(json.load(open('$TASK_FILE')).get('num_agents', 2))" 2>/dev/null)
         if [ -n "$TASK_NUM_AGENTS" ]; then
@@ -501,8 +505,23 @@ while [[ $# -gt 0 ]]; do
             RETRY_VERIFICATION=$2
             shift 2
             ;;
+        --agents)
+            AGENTS_MIN=$2
+            AGENTS_MAX=$2
+            shift 2
+            ;;
+        --agents-min)
+            AGENTS_MIN=$2
+            shift 2
+            ;;
+        --agents-max)
+            AGENTS_MAX=$2
+            shift 2
+            ;;
         --num-agents)
-            NUM_AGENTS=$2
+            # Backwards compatibility: --num-agents sets both min and max
+            AGENTS_MIN=$2
+            AGENTS_MAX=$2
             shift 2
             ;;
         --agent-type)

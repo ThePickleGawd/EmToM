@@ -78,7 +78,8 @@ def main(config: DictConfig) -> None:
     quiet = config.get("quiet", False)
     subtasks_min = config.get("subtasks_min", 2)
     subtasks_max = config.get("subtasks_max", 5)
-    num_agents = config.get("num_agents", 2)
+    agents_min = config.get("agents_min", 2)
+    agents_max = config.get("agents_max", 2)
     seed = config.get("seed", None)
 
     # Get query from extra_args (parsed before Hydra to handle quoted strings)
@@ -202,7 +203,8 @@ def main(config: DictConfig) -> None:
         verbose=not quiet,
         subtasks_min=subtasks_min,
         subtasks_max=subtasks_max,
-        num_agents=num_agents,  # Number of agents for task generation
+        agents_min=agents_min,
+        agents_max=agents_max,
         scene_data=scene_data,  # Pass live scene data
         log_dir=hydra_output_dir,  # Pass Hydra output directory for logs
         query=query,  # Optional seed query for task generation

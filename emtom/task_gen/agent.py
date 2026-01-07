@@ -49,7 +49,8 @@ class TaskGeneratorAgent:
         verbose: bool = True,
         subtasks_min: int = 2,
         subtasks_max: int = 5,
-        num_agents: int = 2,
+        agents_min: int = 2,
+        agents_max: int = 2,
         scene_data: Optional[Any] = None,
         log_dir: Optional[str] = None,
         max_context_chars: Optional[int] = None,
@@ -68,7 +69,8 @@ class TaskGeneratorAgent:
             verbose: Print agent thoughts and actions
             subtasks_min: Minimum number of subtasks per task
             subtasks_max: Maximum number of subtasks per task
-            num_agents: Number of agents for task generation (2-5)
+            agents_min: Minimum number of agents for task generation (2-5)
+            agents_max: Maximum number of agents for task generation (2-5)
             scene_data: Live scene data from SceneLoader (required)
             log_dir: Directory for log files (defaults to Hydra output or output_dir/logs)
             max_context_chars: Max context size before summarizing. Auto-detected from model if None.
@@ -80,7 +82,8 @@ class TaskGeneratorAgent:
         self.working_dir = Path(working_dir)
         self.subtasks_min = subtasks_min
         self.subtasks_max = subtasks_max
-        self.num_agents = num_agents
+        self.agents_min = agents_min
+        self.agents_max = agents_max
         self.output_dir = Path(output_dir)
         self.max_iterations = max_iterations
         self.verbose = verbose
@@ -112,27 +115,28 @@ class TaskGeneratorAgent:
         # Track run count for trajectory folders (reset per task)
         self._test_run_count = 0
 
-        # Copy fresh template from source to working directory and update for num_agents
+        # Copy fresh template from source to working directory and update for agent range
+        # Template shows max agents; LLM can use fewer based on agents_min/agents_max
         source_template = Path(__file__).parent / "template" / "template.json"
         if source_template.exists():
             with open(source_template) as f:
                 template = json.load(f)
-            # Update template for correct num_agents
-            template["num_agents"] = self.num_agents
+            # Set num_agents to max (LLM will choose within range)
+            template["num_agents"] = self.agents_max
             default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]
             template["agent_secrets"] = {
                 f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
-                for i in range(self.num_agents)
+                for i in range(self.agents_max)
             }
             template["agent_actions"] = {
                 f"agent_{i}": default_actions.copy()
-                for i in range(self.num_agents)
+                for i in range(self.agents_max)
             }
             template["golden_trajectory"] = [
                 {
                     "actions": [
                         {"agent": f"agent_{i}", "action": "ACTION_NAME[TARGET]" if i == 0 else "Wait"}
-                        for i in range(self.num_agents)
+                        for i in range(self.agents_max)
                     ]
                 }
             ]
@@ -377,9 +381,10 @@ Your previous task did not pass the ToM verification. You MUST address these iss
 **NEVER call fail[]** - if a task repeatedly fails judge (2-3 attempts), use new_scene[] to get a fresh scene and try a completely different task design. Don't keep iterating on a broken design.
 
 ## Task Requirements
-- **Agents**: {self.num_agents} agents (agent_0 through agent_{self.num_agents - 1})
+- **Agents**: Between {self.agents_min} and {self.agents_max} agents (choose based on task complexity; use agent_0 through agent_N-1)
 - **Subtasks**: Between {self.subtasks_min} and {self.subtasks_max} steps per task (choose based on task complexity)
 - Each subtask should be a distinct action that gates progress to the next
+- Set num_agents in the task JSON to match the number of agents you use
 
 ## Scene Data (from PARTNR dataset - these objects EXIST!)
 **Episode ID**: {self.scene_data.episode_id}
@@ -516,26 +521,26 @@ Start by reading the template, then create a task using the scene data above."""
             task["scene_id"] = self.scene_data.scene_id
             task["episode_id"] = self.scene_data.episode_id
 
-        # Set num_agents
-        task["num_agents"] = self.num_agents
+        # Set num_agents to max (LLM can reduce if desired)
+        task["num_agents"] = self.agents_max
 
-        # Generate agent_secrets and agent_actions for N agents
+        # Generate agent_secrets and agent_actions for max agents
         default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]
         task["agent_secrets"] = {
             f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
-            for i in range(self.num_agents)
+            for i in range(self.agents_max)
         }
         task["agent_actions"] = {
             f"agent_{i}": default_actions.copy()
-            for i in range(self.num_agents)
+            for i in range(self.agents_max)
         }
 
-        # Generate golden_trajectory template with N agents
+        # Generate golden_trajectory template with max agents
         task["golden_trajectory"] = [
             {
                 "actions": [
                     {"agent": f"agent_{i}", "action": "ACTION_NAME[TARGET]" if i == 0 else "Wait"}
-                    for i in range(self.num_agents)
+                    for i in range(self.agents_max)
                 ]
             }
         ]
@@ -544,7 +549,7 @@ Start by reading the template, then create a task using the scene data above."""
         with open(self.task_file, 'w') as f:
             json.dump(task, f, indent=2)
 
-        self._log(f"Created {self.task_file} with {self.num_agents} agents pre-populated")
+        self._log(f"Created {self.task_file} with {self.agents_min}-{self.agents_max} agent template")
 
     def _truncate_old_heredocs(self) -> None:
         """Truncate large heredoc content in PREVIOUS assistant messages.
@@ -1831,6 +1836,23 @@ SUMMARY:"""
                 "required_max": self.subtasks_max,
             })
 
+        # Validate agent count
+        num_agents = task_data.get("num_agents", 2)
+        if num_agents < self.agents_min:
+            return json.dumps({
+                "error": f"Task has {num_agents} agents, minimum is {self.agents_min}.",
+                "hint": f"Increase num_agents to at least {self.agents_min}.",
+                "current": num_agents,
+                "required_min": self.agents_min,
+            })
+        if num_agents > self.agents_max:
+            return json.dumps({
+                "error": f"Task has {num_agents} agents, maximum is {self.agents_max}.",
+                "hint": f"Reduce num_agents to at most {self.agents_max}.",
+                "current": num_agents,
+                "required_max": self.agents_max,
+            })
+
         # Generate filename: {datetime}_{title_slug}.json
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         title = task_data.get("title", "untitled")
@@ -1970,8 +1992,8 @@ Use new_scene[] if you want a different scene, or start creating your next task.
 
         try:
             # Use subprocess to load scene (fresh GL context)
-            # Use appropriate config for num_agents
-            config_name = f"examples/emtom_{self.num_agents}_robots"
+            # Use config for max agents (scene supports up to agents_max)
+            config_name = f"examples/emtom_{self.agents_max}_robots"
             new_seed = get_random_seed()
             script_path = Path(__file__).parent / "load_scene.py"
 
