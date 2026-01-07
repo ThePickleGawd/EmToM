@@ -112,10 +112,32 @@ class TaskGeneratorAgent:
         # Track run count for trajectory folders (reset per task)
         self._test_run_count = 0
 
-        # Copy fresh template from source to working directory
+        # Copy fresh template from source to working directory and update for num_agents
         source_template = Path(__file__).parent / "template" / "template.json"
         if source_template.exists():
-            shutil.copy(source_template, self.template_file)
+            with open(source_template) as f:
+                template = json.load(f)
+            # Update template for correct num_agents
+            template["num_agents"] = self.num_agents
+            default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]
+            template["agent_secrets"] = {
+                f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
+                for i in range(self.num_agents)
+            }
+            template["agent_actions"] = {
+                f"agent_{i}": default_actions.copy()
+                for i in range(self.num_agents)
+            }
+            template["golden_trajectory"] = [
+                {
+                    "actions": [
+                        {"agent": f"agent_{i}", "action": "ACTION_NAME[TARGET]" if i == 0 else "Wait"}
+                        for i in range(self.num_agents)
+                    ]
+                }
+            ]
+            with open(self.template_file, 'w') as f:
+                json.dump(template, f, indent=2)
 
         # Track state
         self.submitted_tasks: List[str] = []
