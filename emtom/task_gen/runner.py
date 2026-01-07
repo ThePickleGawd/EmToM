@@ -142,6 +142,7 @@ def main(config: DictConfig) -> None:
     cprint("=" * 60, "blue")
     cprint(f"Instance: {instance_id}", "blue")
     cprint(f"Target tasks: {num_tasks}", "blue")
+    cprint(f"Agents: {agents_min} - {agents_max}", "blue")
     cprint(f"LLM: {llm_provider} ({model})", "blue")
     if query:
         cprint(f"Query: {query}", "green")

@@ -5,7 +5,7 @@ defaults:
   - /training@             : base_train
   - /habitat_conf          : oracle_kinematic_multi_agent_5
   - /habitat_conf/task     : rearrange_easy_multi_agent
-  - /evaluation: centralized_evaluation_runner_multi_agent
+  - /evaluation: centralized_evaluation_runner_5_agent
   # Agent 0 actions
   - /habitat/task/actions@habitat.task.actions.agent_0_humanoid_base_velocity: humanoid_base_velocity
   - /habitat/task/actions@habitat.task.actions.agent_0_humanoidjoint_action: humanoidjoint_action

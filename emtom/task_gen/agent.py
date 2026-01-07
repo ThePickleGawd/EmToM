@@ -254,6 +254,7 @@ class TaskGeneratorAgent:
         self._log(f"\n{'='*60}")
         self._log(f"Starting TaskGeneratorAgent")
         self._log(f"Target: {num_tasks_target} tasks")
+        self._log(f"Agents: {self.agents_min} - {self.agents_max}")
         self._log(f"Max iterations: {self.max_iterations} (TOTAL, not per task)")
         self._log(f"Output: {self.output_dir}")
         self._log(f"{'='*60}\n")
@@ -324,6 +325,12 @@ class TaskGeneratorAgent:
         ).replace(
             "{available_mechanics}",
             available_mechanics
+        ).replace(
+            "{num_agents}",
+            str(self.agents_max)  # Template uses max agents; LLM can choose fewer
+        ).replace(
+            "{max_agent_id}",
+            str(self.agents_max - 1)
         )
         self.messages = [
             {"role": "system", "content": system_prompt}
@@ -1410,7 +1417,7 @@ SUMMARY:"""
             }
 
         # Run test in subprocess with trajectory output directory
-        # Use appropriate config for num_agents
+        # Use appropriate config for num_agents from task
         num_agents = task_data.get("num_agents", 2)
         config_name = f"examples/emtom_{num_agents}_robots"
         script_path = Path(__file__).parent / "test_task.py"
@@ -1583,7 +1590,7 @@ SUMMARY:"""
             })
 
         # Run verification in subprocess (fresh GL context)
-        # Use appropriate config for num_agents
+        # Use appropriate config for num_agents from task
         num_agents = task_data.get("num_agents", 2)
         config_name = f"examples/emtom_{num_agents}_robots"
         script_path = Path(__file__).parent / "verify_trajectory.py"
