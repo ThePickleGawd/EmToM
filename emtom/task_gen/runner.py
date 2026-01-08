@@ -42,11 +42,44 @@ def parse_extra_args():
                         help="Seed query to guide task generation")
     parser.add_argument("--retry-verification", type=str, default=None,
                         help="Path to failed ToM verification JSON to retry with suggestions")
+    parser.add_argument("--calibration-model", type=str, default="gpt-5.2",
+                        help="Model to calibrate dataset difficulty against (default: gpt-5.2)")
+    parser.add_argument("--target-pass-rate", type=float, default=0.10,
+                        help="Target pass rate for calibration model (default: 0.10 = 10%%)")
 
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
 
     return args
+
+
+def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
+    """Compute pass rate statistics for a given model from existing tasks."""
+    stats = {"passed": 0, "failed": 0, "untested": 0, "model": model}
+    tasks_path = Path(tasks_dir)
+
+    if not tasks_path.exists():
+        stats["total"] = 0
+        stats["rate"] = None
+        return stats
+
+    for task_file in tasks_path.glob("*.json"):
+        try:
+            with open(task_file) as f:
+                task = json.load(f)
+            cal = task.get("calibration", {}).get(model)
+            if cal is None:
+                stats["untested"] += 1
+            elif cal.get("passed"):
+                stats["passed"] += 1
+            else:
+                stats["failed"] += 1
+        except Exception:
+            continue
+
+    stats["total"] = stats["passed"] + stats["failed"]
+    stats["rate"] = stats["passed"] / stats["total"] if stats["total"] > 0 else None
+    return stats
 
 
 @hydra.main(version_base=None, config_path="../../habitat_llm/conf")
@@ -85,6 +118,8 @@ def main(config: DictConfig) -> None:
     # Get query from extra_args (parsed before Hydra to handle quoted strings)
     query = extra_args.query if extra_args else None
     retry_verification = extra_args.retry_verification if extra_args else None
+    calibration_model = extra_args.calibration_model if extra_args else "gpt-5.2"
+    target_pass_rate = extra_args.target_pass_rate if extra_args else 0.10
 
     # Load failed verification suggestions if retrying
     verification_feedback = None
@@ -137,6 +172,10 @@ def main(config: DictConfig) -> None:
     fix_config(config)
     config = setup_config(config, seed=seed or 47668090)
 
+    # Compute calibration stats from existing dataset
+    calibration_stats = compute_calibration_stats(output_dir, calibration_model)
+    calibration_stats["target_rate"] = target_pass_rate
+
     cprint("=" * 60, "blue")
     cprint("EMTOM Task Generator (Live Scene Mode)", "blue")
     cprint("=" * 60, "blue")
@@ -148,6 +187,13 @@ def main(config: DictConfig) -> None:
         cprint(f"Query: {query}", "green")
     cprint(f"Working dir: {working_dir}", "blue")
     cprint(f"Output: {output_dir}", "blue")
+
+    # Display calibration stats
+    cprint(f"Calibration: {calibration_model} (target: {target_pass_rate:.0%})", "blue")
+    if calibration_stats["rate"] is not None:
+        cprint(f"  Current rate: {calibration_stats['rate']:.1%} ({calibration_stats['passed']}/{calibration_stats['total']})", "yellow")
+    else:
+        cprint(f"  No calibration data yet (untested: {calibration_stats['untested']})", "yellow")
     cprint("=" * 60, "blue")
     print()
 
@@ -210,6 +256,7 @@ def main(config: DictConfig) -> None:
         log_dir=hydra_output_dir,  # Pass Hydra output directory for logs
         query=query,  # Optional seed query for task generation
         verification_feedback=verification_feedback,  # Failed ToM verification suggestions
+        calibration_stats=calibration_stats,  # Dataset calibration stats for difficulty guidance
     )
 
     # Run agent

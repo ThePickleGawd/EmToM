@@ -56,6 +56,7 @@ class TaskGeneratorAgent:
         max_context_chars: Optional[int] = None,
         query: Optional[str] = None,
         verification_feedback: Optional[Dict[str, Any]] = None,
+        calibration_stats: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the agent.
@@ -76,6 +77,7 @@ class TaskGeneratorAgent:
             max_context_chars: Max context size before summarizing. Auto-detected from model if None.
             query: Optional seed query to guide task generation (e.g., "A task where agents use the radio")
             verification_feedback: Optional dict with suggestions from a failed ToM verification to incorporate
+            calibration_stats: Dataset calibration stats (pass rate, target rate) for difficulty guidance
         """
         self.llm = llm_client
         self.config = config
@@ -91,6 +93,7 @@ class TaskGeneratorAgent:
         self.max_context_chars = max_context_chars or self._get_model_context_limit()
         self.query = query
         self.verification_feedback = verification_feedback
+        self.calibration_stats = calibration_stats or {}
 
         # Task file paths
         self.task_file = self.working_dir / "working_task.json"
@@ -375,9 +378,42 @@ Your previous task did not pass the ToM verification. You MUST address these iss
 
             verification_section += "\nCreate a NEW task that specifically addresses these issues.\n"
 
+        # Build calibration guidance section based on dataset stats
+        calibration_section = ""
+        if self.calibration_stats:
+            model = self.calibration_stats.get("model", "unknown")
+            target_rate = self.calibration_stats.get("target_rate", 0.10)
+            current_rate = self.calibration_stats.get("rate")
+            total = self.calibration_stats.get("total", 0)
+            passed = self.calibration_stats.get("passed", 0)
+            failed = self.calibration_stats.get("failed", 0)
+            untested = self.calibration_stats.get("untested", 0)
+
+            calibration_section = f"""
+## Dataset Calibration
+Target: {target_rate:.0%} of tasks should be passable by {model}
+
+"""
+            if current_rate is not None:
+                calibration_section += f"""Current dataset statistics for {model}:
+- Tested tasks: {total}
+- Pass rate: {current_rate:.1%} ({passed} passed, {failed} failed)
+- Untested: {untested}
+
+"""
+                tolerance = 0.05
+                if current_rate > target_rate + tolerance:
+                    calibration_section += f"**Guidance**: Current pass rate ({current_rate:.1%}) is ABOVE target ({target_rate:.0%}). Generate HARDER tasks with more complex coordination requirements, deeper dependency chains, or more challenging Theory of Mind requirements.\n"
+                elif current_rate < target_rate - tolerance:
+                    calibration_section += f"**Guidance**: Current pass rate ({current_rate:.1%}) is BELOW target ({target_rate:.0%}). Generate EASIER tasks with clearer paths to success, simpler coordination, or more direct hints in agent secrets.\n"
+                else:
+                    calibration_section += f"**Guidance**: Current pass rate is near target. Continue generating varied difficulty tasks.\n"
+            else:
+                calibration_section += f"No calibration data yet for {model}. Generate tasks of varied difficulty.\n"
+
         # Initial user message with scene data
         user_msg = f"""Create {num_tasks_target} quality benchmark tasks.
-{query_section}{verification_section}
+{query_section}{verification_section}{calibration_section}
 ## WORKFLOW (IMPORTANT!)
 1. Create ONE task at a time using working_task.json
 2. Verify with verify_golden_trajectory[] and judge[]
@@ -1047,6 +1083,10 @@ SUMMARY:"""
 
             # Benchmark ran successfully - merge results with validation
             validation_result.update(results)
+
+            # Save calibration results to task JSON for dataset tracking
+            self._save_calibration_result(task_data, results)
+
             return json.dumps(validation_result, indent=2)
         except Exception as e:
             # If benchmark fails due to environment issues, return validation result
@@ -1054,6 +1094,39 @@ SUMMARY:"""
             validation_result["benchmark_error"] = str(e)
             validation_result["summary"] = f"Task structure valid. Benchmark skipped: {e}"
             return json.dumps(validation_result, indent=2)
+
+    def _save_calibration_result(self, task_data: Dict[str, Any], results: Dict[str, Any]) -> None:
+        """Save calibration results to task JSON for dataset pass rate tracking."""
+        from datetime import datetime
+
+        # Get model name from LLM config
+        model_name = "unknown"
+        if hasattr(self.llm, 'llm_conf'):
+            params = self.llm.llm_conf.get('generation_params', {})
+            model_name = params.get('model', 'unknown')
+        elif hasattr(self.llm, 'generation_params'):
+            model_name = getattr(self.llm.generation_params, 'model', 'unknown')
+
+        # Extract calibration data from results
+        calibration_entry = {
+            "passed": results.get("done", False),
+            "tested_at": datetime.now().isoformat(),
+            "steps": results.get("steps", 0),
+            "percent_complete": results.get("evaluation", {}).get("percent_complete", 0.0),
+        }
+
+        # Update task data with calibration results
+        if "calibration" not in task_data:
+            task_data["calibration"] = {}
+        task_data["calibration"][model_name] = calibration_entry
+
+        # Write back to working_task.json
+        try:
+            with open(self.task_file, 'w') as f:
+                json.dump(task_data, f, indent=2)
+            self._log(f"[Calibration] Saved result for {model_name}: passed={calibration_entry['passed']}")
+        except Exception as e:
+            self._log(f"[Calibration] Warning: Failed to save calibration result: {e}")
 
     def _validate_task_structure(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """Validate task JSON structure without running benchmark."""
