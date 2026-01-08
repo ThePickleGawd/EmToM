@@ -332,10 +332,10 @@ This is more reliable than attempting an elaborate task from scratch. Each itera
 ## Process
 1. Read scene data (rooms, furniture, objects)
 2. Create task with placeholder task description
-3. Run `verify_golden_trajectory[]` - MUST PASS
-4. Fix any issues and re-verify
-5. Run `judge[]` - MUST PASS (evaluates ToM + Quality with multi-model council)
-6. If judge fails, improve based on suggestions and re-run judge[]
+3. Run `judge[]` - MUST PASS (evaluates ToM + Quality with multi-model council)
+4. If judge fails, improve based on suggestions and re-run judge[]
+5. Run `verify_golden_trajectory[]` - MUST PASS
+6. Fix any issues and re-verify
 7. Run `test_task[]` - target 10-50 steps
 8. Write real task description (after verification passes)
 9. `submit_task[]` (requires both verify and judge to pass)
