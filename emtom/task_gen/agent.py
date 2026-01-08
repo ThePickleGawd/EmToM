@@ -1494,6 +1494,7 @@ SUMMARY:"""
         num_agents = task_data.get("num_agents", 2)
         config_name = f"examples/emtom_{num_agents}_robots"
         script_path = Path(__file__).parent / "test_task.py"
+
         cmd = [
             sys.executable,
             str(script_path),
@@ -1501,7 +1502,6 @@ SUMMARY:"""
             "--result-file", temp_result_file,
             "--trajectory-dir", str(run_dir),
             "--config-name", config_name,
-            "--max-turns", "20",
         ]
 
         try:

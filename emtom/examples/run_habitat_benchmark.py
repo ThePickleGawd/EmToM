@@ -32,17 +32,21 @@ from habitat_llm.utils import cprint, setup_config, fix_config
 from emtom.task_gen import GeneratedTask
 
 
-def load_tasks(task_file: str) -> list:
+def load_tasks(task_file: str) -> tuple:
     """Load tasks from JSON file.
 
     Supports two formats:
     - Bundle format: {"tasks": [task1, task2, ...]}
     - Single task format: {task_id, title, ...}
+
+    Returns:
+        Tuple of (tasks list, raw data list) - raw data includes golden_trajectory
     """
     with open(task_file) as f:
         data = json.load(f)
 
     tasks = []
+    raw_data = []
 
     # Check if it's a bundle (has "tasks" array) or single task
     if "tasks" in data:
@@ -50,34 +54,41 @@ def load_tasks(task_file: str) -> list:
         for task_data in data["tasks"]:
             task = GeneratedTask.from_dict(task_data)
             tasks.append(task)
+            raw_data.append(task_data)
     elif "task_id" in data:
         # Single task format
         task = GeneratedTask.from_dict(data)
         tasks.append(task)
+        raw_data.append(data)
 
-    return tasks
+    return tasks, raw_data
 
 
-def load_all_tasks_from_dir(task_dir: Path) -> list:
+def load_all_tasks_from_dir(task_dir: Path) -> tuple:
     """Load all tasks from a directory.
 
     Looks for:
     - Individual task files: task_*.json
     - Bundle files: emtom_challenges_*.json, tasks_*.json
+
+    Returns:
+        Tuple of (tasks list, raw data list)
     """
     tasks = []
+    raw_data = []
 
     # Find all JSON files in the directory
     json_files = list(task_dir.glob("*.json"))
 
     for task_file in json_files:
         try:
-            file_tasks = load_tasks(str(task_file))
+            file_tasks, file_raw = load_tasks(str(task_file))
             tasks.extend(file_tasks)
+            raw_data.extend(file_raw)
         except Exception as e:
             print(f"Warning: Could not load {task_file}: {e}")
 
-    return tasks
+    return tasks, raw_data
 
 
 @hydra.main(version_base=None, config_path="../../habitat_llm/conf")
@@ -144,13 +155,14 @@ def main(config: DictConfig) -> None:
         task_file = task_files[0]
         cprint(f"Loading most recent task: {task_file.name}", "blue")
 
-    tasks = load_tasks(str(task_file))
+    tasks, raw_data = load_tasks(str(task_file))
 
     if not tasks:
         cprint(f"ERROR: Failed to parse task file: {task_file}", "red")
         sys.exit(1)
 
     task = tasks[0]
+    task_raw = raw_data[0]
     cprint(f"Loaded task: {task.title}", "green")
     output_dir = config.paths.results_dir
 
@@ -210,11 +222,16 @@ def main(config: DictConfig) -> None:
     # Get max steps from config (set via --max-sim-steps or Hydra)
     max_steps = config.habitat.environment.get("max_episode_steps", 2000)
 
-    # Get max turns from config (set via +max_turns=N)
-    max_turns = config.get("max_turns", 20)
+    # Calculate max turns as 3x golden trajectory length
+    # Config override via +max_turns=N takes precedence if explicitly set
+    golden_trajectory = task_raw.get("golden_trajectory", [])
+    if "max_turns" in config:
+        max_turns = config.max_turns
+    else:
+        max_turns = len(golden_trajectory) * 3
 
     cprint(f"\nMax simulation steps: {max_steps}", "blue")
-    cprint(f"Max LLM turns: {max_turns}", "blue")
+    cprint(f"Max LLM turns: {max_turns} (golden trajectory: {len(golden_trajectory)} steps)", "blue")
 
     # Run benchmark
     try:
