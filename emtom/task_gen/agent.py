@@ -2129,7 +2129,10 @@ Use new_scene[] if you want a different scene, or start creating your next task.
             with open(scene_file, "w") as f:
                 json.dump(self.scene_data.to_dict(), f, indent=2)
 
-            # Reset working_task.json with new scene info
+            # Reset working_task.json with new scene info and random agent count
+            import random
+            num_agents = random.randint(self.agents_min, self.agents_max)
+
             source_template = Path(__file__).parent / "template" / "template.json"
             if source_template.exists():
                 with open(source_template) as f:
@@ -2137,8 +2140,31 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                 # Pre-populate with new scene info
                 template_data["scene_id"] = self.scene_data.scene_id
                 template_data["episode_id"] = self.scene_data.episode_id
+                template_data["num_agents"] = num_agents
+
+                # Set up agent_secrets and agent_actions for the chosen number of agents
+                default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]
+                template_data["agent_secrets"] = {
+                    f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
+                    for i in range(num_agents)
+                }
+                template_data["agent_actions"] = {
+                    f"agent_{i}": default_actions.copy()
+                    for i in range(num_agents)
+                }
+                template_data["golden_trajectory"] = [
+                    {
+                        "actions": [
+                            {"agent": f"agent_{i}", "action": "ACTION_NAME[TARGET]" if i == 0 else "Wait"}
+                            for i in range(num_agents)
+                        ]
+                    }
+                ]
+
                 with open(self.task_file, "w") as f:
                     json.dump(template_data, f, indent=2)
+
+                self._log(f"Created working_task.json with {num_agents} agents (range: {self.agents_min}-{self.agents_max})")
 
             # Reset verification state for new task
             self.last_verify_passed = False
@@ -2154,12 +2180,13 @@ Use new_scene[] if you want a different scene, or start creating your next task.
 
 Scene ID: {self.scene_data.scene_id}
 Episode ID: {self.scene_data.episode_id}
+Agents: {num_agents} (randomly chosen from range {self.agents_min}-{self.agents_max})
 Rooms: {', '.join(self.scene_data.rooms)}
 Furniture: {len(self.scene_data.furniture)} items
 Objects: {len(self.scene_data.objects)} items
 Articulated: {len(self.scene_data.articulated_furniture)} items
 
-working_task.json has been reset with new scene_id and episode_id.
+working_task.json has been reset with scene_id, episode_id, and {num_agents} agents.
 Full scene data saved to: {scene_file}"""
 
         except Exception as e:

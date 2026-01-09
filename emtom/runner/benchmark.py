@@ -248,9 +248,19 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
             # =====================================================================
             # Phase 2: Plan for all LLM agents (get high-level actions)
+            # Buffer messages during planning so they're only visible next turn
             # =====================================================================
             llm_agent_state: Dict[int, Dict[str, Any]] = {}
             max_skill_steps = 1500
+
+            # Buffer messages sent during this turn - they should only be visible next turn
+            message_buffer: List[tuple] = []
+            original_post_message = self.env_interface.post_agent_message
+
+            def buffered_post_message(sender_uid: int, message: str) -> None:
+                message_buffer.append((sender_uid, message))
+
+            self.env_interface.post_agent_message = buffered_post_message
 
             for uid in sorted(self.agents.keys()):
                 if uid in agents_done:
@@ -304,6 +314,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 except Exception as e:
                     print(f"[Agent {uid} ERROR during planning] {e}", flush=True)
                     continue
+
+            # Restore original post_message and flush buffered messages to queues
+            # These messages will be consumed at the start of NEXT turn
+            self.env_interface.post_agent_message = original_post_message
+            for sender_uid, message in message_buffer:
+                original_post_message(sender_uid, message)
 
             if self._episode_done:
                 break

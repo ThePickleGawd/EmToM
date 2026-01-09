@@ -38,7 +38,7 @@ class EmtomPlanner(LLMPlanner):
                 color = self.AGENT_COLORS[uid % len(self.AGENT_COLORS)]
 
                 if thought:
-                    print(f"Thought: {thought}", flush=True)
+                    print(f"{thought}", flush=True)
                 print(
                     f"{color}Agent_{uid}:{self.RESET} {action_name}[{action_arg}]",
                     flush=True,
