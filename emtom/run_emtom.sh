@@ -86,7 +86,7 @@ print_llm_options() {
 
 # Default values
 MAX_SIM_STEPS=200000
-MAX_LLM_CALLS=20
+MAX_LLM_CALLS=""  # Empty = use 3x golden trajectory length
 EXPLORATION_STEPS=20
 MECHANICS=""
 TASK_FILE=""
@@ -165,7 +165,7 @@ print_usage() {
     echo ""
     echo -e "${BOLD}Benchmark Options:${NC}"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
-    echo "  --max-llm-calls N    Max LLM calls per agent (default: $MAX_LLM_CALLS)"
+    echo "  --max-llm-calls N    Max LLM calls per agent (default: 3x golden trajectory)"
     echo ""
     echo -e "${BOLD}Test Options:${NC}"
     echo "  --mechanics M1 M2    Mechanics to enable (e.g., inverse_state remote_control)"
@@ -349,7 +349,11 @@ run_benchmark() {
     echo "Running EMTOM Habitat Benchmark"
     echo "=============================================="
     echo "Max simulation steps: $MAX_SIM_STEPS"
-    echo "Max LLM calls per agent: $MAX_LLM_CALLS"
+    if [ -n "$MAX_LLM_CALLS" ]; then
+        echo "Max LLM calls per agent: $MAX_LLM_CALLS"
+    else
+        echo "Max LLM calls per agent: 3x golden trajectory"
+    fi
     echo "Task file: $ACTUAL_TASK_FILE"
     echo "Agents: $TASK_NUM_AGENTS (from task file)"
     echo "=============================================="
@@ -357,16 +361,20 @@ run_benchmark() {
     # Get the appropriate config for the number of agents (from task)
     CONFIG_NAME=$(get_agent_config $TASK_NUM_AGENTS $AGENT_TYPE)
 
-    # Build replanning threshold overrides for all agents
+    # Build optional overrides (only if MAX_LLM_CALLS is explicitly set)
+    MAX_TURNS_OVERRIDE=""
     REPLANNING_OVERRIDES=""
-    for ((i=0; i<TASK_NUM_AGENTS; i++)); do
-        REPLANNING_OVERRIDES="$REPLANNING_OVERRIDES ++evaluation.agents.agent_${i}.planner.plan_config.replanning_threshold=$MAX_LLM_CALLS"
-    done
+    if [ -n "$MAX_LLM_CALLS" ]; then
+        MAX_TURNS_OVERRIDE="+max_turns=$MAX_LLM_CALLS"
+        for ((i=0; i<TASK_NUM_AGENTS; i++)); do
+            REPLANNING_OVERRIDES="$REPLANNING_OVERRIDES ++evaluation.agents.agent_${i}.planner.plan_config.replanning_threshold=$MAX_LLM_CALLS"
+        done
+    fi
 
     python emtom/examples/run_habitat_benchmark.py \
         --config-name $CONFIG_NAME \
         habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
-        +max_turns=$MAX_LLM_CALLS \
+        $MAX_TURNS_OVERRIDE \
         $REPLANNING_OVERRIDES \
         +task=$ACTUAL_TASK_FILE \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-benchmark"
