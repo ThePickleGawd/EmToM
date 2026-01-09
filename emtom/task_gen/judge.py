@@ -354,7 +354,7 @@ class Judge:
     MIN_CRITERION_THRESHOLD = 0.5
 
     # Default council models
-    DEFAULT_MODELS = ["opus", "gpt-5"]
+    DEFAULT_MODELS = ["opus", "gpt-5.2"]
 
     def __init__(
         self,
@@ -367,7 +367,7 @@ class Judge:
         Initialize the judge.
 
         Args:
-            models: List of model names for council (default: ["opus", "gpt-5"])
+            models: List of model names for council (default: ["opus", "gpt-5.2"])
             overall_threshold: Minimum overall score to pass (default 0.7)
             min_criterion_threshold: Minimum score for any criterion (default 0.5)
             verbose: Print debug information
