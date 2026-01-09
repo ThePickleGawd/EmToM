@@ -150,9 +150,7 @@ class DebugVideoUtil:
         frames_concat = np.ascontiguousarray(frames_concat)
 
         for idx, action in hl_actions.items():
-            # text = f"Agent_{id}:{action[0]}[{action[1]}]"
-            agent_name = "Human" if str(idx) == "1" else "Robot"
-            text = f"{agent_name}: {action[0]}[{action[1]}]"
+            text = f"Agent_{idx}: {action[0]}[{action[1]}]"
             frames_concat = cv2.putText(
                 frames_concat,
                 text,
