@@ -168,6 +168,7 @@ class DebugVideoUtil:
         observations: Dict[str, Any],
         hl_actions: Dict[int, Any],
         popup_images: Dict[int, str] = None,
+        turn: Optional[int] = None,
     ) -> None:
         """
         Store a video with observations and text from an observation dict and an agent to action metadata dict.
@@ -175,9 +176,24 @@ class DebugVideoUtil:
 
         :param observations: A dict mapping observation names to values.
         :param hl_actions: A dict mapping agent action indices to actions.
+        :param turn: Optional turn number to display at the top.
         """
         frames_concat = self.__get_combined_frames(observations)
         frames_concat = np.ascontiguousarray(frames_concat)
+
+        y_offset = 20
+        # Display turn number at the top
+        if turn is not None:
+            frames_concat = cv2.putText(
+                frames_concat,
+                f"Turn {turn}",
+                (10, y_offset),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 0),  # Yellow for turn number
+                1,
+            )
+            y_offset += 25
 
         for idx, action in hl_actions.items():
             text = f"Agent_{idx}: {action[0]}[{action[1]}]"
@@ -186,7 +202,7 @@ class DebugVideoUtil:
             frames_concat = cv2.putText(
                 frames_concat,
                 text,
-                (10, (int(idx) + 1) * 25),
+                (10, y_offset + int(idx) * 20),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
                 (255, 255, 255),

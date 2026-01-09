@@ -351,11 +351,16 @@ class EMTOMBaseRunner(ABC):
             path = os.path.join(self.output_dir, subdir)
             os.makedirs(path, exist_ok=True)
 
-    def record_frame(self, observations: Dict[str, Any], actions: Optional[Dict] = None) -> None:
+    def record_frame(
+        self,
+        observations: Dict[str, Any],
+        actions: Optional[Dict] = None,
+        turn: Optional[int] = None,
+    ) -> None:
         """Record a video frame."""
         if self._dvu:
             try:
-                self._dvu._store_for_video(observations, actions or {}, popup_images={})
+                self._dvu._store_for_video(observations, actions or {}, popup_images={}, turn=turn)
             except Exception:
                 pass
 

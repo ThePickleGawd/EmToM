@@ -170,7 +170,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
             self._print_controls()
 
         observations = self.get_observations()
-        self.record_frame(observations)
+        self.record_frame(observations, turn=0)
 
         done = False
         turn_count = 0
@@ -338,7 +338,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                             uid: self._parse_action_to_tuple(state['high_level_action'])
                             for uid, state in llm_agent_state.items()
                         }
-                        self.record_frame(observations, action_tuples)
+                        self.record_frame(observations, action_tuples, turn=turn_count)
 
                     except Exception as e:
                         print(f"[Concurrent step error] {e}", flush=True)
@@ -420,7 +420,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
             if not self._episode_done and not done:
                 observations = self.get_observations()
                 # Record end-of-turn frame (no actions displayed)
-                self.record_frame(observations)
+                self.record_frame(observations, turn=turn_count)
 
         print(f"\n[Benchmark] Finished: steps={self._step_count}, turns={turn_count}, done={done}", flush=True)
 
