@@ -173,6 +173,7 @@ def main():
 
     # Execute trajectory
     # New format: each step has "actions" array with all agents' actions for that step
+    # Execute all agents' actions CONCURRENTLY within each step
     executed_steps = []
     print(f"\n=== Executing Golden Trajectory ({len(golden)} steps) ===", file=sys.stderr)
     try:
@@ -186,6 +187,10 @@ def main():
             print(f"  Step {step_idx+1}:", file=sys.stderr)
             step_results = []
 
+            # Collect actions to execute concurrently (skip Wait/Communicate)
+            concurrent_actions = {}  # uid -> (action_name, target)
+            skipped_actions = []
+
             for action_entry in actions:
                 agent_str = action_entry.get("agent", "agent_0")
                 agent_id = int(agent_str.split("_")[1])
@@ -197,7 +202,7 @@ def main():
                 # Skip Wait actions
                 if action == "Wait":
                     print(f"    {agent_str}: Wait [SKIP]", file=sys.stderr)
-                    step_results.append({
+                    skipped_actions.append({
                         "agent": agent_str, "action": action_str,
                         "success": True, "skipped": True
                     })
@@ -207,39 +212,53 @@ def main():
                 if action == "Communicate":
                     msg_preview = (target or "")[:50]
                     print(f"    {agent_str}: Communicate[\"{msg_preview}...\"] [SKIP]", file=sys.stderr)
-                    step_results.append({
+                    skipped_actions.append({
                         "agent": agent_str, "action": action_str,
                         "success": True, "skipped": True
                     })
                     continue
 
-                result = runner.execute_action(uid=agent_id, action_name=action, target=target or "")
-                success = result.get("success", False)
-                obs = result.get("observation", "")
+                # Add to concurrent execution
+                concurrent_actions[agent_id] = (action, target or "")
 
-                # Print action + observation
-                status = "✓" if success else "✗"
-                print(f"    {agent_str}: {action_str} {status}", file=sys.stderr)
-                if obs:
-                    print(f"      → {obs}", file=sys.stderr)
+            # Execute all actions concurrently
+            if concurrent_actions:
+                results = runner.execute_actions_concurrent(concurrent_actions)
 
-                step_results.append({
-                    "agent": agent_str, "action": action_str,
-                    "success": success,
-                    "observation": result.get("observation", "")[:200]
-                })
+                # Process results
+                for agent_id, result in sorted(results.items()):
+                    agent_str = f"agent_{agent_id}"
+                    action, target = concurrent_actions[agent_id]
+                    action_str = f"{action}[{target}]" if target else f"{action}[]"
 
-                if not success:
-                    runner.cleanup()
-                    write_result({
-                        "valid": False,
-                        "failed_step": step_idx,
-                        "action": f"{agent_str}: {action_str}",
-                        "error": result.get("observation", "Action failed"),
-                        "executed_steps": executed_steps + [{"step": step_idx, "actions": step_results}],
+                    success = result.get("success", False)
+                    obs = result.get("observation", "")
+
+                    # Print action + observation
+                    status = "✓" if success else "✗"
+                    print(f"    {agent_str}: {action_str} {status}", file=sys.stderr)
+                    if obs:
+                        print(f"      → {obs}", file=sys.stderr)
+
+                    step_results.append({
+                        "agent": agent_str, "action": action_str,
+                        "success": success,
+                        "observation": obs[:200] if obs else ""
                     })
-                    sys.exit(0)
 
+                    if not success:
+                        runner.cleanup()
+                        write_result({
+                            "valid": False,
+                            "failed_step": step_idx,
+                            "action": f"{agent_str}: {action_str}",
+                            "error": result.get("observation", "Action failed"),
+                            "executed_steps": executed_steps + [{"step": step_idx, "actions": step_results + skipped_actions}],
+                        })
+                        sys.exit(0)
+
+            # Add skipped actions to results
+            step_results.extend(skipped_actions)
             executed_steps.append({"step": step_idx, "actions": step_results})
 
         # Evaluate success

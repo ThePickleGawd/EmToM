@@ -30,7 +30,9 @@ class EmtomPlanner(LLMPlanner):
         :param high_level_actions: Dict mapping agent uid to action tuple.
         :param thought: Optional thought string from LLM.
         """
-        for uid, action_tuple in high_level_actions.items():
+        # Sort by agent uid to ensure consistent ordering (Agent_0 first)
+        for uid in sorted(high_level_actions.keys()):
+            action_tuple = high_level_actions[uid]
             if action_tuple and action_tuple[0]:
                 action_name, action_arg, _ = action_tuple
                 color = self.AGENT_COLORS[uid % len(self.AGENT_COLORS)]

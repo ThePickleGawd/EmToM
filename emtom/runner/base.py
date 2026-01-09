@@ -628,6 +628,201 @@ class EMTOMBaseRunner(ABC):
         target = target if target else None
         return self.execute_action(uid, action_name, target)
 
+    def execute_actions_concurrent(
+        self,
+        actions: Dict[int, tuple],
+    ) -> Dict[int, Dict[str, Any]]:
+        """
+        Execute multiple agents' actions concurrently.
+
+        All agents execute their skills together, stepping the environment
+        with combined low-level actions until all skills complete.
+
+        Args:
+            actions: Dict mapping agent uid to (action_name, target) tuple
+
+        Returns:
+            Dict mapping agent uid to result dict
+        """
+        import torch
+        from emtom.mechanics.handlers import apply_mechanics
+
+        results: Dict[int, Dict[str, Any]] = {}
+        agent_states: Dict[int, Dict[str, Any]] = {}
+
+        # Phase 1: Setup all agents' actions (check mechanics, initialize skills)
+        for uid, (action_name, target) in actions.items():
+            agent_id = f"agent_{uid}"
+            target = target or ""
+
+            # Check mechanics
+            mech_result = apply_mechanics(
+                action_name, agent_id, target, self.game_manager.get_state()
+            )
+
+            if mech_result.blocked:
+                results[uid] = {
+                    "success": False,
+                    "observation": mech_result.observation,
+                    "blocked": True,
+                }
+                continue
+
+            if uid not in self.agents:
+                results[uid] = {"success": False, "observation": f"No agent with uid {uid}"}
+                continue
+
+            agent = self.agents[uid]
+            actual_action = mech_result.actual_action or action_name
+            actual_target = mech_result.actual_target or target
+
+            if actual_action not in agent.tools:
+                results[uid] = {"success": False, "observation": f"Tool '{actual_action}' not available"}
+                continue
+
+            obs = self.env_interface.get_observations()
+            low_level_action, response = agent.process_high_level_action(
+                actual_action, actual_target, obs
+            )
+
+            if low_level_action is None:
+                # Instant action (no motor skill needed)
+                obs_text = response or f"Executed {actual_action}[{actual_target}]"
+                habitat_failed = any(
+                    fail_phrase in obs_text.lower()
+                    for fail_phrase in ["too far", "occluded", "failed to", "unexpected failure", "cannot"]
+                )
+                if habitat_failed:
+                    results[uid] = {"success": False, "observation": obs_text}
+                else:
+                    if mech_result.applies:
+                        _, mechanic_result = self.game_manager.apply_action(
+                            action_name, agent_id, target
+                        )
+                        self._sync_remote_effects_to_simulator(mechanic_result.effects)
+                        if mech_result.observation:
+                            obs_text = f"{obs_text} {mech_result.observation}"
+                    results[uid] = {
+                        "success": True,
+                        "observation": obs_text,
+                        "skill_steps": 0,
+                    }
+            else:
+                # Skill-based action - track state for concurrent execution
+                agent_states[uid] = {
+                    "agent": agent,
+                    "tool": agent.tools[actual_action],
+                    "action_name": actual_action,
+                    "target": actual_target,
+                    "low_level_action": low_level_action,
+                    "mech_result": mech_result,
+                    "done": False,
+                    "response": response,
+                    "skill_steps": 0,
+                }
+
+        # Phase 2: Execute all skills concurrently
+        max_skill_steps = 5000
+        total_steps = 0
+
+        while agent_states and total_steps < max_skill_steps:
+            # Check if all agents are done
+            if all(state["done"] for state in agent_states.values()):
+                break
+
+            # Collect low-level actions from all active agents
+            combined_actions: Dict[int, Any] = {}
+            for uid, state in agent_states.items():
+                if not state["done"] and state["low_level_action"] is not None:
+                    combined_actions[uid] = state["low_level_action"]
+
+            if not combined_actions:
+                break
+
+            # Step environment with ALL agents at once
+            try:
+                raw_obs, reward, done, info = self.env_interface.step(combined_actions)
+            except AssertionError as e:
+                if "Episode over" in str(e):
+                    self._episode_done = True
+                    break
+                raise
+
+            parsed_obs = self.env_interface.parse_observations(raw_obs)
+
+            # Record frame with all agents' actions
+            action_tuples = {
+                uid: (state["action_name"], state["target"])
+                for uid, state in agent_states.items()
+            }
+            self.record_frame(parsed_obs, action_tuples)
+
+            total_steps += 1
+
+            if done:
+                self._episode_done = True
+                break
+
+            # Get next low-level actions for each active agent
+            for uid, state in agent_states.items():
+                if state["done"]:
+                    continue
+
+                state["skill_steps"] += 1
+                tool = state["tool"]
+
+                # Check if skill is done
+                if hasattr(tool, 'skill') and hasattr(tool.skill, '_is_skill_done'):
+                    is_done = tool.skill._is_skill_done(
+                        raw_obs, None, None, torch.ones(1, 1), 0
+                    )
+                    if is_done:
+                        state["done"] = True
+                        continue
+
+                # Get next low-level action
+                low_level_action, response = state["agent"].process_high_level_action(
+                    state["action_name"], state["target"], raw_obs
+                )
+
+                if low_level_action is None:
+                    state["done"] = True
+                    state["response"] = response
+                else:
+                    state["low_level_action"] = low_level_action
+
+        # Phase 3: Collect results and apply mechanics
+        for uid, state in agent_states.items():
+            obs_text = state["response"] or f"Executed {state['action_name']}[{state['target']}]"
+            mech_result = state["mech_result"]
+
+            # Check if action failed
+            habitat_failed = any(
+                fail_phrase in obs_text.lower()
+                for fail_phrase in ["too far", "occluded", "failed to", "unexpected failure", "cannot"]
+            )
+
+            if habitat_failed:
+                results[uid] = {"success": False, "observation": obs_text}
+            else:
+                # Apply mechanic state changes
+                if mech_result.applies:
+                    agent_id = f"agent_{uid}"
+                    action_name = state["action_name"]
+                    target = state["target"]
+                    _, mechanic_result = self.game_manager.apply_action(action_name, agent_id, target)
+                    self._sync_remote_effects_to_simulator(mechanic_result.effects)
+                    if mech_result.observation:
+                        obs_text = f"{obs_text} {mech_result.observation}"
+
+                results[uid] = {
+                    "success": True,
+                    "observation": obs_text,
+                    "skill_steps": state["skill_steps"],
+                }
+
+        return results
+
     def save_video(self, suffix: str) -> Optional[str]:
         """Save recorded video with given suffix."""
         if not self._dvu or not self._dvu.frames:

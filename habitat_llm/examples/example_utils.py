@@ -52,17 +52,47 @@ class DebugVideoUtil:
         :param batch: A dict mapping observation names to values.
         :return: The composite image as a numpy array.
         """
-        # Extract agent frames from third_rgb observations
         images = []
-        third_rgb_keys = [k for k in batch.keys() if "third_rgb" in k]
+        # Prefer a per-agent selection to avoid duplicate views when third_rgb is missing.
+        agent_ids = []
+        for key in batch.keys():
+            if key.startswith("agent_"):
+                parts = key.split("_")
+                if len(parts) > 1 and parts[1].isdigit():
+                    agent_ids.append(int(parts[1]))
+        agent_ids = sorted(set(agent_ids))
+        if not agent_ids and self.num_agents:
+            agent_ids = list(range(self.num_agents))
 
-        for obs_name in sorted(third_rgb_keys):  # Sort for consistent ordering
-            obs_value = batch[obs_name]
-            if self.num_agents == 1:
-                if "0" in obs_name or "main_agent" in obs_name:
+        if agent_ids:
+            for agent_id in agent_ids:
+                preferred = f"agent_{agent_id}_third_rgb"
+                obs_name = None
+                if preferred in batch:
+                    obs_name = preferred
+                else:
+                    for key in sorted(batch.keys()):
+                        if key.startswith(f"agent_{agent_id}_") and "third_rgb" in key:
+                            obs_name = key
+                            break
+                if obs_name is None:
+                    for key in sorted(batch.keys()):
+                        if key.startswith(f"agent_{agent_id}_") and "rgb" in key.lower():
+                            obs_name = key
+                            break
+                if obs_name is not None:
+                    images.append(batch[obs_name])
+
+        # Fallback to legacy behavior if per-agent selection failed.
+        if not images:
+            third_rgb_keys = [k for k in batch.keys() if "third_rgb" in k]
+            for obs_name in sorted(third_rgb_keys):  # Sort for consistent ordering
+                obs_value = batch[obs_name]
+                if self.num_agents == 1:
+                    if "0" in obs_name or "main_agent" in obs_name:
+                        images.append(obs_value)
+                else:
                     images.append(obs_value)
-            else:
-                images.append(obs_value)
 
         # Handle case where no images found
         if not images:
@@ -72,7 +102,7 @@ class DebugVideoUtil:
                 obs_value = batch[obs_name]
                 if hasattr(obs_value, 'shape'):
                     images.append(obs_value)
-                    if len(images) >= self.num_agents:
+                    if self.num_agents and len(images) >= self.num_agents:
                         break
 
             if not images:
@@ -151,14 +181,16 @@ class DebugVideoUtil:
 
         for idx, action in hl_actions.items():
             text = f"Agent_{idx}: {action[0]}[{action[1]}]"
+            if len(text) > 50:
+                text = text[:46] + "...]"
             frames_concat = cv2.putText(
                 frames_concat,
                 text,
-                (20, (int(idx) + 1) * 50),
+                (10, (int(idx) + 1) * 25),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.75,
+                0.5,
                 (255, 255, 255),
-                2,
+                1,
             )
 
         # Overlay popups if provided (per agent, left/right). Align with eval runner style.
