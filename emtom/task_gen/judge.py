@@ -314,19 +314,19 @@ Does the golden_trajectory avoid wasteful actions?
 
 ## Response Format
 
-Respond with ONLY valid JSON (no markdown, no text outside JSON):
+Respond with ONLY valid JSON. Keep reasoning BRIEF (under 15 words each).
 
 {{
-  "information_asymmetry": {{"score": <0.0-1.0>, "reasoning": "<1-2 sentences>"}},
-  "interdependence": {{"score": <0.0-1.0>, "reasoning": "<1-2 sentences>"}},
-  "mental_state_reasoning": {{"score": <0.0-1.0 or -1.0>, "reasoning": "<1-2 sentences>"}},
-  "coordination_requirement": {{"score": <0.0-1.0>, "reasoning": "<1-2 sentences>"}},
-  "narrative_consistency": {{"score": <0.0-1.0>, "reasoning": "<1-2 sentences>"}},
-  "subtask_relevance": {{"score": <0.0-1.0>, "reasoning": "<1-2 sentences>"}},
-  "mechanic_utilization": {{"score": <0.0-1.0>, "reasoning": "<1-2 sentences>"}},
-  "trajectory_efficiency": {{"score": <0.0-1.0>, "reasoning": "<1-2 sentences>"}},
-  "overall_reasoning": "<2-3 sentences summarizing task validity>",
-  "suggestions": ["<specific actionable suggestion>", ...]
+  "information_asymmetry": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
+  "interdependence": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
+  "mental_state_reasoning": {{"score": <0.0-1.0 or -1.0>, "reasoning": "<brief>"}},
+  "coordination_requirement": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
+  "narrative_consistency": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
+  "subtask_relevance": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
+  "mechanic_utilization": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
+  "trajectory_efficiency": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
+  "overall_reasoning": "<1 sentence>",
+  "suggestions": ["<specific fix>", "<specific fix>"]
 }}
 
 ## Suggestion Requirements
@@ -537,12 +537,27 @@ class Judge:
             if rollout and self.verbose:
                 print(f"[Judge] Loaded rollout: success={rollout.success}, {rollout.steps} steps")
 
-        # Evaluate with each model
+        # Evaluate with all models in parallel
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        if self.verbose:
+            print(f"[Judge] Evaluating with {len(self.models)} models in parallel: {', '.join(self.models)}")
+
         judgments: Dict[str, Judgment] = {}
-        for model in self.models:
-            if self.verbose:
-                print(f"[Judge] Evaluating with {model}...")
-            judgments[model] = self._evaluate_single(task_dict, model, scene_data, rollout)
+        with ThreadPoolExecutor(max_workers=len(self.models)) as executor:
+            future_to_model = {
+                executor.submit(self._evaluate_single, task_dict, model, scene_data, rollout): model
+                for model in self.models
+            }
+            for future in as_completed(future_to_model):
+                model = future_to_model[future]
+                try:
+                    judgments[model] = future.result()
+                    if self.verbose:
+                        print(f"[Judge] {model} completed")
+                except Exception as e:
+                    print(f"[Judge] {model} failed: {e}")
+                    judgments[model] = self._failed_judgment(f"[{model}] Error: {e}")
 
         # Aggregate results
         return self._aggregate(judgments)
