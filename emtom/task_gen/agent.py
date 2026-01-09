@@ -553,8 +553,18 @@ Start by reading the template, then create a task using the scene data above."""
         except Exception as e:
             self._log(f"Warning: Could not save context window: {e}")
 
-    def _create_working_task_from_template(self) -> None:
-        """Create working_task.json from template with scene fields and num_agents pre-populated."""
+    def _create_working_task_from_template(self, num_agents: Optional[int] = None) -> int:
+        """Create working_task.json from template with scene fields and num_agents pre-populated.
+
+        Args:
+            num_agents: Number of agents to use. If None, uses agents_max.
+
+        Returns:
+            The number of agents used.
+        """
+        if num_agents is None:
+            num_agents = self.agents_max
+
         # Load template
         with open(self.template_file) as f:
             task = json.load(f)
@@ -564,26 +574,25 @@ Start by reading the template, then create a task using the scene data above."""
             task["scene_id"] = self.scene_data.scene_id
             task["episode_id"] = self.scene_data.episode_id
 
-        # Set num_agents to max (LLM can reduce if desired)
-        task["num_agents"] = self.agents_max
+        task["num_agents"] = num_agents
 
-        # Generate agent_secrets and agent_actions for max agents
+        # Generate agent_secrets and agent_actions
         default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]
         task["agent_secrets"] = {
             f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
-            for i in range(self.agents_max)
+            for i in range(num_agents)
         }
         task["agent_actions"] = {
             f"agent_{i}": default_actions.copy()
-            for i in range(self.agents_max)
+            for i in range(num_agents)
         }
 
-        # Generate golden_trajectory template with max agents
+        # Generate golden_trajectory template
         task["golden_trajectory"] = [
             {
                 "actions": [
                     {"agent": f"agent_{i}", "action": "ACTION_NAME[TARGET]" if i == 0 else "Wait"}
-                    for i in range(self.agents_max)
+                    for i in range(num_agents)
                 ]
             }
         ]
@@ -592,7 +601,8 @@ Start by reading the template, then create a task using the scene data above."""
         with open(self.task_file, 'w') as f:
             json.dump(task, f, indent=2)
 
-        self._log(f"Created {self.task_file} with {self.agents_min}-{self.agents_max} agent template")
+        self._log(f"Created {self.task_file} with {num_agents} agents")
+        return num_agents
 
     def _truncate_old_heredocs(self) -> None:
         """Truncate large heredoc content in PREVIOUS assistant messages.
@@ -2132,39 +2142,7 @@ Use new_scene[] if you want a different scene, or start creating your next task.
             # Reset working_task.json with new scene info and random agent count
             import random
             num_agents = random.randint(self.agents_min, self.agents_max)
-
-            source_template = Path(__file__).parent / "template" / "template.json"
-            if source_template.exists():
-                with open(source_template) as f:
-                    template_data = json.load(f)
-                # Pre-populate with new scene info
-                template_data["scene_id"] = self.scene_data.scene_id
-                template_data["episode_id"] = self.scene_data.episode_id
-                template_data["num_agents"] = num_agents
-
-                # Set up agent_secrets and agent_actions for the chosen number of agents
-                default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]
-                template_data["agent_secrets"] = {
-                    f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
-                    for i in range(num_agents)
-                }
-                template_data["agent_actions"] = {
-                    f"agent_{i}": default_actions.copy()
-                    for i in range(num_agents)
-                }
-                template_data["golden_trajectory"] = [
-                    {
-                        "actions": [
-                            {"agent": f"agent_{i}", "action": "ACTION_NAME[TARGET]" if i == 0 else "Wait"}
-                            for i in range(num_agents)
-                        ]
-                    }
-                ]
-
-                with open(self.task_file, "w") as f:
-                    json.dump(template_data, f, indent=2)
-
-                self._log(f"Created working_task.json with {num_agents} agents (range: {self.agents_min}-{self.agents_max})")
+            self._create_working_task_from_template(num_agents=num_agents)
 
             # Reset verification state for new task
             self.last_verify_passed = False
