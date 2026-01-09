@@ -4,12 +4,16 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree
 
+import logging
 import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from omegaconf import DictConfig, OmegaConf
 from openai import OpenAI
+
+# Suppress verbose httpx logs from OpenAI client
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 from habitat_llm.llm.base_llm import BaseLLM, Prompt
 
