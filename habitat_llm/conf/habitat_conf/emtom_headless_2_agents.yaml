@@ -6,9 +6,6 @@ defaults:
   - /habitat_conf/habitat_agent@habitat.simulator.agents.agent_0: minimal_no_visual
   - /habitat_conf/habitat_agent@habitat.simulator.agents.agent_1: minimal_no_visual
   - /habitat_conf/dataset: collaboration_hssd
-
-  - /habitat/task/lab_sensors:
-    - humanoid_detector_sensor
   - _self_
 
 habitat:
@@ -18,18 +15,13 @@ habitat:
       - agent_0_joint
       - agent_0_ee_pos
       - agent_0_is_holding
-      - agent_0_humanoid_detector_sensor
       - agent_1_relative_resting_position
       - agent_1_joint
       - agent_1_ee_pos
       - agent_1_is_holding
-      - agent_1_humanoid_detector_sensor
 
   task:
-    lab_sensors:
-      humanoid_detector_sensor:
-        return_image: False
-        is_return_image_bbox: False
+    lab_sensors: {}
   environment:
     max_episode_steps: 1000
   simulator:
