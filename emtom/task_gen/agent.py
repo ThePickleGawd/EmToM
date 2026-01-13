@@ -2197,7 +2197,7 @@ Use new_scene[] if you want a different scene, or start creating your next task.
         try:
             # Use subprocess to load scene (fresh GL context)
             # Use headless config for faster loading (no visual sensors needed)
-            config_name = f"examples/emtom_{self.agents_max}_robots_headless"
+            config_name = "examples/emtom_2_robots"  # TEMP: 10-agent headless loader crashes; use stable loader
             new_seed = get_random_seed()
             script_path = Path(__file__).parent / "load_scene.py"
 
