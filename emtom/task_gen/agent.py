@@ -643,27 +643,6 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
         self._log(f"Agent: {response}", truncate_terminal=300)
         return response
 
-    def _truncate_after_first_action(self, content: str) -> str:
-        """
-        Truncate content after the first Action: tool[args] line.
-        This keeps context clean when LLM generates multiple actions.
-        """
-        # Find Action: tool[ pattern
-        action_match = re.search(r'Action:\s*(\w+)\[', content)
-        if not action_match:
-            return content
-
-        # Extract bracket content to find where action ends
-        start_idx = action_match.end()
-        bracket_content = self._extract_bracket_content(content, start_idx)
-
-        if bracket_content is None:
-            return content
-
-        # Calculate end index: start + content length + 1 for closing bracket
-        end_idx = start_idx + len(bracket_content) + 1
-        return content[:end_idx].rstrip()
-
     def _format_messages_for_llm(self) -> str:
         """Format message history for the LLM."""
         parts = []
