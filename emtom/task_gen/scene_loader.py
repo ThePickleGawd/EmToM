@@ -255,6 +255,7 @@ def apply_agent_spawns(
         agent_spawns: Dict mapping agent_X -> {"position": [x,y,z], "rotation": float}
     """
     import sys
+    import numpy as np
 
     if not agent_spawns:
         return
@@ -266,7 +267,8 @@ def apply_agent_spawns(
         agent_uid = int(agent_key.split("_")[1])
         try:
             agent = env_interface.sim.agents_mgr[agent_uid].articulated_agent
-            agent.base_pos = spawn["position"]
+            # Convert list to numpy array (base_pos expects array, not Python list)
+            agent.base_pos = np.array(spawn["position"])
             # Handle rotation as float (yaw) - ignore if list/quaternion
             rot = spawn.get("rotation", 0.0)
             if isinstance(rot, (int, float)):

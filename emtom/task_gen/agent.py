@@ -635,7 +635,10 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
         return response
 
     def _truncate_to_first_action(self, content: str) -> str:
-        """Truncate content after the first Action: tool[args] to keep context clean."""
+        """Truncate content after the first Action: tool[args] to keep context clean.
+
+        Appends 'Assigned!' since the LLM stops on that token (so it's not in the response).
+        """
         action_match = re.search(r'Action:\s*(\w+)\[', content)
         if not action_match:
             return content
@@ -646,7 +649,8 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
             return content
 
         end_idx = start_idx + len(bracket_content) + 1
-        return content[:end_idx].rstrip()
+        # Append "Assigned!" - it was the stop word so not included in response
+        return content[:end_idx].rstrip() + "\nAssigned!"
 
     def _format_messages_for_llm(self) -> str:
         """Format message history for the LLM."""
@@ -1959,7 +1963,7 @@ SUMMARY:"""
                 "error": f"Invalid JSON: {e}"
             })
 
-        self._log("[Judge] Evaluating task with council (ToM + Quality)...")
+        self._log("[Judge] Evaluating task with council...")
 
         # Find latest trajectory dir for this task if available
         trajectory_dir = None

@@ -10,6 +10,28 @@ Assigned!
 ```
 ONE action per turn. Always end with "Assigned!" after your action.
 
+## Examples
+
+Thought: Starting task generation. I'll load a scene with 3 agents.
+Action: new_scene[3]
+Assigned!
+
+Thought: Scene loaded. Let me check the example tasks for inspiration.
+Action: bash[ls {working_dir}/sampled_tasks/]
+Assigned!
+
+Thought: I'll read an example to understand the format.
+Action: bash[cat {working_dir}/sampled_tasks/task_001.json]
+Assigned!
+
+Thought: Now I'll edit the working task to add my task description.
+Action: bash[python3 -c "import json; t=json.load(open('{task_file}')); t['task']='Find the hidden key and unlock the cabinet'; json.dump(t, open('{task_file}','w'), indent=2)"]
+Assigned!
+
+Thought: Task is ready. Let me run the judge to check quality.
+Action: judge[]
+Assigned!
+
 ## Tools
 - `new_scene[N]` - **CALL FIRST!** Load scene with N agents (2-10), reset task.
 - `new_scene[N, keep]` - Change agent count, keep current scene and task edits.
