@@ -1515,9 +1515,9 @@ SUMMARY:"""
             }
 
         # Run test in subprocess with trajectory output directory
-        # Use appropriate config for num_agents from task
+        # Use headless config for faster loading (no visual sensors needed)
         num_agents = task_data.get("num_agents", 2)
-        config_name = f"examples/emtom_{num_agents}_robots"
+        config_name = f"examples/emtom_{num_agents}_robots_headless"
         script_path = Path(__file__).parent / "test_task.py"
 
         cmd = [
@@ -1536,7 +1536,7 @@ SUMMARY:"""
                 stdout=subprocess.DEVNULL,
                 stderr=None,  # Inherit stderr - shows logs in terminal
                 text=True,
-                timeout=600,  # 10 minute timeout for LLM agents
+                timeout=1200,  # 20 minute timeout for LLM agents
             )
 
             # Read result from file (cleaner than parsing stdout)
@@ -1688,9 +1688,9 @@ SUMMARY:"""
             })
 
         # Run verification in subprocess (fresh GL context)
-        # Use appropriate config for num_agents from task
+        # Use headless config for faster loading (no visual sensors needed)
         num_agents = task_data.get("num_agents", 2)
-        config_name = f"examples/emtom_{num_agents}_robots"
+        config_name = f"examples/emtom_{num_agents}_robots_headless"
         script_path = Path(__file__).parent / "verify_trajectory.py"
         cmd = [
             sys.executable,
@@ -1701,7 +1701,7 @@ SUMMARY:"""
         ]
 
         try:
-            timeout = 300  # 5 minutes - should be plenty for golden trajectory
+            timeout = 1200  # 20 minutes - golden trajectory verification
             # Stream stderr to terminal for live logging
             subprocess.run(
                 cmd,
@@ -2104,8 +2104,8 @@ Use new_scene[] if you want a different scene, or start creating your next task.
 
         try:
             # Use subprocess to load scene (fresh GL context)
-            # Use config for max agents (scene supports up to agents_max)
-            config_name = f"examples/emtom_{self.agents_max}_robots"
+            # Use headless config for faster loading (no visual sensors needed)
+            config_name = f"examples/emtom_{self.agents_max}_robots_headless"
             new_seed = get_random_seed()
             script_path = Path(__file__).parent / "load_scene.py"
 
@@ -2125,7 +2125,7 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=600,  # 10 minutes for scene loading
             )
 
             # Read result

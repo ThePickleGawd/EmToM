@@ -172,6 +172,20 @@ def main(config: DictConfig) -> None:
                 dest = sampled_tasks_dir / f"task_{i}.json"
                 shutil.copy(task_path, dest)
 
+    # Sample exploration trajectories for agent inspiration
+    sampled_trajectories_dir = working_dir / "sampled_trajectories"
+    sampled_trajectories_dir.mkdir(parents=True, exist_ok=True)
+    trajectories_source = Path("outputs/emtom")
+    if trajectories_source.exists():
+        # Find all trajectory files in exploration output directories
+        trajectory_files = list(trajectories_source.glob("*-exploration/results/trajectory_*.json"))
+        if trajectory_files:
+            sample_count = min(5, len(trajectory_files))
+            sampled = random.sample(trajectory_files, sample_count)
+            for i, traj_path in enumerate(sampled, 1):
+                dest = sampled_trajectories_dir / f"trajectory_{i}.json"
+                shutil.copy(traj_path, dest)
+
     # Setup config (registers Habitat plugins, sets seed, etc.)
     fix_config(config)
     config = setup_config(config, seed=seed or 47668090)

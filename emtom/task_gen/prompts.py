@@ -100,10 +100,18 @@ Your working directory ({working_dir}) contains:
 - `working_task.json` - Current task you are editing
 - `template.json` - Task structure template
 - `current_scene.json` - Scene data (objects, furniture, rooms)
-- `reference_tasks/` - Simple planning task examples (NO Theory of Mind)
+- `sampled_tasks/` - **READ THESE FOR INSPIRATION** - Example tasks from the dataset
+  - `task_1.json` through `task_N.json` - Complete task examples with subtasks, mechanics, golden trajectories
+  - Study these to understand task structure, mechanic usage, and quality expectations
+  - `bash[ls {working_dir}/sampled_tasks/]` to list, `bash[cat {working_dir}/sampled_tasks/task_1.json]` to read
+- `sampled_trajectories/` - **READ THESE FOR INSPIRATION** - Exploration trajectories showing agent interactions
+  - `trajectory_1.json` through `trajectory_N.json` - Records of agents exploring scenes
+  - Contains: scene inventory, mechanics discovered, agent actions, surprise moments
+  - Use these to understand how mechanics work and what interesting interactions are possible
+  - `bash[cat {working_dir}/sampled_trajectories/trajectory_1.json]` to read
+- `reference_tasks/` - Simple planning task examples (NO coordination requirements)
   - `planning_examples.txt` - 10 diverse single-agent rearrangement tasks
   - These show patterns for: task phrasing, success conditions, goal types
-  - Read for inspiration: `bash[cat {working_dir}/reference_tasks/planning_examples.txt]`
   - Your tasks should ADD: agent secrets, coordination requirements, information asymmetry
 - `submitted_tasks/` - Tasks you've submitted in this session
 - `agent_trajectories/` - Benchmark results from test_task[] calls
@@ -111,7 +119,7 @@ Your working directory ({working_dir}) contains:
   - `task_N/run_M/agent_1.txt` - Agent 1's reasoning trace
   - (and agent_2.txt through agent_{max_agent_id}.txt if more agents)
   - `task_N/run_M/result.txt` - Evaluation summary + subtask progress
-  - `task_N/run_M/behavior_analysis.json` - ToM behavior observations
+  - `task_N/run_M/behavior_analysis.json` - Behavior observations
 
 **Behavior Analysis**: After test_task[], the response includes `behavior_analysis` with observations:
 - Whether agents shared/used asymmetric information
@@ -353,15 +361,16 @@ Build tasks incrementally rather than creating complex multi-step tasks all at o
 This is more reliable than attempting an elaborate task from scratch. Each iteration gives you feedback on what works in this scene with these objects.
 
 ## Process
-1. Read scene data (rooms, furniture, objects)
-2. Create task with placeholder task description
-3. Run `judge[]` - MUST PASS (evaluates quality with multi-model council)
-4. If judge fails, improve based on suggestions and re-run judge[]
-5. Run `verify_golden_trajectory[]` - MUST PASS
-6. Fix any issues and re-verify
-7. Run `test_task[]` - REQUIRED for calibration (records LLM pass/fail)
-8. Write real task description (after verification passes)
-9. `submit_task[]` (requires verify, judge, AND test_task)
+1. **Study examples first**: Read 1-2 files from `sampled_tasks/` and `sampled_trajectories/` to understand quality expectations
+2. Read scene data (rooms, furniture, objects)
+3. Create task with placeholder task description
+4. Run `judge[]` - MUST PASS (evaluates quality with multi-model council)
+5. If judge fails, improve based on suggestions and re-run judge[]
+6. Run `verify_golden_trajectory[]` - MUST PASS
+7. Fix any issues and re-verify
+8. Run `test_task[]` - REQUIRED for calibration (records LLM pass/fail)
+9. Write real task description (after verification passes)
+10. `submit_task[]` (requires verify, judge, AND test_task)
 
 ## Golden Trajectory Format
 Each step has ALL {num_agents} agents' actions for that timestep. Use PARTNR-style `Action[args]` format:

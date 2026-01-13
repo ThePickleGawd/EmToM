@@ -45,16 +45,25 @@ habitat:
         articulated_agent_urdf: ./data/robots/hab_spot_arm/urdf/hab_spot_arm.urdf
         articulated_agent_type: SpotRobot
         joint_start_noise: 0.0
+        is_set_start_state: True
+        start_position: [0, 0, 0]
+        start_rotation: [0, 0, 0, 1]
       agent_1:
         radius: 0.3
         articulated_agent_urdf: ./data/robots/hab_spot_arm/urdf/hab_spot_arm.urdf
         articulated_agent_type: SpotRobot
         joint_start_noise: 0.0
+        is_set_start_state: True
+        start_position: [1, 0, 0]
+        start_rotation: [0, 0, 0, 1]
       agent_2:
         radius: 0.3
         articulated_agent_urdf: ./data/robots/hab_spot_arm/urdf/hab_spot_arm.urdf
         articulated_agent_type: SpotRobot
         joint_start_noise: 0.0
+        is_set_start_state: True
+        start_position: [2, 0, 0]
+        start_rotation: [0, 0, 0, 1]
     kinematic_mode: True
     step_physics: False
     habitat_sim_v0:

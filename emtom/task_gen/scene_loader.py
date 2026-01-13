@@ -78,16 +78,12 @@ def load_random_scene(config: "DictConfig", seed: Optional[int] = None) -> Scene
     from habitat_llm.agent.env.dataset import CollaborationDatasetV0
     from habitat_llm.agent.env.environment_interface import EnvironmentInterface
 
-    print("[SceneLoader] Registering sensors, actions, measures...")
     register_sensors(config)
     register_actions(config)
     register_measures(config)
 
     # Load dataset
-    print("[SceneLoader] Loading PARTNR dataset...")
     dataset = CollaborationDatasetV0(config.habitat.dataset)
-    num_episodes = len(dataset.episodes)
-    print(f"[SceneLoader] Dataset has {num_episodes} episodes")
 
     # Select random episode
     if seed is not None:
@@ -95,26 +91,19 @@ def load_random_scene(config: "DictConfig", seed: Optional[int] = None) -> Scene
     selected_episode = random.choice(dataset.episodes)
     episode_id = selected_episode.episode_id
     scene_id = selected_episode.scene_id
-    print(f"[SceneLoader] Selected episode {episode_id} (scene: {scene_id})")
 
     # Create environment and load episode
-    print("[SceneLoader] Creating environment...")
     env_interface = EnvironmentInterface(config, dataset=dataset, init_wg=False)
     env_interface.reset_environment(episode_id=episode_id)
 
     # Extract world graph
-    print("[SceneLoader] Extracting world graph...")
     scene_data = extract_scene_data(env_interface, episode_id, scene_id)
 
     # Cleanup
-    print("[SceneLoader] Cleaning up environment...")
     try:
         env_interface.env.close()
     except Exception:
         pass
-
-    print(f"[SceneLoader] Scene loaded: {len(scene_data.rooms)} rooms, "
-          f"{len(scene_data.furniture)} furniture, {len(scene_data.objects)} objects")
 
     return scene_data
 
