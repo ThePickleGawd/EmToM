@@ -216,35 +216,9 @@ def main(config: DictConfig) -> None:
     cprint("=" * 60, "blue")
     print()
 
-    # Load random scene from PARTNR dataset
-    cprint("Loading random scene from PARTNR dataset...", "blue")
-    from emtom.task_gen.scene_loader import load_random_scene
-    from habitat_llm.utils import get_random_seed
-
-    try:
-        # Use a truly random seed for scene selection if not explicitly provided
-        scene_seed = seed if seed is not None else get_random_seed()
-        scene_data = load_random_scene(config, seed=scene_seed)
-        cprint(f"Loaded scene {scene_data.scene_id} (episode {scene_data.episode_id})", "green")
-        cprint(f"  Rooms: {len(scene_data.rooms)}", "green")
-        cprint(f"  Furniture: {len(scene_data.furniture)}", "green")
-        cprint(f"  Objects: {len(scene_data.objects)}", "green")
-        cprint(f"  Articulated: {len(scene_data.articulated_furniture)}", "green")
-    except Exception as e:
-        cprint(f"Error loading scene: {e}", "red")
-        import traceback
-        traceback.print_exc()
-        # Clean up temp dir on error
-        shutil.rmtree(working_dir, ignore_errors=True)
-        sys.exit(1)
-
-    print()
-
-    # Save scene data to working directory
-    scene_file = working_dir / "current_scene.json"
-    with open(scene_file, "w") as f:
-        json.dump(scene_data.to_dict(), f, indent=2)
-    cprint(f"Scene data saved to {scene_file}", "green")
+    # Note: Scene is NOT loaded at startup
+    # Agent will call new_scene[num_agents] to load scene with desired agent count
+    cprint("Scene loading deferred to agent (call new_scene[num_agents] first)", "yellow")
     print()
 
     # Initialize LLM
@@ -257,7 +231,7 @@ def main(config: DictConfig) -> None:
         cprint(f"Error initializing LLM: {e}", "red")
         sys.exit(1)
 
-    # Create and run agent with scene data
+    # Create and run agent (scene_data=None - agent will call new_scene[num_agents] first)
     from emtom.task_gen.agent import TaskGeneratorAgent
 
     agent = TaskGeneratorAgent(
@@ -271,7 +245,7 @@ def main(config: DictConfig) -> None:
         subtasks_max=subtasks_max,
         agents_min=agents_min,
         agents_max=agents_max,
-        scene_data=scene_data,  # Pass live scene data
+        scene_data=None,  # Agent will call new_scene[num_agents] to load scene
         log_dir=hydra_output_dir,  # Pass Hydra output directory for logs
         query=query,  # Optional seed query for task generation
         verification_feedback=verification_feedback,  # Failed ToM verification suggestions

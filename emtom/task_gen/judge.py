@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Unified Task Judge for EMTOM task validation.
+Category-aware Task Judge for EMTOM task validation.
 
-Evaluates tasks on two dimensions:
-1. Theory of Mind (ToM) - information asymmetry, interdependence, mental state reasoning, coordination
-2. Task Quality - narrative consistency, subtask relevance, mechanic utilization, trajectory efficiency
+Evaluates tasks using category-specific criteria:
+- Cooperative: shared goals, agent interdependence, coordination requirements
+- Competitive: team opposition, balance, meaningful strategic choices
+- Mixed: main goal + hidden subgoals with tension
 
 Uses a multi-LLM council (Claude Opus + GPT-5) to reduce bias.
 Both models must agree for a task to pass.
@@ -142,51 +143,87 @@ CRITERIA_DESCRIPTIONS = {
     # Shared quality criteria
     "narrative_consistency": {
         "name": "Narrative Consistency",
-        "description": "Does the task description match what agents actually do?",
-        "rubric": "0.0: Description unrelated to subtasks | 0.5: Partially matches | 1.0: Perfect match",
+        "description": "Does the task description accurately describe what agents must do?",
+        "rubric": """0.0: Description misleading or unrelated to actual subtasks
+0.3: Major discrepancies (mentions goals not in subtasks, or misses key objectives)
+0.5: Partial match (captures main idea but omits or misrepresents details)
+0.7: Good match with minor omissions
+1.0: Perfect - description precisely matches subtask objectives""",
     },
     "subtask_relevance": {
         "name": "Subtask Relevance",
-        "description": "Does every subtask contribute to the main objective?",
-        "rubric": "0.0: Many filler subtasks | 0.5: Some tangential | 1.0: All essential",
+        "description": "Does every subtask directly contribute to the main objective?",
+        "rubric": """0.0: Many filler subtasks (opening random furniture, navigating pointlessly)
+0.3: Several subtasks unrelated to main goal
+0.5: Some tangential subtasks that could be removed
+0.7: Most subtasks essential, 1-2 questionable
+1.0: All subtasks directly advance the objective - removing any would break the task""",
     },
     "mechanic_utilization": {
         "name": "Mechanic Utilization",
-        "description": "Are listed mechanics actually used? (Empty list = auto-pass)",
-        "rubric": "0.0: Listed but unused | 0.5: Could be removed | 1.0: Essential to task",
+        "description": "Are listed mechanics actually essential to the task? (Empty mechanics list = auto-pass at 1.0)",
+        "rubric": """0.0: Mechanics listed but never triggered or used
+0.3: Mechanics present but could be removed without changing task
+0.5: Mechanics add flavor but aren't essential
+0.7: Mechanics contribute meaningfully
+1.0: Listed mechanics are essential - task wouldn't work without them""",
     },
     "trajectory_efficiency": {
         "name": "Trajectory Efficiency",
-        "description": "Does the golden trajectory avoid wasteful actions?",
-        "rubric": "0.0: Many wasteful actions | 0.5: Some inefficiency | 1.0: All actions purposeful",
+        "description": "Does the golden trajectory take the optimal path without wasteful actions?",
+        "rubric": """0.0: Many wasteful actions (unnecessary navigation, redundant opens/closes)
+0.3: Several inefficient steps
+0.5: Some unnecessary actions but mostly efficient
+0.7: Minor inefficiencies only
+1.0: Every action serves a purpose - no wasted steps""",
     },
     "agent_necessity": {
         "name": "Agent Necessity",
-        "description": "Is EVERY agent required? Could any agent be removed without breaking the task?",
-        "rubric": "0.0: Some agents are idle/removable | 0.5: Some agents only marginally needed | 1.0: Every agent is essential",
+        "description": "Is EVERY agent essential? Could the task work with fewer agents?",
+        "rubric": """0.0: One or more agents are completely idle or removable
+0.3: Some agents do trivial work that others could handle
+0.5: All agents participate but some are only marginally needed
+0.7: Most agents essential, one could theoretically be merged
+1.0: Every agent is indispensable - removing any would make task impossible""",
     },
     # Cooperative-specific
     "task_interdependence": {
         "name": "Task Interdependence",
-        "description": "Do agents genuinely need each other to succeed?",
-        "rubric": "0.0: One agent can do it alone | 0.5: Helps but not required | 1.0: Impossible alone",
+        "description": "Do agents genuinely NEED each other to succeed?",
+        "rubric": """0.0: One agent can complete the entire task alone
+0.3: Agents help but aren't required (parallel independent work)
+0.5: Some interdependence but key steps can be done solo
+0.7: Strong interdependence with minor exceptions
+1.0: Impossible for any single agent to succeed - must coordinate and share information""",
     },
     # Competitive-specific
     "goal_opposition": {
         "name": "Goal Opposition",
-        "description": "Do teams have mutually exclusive win conditions?",
-        "rubric": "0.0: Goals don't conflict | 0.5: Partial conflict | 1.0: One wins = other loses",
+        "description": "Do teams have truly mutually exclusive win conditions?",
+        "rubric": """0.0: Both teams can win simultaneously (no real competition)
+0.3: Goals partially conflict but both could achieve objectives
+0.5: Conflict exists but not zero-sum
+0.7: Strong opposition - one winning significantly hurts the other
+1.0: Zero-sum - exactly one team wins, the other loses""",
     },
     "team_balance": {
         "name": "Team Balance",
         "description": "Do both teams have a fair chance of winning?",
-        "rubric": "0.0: One team always wins | 0.5: Slight advantage | 1.0: Fair chance for both",
+        "rubric": """0.0: One team has overwhelming advantage (closer start, easier objective)
+0.3: Significant imbalance favoring one team
+0.5: Slight advantage but both could win
+0.7: Well balanced with minor asymmetries
+1.0: Fair contest - either team could win with good play""",
     },
     # Mixed-specific
     "subgoal_tension": {
         "name": "Subgoal Tension",
-        "description": "Can hidden subgoals conflict with main goal or each other?",
-        "rubric": "0.0: No conflict possible | 0.5: Minor tension | 1.0: Real strategic dilemmas",
+        "description": "Do hidden subgoals create meaningful conflict with main goal or each other?",
+        "rubric": """0.0: Subgoals trivial or don't conflict with anything
+0.3: Subgoals exist but easily achieved without tension
+0.5: Minor tension that doesn't create real dilemmas
+0.7: Meaningful conflicts that require strategic choices
+1.0: Real dilemmas - pursuing subgoals risks main goal or conflicts with others' subgoals""",
     },
 }
 
@@ -286,6 +323,41 @@ Score each criterion from 0.0 to 1.0.
 
 ---
 
+## Subtask `required` Field Semantics
+
+The `required` field in subtasks determines ownership and win conditions:
+- `required: true` - Shared goal (must complete for task success)
+- `required: false` - Intermediate step (tracks progress, not required)
+- `required: "team_X"` - Team X wins when complete (competitive)
+- `required: "agent_X"` - Agent X's personal subgoal (mixed)
+
+**Check**: Do `required` values match the task category?
+- Cooperative: Should use `true`/`false` only
+- Competitive: Should have `"team_0"`, `"team_1"` win conditions
+- Mixed: Should have `true` for main goal + `"agent_X"` for subgoals
+
+---
+
+## What Makes a Good Task
+
+**Information Asymmetry**: Each agent has UNIQUE knowledge via `agent_secrets` that others need.
+- Good: Agent 0 knows key location, Agent 1 knows target cabinet
+- Bad: All agents know everything, or information isn't needed
+
+**Forced Coordination**: Subtask dependencies require sharing discoveries through `Communicate`.
+- Good: Agent 1 must tell Agent 0 which cabinet to unlock
+- Bad: Agents work in parallel without needing to talk
+
+**Every Agent Essential**: Removing ANY agent should make task impossible.
+- Good: 3 agents each have 1 of 3 required components
+- Bad: 2 agents do real work while 1 just watches
+
+**DAG Structure**: Later subtasks depend on earlier ones across multiple agents.
+- Good: s3 depends on s1 (agent_0's work) AND s2 (agent_1's work)
+- Bad: Linear chain that one agent could complete alone
+
+---
+
 ## Task to Evaluate
 
 ```json
@@ -314,14 +386,34 @@ Suggestions MUST be SPECIFIC and use ONLY available system capabilities.
 
 # Category descriptions for the prompt
 CATEGORY_PROMPT_DESCRIPTIONS = {
-    "cooperative": """**Cooperative Task**: All agents share the same goal and must work together to succeed.
-Key qualities: Clear shared objective, genuine interdependence, efficient coordination.""",
+    "cooperative": """**COOPERATIVE** - All agents united toward shared goals
+- Every agent contributes unique knowledge, skills, or access that others lack
+- Information is distributed: one agent might know key locations, another knows which locks need which keys
+- Success requires piecing together distributed information through communication
+- Complex tasks can have parallel workstreams that converge
+- Uses `agent_secrets` to distribute knowledge, `required: true` for shared goals
 
-    "competitive": """**Competitive Task**: Two teams with opposing win conditions. One team winning means the other loses.
-Key qualities: Clear win conditions, fair team balance, meaningful strategic choices.""",
+**Good cooperative task**: Agent 0 knows key location, Agent 1 knows which cabinet → must share info
+**Bad cooperative task**: Agent 0 can find key AND unlock cabinet alone (no interdependence)""",
 
-    "mixed": """**Mixed Task**: Agents share a main goal, but each has hidden subgoals that may conflict.
-Key qualities: Clear main goal, hidden subgoals with real tension, viable resolution paths.""",
+    "competitive": """**COMPETITIVE** - Teams with opposing objectives
+- Divide agents into teams (any split: 1v1, 2v1, 2v2, 3v2, etc.)
+- Teams compete for contested resources OR race to complete opposing objectives
+- Each team member should contribute - divide responsibilities within teams
+- Balance matters: if teams are uneven in size, give smaller team easier objectives
+- Uses `teams` mapping, `required: "team_X"` for each team's win conditions
+
+**Good competitive task**: Both teams need to unlock a shared chest, then race to secure the prize in their cabinet
+**Bad competitive task**: One team has overwhelming advantage or goals don't actually conflict""",
+
+    "mixed": """**MIXED** - Cooperation with hidden conflicts
+- All agents share a main goal they must complete together (`required: true`)
+- Each agent also has a SECRET personal subgoal (`required: "agent_X"`) that may conflict with others
+- Tension: agents must cooperate on the main task while secretly pursuing conflicting interests
+- Subgoals should create interesting dilemmas, not make main goal impossible
+
+**Good mixed task**: Both agents clean house, but one secretly wants valuable item hidden while another wants it displayed
+**Bad mixed task**: Subgoals are trivial or don't actually conflict with anything""",
 }
 
 

@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from omegaconf import DictConfig
 
-from .prompts import SYSTEM_PROMPT
+from .prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
 from .judge import Judge, Judgment, CouncilVerdict
 from emtom.actions import ActionRegistry
 
@@ -270,33 +270,22 @@ class TaskGeneratorAgent:
         self._log(f"Output: {self.output_dir}")
         self._log(f"{'='*60}\n")
 
-        if not self.scene_data:
-            self._log("ERROR: No scene_data provided!")
-            return []
-
-        self._log(f"Scene: {self.scene_data.scene_id} (episode {self.scene_data.episode_id})")
-        self._log(f"  Rooms: {len(self.scene_data.rooms)}")
-        self._log(f"  Furniture: {len(self.scene_data.furniture)}")
-        self._log(f"  Objects: {len(self.scene_data.objects)}")
+        # Scene is loaded lazily via new_scene[num_agents] - don't require it at startup
+        if self.scene_data:
+            self._log(f"Scene: {self.scene_data.scene_id} (episode {self.scene_data.episode_id})")
+            self._log(f"  Rooms: {len(self.scene_data.rooms)}")
+            self._log(f"  Furniture: {len(self.scene_data.furniture)}")
+            self._log(f"  Objects: {len(self.scene_data.objects)}")
+        else:
+            self._log("No scene loaded yet. Agent must call new_scene[num_agents] first.")
 
         # Clean up working_task.json from previous runs
         if self.task_file.exists():
             self.task_file.unlink()
             self._log(f"Cleaned up previous {self.task_file}")
 
-        # Create working_task.json from template with scene fields pre-populated
-        self._create_working_task_from_template()
-
-        # Story sampling disabled - uncomment to re-enable:
-        # from emtom.task_gen.task_generator import load_scenario_inspirations
-        # scenarios = load_scenario_inspirations(max_scenarios=num_tasks_target)
-        # if scenarios:
-        #     scenario_text = "\n\n## Story Inspiration (for atmosphere only - do NOT copy!)\n"
-        #     scenario_text += "Use these themes as creative inspiration for your story. Write your OWN story using the REAL object IDs from the scene.\n"
-        #     for i, s in enumerate(scenarios, 1):
-        #         truncated = s[:500] + "..." if len(s) > 500 else s
-        #         scenario_text += f"\n--- Theme {i} ---\n{truncated}\n"
-        scenario_text = ""
+        # Don't create working_task.json yet - agent must call new_scene first
+        # self._create_working_task_from_template() is called in _new_scene()
 
         # Get available items from registry
         from emtom.state.item_registry import ItemRegistry
@@ -345,9 +334,6 @@ class TaskGeneratorAgent:
         self.messages = [
             {"role": "system", "content": system_prompt}
         ]
-
-        # Format scene data for the prompt
-        scene_info = self._format_scene_data()
 
         # Build query section if provided
         query_section = ""
@@ -418,41 +404,18 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
             else:
                 calibration_section += f"No calibration data yet for {model}. Generate tasks of varied difficulty.\n"
 
-        # Initial user message with scene data
-        user_msg = f"""Create {num_tasks_target} quality benchmark tasks.
-{query_section}{verification_section}{calibration_section}
-## WORKFLOW (IMPORTANT!)
-1. Create ONE task at a time using working_task.json
-2. Verify with verify_golden_trajectory[] and judge[]
-3. Submit with submit_task[] - context will reset automatically
-4. Call new_scene[] for a fresh scene, then create your next task
-5. Repeat until you've submitted {num_tasks_target} tasks
+        # Build extra sections string
+        extra_sections = query_section + verification_section + calibration_section
 
-**NEVER call fail[]** - if a task repeatedly fails judge (2-3 attempts), use new_scene[] to get a fresh scene and try a completely different task design. Don't keep iterating on a broken design.
-
-## Task Requirements
-- **Agents**: Between {self.agents_min} and {self.agents_max} agents (choose based on task complexity; use agent_0 through agent_N-1)
-- **Subtasks**: Between {self.subtasks_min} and {self.subtasks_max} steps per task (choose based on task complexity)
-- Each subtask should be a distinct action that gates progress to the next
-- Set num_agents in the task JSON to match the number of agents you use
-
-## Scene Data (from PARTNR dataset - these objects EXIST!)
-**Episode ID**: {self.scene_data.episode_id}
-**Scene ID**: {self.scene_data.scene_id}
-
-NOTE: scene_id and episode_id are ALREADY SET in working_task.json. Do not modify them.
-
-{scene_info}
-
-Template is at: {self.template_file}
-Working task (pre-populated with scene fields): {self.task_file}
-{scenario_text}
-IMPORTANT:
-- Use ONLY the objects listed above - they are verified to exist in this scene
-- The task description should reference REAL object IDs from the scene
-- Choose mechanics to apply (inverse_state, remote_control, etc.) based on the articulated furniture available
-
-Start by reading the template, then create a task using the scene data above."""
+        # Initial user message - use template from prompts.py
+        user_msg = USER_PROMPT_TEMPLATE.format(
+            num_tasks=num_tasks_target,
+            extra_sections=extra_sections,
+            agents_min=self.agents_min,
+            agents_max=self.agents_max,
+            subtasks_min=self.subtasks_min,
+            subtasks_max=self.subtasks_max,
+        )
 
         self.messages.append({"role": "user", "content": user_msg})
 
@@ -889,6 +852,126 @@ SUMMARY:"""
 
         return None
 
+    def _extract_paths_from_command(self, command: str) -> List[str]:
+        """
+        Extract file paths from a shell command.
+
+        Returns list of paths that appear as arguments to file-access commands.
+        Handles quoted paths and paths with spaces.
+        """
+        paths = []
+
+        # Commands that take file/directory paths as arguments
+        path_commands = {"cat", "head", "tail", "ls", "wc", "find"}
+
+        # Flags that take an argument (not a path)
+        flags_with_args = {"-n", "-c", "-name", "-type", "-maxdepth", "-mindepth"}
+
+        # Split command respecting quotes
+        tokens = []
+        current_token = []
+        in_single_quote = False
+        in_double_quote = False
+
+        for char in command:
+            if char == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+            elif char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+            elif char.isspace() and not in_single_quote and not in_double_quote:
+                if current_token:
+                    tokens.append("".join(current_token))
+                    current_token = []
+                continue
+            current_token.append(char)
+
+        if current_token:
+            tokens.append("".join(current_token))
+
+        # Clean quotes from tokens
+        tokens = [t.strip("'\"") for t in tokens]
+
+        # Find paths after path commands
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+
+            # Check if this is a path command
+            if token in path_commands:
+                # Collect following tokens that look like paths (not flags)
+                j = i + 1
+                while j < len(tokens):
+                    arg = tokens[j]
+                    # Skip flags - if flag takes an argument, skip that too
+                    if arg.startswith("-"):
+                        if arg in flags_with_args and j + 1 < len(tokens):
+                            j += 2  # Skip flag and its argument
+                        else:
+                            j += 1  # Skip flag only
+                        continue
+                    # Skip heredoc markers
+                    if arg.startswith("<"):
+                        j += 1
+                        continue
+                    # Skip shell operators
+                    if arg in ("|", ">", ">>", "&&", "||", ";"):
+                        break
+                    # Skip jq patterns (start with . but not ./ or .. or just .)
+                    if arg.startswith(".") and arg != "." and not arg.startswith("./") and not arg.startswith(".."):
+                        break
+                    # This looks like a path
+                    paths.append(arg)
+                    j += 1
+                i = j
+            else:
+                i += 1
+
+        # Also check for redirection targets (> or >>)
+        for i, token in enumerate(tokens):
+            if token in (">", ">>") and i + 1 < len(tokens):
+                paths.append(tokens[i + 1])
+
+        return paths
+
+    def _validate_path_in_working_dir(self, path: str, allowed_paths: List[str]) -> tuple[bool, str]:
+        """
+        Validate that a path is within the allowed directories.
+
+        Args:
+            path: The path to validate
+            allowed_paths: List of allowed directory paths
+
+        Returns:
+            (is_valid, error_message) tuple
+        """
+        try:
+            # Resolve the path to an absolute path
+            # If relative, it's relative to working_dir (since subprocess runs there)
+            if not os.path.isabs(path):
+                # Resolve relative to the first allowed path (working_dir)
+                abs_path = os.path.join(allowed_paths[0], path)
+            else:
+                abs_path = path
+
+            # Resolve any symlinks and normalize
+            real_path = os.path.realpath(abs_path)
+
+            # Check if the path is within any allowed directory
+            for allowed in allowed_paths:
+                allowed_real = os.path.realpath(allowed)
+                # Use os.path.commonpath to check if path is under allowed
+                try:
+                    common = os.path.commonpath([real_path, allowed_real])
+                    if common == allowed_real:
+                        return True, ""
+                except ValueError:
+                    # Different drives on Windows, or other path issues
+                    continue
+
+            return False, f"Access denied: '{path}' is outside allowed directories. Only access within working directory is permitted."
+        except Exception as e:
+            return False, f"Path validation error for '{path}': {e}"
+
     def _split_by_operators(self, command: str) -> List[str]:
         """
         Split command by shell operators (&&, ||, ;, |) while respecting quotes.
@@ -956,7 +1039,7 @@ SUMMARY:"""
         elif tool == "submit_task":
             return self._submit_task()
         elif tool == "new_scene":
-            return self._new_scene()
+            return self._new_scene(args)
         elif tool == "fail":
             return self._fail(args)
         else:
@@ -1002,22 +1085,23 @@ SUMMARY:"""
             if first_word not in self.allowed_commands:
                 return f"Command not allowed: '{first_word}'. Allowed: {', '.join(self.allowed_commands)}"
 
-        # For heredoc writes, validate the target path
+        # SECURITY: Validate ALL file paths are within allowed directories
+        # Extract paths from the command part (not heredoc content)
+        extracted_paths = self._extract_paths_from_command(command_part)
+
+        for path in extracted_paths:
+            is_valid, error_msg = self._validate_path_in_working_dir(path, allowed_paths)
+            if not is_valid:
+                return error_msg
+
+        # For heredoc writes, also validate the target path explicitly
         if is_heredoc and ">" in command:
-            # Extract path after "cat >" or "cat>", before "<<"
             path_match = re.search(r'cat\s*>\s*([^\s<]+)', command)
             if path_match:
                 target_path = path_match.group(1).strip()
-                if not any(target_path.startswith(p) for p in allowed_paths):
-                    return f"Write not allowed: {target_path}. Can only write to: {', '.join(allowed_paths)}"
-
-        # For read commands, check if accessing sensitive file paths
-        # Only check the command part, not heredoc content
-        sensitive_paths = ["/etc/", "/root/", "~/.ssh/", ".env", "credentials.json"]
-        command_to_check = command_part.lower()
-        for sensitive in sensitive_paths:
-            if sensitive in command_to_check:
-                return f"Access denied: cannot access paths containing '{sensitive}'"
+                is_valid, error_msg = self._validate_path_in_working_dir(target_path, allowed_paths)
+                if not is_valid:
+                    return error_msg
 
         try:
             result = subprocess.run(
@@ -1026,7 +1110,7 @@ SUMMARY:"""
                 capture_output=True,
                 text=True,
                 timeout=30,
-                cwd=str(Path.cwd())  # Run from project root
+                cwd=str(self.working_dir)  # Run from working directory for safety
             )
             output = result.stdout + result.stderr
             if not output.strip():
@@ -2184,25 +2268,45 @@ Use new_scene[] if you want a different scene, or start creating your next task.
         new_size = self._estimate_context_size()
         self._log(f"Context reset. New size: {new_size} chars. Memories preserved: {len(self.task_memories)}")
 
-    def _new_scene(self) -> str:
+    def _new_scene(self, args: str = "") -> str:
         """
-        Load a new random scene for the next task.
+        Load a scene for task generation.
+
+        Usage:
+            new_scene[N] - Load random scene with N agents, reset task
+            new_scene[N, keep] - Same scene with N agents, preserve task edits
 
         Uses subprocess to get a fresh GL context (avoids sensor registry conflicts).
-        Updates scene_data, resets working_task.json, and clears verification state.
-        Returns scene info for the agent.
         """
         import tempfile
         from emtom.task_gen.scene_loader import SceneData
         from habitat_llm.utils import get_random_seed
 
-        self._log("Loading new random scene via subprocess...")
+        # Parse arguments
+        args = args.strip()
+        if not args:
+            return "Error: new_scene requires num_agents. Usage: new_scene[N] or new_scene[N, keep]"
+
+        parts = [p.strip() for p in args.split(",")]
+        try:
+            num_agents = int(parts[0])
+        except ValueError:
+            return f"Error: num_agents must be an integer, got '{parts[0]}'"
+
+        if num_agents < 2 or num_agents > 10:
+            return f"Error: num_agents must be 2-10, got {num_agents}"
+
+        # Check for 'keep' mode
+        keep_mode = len(parts) > 1 and parts[1].lower() == "keep"
+        scene_id = None
+        if keep_mode:
+            if self.scene_data is None:
+                return "Error: new_scene[N, keep] requires a scene. Use new_scene[N] first."
+            scene_id = self.scene_data.scene_id
+
+        self._log(f"Loading scene (num_agents={num_agents}, keep={keep_mode})...")
 
         try:
-            # Choose random agent count first (used for config selection and task template)
-            import random
-            num_agents = random.randint(self.agents_min, self.agents_max)
-
             # Use subprocess to load scene (fresh GL context)
             # Use headless config for faster loading (no visual sensors needed)
             config_name = f"examples/emtom_{num_agents}_robots_headless"
@@ -2219,6 +2323,8 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                 "--config-name", config_name,
                 "--seed", str(new_seed),
             ]
+            if scene_id:
+                cmd.extend(["--scene-id", scene_id])
 
             self._log(f"Running: {' '.join(cmd)}")
             result = subprocess.run(
@@ -2261,32 +2367,50 @@ Use new_scene[] if you want a different scene, or start creating your next task.
             with open(scene_file, "w") as f:
                 json.dump(self.scene_data.to_dict(), f, indent=2)
 
-            # Reset working_task.json with new scene info (uses num_agents chosen above)
-            self._create_working_task_from_template(num_agents=num_agents)
-
-            # Reset verification state for new task
+            # Reset verification state (task structure changed)
             self.last_verify_passed = False
             self.last_judge_passed = False
             self.last_test_passed = False
             self.last_judgment = None
-            self.consecutive_tom_failures = 0  # Reset failure counter for new task
+            self.consecutive_tom_failures = 0
 
-            # Reset context with fresh scene data (old scene data is now stale)
-            self._reset_context_for_next_task()
+            if keep_mode:
+                # Keep mode: preserve working_task.json, just update num_agents
+                task_file = self.working_dir / "working_task.json"
+                if task_file.exists():
+                    with open(task_file) as f:
+                        task_data = json.load(f)
+                    task_data["num_agents"] = num_agents
+                    with open(task_file, "w") as f:
+                        json.dump(task_data, f, indent=2)
+                    self._log(f"Updated num_agents to {num_agents} in working_task.json (preserved other fields)")
+                else:
+                    # No task file exists, create from template
+                    self._create_working_task_from_template(num_agents=num_agents)
 
-            # Return scene summary
-            return f"""New scene loaded! Context refreshed with new scene data.
+                return f"""Scene reloaded with {num_agents} agents. Task preserved.
+
+Scene ID: {self.scene_data.scene_id}
+Agents: {num_agents}
+Rooms: {', '.join(self.scene_data.rooms)}
+
+working_task.json preserved (num_agents updated to {num_agents}).
+Context preserved. Verification flags reset - run judge[] again."""
+            else:
+                # Fresh start: reset working_task.json and context
+                self._create_working_task_from_template(num_agents=num_agents)
+                self._reset_context_for_next_task()
+
+                return f"""New scene loaded! Context refreshed.
 
 Scene ID: {self.scene_data.scene_id}
 Episode ID: {self.scene_data.episode_id}
-Agents: {num_agents} (randomly chosen from range {self.agents_min}-{self.agents_max})
+Agents: {num_agents}
 Rooms: {', '.join(self.scene_data.rooms)}
 Furniture: {len(self.scene_data.furniture)} items
 Objects: {len(self.scene_data.objects)} items
-Articulated: {len(self.scene_data.articulated_furniture)} items
 
-working_task.json has been reset with scene_id, episode_id, and {num_agents} agents.
-Full scene data saved to: {scene_file}"""
+working_task.json reset. Use new_scene[N, keep] to change agent count without losing work."""
 
         except Exception as e:
             self._log(f"Error loading new scene: {e}")

@@ -74,6 +74,25 @@ def load_random_scene(config: "DictConfig", seed: Optional[int] = None) -> Scene
     Returns:
         SceneData with complete scene information
     """
+    return load_scene(config, seed=seed, scene_id=None)
+
+
+def load_scene(
+    config: "DictConfig",
+    seed: Optional[int] = None,
+    scene_id: Optional[str] = None,
+) -> SceneData:
+    """
+    Load a PARTNR episode and extract scene data.
+
+    Args:
+        config: Hydra config (should be already fixed/setup)
+        seed: Random seed for episode selection (used if scene_id not provided)
+        scene_id: Specific scene ID to load (e.g., "102817140"). If None, picks random.
+
+    Returns:
+        SceneData with complete scene information
+    """
     from habitat_llm.agent.env import register_actions, register_measures, register_sensors
     from habitat_llm.agent.env.dataset import CollaborationDatasetV0
     from habitat_llm.agent.env.environment_interface import EnvironmentInterface
@@ -85,19 +104,31 @@ def load_random_scene(config: "DictConfig", seed: Optional[int] = None) -> Scene
     # Load dataset
     dataset = CollaborationDatasetV0(config.habitat.dataset)
 
-    # Select random episode
-    if seed is not None:
-        random.seed(seed)
-    selected_episode = random.choice(dataset.episodes)
+    # Select episode
+    if scene_id is not None:
+        # Find episode with matching scene_id
+        matching_episodes = [ep for ep in dataset.episodes if ep.scene_id == scene_id]
+        if not matching_episodes:
+            raise ValueError(f"No episode found with scene_id '{scene_id}'. Available scenes: {set(ep.scene_id for ep in dataset.episodes[:20])}...")
+        # Pick first matching episode (or random if multiple)
+        if seed is not None:
+            random.seed(seed)
+        selected_episode = random.choice(matching_episodes)
+    else:
+        # Random episode
+        if seed is not None:
+            random.seed(seed)
+        selected_episode = random.choice(dataset.episodes)
+
     episode_id = selected_episode.episode_id
-    scene_id = selected_episode.scene_id
+    actual_scene_id = selected_episode.scene_id
 
     # Create environment and load episode
     env_interface = EnvironmentInterface(config, dataset=dataset, init_wg=False)
     env_interface.reset_environment(episode_id=episode_id)
 
     # Extract world graph
-    scene_data = extract_scene_data(env_interface, episode_id, scene_id)
+    scene_data = extract_scene_data(env_interface, episode_id, actual_scene_id)
 
     # Cleanup
     try:
@@ -138,6 +169,9 @@ def extract_scene_data(
     articulated = []
     furniture_in_rooms: Dict[str, List[str]] = {r: [] for r in rooms}
 
+    # Get furniture-to-room mapping from world graph
+    furniture_to_room = world_graph.get_furniture_to_room_map()
+
     for furn in world_graph.get_all_furnitures():
         furn_name = furn.name if hasattr(furn, 'name') else str(furn)
         furniture.append(furn_name)
@@ -147,9 +181,10 @@ def extract_scene_data(
             if furn.properties.get('is_articulated', False) or 'is_open' in furn.properties:
                 articulated.append(furn_name)
 
-        # Track room location
-        if hasattr(furn, 'room') and furn.room:
-            room_name = furn.room.name if hasattr(furn.room, 'name') else str(furn.room)
+        # Track room location using world graph mapping
+        if furn in furniture_to_room:
+            room_node = furniture_to_room[furn]
+            room_name = room_node.name if hasattr(room_node, 'name') else str(room_node)
             if room_name in furniture_in_rooms:
                 furniture_in_rooms[room_name].append(furn_name)
 
@@ -157,13 +192,17 @@ def extract_scene_data(
     objects = []
     objects_on_furniture: Dict[str, List[str]] = {f: [] for f in furniture}
 
+    # Get object-to-parent mapping from world graph
+    object_furniture_pairs = world_graph.find_object_furniture_pairs()
+
     for obj in world_graph.get_all_objects():
         obj_name = obj.name if hasattr(obj, 'name') else str(obj)
         objects.append(obj_name)
 
-        # Track furniture location
-        if hasattr(obj, 'parent') and obj.parent:
-            parent_name = obj.parent.name if hasattr(obj.parent, 'name') else str(obj.parent)
+        # Track furniture location using world graph mapping
+        if obj in object_furniture_pairs:
+            parent = object_furniture_pairs[obj]
+            parent_name = parent.name if hasattr(parent, 'name') else str(parent)
             if parent_name in objects_on_furniture:
                 objects_on_furniture[parent_name].append(obj_name)
 

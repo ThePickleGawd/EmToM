@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Standalone script to load a random scene.
+Standalone script to load a scene.
 
 Runs as a subprocess to get a fresh GL context and avoid sensor registry conflicts.
 
 Usage:
-    python emtom/task_gen/load_scene.py --result-file <path> --config-name <config> [--seed N]
+    python emtom/task_gen/load_scene.py --result-file <path> --config-name <config> [--seed N] [--scene-id ID]
 """
 
 import argparse
@@ -19,10 +19,11 @@ sys.path.insert(0, str(project_root))
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Load a random scene")
+    parser = argparse.ArgumentParser(description="Load a scene (random or specific)")
     parser.add_argument("--result-file", required=True, help="Path to write result JSON")
     parser.add_argument("--config-name", default="examples/emtom_2_robots")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for scene selection")
+    parser.add_argument("--scene-id", type=str, default=None, help="Specific scene ID to load (e.g., '102817140')")
     args = parser.parse_args()
 
     def write_result(result: dict):
@@ -37,7 +38,7 @@ def main():
 
         from habitat_llm.utils import fix_config, setup_config
 
-        from emtom.task_gen.scene_loader import load_random_scene
+        from emtom.task_gen.scene_loader import load_scene
     except ImportError as e:
         write_result({"success": False, "error": f"Import error: {e}"})
         sys.exit(1)
@@ -66,9 +67,9 @@ def main():
         write_result({"success": False, "error": f"Config error: {e}"})
         sys.exit(1)
 
-    # Load random scene
+    # Load scene (random or specific)
     try:
-        scene_data = load_random_scene(config, seed=args.seed)
+        scene_data = load_scene(config, seed=args.seed, scene_id=args.scene_id)
 
         write_result({
             "success": True,
