@@ -1061,8 +1061,10 @@ SUMMARY:"""
         # Allowed directories (temp working dir only - all working files are there)
         allowed_paths = [str(self.working_dir)]
 
-        # Allow cat with heredoc even though it writes
-        is_heredoc = "<<" in command and "EOF" in command
+        # Detect heredocs with any delimiter (EOF, PY, END, etc.)
+        # Match patterns like: <<EOF, <<'EOF', <<"EOF", <<-EOF, <<-'PY', etc.
+        heredoc_match = re.search(r"<<-?\s*['\"]?(\w+)['\"]?", command)
+        is_heredoc = heredoc_match is not None
 
         # Split command by chain operators to validate each part
         # For heredocs, only validate the command part before <<
