@@ -35,17 +35,15 @@ from emtom.mechanics.handlers import (
     handle_remote_control,
     handle_conditional_unlock,
     handle_state_mirroring,
-    # Theory of Mind handlers
+    # Belief tracking handlers
     handle_location_change,
     handle_container_swap,
     handle_state_change_unseen,
-    handle_delayed_information,
     # Communication handlers
     handle_limited_bandwidth,
     handle_delayed_messages,
     handle_noisy_channel,
     # Coordination handlers
-    handle_hidden_agenda,
     handle_simultaneous_action,
 )
 
@@ -67,16 +65,14 @@ __all__ = [
     "handle_remote_control",
     "handle_conditional_unlock",
     "handle_state_mirroring",
-    # Theory of Mind handlers
+    # Belief tracking handlers
     "handle_location_change",
     "handle_container_swap",
     "handle_state_change_unseen",
-    "handle_delayed_information",
     # Communication handlers
     "handle_limited_bandwidth",
     "handle_delayed_messages",
     "handle_noisy_channel",
     # Coordination handlers
-    "handle_hidden_agenda",
     "handle_simultaneous_action",
 ]

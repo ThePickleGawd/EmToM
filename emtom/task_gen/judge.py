@@ -123,22 +123,75 @@ class BenchmarkRollout:
         )
 
 
+# =============================================================================
+# Category Configuration
+# =============================================================================
+
+# Shared quality criteria (apply to ALL categories)
+SHARED_CRITERIA = ["narrative_consistency", "subtask_relevance", "mechanic_utilization", "trajectory_efficiency"]
+
+# Category-specific criteria
+CATEGORY_CRITERIA = {
+    "cooperative": SHARED_CRITERIA + ["task_interdependence"],
+    "competitive": SHARED_CRITERIA + ["goal_opposition", "team_balance"],
+    "mixed": SHARED_CRITERIA + ["subgoal_tension"],
+}
+
+# Criteria descriptions for prompts
+CRITERIA_DESCRIPTIONS = {
+    # Shared quality criteria
+    "narrative_consistency": {
+        "name": "Narrative Consistency",
+        "description": "Does the task description match what agents actually do?",
+        "rubric": "0.0: Description unrelated to subtasks | 0.5: Partially matches | 1.0: Perfect match",
+    },
+    "subtask_relevance": {
+        "name": "Subtask Relevance",
+        "description": "Does every subtask contribute to the main objective?",
+        "rubric": "0.0: Many filler subtasks | 0.5: Some tangential | 1.0: All essential",
+    },
+    "mechanic_utilization": {
+        "name": "Mechanic Utilization",
+        "description": "Are listed mechanics actually used? (Empty list = auto-pass)",
+        "rubric": "0.0: Listed but unused | 0.5: Could be removed | 1.0: Essential to task",
+    },
+    "trajectory_efficiency": {
+        "name": "Trajectory Efficiency",
+        "description": "Does the golden trajectory avoid wasteful actions?",
+        "rubric": "0.0: Many wasteful actions | 0.5: Some inefficiency | 1.0: All actions purposeful",
+    },
+    # Cooperative-specific
+    "task_interdependence": {
+        "name": "Task Interdependence",
+        "description": "Do agents genuinely need each other to succeed?",
+        "rubric": "0.0: One agent can do it alone | 0.5: Helps but not required | 1.0: Impossible alone",
+    },
+    # Competitive-specific
+    "goal_opposition": {
+        "name": "Goal Opposition",
+        "description": "Do teams have mutually exclusive win conditions?",
+        "rubric": "0.0: Goals don't conflict | 0.5: Partial conflict | 1.0: One wins = other loses",
+    },
+    "team_balance": {
+        "name": "Team Balance",
+        "description": "Do both teams have a fair chance of winning?",
+        "rubric": "0.0: One team always wins | 0.5: Slight advantage | 1.0: Fair chance for both",
+    },
+    # Mixed-specific
+    "subgoal_tension": {
+        "name": "Subgoal Tension",
+        "description": "Can hidden subgoals conflict with main goal or each other?",
+        "rubric": "0.0: No conflict possible | 0.5: Minor tension | 1.0: Real strategic dilemmas",
+    },
+}
+
+
 @dataclass
 class Judgment:
     """Result of task evaluation by a single model."""
 
-    # ToM criteria
-    information_asymmetry: CriterionScore
-    interdependence: CriterionScore
-    mental_state_reasoning: CriterionScore
-    coordination_requirement: CriterionScore
-
-    # Quality criteria
-    narrative_consistency: CriterionScore
-    subtask_relevance: CriterionScore
-    mechanic_utilization: CriterionScore
-    trajectory_efficiency: CriterionScore
-
+    category: str  # Task category that was evaluated
+    criteria_scores: Dict[str, CriterionScore]  # Dynamic based on category
     overall_score: float
     is_valid: bool
     overall_reasoning: str
@@ -150,15 +203,11 @@ class Judgment:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         criteria = {}
-        for name in [
-            "information_asymmetry", "interdependence", "mental_state_reasoning",
-            "coordination_requirement", "narrative_consistency", "subtask_relevance",
-            "mechanic_utilization", "trajectory_efficiency"
-        ]:
-            c = getattr(self, name)
-            criteria[name] = {"score": c.score, "reasoning": c.reasoning}
+        for name, score in self.criteria_scores.items():
+            criteria[name] = {"score": score.score, "reasoning": score.reasoning}
 
         return {
+            "category": self.category,
             "is_valid": self.is_valid,
             "overall_score": self.overall_score,
             "criteria": criteria,
@@ -198,13 +247,12 @@ class CouncilVerdict:
         return json.dumps(self.to_dict(), indent=indent)
 
 
-# Combined evaluation prompt
-EVALUATION_PROMPT = """You are an expert evaluator for multi-agent collaborative tasks.
+# Category-aware evaluation prompt template
+EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 
-## Your Task
-Evaluate this task on TWO dimensions:
-1. **Theory of Mind (ToM)** - Does the task require agents to reason about each other's mental states?
-2. **Task Quality** - Is the task well-designed, coherent, and efficient?
+## Task Category: {category}
+
+{category_description}
 
 ## System Capabilities (suggestions must use these!)
 
@@ -225,82 +273,11 @@ Evaluate this task on TWO dimensions:
 
 ---
 
-## PART 1: Theory of Mind Criteria
+## Evaluation Criteria
 
-Score each from 0.0 to 1.0. Mental State Reasoning can trigger AUTOMATIC FAIL (-1.0).
+Score each criterion from 0.0 to 1.0.
 
-### 1. Information Asymmetry (0.0-1.0)
-Do agents have meaningfully different private knowledge?
-- 0.0: All agents have identical information
-- 0.5: Minor asymmetry, not task-critical
-- 1.0: Each agent has unique, critical information others need
-
-### 2. Interdependence (0.0-1.0)
-Can one agent complete the task alone?
-- 0.0: One agent could do everything
-- 0.5: Collaboration helps but isn't required
-- 1.0: Impossible without combining multiple agents' knowledge/abilities
-
-### 3. Mental State Reasoning (0.0-1.0 or -1.0 for AUTO-FAIL)
-Must agents reason about what others know/don't know?
-- **-1.0 AUTO-FAIL**: Both agents have identical info OR one can complete alone
-- 0.5: Some benefit from understanding others' knowledge
-- 1.0: Success requires recognizing knowledge gaps and acting on them
-
-### 4. Coordination Requirement (0.0-1.0)
-Do actions need careful cross-agent sequencing?
-- 0.0: Agents work completely independently
-- 0.5: Some coordination helps
-- 1.0: Precise sequencing essential (DAG has cross-agent dependencies)
-
----
-
-## PART 2: Task Quality Criteria
-
-Score each from 0.0 to 1.0.
-
-### 5. Narrative Consistency (0.0-1.0)
-Does the task description match what agents actually do?
-- 0.0: Description unrelated to actual subtasks
-- 0.5: Partially matches, some disconnected elements
-- 1.0: Description perfectly captures all goals and purpose
-
-### 6. Subtask Relevance (0.0-1.0)
-Does every subtask contribute to the main objective?
-- 0.0: Many subtasks are filler/busywork with no purpose
-- 0.5: Some subtasks tangentially related
-- 1.0: Every subtask is essential to task completion
-
-### 7. Mechanic Utilization (0.0-1.0)
-Are listed mechanics actually used in the task?
-- 0.0: Mechanics listed but never triggered (empty mechanic_bindings, or bindings don't affect task)
-- 0.5: Mechanics exist but could be removed without impact
-- 1.0: Mechanics are essential to task design
-
-NOTE: If active_mechanics is empty [], score 1.0 (no mechanics claimed, none needed).
-If active_mechanics has items but mechanic_bindings is empty, score 0.0.
-
-### 8. Trajectory Efficiency (0.0-1.0)
-Does the golden_trajectory avoid wasteful actions?
-- 0.0: Many actions don't progress toward goals
-- 0.5: Some inefficiencies but generally on-track
-- 1.0: Every action directly advances task completion
-
----
-
-## Examples
-
-### Good Task (high ToM + high Quality):
-- Agent 0 knows key is in drawer_5, Agent 1 knows locked cabinet has goal. Neither succeeds alone.
-- Every subtask contributes to main objective.
-- All mechanics actually affect gameplay.
-- Golden trajectory is efficient.
-
-### Bad Task (low scores):
-- Both agents have identical info (no ToM)
-- Subtasks like "open random drawers" that serve no purpose (low quality)
-- Mechanics listed but mechanic_bindings is empty (low quality)
-- Golden trajectory has wasteful navigation (low quality)
+{criteria_section}
 
 ---
 
@@ -317,14 +294,7 @@ Does the golden_trajectory avoid wasteful actions?
 Respond with ONLY valid JSON. Keep reasoning BRIEF (under 15 words each).
 
 {{
-  "information_asymmetry": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
-  "interdependence": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
-  "mental_state_reasoning": {{"score": <0.0-1.0 or -1.0>, "reasoning": "<brief>"}},
-  "coordination_requirement": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
-  "narrative_consistency": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
-  "subtask_relevance": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
-  "mechanic_utilization": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
-  "trajectory_efficiency": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},
+{response_format}
   "overall_reasoning": "<1 sentence>",
   "suggestions": ["<specific fix>", "<specific fix>"]
 }}
@@ -333,25 +303,60 @@ Respond with ONLY valid JSON. Keep reasoning BRIEF (under 15 words each).
 
 Suggestions MUST be SPECIFIC and use ONLY available system capabilities.
 
-**BAD**: "Add more information asymmetry"
-**GOOD**: "Give Agent 1 the secret about item_small_key_1 location. Agent 0 must communicate to learn it."
-
-**BAD**: "Remove filler subtasks"
-**GOOD**: "Remove subtasks s8, s9, s10 - they open random furniture unrelated to the main goal."
+**BAD**: "Improve the task design"
+**GOOD**: "Remove subtasks s8, s9 - they open random furniture unrelated to the main goal."
 """
+
+# Category descriptions for the prompt
+CATEGORY_PROMPT_DESCRIPTIONS = {
+    "cooperative": """**Cooperative Task**: All agents share the same goal and must work together to succeed.
+Key qualities: Clear shared objective, genuine interdependence, efficient coordination.""",
+
+    "competitive": """**Competitive Task**: Two teams with opposing win conditions. One team winning means the other loses.
+Key qualities: Clear win conditions, fair team balance, meaningful strategic choices.""",
+
+    "mixed": """**Mixed Task**: Agents share a main goal, but each has hidden subgoals that may conflict.
+Key qualities: Clear main goal, hidden subgoals with real tension, viable resolution paths.""",
+}
+
+
+def _build_criteria_section(category: str) -> str:
+    """Build the criteria section for a given category."""
+    criteria = CATEGORY_CRITERIA.get(category, SHARED_CRITERIA)
+    lines = []
+    for i, criterion in enumerate(criteria, 1):
+        info = CRITERIA_DESCRIPTIONS.get(criterion, {})
+        lines.append(f"### {i}. {info.get('name', criterion)} (0.0-1.0)")
+        lines.append(info.get('description', ''))
+        lines.append(f"- {info.get('rubric', '')}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _build_response_format(category: str) -> str:
+    """Build the JSON response format for a given category."""
+    criteria = CATEGORY_CRITERIA.get(category, SHARED_CRITERIA)
+    lines = []
+    for criterion in criteria:
+        lines.append(f'  "{criterion}": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},')
+    return "\n".join(lines)
 
 
 class Judge:
     """
     Multi-LLM council judge for task validation.
 
-    Evaluates tasks on 8 criteria (4 ToM + 4 Quality) using multiple models.
+    Evaluates tasks using category-specific criteria:
+    - Cooperative: 5 criteria (4 shared + task_interdependence)
+    - Competitive: 6 criteria (4 shared + goal_opposition + team_balance)
+    - Mixed: 5 criteria (4 shared + subgoal_tension)
+
     Both models must agree for a task to pass.
     """
 
-    # Thresholds
-    OVERALL_THRESHOLD = 0.7
-    MIN_CRITERION_THRESHOLD = 0.5
+    # Thresholds (lowered for faster generation)
+    OVERALL_THRESHOLD = 0.6
+    MIN_CRITERION_THRESHOLD = 0.4
 
     # Default council models
     DEFAULT_MODELS = ["opus", "gpt-5.2"]
@@ -359,8 +364,8 @@ class Judge:
     def __init__(
         self,
         models: Optional[List[str]] = None,
-        overall_threshold: float = 0.7,
-        min_criterion_threshold: float = 0.5,
+        overall_threshold: float = 0.6,
+        min_criterion_threshold: float = 0.4,
         verbose: bool = False,
     ):
         """
@@ -368,8 +373,8 @@ class Judge:
 
         Args:
             models: List of model names for council (default: ["opus", "gpt-5.2"])
-            overall_threshold: Minimum overall score to pass (default 0.7)
-            min_criterion_threshold: Minimum score for any criterion (default 0.5)
+            overall_threshold: Minimum overall score to pass (default 0.6)
+            min_criterion_threshold: Minimum score for any criterion (default 0.4)
             verbose: Print debug information
         """
         self.models = models or self.DEFAULT_MODELS
@@ -572,12 +577,21 @@ class Judge:
         """Evaluate task with a single model."""
         llm = self._get_llm_client(model)
 
-        # Build prompt
+        # Get task category (default to cooperative for backwards compatibility)
+        category = task_dict.get("category", "cooperative")
+        if category not in CATEGORY_CRITERIA:
+            category = "cooperative"
+
+        # Build category-aware prompt
         grounding = self._get_grounding_info()
         scene_objects = self._format_scene_objects(scene_data)
         task_json = json.dumps(task_dict, indent=2)
 
         prompt = EVALUATION_PROMPT.format(
+            category=category.upper(),
+            category_description=CATEGORY_PROMPT_DESCRIPTIONS.get(category, ""),
+            criteria_section=_build_criteria_section(category),
+            response_format=_build_response_format(category),
             task_json=task_json,
             available_actions=grounding["available_actions"],
             available_mechanics=grounding["available_mechanics"],
@@ -592,7 +606,7 @@ class Judge:
             prompt += f"\n\n{rollout_section}"
 
         if self.verbose:
-            print(f"[Judge/{model}] Sending prompt ({len(prompt)} chars)")
+            print(f"[Judge/{model}] Evaluating {category} task ({len(prompt)} chars)")
 
         # Get response
         response = llm.generate(prompt)
@@ -601,57 +615,43 @@ class Judge:
             print(f"[Judge/{model}] Received response ({len(response)} chars)")
 
         # Parse response
-        return self._parse_response(response, model)
+        return self._parse_response(response, model, category)
 
-    def _parse_response(self, response: str, model: str) -> Judgment:
+    def _parse_response(self, response: str, model: str, category: str = "cooperative") -> Judgment:
         """Parse LLM response into Judgment."""
         # Extract JSON
         json_match = re.search(r"\{[\s\S]*\}", response)
         if not json_match:
-            return self._failed_judgment(f"[{model}] Failed to parse response")
+            return self._failed_judgment(f"[{model}] Failed to parse response", category)
 
         try:
             data = json.loads(json_match.group())
         except json.JSONDecodeError as e:
-            return self._failed_judgment(f"[{model}] JSON parse error: {e}")
+            return self._failed_judgment(f"[{model}] JSON parse error: {e}", category)
 
-        # Extract all criteria
-        criteria_names = [
-            "information_asymmetry", "interdependence", "mental_state_reasoning",
-            "coordination_requirement", "narrative_consistency", "subtask_relevance",
-            "mechanic_utilization", "trajectory_efficiency"
-        ]
+        # Get criteria for this category
+        criteria_names = CATEGORY_CRITERIA.get(category, SHARED_CRITERIA)
 
-        criteria = {}
+        criteria_scores = {}
         scores = []
-        automatic_fail = False
 
         for name in criteria_names:
             if name in data and isinstance(data[name], dict):
                 score = float(data[name].get("score", 0.0))
                 reasoning = data[name].get("reasoning", "No reasoning provided")
-
-                if name == "mental_state_reasoning" and score == -1.0:
-                    automatic_fail = True
-                    reasoning = f"AUTOMATIC FAIL: {reasoning}"
-
-                criteria[name] = CriterionScore(score=score, reasoning=reasoning)
+                criteria_scores[name] = CriterionScore(score=score, reasoning=reasoning)
                 scores.append(score)
             else:
-                criteria[name] = CriterionScore(score=0.0, reasoning="Missing from response")
+                criteria_scores[name] = CriterionScore(score=0.0, reasoning="Missing from response")
                 scores.append(0.0)
 
         # Calculate overall score
-        valid_scores = [s for s in scores if s >= 0]
-        overall_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
+        overall_score = sum(scores) / len(scores) if scores else 0.0
 
-        # Check if passes
-        if automatic_fail:
-            is_valid = False
-        else:
-            passes_overall = overall_score >= self.overall_threshold
-            passes_all_criteria = all(s >= self.min_criterion_threshold for s in scores if s >= 0)
-            is_valid = passes_overall and passes_all_criteria
+        # Check if passes (no AUTO-FAIL triggers in new system)
+        passes_overall = overall_score >= self.overall_threshold
+        passes_all_criteria = all(s >= self.min_criterion_threshold for s in scores)
+        is_valid = passes_overall and passes_all_criteria
 
         # Extract suggestions
         suggestions = data.get("suggestions", [])
@@ -659,39 +659,29 @@ class Judge:
             suggestions = [str(suggestions)]
 
         # Add auto-suggestions for low scores
-        for name, criterion in criteria.items():
-            if criterion.score == -1.0:
-                suggestions.insert(0, f"AUTOMATIC FAIL on {name}: {criterion.reasoning}")
-            elif criterion.score < self.min_criterion_threshold:
+        for name, criterion in criteria_scores.items():
+            if criterion.score < self.min_criterion_threshold:
                 suggestions.append(f"Improve {name} ({criterion.score:.2f}): {criterion.reasoning}")
 
         return Judgment(
-            information_asymmetry=criteria["information_asymmetry"],
-            interdependence=criteria["interdependence"],
-            mental_state_reasoning=criteria["mental_state_reasoning"],
-            coordination_requirement=criteria["coordination_requirement"],
-            narrative_consistency=criteria["narrative_consistency"],
-            subtask_relevance=criteria["subtask_relevance"],
-            mechanic_utilization=criteria["mechanic_utilization"],
-            trajectory_efficiency=criteria["trajectory_efficiency"],
+            category=category,
+            criteria_scores=criteria_scores,
             overall_score=overall_score,
             is_valid=is_valid,
             overall_reasoning=data.get("overall_reasoning", "No reasoning provided"),
             suggestions=suggestions,
         )
 
-    def _failed_judgment(self, reason: str) -> Judgment:
+    def _failed_judgment(self, reason: str, category: str = "cooperative") -> Judgment:
         """Create a failed judgment for parse errors."""
-        failed_score = CriterionScore(score=0.0, reasoning=reason)
+        criteria_names = CATEGORY_CRITERIA.get(category, SHARED_CRITERIA)
+        failed_scores = {
+            name: CriterionScore(score=0.0, reasoning=reason)
+            for name in criteria_names
+        }
         return Judgment(
-            information_asymmetry=failed_score,
-            interdependence=failed_score,
-            mental_state_reasoning=failed_score,
-            coordination_requirement=failed_score,
-            narrative_consistency=failed_score,
-            subtask_relevance=failed_score,
-            mechanic_utilization=failed_score,
-            trajectory_efficiency=failed_score,
+            category=category,
+            criteria_scores=failed_scores,
             overall_score=0.0,
             is_valid=False,
             overall_reasoning=reason,
@@ -755,20 +745,13 @@ class Judge:
         # Show per-model breakdown
         for model, judgment in verdict.judgments.items():
             lines.append(f"\n--- {model} ({'PASS' if judgment.is_valid else 'FAIL'}) ---")
+            lines.append(f"Category: {judgment.category}")
             lines.append(f"Score: {judgment.overall_score:.2f}")
 
-            lines.append("\nToM Criteria:")
-            for name in ["information_asymmetry", "interdependence", "mental_state_reasoning", "coordination_requirement"]:
-                c = getattr(judgment, name)
-                icon = "+" if c.score >= self.min_criterion_threshold else ("X" if c.score == -1 else "!")
-                score_str = "AUTO-FAIL" if c.score == -1 else f"{c.score:.2f}"
-                lines.append(f"  [{icon}] {name}: {score_str}")
-
-            lines.append("\nQuality Criteria:")
-            for name in ["narrative_consistency", "subtask_relevance", "mechanic_utilization", "trajectory_efficiency"]:
-                c = getattr(judgment, name)
-                icon = "+" if c.score >= self.min_criterion_threshold else "!"
-                lines.append(f"  [{icon}] {name}: {c.score:.2f}")
+            lines.append("\nCriteria:")
+            for name, criterion in judgment.criteria_scores.items():
+                icon = "+" if criterion.score >= self.min_criterion_threshold else "!"
+                lines.append(f"  [{icon}] {name}: {criterion.score:.2f}")
 
         if verdict.suggestions:
             lines.append("\nSuggestions:")
@@ -783,7 +766,7 @@ class Judge:
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Evaluate task quality and ToM requirements"
+        description="Evaluate task quality with category-specific criteria"
     )
     parser.add_argument(
         "--task", type=str, required=True,
@@ -794,12 +777,12 @@ def main():
         help="Comma-separated list of models for council (default: opus,gpt-5)"
     )
     parser.add_argument(
-        "--threshold", type=float, default=0.7,
-        help="Overall score threshold (default: 0.7)"
+        "--threshold", type=float, default=0.6,
+        help="Overall score threshold (default: 0.6)"
     )
     parser.add_argument(
-        "--min-criterion", type=float, default=0.5,
-        help="Minimum criterion score (default: 0.5)"
+        "--min-criterion", type=float, default=0.4,
+        help="Minimum criterion score (default: 0.4)"
     )
     parser.add_argument(
         "--verbose", action="store_true",

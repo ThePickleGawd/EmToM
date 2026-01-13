@@ -108,15 +108,6 @@ MECHANIC_INFO = {
         "example_binding": {"mechanic_type": "state_change_unseen", "object_id": "door_5", "property": "is_locked", "new_value": True, "changing_agent": "agent_0"},
         "recommended_for_tom": True,
     },
-    "delayed_information": {
-        "description": "Information is revealed to an agent after a delay",
-        "category": "information_asymmetry",
-        "setup_keys": ["info_id", "content", "delay_turns", "target_agents"],
-        "agent_observation": "You suddenly remember: {content}",
-        "tom_use": "Agent A gets info first, must decide whether to share before B learns it naturally.",
-        "example_binding": {"mechanic_type": "delayed_information", "info_id": "key_hint", "content": "The key is hidden in drawer_5", "delay_turns": 3, "target_agents": ["agent_1"]},
-        "recommended_for_tom": True,
-    },
     # === Communication Mechanics ===
     "limited_bandwidth": {
         "description": "Agents can only send N messages total during the episode",
@@ -146,15 +137,6 @@ MECHANIC_INFO = {
         "recommended_for_tom": True,
     },
     # === Coordination Mechanics ===
-    "hidden_agenda": {
-        "description": "Agents have secret, potentially conflicting goals",
-        "category": "coordination",
-        "setup_keys": ["agent_goals"],
-        "agent_observation": "You have a secret objective: {goal}",
-        "tom_use": "Agents must infer others' hidden motives from behavior. May need to cooperate despite conflict.",
-        "example_binding": {"mechanic_type": "hidden_agenda", "agent_goals": {"agent_0": {"goal": "get_apple", "target": "apple_3"}, "agent_1": {"goal": "get_apple", "target": "apple_3"}}},
-        "recommended_for_tom": True,
-    },
     "simultaneous_action": {
         "description": "Certain actions require multiple agents to act together in the same step",
         "category": "coordination",
@@ -759,69 +741,6 @@ def handle_state_change_unseen(
     return no_effect(state)
 
 
-def handle_delayed_information(
-    action_name: str,
-    agent_id: str,
-    target: Optional[str],
-    state: EMTOMGameState,
-) -> HandlerResult:
-    """
-    Delayed Information: Reveal information to agents after a delay.
-
-    Creates information asymmetry over time:
-    - Agent A might learn info at step 0
-    - Agent B learns same info at step 5
-    - A must decide whether to share before B learns naturally
-
-    Setup in state via mechanic_bindings:
-        {"mechanic_type": "delayed_information", "info_id": "key_hint",
-         "content": "The key is in drawer_5", "reveal_to": "agent_1",
-         "reveal_at_step": 5}
-
-    This handler checks on EVERY action whether delayed info should be revealed.
-    """
-    new_state = state
-    revealed_info = []
-
-    # Check all delayed info entries
-    for info_id, info_data in state.delayed_info.items():
-        if info_data.get("revealed", False):
-            continue
-
-        reveal_step = info_data.get("reveal_at_step", 0)
-        if state.current_step < reveal_step:
-            continue
-
-        # Time to reveal!
-        target_agents = info_data.get("target_agents", [])
-        content = info_data.get("content", "")
-
-        # Only reveal to the acting agent if they're a target
-        if agent_id in target_agents:
-            revealed_info.append((info_id, content))
-
-            # Mark as revealed for this agent
-            new_state = copy.copy(new_state)
-            new_state.delayed_info = copy.copy(new_state.delayed_info)
-            new_state.delayed_info[info_id] = copy.copy(info_data)
-            new_state.delayed_info[info_id]["revealed"] = True
-            new_state.delayed_info[info_id]["revealed_at_step"] = state.current_step
-
-    if revealed_info:
-        observations = [f"You suddenly remember: {content}" for _, content in revealed_info]
-        return HandlerResult(
-            applies=True,
-            state=new_state,
-            observation=" ".join(observations),
-            success=True,
-            effects=[f"info_revealed={info_id}" for info_id, _ in revealed_info],
-            surprise_trigger="Delayed information revealed",
-            mechanic_type="delayed_information",
-        )
-
-    return no_effect(state)
-
-
 # =============================================================================
 # Communication Mechanic Handlers
 # =============================================================================
@@ -1100,121 +1019,6 @@ def handle_noisy_channel(
 # Coordination Mechanic Handlers
 # =============================================================================
 
-def handle_hidden_agenda(
-    action_name: str,
-    agent_id: str,
-    target: Optional[str],
-    state: EMTOMGameState,
-) -> HandlerResult:
-    """
-    Hidden Agenda: Agents have secret, potentially conflicting goals.
-
-    Each agent has a private objective that may conflict with others.
-    Creates situations where agents must:
-    - Infer others' goals from behavior
-    - Decide whether to cooperate or compete
-    - Balance public task with private agenda
-
-    Setup in state via mechanic_bindings:
-        {"mechanic_type": "hidden_agenda", "agent_goals": {
-            "agent_0": {"goal": "get_apple", "target": "apple_3", "description": "You want the apple for yourself"},
-            "agent_1": {"goal": "get_apple", "target": "apple_3", "description": "You want the apple for yourself"}
-        }}
-
-    Tracks when agents achieve their hidden goals and detects conflicts.
-    """
-    # Check for hidden_agenda binding
-    agent_goals = None
-    for binding in state.mechanic_bindings:
-        if binding.get("mechanic_type") == "hidden_agenda":
-            agent_goals = binding.get("agent_goals", {})
-            break
-
-    if not agent_goals or agent_id not in agent_goals:
-        return no_effect(state)
-
-    my_agenda = agent_goals.get(agent_id, {})
-    my_goal = my_agenda.get("goal", "")
-    my_target = my_agenda.get("target", "")
-
-    # Check if this action achieves the agent's hidden goal
-    goal_achieved = False
-    action_lower = action_name.lower()
-
-    # Check various goal types
-    if my_goal == "get_item" and action_lower == "pick" and target == my_target:
-        goal_achieved = True
-    elif my_goal == "place_item" and action_lower == "place" and target == my_target:
-        goal_achieved = True
-    elif my_goal == "open_container" and action_lower == "open" and target == my_target:
-        goal_achieved = True
-    elif my_goal == "reach_location" and action_lower == "navigate" and target == my_target:
-        goal_achieved = True
-    elif my_goal.startswith("get_") and action_lower == "pick" and target == my_target:
-        # Generic "get_X" goal
-        goal_achieved = True
-
-    if goal_achieved:
-        # Update state to mark goal as achieved
-        new_state = copy.copy(state)
-        new_state.hidden_agendas = copy.copy(state.hidden_agendas)
-        new_state.hidden_agendas[agent_id] = {
-            "goal": my_goal,
-            "target": my_target,
-            "achieved": True,
-            "achieved_at_step": state.current_step,
-        }
-
-        # Check for conflicts - did another agent want the same thing?
-        conflicts = []
-        for other_agent, other_agenda in agent_goals.items():
-            if other_agent != agent_id:
-                if other_agenda.get("target") == my_target and other_agenda.get("goal") == my_goal:
-                    conflicts.append(other_agent)
-
-        effects = [f"hidden_goal_achieved={agent_id}:{my_goal}"]
-        if conflicts:
-            effects.append(f"goal_conflict_with={','.join(conflicts)}")
-
-        return HandlerResult(
-            applies=True,
-            state=new_state,
-            observation=f"You achieved your secret objective!",
-            success=True,
-            effects=effects,
-            surprise_trigger="Hidden agenda achieved",
-            mechanic_type="hidden_agenda",
-        )
-
-    # Track actions that might reveal intentions to observant agents
-    new_state = copy.copy(state)
-    new_state.hidden_agendas = copy.copy(state.hidden_agendas)
-    if agent_id not in new_state.hidden_agendas:
-        new_state.hidden_agendas[agent_id] = {
-            "goal": my_goal,
-            "target": my_target,
-            "achieved": False,
-            "actions_toward_goal": [],
-        }
-
-    # Check if this action is toward the goal target (reveals intent)
-    if target == my_target:
-        actions_list = new_state.hidden_agendas[agent_id].get("actions_toward_goal", [])
-        actions_list.append({"action": action_name, "step": state.current_step})
-        new_state.hidden_agendas[agent_id]["actions_toward_goal"] = actions_list
-
-        return HandlerResult(
-            applies=True,
-            state=new_state,
-            observation="",  # Silent tracking
-            success=True,
-            effects=[f"action_toward_hidden_goal={agent_id}"],
-            mechanic_type="hidden_agenda",
-        )
-
-    return no_effect(state)
-
-
 def handle_simultaneous_action(
     action_name: str,
     agent_id: str,
@@ -1331,22 +1135,20 @@ def handle_simultaneous_action(
 # =============================================================================
 
 MECHANIC_HANDLERS: Dict[str, MechanicHandler] = {
-    # Original mechanics
+    # State transform mechanics
     "inverse_state": handle_inverse_state,
     "remote_control": handle_remote_control,
     "conditional_unlock": handle_conditional_unlock,
     "state_mirroring": handle_state_mirroring,
-    # Theory of Mind mechanics
+    # Belief tracking mechanics
     "location_change": handle_location_change,
     "container_swap": handle_container_swap,
     "state_change_unseen": handle_state_change_unseen,
-    "delayed_information": handle_delayed_information,
     # Communication mechanics
     "limited_bandwidth": handle_limited_bandwidth,
     "delayed_messages": handle_delayed_messages,
     "noisy_channel": handle_noisy_channel,
     # Coordination mechanics
-    "hidden_agenda": handle_hidden_agenda,
     "simultaneous_action": handle_simultaneous_action,
 }
 

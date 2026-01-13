@@ -1,6 +1,7 @@
 {
   "task_id": "REPLACE_WITH_UNIQUE_ID",
   "title": "REPLACE_WITH_TITLE",
+  "category": "cooperative|competitive|mixed",
   "task": "REPLACE_WITH_TASK_DESCRIPTION",
   "scene_id": "",
   "episode_id": "",
@@ -56,5 +57,33 @@
         {"agent": "agent_1", "action": "Wait"}
       ]
     }
-  ]
+  ],
+
+  "_COMPETITIVE_ONLY_FIELDS": "Remove this section for non-competitive tasks",
+  "teams": {
+    "team_0": ["agent_0"],
+    "team_1": ["agent_1"]
+  },
+  "team_goals": {
+    "team_0": {"entity": "trophy_1", "property": "is_inside", "target": "cabinet_10"},
+    "team_1": {"entity": "trophy_1", "property": "is_inside", "target": "cabinet_20"}
+  },
+  "team_secrets": {
+    "team_0": ["Your cabinet is cabinet_10"],
+    "team_1": ["Your cabinet is cabinet_20"]
+  },
+
+  "_MIXED_ONLY_FIELDS": "Remove this section for non-mixed tasks",
+  "agent_subgoals": {
+    "agent_0": {
+      "goal": "Hide the vase",
+      "success_condition": {"entity": "vase_1", "property": "is_inside", "target": "closet_5"},
+      "conflicts_with": "Agent 1 wants vase displayed"
+    },
+    "agent_1": {
+      "goal": "Display the vase",
+      "success_condition": {"entity": "vase_1", "property": "is_on_top", "target": "table_22"},
+      "conflicts_with": "Agent 0 wants vase hidden"
+    }
+  }
 }

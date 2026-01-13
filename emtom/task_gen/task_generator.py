@@ -46,10 +46,18 @@ def load_scenario_inspirations(
 
 
 class TaskType(Enum):
-    """Type of task to generate."""
+    """Type of task to generate (deprecated - use TaskCategory instead)."""
 
-    THEORY_OF_MIND = "theory_of_mind"  # Tasks requiring theory of mind reasoning
-    REGULAR = "regular"  # Simple everyday tasks without ToM requirements
+    THEORY_OF_MIND = "theory_of_mind"  # Legacy: Tasks requiring theory of mind reasoning
+    REGULAR = "regular"  # Legacy: Simple everyday tasks without ToM requirements
+
+
+class TaskCategory(Enum):
+    """Category of task - determines evaluation criteria."""
+
+    COOPERATIVE = "cooperative"  # All agents share same goal, must work together
+    COMPETITIVE = "competitive"  # Two teams with opposing win conditions
+    MIXED = "mixed"  # Shared main goal, but agents have secret conflicting subgoals
 
 
 
@@ -155,6 +163,9 @@ class GeneratedTask:
     task_id: str
     title: str
 
+    # CATEGORY (determines evaluation criteria)
+    category: str  # "cooperative", "competitive", or "mixed"
+
     # SCENE & ENVIRONMENT
     scene_id: str  # Habitat scene ID (e.g., "102817140")
     episode_id: str  # PARTNR dataset episode ID (e.g., "1944")
@@ -180,6 +191,14 @@ class GeneratedTask:
     items: List[Dict[str, Any]] = field(default_factory=list)
     locked_containers: Dict[str, str] = field(default_factory=dict)
     initial_states: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Object -> {property: value}
+
+    # COMPETITIVE-SPECIFIC (optional, for category="competitive")
+    teams: Optional[Dict[str, List[str]]] = None  # team_id -> [agent_ids], e.g. {"team_0": ["agent_0"], "team_1": ["agent_1"]}
+    team_goals: Optional[Dict[str, Dict[str, Any]]] = None  # team_id -> success_condition
+    team_secrets: Optional[Dict[str, List[str]]] = None  # team_id -> [secrets]
+
+    # MIXED-SPECIFIC (optional, for category="mixed")
+    agent_subgoals: Optional[Dict[str, Dict[str, Any]]] = None  # agent_id -> {goal, success_condition, conflicts_with}
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -245,9 +264,31 @@ class GeneratedTask:
             if isinstance(v, dict) and not k.startswith("EXAMPLE_")
         }
 
+        # Parse category (default to cooperative for backwards compatibility)
+        category = data.get("category", "cooperative")
+        if category not in ("cooperative", "competitive", "mixed"):
+            category = "cooperative"
+
+        # Parse competitive-specific fields
+        teams = data.get("teams")
+        if isinstance(teams, str):
+            teams = None
+        team_goals = data.get("team_goals")
+        if isinstance(team_goals, str):
+            team_goals = None
+        team_secrets = data.get("team_secrets")
+        if isinstance(team_secrets, str):
+            team_secrets = None
+
+        # Parse mixed-specific fields
+        agent_subgoals = data.get("agent_subgoals")
+        if isinstance(agent_subgoals, str):
+            agent_subgoals = None
+
         return cls(
             task_id=data.get("task_id", "unknown"),
             title=data.get("title", "Untitled"),
+            category=category,
             scene_id=data.get("scene_id", "unknown"),
             episode_id=data.get("episode_id", "unknown"),
             active_mechanics=data.get("active_mechanics", []) if isinstance(data.get("active_mechanics"), list) else [],
@@ -261,6 +302,10 @@ class GeneratedTask:
             items=items,
             locked_containers=locked_containers,
             initial_states=initial_states,
+            teams=teams,
+            team_goals=team_goals,
+            team_secrets=team_secrets,
+            agent_subgoals=agent_subgoals,
         )
 
     # DAG-related methods

@@ -31,29 +31,40 @@ Action: bash[cat template.json]
 Then wait for observation, then respond with next action.
 
 ## Goal
-Create Theory of Mind (ToM) tasks where agents must share knowledge and coordinate to succeed.
+Create multi-agent challenges in one of three categories: **{category}**.
+
+## Task Categories
+
+**COOPERATIVE**: All agents share the same goal and must work together.
+- Agents need each other's knowledge or actions to succeed
+- Use agent_secrets to give different information to each agent
+- Design subtask DAGs with cross-agent dependencies
+
+**COMPETITIVE**: Two teams with opposing win conditions. One wins = other loses.
+- Define teams and team_goals (mutually exclusive objectives)
+- Use team_secrets for team-shared information
+- Ensure both teams have fair chance of winning
+
+**MIXED**: Shared main goal, but agents have secret subgoals that may conflict.
+- Clear main goal that all agents work toward
+- Use agent_subgoals for hidden objectives that may conflict
+- Task can succeed even if subgoals conflict with each other
 
 ## Task Quality (CRITICAL for judge)
-Tasks are evaluated on 8 criteria by a multi-model council (Claude Opus + GPT-5):
+Tasks are evaluated by a multi-model council (Claude Opus + GPT-5).
 
-**ToM Criteria** (avoid low scores):
-- Information Asymmetry - agents must have different knowledge
-- Interdependence - agents can't complete alone
-- Mental State Reasoning - must reason about what others know
-- Coordination Requirement - precise cross-agent sequencing
-
-**Quality Criteria** (avoid low scores):
+**Shared Quality Criteria** (all categories):
 - Narrative Consistency - description matches actual subtasks
 - Subtask Relevance - every subtask contributes to goal
 - Mechanic Utilization - listed mechanics are actually used
 - Trajectory Efficiency - no wasteful actions
 
-**AUTOMATIC FAIL triggers**:
-- Tasks where agents can complete goals independently
-- Filler subtasks unrelated to main goal
-- Unused mechanics (listed but no bindings)
+**Category-Specific Criteria**:
+- COOPERATIVE: Task Interdependence - agents genuinely need each other
+- COMPETITIVE: Goal Opposition + Team Balance - fair opposing objectives
+- MIXED: Subgoal Tension - hidden subgoals create real dilemmas
 
-Example: Agent 0 knows the key is in drawer_5, Agent 1 knows the cabinet needs the key. Neither can succeed alone - they must share knowledge AND reason about what the other knows/needs.
+Pass threshold: 0.6 overall, 0.4 per criterion.
 
 ## Tools
 1. **bash[command]** - Shell commands (reading files, jq for edits)
@@ -310,13 +321,22 @@ Agents don't know object IDs upfront - they must discover them!
 "agent_actions": {{"agent_0": ["Navigate", "FindObjectTool", "Pick", "Place", "Communicate"]}}
 ```
 
-## Theory of Mind Design
-1. **Information asymmetry**: Different agents know different things
-2. **Capability asymmetry**: Different agents can do different actions
-3. **Cross-agent effects**: One agent's action affects another's environment
+## Category-Specific Design
 
-**Good ToM**: Both agents have unique pieces - must share and coordinate
-**Bad ToM**: One agent dumps all info, other just follows instructions
+### COOPERATIVE Design Tips:
+- Give each agent different knowledge via agent_secrets
+- Ensure subtasks require actions from multiple agents
+- Design DAGs where later subtasks depend on earlier ones from different agents
+
+### COMPETITIVE Design Tips:
+- Define teams array: {{"team_0": ["agent_0"], "team_1": ["agent_1"]}}
+- Define team_goals with mutually exclusive win conditions
+- Make sure both teams have viable paths to victory
+
+### MIXED Design Tips:
+- Define a clear main goal in subtasks with required=true
+- Define agent_subgoals with success_condition and conflicts_with
+- Subgoals should create interesting choices, not make task impossible
 
 ## Iterative Design
 Build tasks incrementally rather than creating complex multi-step tasks all at once.
