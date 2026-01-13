@@ -46,6 +46,7 @@ Create multi-agent challenges in one of three categories: **{category}**.
 - Ensure both teams have fair chance of winning
 - Ensure to tell agents what other agents are on their team
 - Split up the teams however you want (does not have to be even), but if there are significantly more agents on one team compared to the other, give the team with less number of agents less subtasks
+- You are allowed to create subtasks for the team that sabotages the other team, for example, say team A needs some bread from the fridge, one of team B's subtaks could me take the bread out of the fridge and place it somewhere else. Tell the agents on the team that these sabotage subtasks are optional, but DO NOT tell them that this is a sabotage subtasks, the agents should belive that these are like any other subtask 
 
 
 **MIXED**: Shared main goal, but agents have secret subgoals that may conflict.

@@ -1478,6 +1478,92 @@ SUMMARY:"""
             "summary": "Task structure is valid"
         }
 
+    def _static_validate_trajectory(self, task_data: Dict[str, Any], golden: List[Dict]) -> List[str]:
+        """
+        Fast static validation of golden trajectory before running simulation.
+
+        Catches common errors without expensive Habitat initialization:
+        - Invalid object/furniture IDs
+        - Invalid action names
+        - Missing agents in trajectory steps
+        - Malformed action syntax
+
+        Returns list of error messages (empty if valid).
+        """
+        errors = []
+        num_agents = task_data.get("num_agents", 2)
+        valid_agents = {f"agent_{i}" for i in range(num_agents)}
+
+        # Valid action names
+        valid_actions = {
+            "Navigate", "Open", "Close", "Pick", "Place", "Search",
+            "UseItem", "Communicate", "Wait", "Clean", "Pour", "PowerOn", "PowerOff",
+            "Fill", "FindObjectTool", "FindReceptacleTool", "FindRoomTool"
+        }
+
+        # Build set of valid scene IDs
+        valid_ids = set()
+        if self.scene_data:
+            valid_ids.update(self.scene_data.rooms)
+            valid_ids.update(self.scene_data.furniture)
+            valid_ids.update(self.scene_data.objects)
+
+        # Add defined items
+        defined_items = {item.get("item_id") for item in task_data.get("items", []) if item.get("item_id")}
+        valid_ids.update(defined_items)
+
+        # Check each step
+        for step_idx, step in enumerate(golden):
+            actions = step.get("actions", [])
+            if not actions:
+                errors.append(f"Step {step_idx}: No actions array")
+                continue
+
+            agents_in_step = set()
+            for action_entry in actions:
+                agent = action_entry.get("agent", "")
+                action_str = action_entry.get("action", "")
+
+                # Check agent ID
+                if agent not in valid_agents:
+                    errors.append(f"Step {step_idx}: Invalid agent '{agent}' (valid: {sorted(valid_agents)})")
+                agents_in_step.add(agent)
+
+                # Parse action
+                match = re.match(r'(\w+)(?:\[(.+)\])?$', action_str)
+                if not match:
+                    errors.append(f"Step {step_idx}: Malformed action '{action_str}'")
+                    continue
+
+                action_name, args = match.group(1), match.group(2)
+
+                # Check action name
+                if action_name not in valid_actions:
+                    errors.append(f"Step {step_idx}: Unknown action '{action_name}'")
+
+                # Skip ID validation for actions without targets
+                if action_name in ("Wait", "Communicate") or not args:
+                    continue
+
+                # Check object IDs in args (skip None, relation keywords)
+                skip_words = {"on", "within", "next_to", "None", ""}
+                parts = [p.strip() for p in args.split(",")]
+                for part in parts:
+                    if part in skip_words:
+                        continue
+                    # Check if it's a valid ID
+                    if valid_ids and part not in valid_ids:
+                        # Only error for non-item IDs (items might be dynamically created)
+                        if not part.startswith("item_"):
+                            errors.append(f"Step {step_idx}: Unknown object '{part}' in {action_str}")
+
+            # Check all agents have an action (warn only, not error)
+            missing_agents = valid_agents - agents_in_step
+            if missing_agents:
+                errors.append(f"Step {step_idx}: Missing actions for {sorted(missing_agents)} (add Wait if idle)")
+
+        return errors[:10]  # Limit to first 10 errors
+
     def _run_benchmark(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Run the actual benchmark test in a subprocess.
@@ -1676,6 +1762,16 @@ SUMMARY:"""
             })
 
         self._log(f"Verifying golden trajectory: {len(golden)} steps")
+
+        # Fast static pre-validation (catches errors before expensive simulation)
+        static_errors = self._static_validate_trajectory(task_data, golden)
+        if static_errors:
+            return json.dumps({
+                "valid": False,
+                "error": f"Static validation failed: {static_errors[0]}",
+                "all_errors": static_errors,
+                "hint": "Fix these errors before running simulation."
+            })
 
         # Create temp file for results
         try:
