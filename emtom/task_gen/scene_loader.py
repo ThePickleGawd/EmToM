@@ -243,6 +243,39 @@ def extract_scene_data(
     )
 
 
+def apply_agent_spawns(
+    env_interface: "EnvironmentInterface",
+    agent_spawns: Dict[str, Dict[str, Any]],
+) -> None:
+    """
+    Apply cached spawn positions to agents.
+
+    Args:
+        env_interface: Initialized EnvironmentInterface
+        agent_spawns: Dict mapping agent_X -> {"position": [x,y,z], "rotation": float}
+    """
+    import sys
+
+    if not agent_spawns:
+        return
+
+    print(f"Applying cached spawn positions for {len(agent_spawns)} agents", file=sys.stderr)
+    for agent_key, spawn in agent_spawns.items():
+        if agent_key.startswith("_"):  # Skip comments
+            continue
+        agent_uid = int(agent_key.split("_")[1])
+        try:
+            agent = env_interface.sim.agents_mgr[agent_uid].articulated_agent
+            agent.base_pos = spawn["position"]
+            # Handle rotation as float (yaw) - ignore if list/quaternion
+            rot = spawn.get("rotation", 0.0)
+            if isinstance(rot, (int, float)):
+                agent.base_rot = rot
+            print(f"  {agent_key}: pos={spawn['position'][:2]}...", file=sys.stderr)
+        except (IndexError, KeyError) as e:
+            print(f"  Warning: Could not set spawn for {agent_key}: {e}", file=sys.stderr)
+
+
 if __name__ == "__main__":
     # Test scene loading
     from hydra import compose, initialize_config_dir

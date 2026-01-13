@@ -77,6 +77,7 @@ def main():
 
         from emtom.runner.verification import VerificationRunner
         from emtom.task_gen import GeneratedTask
+        from emtom.task_gen.scene_loader import apply_agent_spawns
     except ImportError as e:
         write_result({"valid": False, "error": f"Import error: {e}"})
         sys.exit(1)
@@ -146,18 +147,7 @@ def main():
             raise
 
         # Apply cached spawn positions from task.json (if available)
-        agent_spawns = task_data.get("agent_spawns", {})
-        if agent_spawns:
-            print(f"Applying cached spawn positions for {len(agent_spawns)} agents", file=sys.stderr)
-            for agent_key, spawn in agent_spawns.items():
-                agent_uid = int(agent_key.split("_")[1])
-                try:
-                    agent = env_interface.sim.agents_mgr[agent_uid].articulated_agent
-                    agent.base_pos = spawn["position"]
-                    agent.base_rot = spawn["rotation"]
-                    print(f"  {agent_key}: pos={spawn['position'][:2]}..., rot={spawn['rotation']:.2f}", file=sys.stderr)
-                except (IndexError, KeyError) as e:
-                    print(f"  Warning: Could not set spawn for {agent_key}: {e}", file=sys.stderr)
+        apply_agent_spawns(env_interface, task_data.get("agent_spawns", {}))
 
         runner = VerificationRunner(config)
 

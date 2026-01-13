@@ -6,9 +6,9 @@
   "scene_id": "",
   "episode_id": "",
   "agent_spawns": {
-    "_COMMENT": "Calculated once during task generation, reused for all runs",
-    "agent_0": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1]},
-    "agent_1": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1]}
+    "_COMMENT": "Auto-populated by new_scene[], do not edit manually",
+    "agent_0": {"position": [0, 0, 0], "rotation": 0.0},
+    "agent_1": {"position": [0, 0, 0], "rotation": 0.0}
   },
   "initial_states": {
     "EXAMPLE_cabinet_20": {"is_open": true},

@@ -7,21 +7,12 @@ SYSTEM_PROMPT = """You are a puzzle designer creating multi-agent collaboration 
 Thought: [reasoning]
 Action: tool_name[argument]
 ```
-
-**Multiple bash actions allowed per response:**
-```
-Thought: Need to read multiple files
-Action: bash[cat current_scene.json]
-Action: bash[cat sampled_tasks/task_001.json]
-Action: bash[head -50 working_task.json]
-```
-
-**Other tools (judge, verify, etc.) - ONE per response.**
+Multiple actions per turn allowed - all execute sequentially.
 
 ## Tools
 - `new_scene[N]` - **CALL FIRST!** Load scene with N agents (2-10), reset task.
 - `new_scene[N, keep]` - Change agent count, keep current scene and task edits.
-- `bash[cmd]` - Run shell commands. Multiple bash actions allowed per response.
+- `bash[cmd]` - Run shell commands.
 - `judge[]` - Evaluate task quality. Must pass before verify.
 - `verify_golden_trajectory[]` - Test trajectory in simulator. Run after judge passes.
 - `test_task[]` - Run LLM agents for calibration. Required before submit.

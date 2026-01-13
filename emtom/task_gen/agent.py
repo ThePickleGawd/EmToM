@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from omegaconf import DictConfig
 
 from .prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
-from .judge import Judge, Judgment, CouncilVerdict
+from .judge import Judge, Judgment, CouncilVerdict, Colors
 from emtom.actions import ActionRegistry
 
 if TYPE_CHECKING:
@@ -192,6 +192,8 @@ class TaskGeneratorAgent:
             "echo",
             # Shell control structures
             "for", "do", "done", "while", "if", "then", "else", "fi", "in",
+            # Patching
+            "apply_patch",
         ]
 
     def _sample_reference_tasks(self) -> None:
@@ -463,26 +465,20 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
                 })
                 continue
 
-            # Execute actions - multiple bash allowed, other tools single only
-            all_bash = all(tool == "bash" for tool, _ in actions)
-
-            if all_bash and len(actions) > 1:
-                # Execute all bash commands and combine outputs
+            # Execute all actions sequentially
+            if len(actions) == 1:
+                tool, args = actions[0]
+                observation = self._execute_action(tool, args)
+                response_for_history = response
+            else:
+                # Multiple actions - execute all and combine outputs
                 observations = []
                 for i, (tool, args) in enumerate(actions, 1):
-                    self._log(f"Executing bash [{i}/{len(actions)}]: {args[:80]}...")
+                    self._log(f"Executing [{i}/{len(actions)}]: {tool}[{args[:60]}...]")
                     obs = self._execute_action(tool, args)
-                    observations.append(f"[{i}] $ {args}\n{obs}")
+                    observations.append(f"[{i}] {tool}: {obs}")
                 observation = "\n\n".join(observations)
-                response_for_history = response  # Keep full response with all actions
-            else:
-                # Single action (or mixed - only execute first)
-                tool, args = actions[0]
-                if len(actions) > 1:
-                    self._log(f"Multiple actions found but not all bash - executing only first: {tool}")
-                observation = self._execute_action(tool, args)
-                # Truncate response after first action for clean context
-                response_for_history = self._truncate_after_first_action(response)
+                response_for_history = response
 
             # Truncate heredocs in PREVIOUS assistant messages to save context
             self._truncate_old_heredocs()
@@ -511,12 +507,24 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
         return self.submitted_tasks
 
     def _save_working_task_to_logs(self) -> None:
-        """Save a copy of working_task.json to log directory for debugging."""
+        """Save a copy of working_task.json to log directory for debugging.
+
+        Re-injects agent_spawns from scene_data since LLM may have removed it during edits.
+        """
         if self.task_file.exists():
             try:
-                import shutil
+                # Load current task
+                with open(self.task_file) as f:
+                    task_data = json.load(f)
+
+                # Re-inject agent_spawns from scene_data (LLM may have removed it)
+                if self.scene_data and self.scene_data.agent_spawns:
+                    task_data["agent_spawns"] = self.scene_data.agent_spawns
+
+                # Save to log directory
                 dest = self.log_dir / "working_task_final.json"
-                shutil.copy(self.task_file, dest)
+                with open(dest, "w") as f:
+                    json.dump(task_data, f, indent=2)
                 self._log(f"Saved working task to: {dest}")
             except Exception as e:
                 self._log(f"Warning: Could not save working task: {e}")
@@ -645,52 +653,16 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
         if not action_match:
             return content
 
-        # Find the end of the first action (closing bracket)
+        # Extract bracket content to find where action ends
         start_idx = action_match.end()
-        end_idx = self._find_action_end(content, start_idx)
+        bracket_content = self._extract_bracket_content(content, start_idx)
 
-        if end_idx is None:
+        if bracket_content is None:
             return content
 
-        # Return content up to end of first action
+        # Calculate end index: start + content length + 1 for closing bracket
+        end_idx = start_idx + len(bracket_content) + 1
         return content[:end_idx].rstrip()
-
-    def _find_action_end(self, text: str, start: int) -> Optional[int]:
-        """Find the end of an action (after closing bracket)."""
-        depth = 1
-        in_single_quote = False
-        in_double_quote = False
-        escape_next = False
-        i = start
-
-        while i < len(text) and depth > 0:
-            char = text[i]
-
-            if escape_next:
-                escape_next = False
-                i += 1
-                continue
-
-            if char == '\\':
-                escape_next = True
-                i += 1
-                continue
-
-            if char == "'" and not in_double_quote:
-                in_single_quote = not in_single_quote
-            elif char == '"' and not in_single_quote:
-                in_double_quote = not in_double_quote
-            elif not in_single_quote and not in_double_quote:
-                if char == '[':
-                    depth += 1
-                elif char == ']':
-                    depth -= 1
-
-            i += 1
-
-        if depth == 0:
-            return i
-        return None
 
     def _format_messages_for_llm(self) -> str:
         """Format message history for the LLM."""
@@ -1987,14 +1959,6 @@ SUMMARY:"""
         Returns detailed feedback and suggestions for improvement.
         Saves JSON output to log_dir/judgments/ directory.
         """
-        # ANSI color codes for terminal output
-        RED = "\033[91m"
-        GREEN = "\033[92m"
-        CYAN = "\033[96m"
-        YELLOW = "\033[93m"
-        BOLD = "\033[1m"
-        RESET = "\033[0m"
-
         if not self.task_file.exists():
             return json.dumps({
                 "valid": False,
@@ -2080,20 +2044,20 @@ SUMMARY:"""
 
             # Print colored output to stderr
             status = "PASS" if verdict.passed else "FAIL"
-            color = GREEN if verdict.passed else RED
-            print(f"\n{BOLD}{CYAN}=== Task Evaluation (Council) - attempt {attempt_num} ==={RESET}", file=sys.stderr)
-            print(f"{BOLD}{color}{status}{RESET} - Score: {verdict.overall_score:.2f} (threshold: {self.judge.overall_threshold})", file=sys.stderr)
+            color = Colors.GREEN if verdict.passed else Colors.RED
+            print(f"\n{Colors.BOLD}{Colors.CYAN}=== Task Evaluation (Council) - attempt {attempt_num} ==={Colors.RESET}", file=sys.stderr)
+            print(f"{Colors.BOLD}{color}{status}{Colors.RESET} - Score: {verdict.overall_score:.2f} (threshold: {self.judge.overall_threshold})", file=sys.stderr)
             print(f"Models: {', '.join(verdict.judgments.keys())}", file=sys.stderr)
-            print(f"Saved to: {CYAN}{judgment_file}{RESET}", file=sys.stderr)
+            print(f"Saved to: {Colors.CYAN}{judgment_file}{Colors.RESET}", file=sys.stderr)
 
             if verdict.disagreements:
-                print(f"\n{YELLOW}Model disagreements:{RESET}", file=sys.stderr)
+                print(f"\n{Colors.YELLOW}Model disagreements:{Colors.RESET}", file=sys.stderr)
                 for d in verdict.disagreements:
                     print(f"  - {d}", file=sys.stderr)
 
             if not verdict.passed and verdict.suggestions:
-                print(f"\n{YELLOW}Suggestions for improvement:{RESET}", file=sys.stderr)
-                for i, suggestion in enumerate(verdict.suggestions[:10], 1):
+                print(f"\n{Colors.YELLOW}Suggestions for improvement:{Colors.RESET}", file=sys.stderr)
+                for i, suggestion in enumerate(verdict.suggestions, 1):
                     print(f"  {i}. {suggestion}", file=sys.stderr)
 
             self._log(f"[Judge] Result: {status} (score: {verdict.overall_score:.2f}) [failures: {self.consecutive_tom_failures}]")

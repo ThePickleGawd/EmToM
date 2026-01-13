@@ -373,12 +373,13 @@ Respond with ONLY valid JSON. Keep reasoning BRIEF (under 15 words each).
 {{
 {response_format}
   "overall_reasoning": "<1 sentence>",
-  "suggestions": ["<specific fix>", "<specific fix>"]
+  "suggestions": ["<high-impact fix>", "..."]
 }}
 
 ## Suggestion Requirements
 
 Suggestions MUST be SPECIFIC and use ONLY available system capabilities.
+Only include the MOST IMPORTANT fixes - don't list everything wrong, just what matters most.
 
 **BAD**: "Improve the task design"
 **GOOD**: "Remove subtasks s8, s9 - they open random furniture unrelated to the main goal."
