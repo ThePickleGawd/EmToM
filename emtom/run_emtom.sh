@@ -410,7 +410,7 @@ run_test() {
     echo "=============================================="
     echo ""
     echo "Actions: Navigate[target], Open[target], Close[target], Pick[target], Place[target]"
-    echo "         Use[target], Inspect[target], Communicate[message]"
+    echo "         Search[container], UseItem[item, target], Communicate[message]"
     echo "Commands: status, mechanics, history, skip, quit, help"
     echo ""
 

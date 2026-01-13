@@ -1739,44 +1739,6 @@ SUMMARY:"""
                 except Exception:
                     pass
 
-            # Analyze agent behavior for ToM-relevant patterns
-            try:
-                from emtom.task_gen.behavior_analyzer import BehaviorAnalyzer
-
-                # Load task data for context
-                with open(self.task_file) as f:
-                    task_data = json.load(f)
-
-                # Read agent traces from files (use task's num_agents)
-                agent_traces = {}
-                num_agents = task_data.get("num_agents", 2)
-                for i in range(num_agents):
-                    agent_id = f"agent_{i}"
-                    trace_path = run_dir / f"{agent_id}.txt"
-                    if trace_path.exists():
-                        with open(trace_path) as f:
-                            agent_traces[agent_id] = f.read()
-
-                # Get subtask progress from evaluation
-                subtask_progress = result.get("evaluation", {}).get("proposition_status", {})
-
-                # Run behavior analysis
-                analyzer = BehaviorAnalyzer(self.llm, verbose=self.verbose)
-                behavior = analyzer.analyze(task_data, agent_traces, subtask_progress)
-
-                result["behavior_analysis"] = behavior.to_dict()
-                self._log(f"[Behavior] ToM utilized: {behavior.tom_utilized}")
-                self._log(f"[Behavior] Summary: {behavior.summary}")
-
-                # Save behavior analysis to file
-                behavior_path = run_dir / "behavior_analysis.json"
-                with open(behavior_path, "w") as f:
-                    json.dump(behavior.to_dict(), f, indent=2)
-
-            except Exception as e:
-                self._log(f"[Behavior] Analysis failed: {e}")
-                result["behavior_analysis"] = {"error": str(e)}
-
             # Remove full traces from result (agent reads files instead via bash)
             result.pop("planner_traces", None)
             result.pop("action_history", None)

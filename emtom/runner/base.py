@@ -230,7 +230,7 @@ class EMTOMBaseRunner(ABC):
                     return True  # No restrictions
                 return action_name in allowed_actions
 
-            # Add EMTOM tools (Use, Search, Inspect) if allowed
+            # Add EMTOM tools (UseItem, Search) if allowed
             emtom_tools = get_emtom_tools(agent_uid=uid)
             for tool_name, tool in emtom_tools.items():
                 if is_allowed(tool_name):
@@ -516,7 +516,7 @@ class EMTOMBaseRunner(ABC):
             # Execute motor skill
             tool = agent.tools[actual_action]
             skill_steps = 0
-            max_skill_steps = 5000
+            max_skill_steps = 1500  # ~50 seconds at 30Hz, matches benchmark runner
 
             while skill_steps < max_skill_steps:
                 try:
@@ -727,7 +727,7 @@ class EMTOMBaseRunner(ABC):
                 }
 
         # Phase 2: Execute all skills concurrently
-        max_skill_steps = 5000
+        max_skill_steps = 1500  # ~50 seconds at 30Hz, matches benchmark runner
         total_steps = 0
 
         while agent_states and total_steps < max_skill_steps:

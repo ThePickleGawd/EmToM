@@ -361,69 +361,6 @@ class SearchAction(EMTOMAction):
         return targets[:10]
 
 
-@register_action("Inspect")
-class InspectAction(EMTOMAction):
-    """
-    Carefully inspect an object to learn about its properties.
-
-    Normal behavior: Reveals detailed information about the object.
-    Can be affected by:
-    - Mechanics may hide some information
-    - Different agents may see different things
-    """
-
-    action_name = "Inspect"
-    action_description = (
-        "Inspect[object]: Carefully examine an object to learn about its "
-        "properties and current state."
-    )
-
-    MEANINGFUL_STATES = {"is_open", "is_powered", "is_clean", "is_filled", "is_locked", "is_on"}
-
-    @property
-    def argument_types(self) -> List[str]:
-        return ["OBJECT_INSTANCE", "FURNITURE_INSTANCE"]
-
-    def execute(
-        self,
-        agent_id: str,
-        target: Optional[str],
-        world_state: Dict[str, Any],
-    ) -> ActionResult:
-        if not target:
-            return ActionResult(
-                success=False,
-                observation="You need to specify what to inspect.",
-            )
-
-        entity_info = world_state.get("entity_details", {}).get(target, {})
-
-        if not entity_info:
-            observation = f"You look closely at {target}. It appears to be a normal object."
-        else:
-            states = entity_info.get("states", {})
-            details = []
-            for k, v in states.items():
-                if any(k.startswith(prefix) for prefix in self.MEANINGFUL_STATES):
-                    readable_name = k.replace("is_", "").replace("_", " ")
-                    state_word = "yes" if v else "no"
-                    details.append(f"{readable_name}: {state_word}")
-
-            if details:
-                observation = f"You examine {target} closely. You observe: {', '.join(details)}."
-            else:
-                observation = f"You examine {target}. It appears normal with no unusual properties."
-
-        return ActionResult(
-            success=True,
-            observation=observation,
-        )
-
-    def get_available_targets(self, world_state: Dict[str, Any]) -> List[str]:
-        targets = [e.get("name", e.get("id")) for e in world_state.get("entities", [])]
-        return targets[:10]
-
-
 class DynamicItemTool(EMTOMAction):
     """
     A tool dynamically created from an inventory item.

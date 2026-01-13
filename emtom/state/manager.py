@@ -579,30 +579,6 @@ class GameStateManager:
                 effects=[f"hidden={target}"],
             )
 
-        elif action_name == "Inspect" and target:
-            # Get object info
-            obj_states = state.object_states.get(target, {})
-            obj_props = state.object_properties.get(target, {})
-
-            details = []
-            for k, v in obj_states.items():
-                if k.startswith("is_"):
-                    readable = k.replace("is_", "").replace("_", " ")
-                    details.append(f"{readable}: {'yes' if v else 'no'}")
-
-            if details:
-                obs = f"You examine {target}. You observe: {', '.join(details)}."
-            else:
-                obs = f"You examine {target}. It appears normal."
-
-            return state, HandlerResult(
-                applies=True,
-                state=state,
-                observation=obs,
-                success=True,
-                effects=[],
-            )
-
         return state, None
 
     def tick(self, state: Optional[EMTOMGameState] = None) -> Tuple[EMTOMGameState, List[str]]:

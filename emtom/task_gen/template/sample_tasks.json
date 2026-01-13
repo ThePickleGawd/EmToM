@@ -27,7 +27,6 @@
   "agent_actions": {
     "agent_0": [
       "Communicate",
-      "Inspect",
       "Open",
       "Close",
       "Navigate",

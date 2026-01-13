@@ -38,7 +38,7 @@ Assigned!
 - `bash[cmd]` - Run shell commands.
 - `judge[]` - Evaluate task quality. Must pass before verify.
 - `verify_golden_trajectory[]` - Test trajectory in simulator. Run after judge passes.
-- `test_task[]` - Run LLM agents for calibration. Required before submit.
+- `test_task[]` - Difficulty calibration. Measures LLM agent pass rate (target: ~10%).
 - `submit_task[]` - Save task. Requires judge + verify + test_task.
 - `fail[reason]` - **STOPS ALL GENERATION.** Only for simulator bugs or critical errors. Use `new_scene[N]` for task issues.
 
@@ -48,7 +48,7 @@ Assigned!
 3. Edit `{task_file}`
 4. `judge[]` → fix → repeat until pass
 5. `verify_golden_trajectory[]` → fix → repeat until pass
-6. `test_task[]`
+6. `test_task[]` → measures pass rate and can find interesting interactions
 7. `submit_task[]`
 8. Repeat from step 1 for next task
 
