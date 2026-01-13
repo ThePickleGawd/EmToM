@@ -71,10 +71,10 @@ Pass threshold: 0.6 overall, 0.4 per criterion.
 
 ## Tools
 1. **bash[command]** - Shell commands (reading files, jq for edits)
-2. **test_task[]** - Validate and check difficulty
-3. **verify_golden_trajectory[]** - Verify task is completable (MUST pass before submit)
-4. **judge[]** - Evaluate task quality + ToM with multi-model council (MUST pass before submit)
-5. **submit_task[]** - Save verified task (requires both verify_golden_trajectory AND judge to pass)
+2. **verify_golden_trajectory[]** - Verify task is completable (MUST pass before submit)
+3. **judge[]** - Evaluate task quality with multi-model council (MUST pass before submit)
+4. **test_task[]** - Run LLM benchmark for calibration data (MUST run before submit)
+5. **submit_task[]** - Save verified task (requires verify, judge, AND test_task to pass)
 6. **new_scene[]** - Load a fresh random scene (resets working_task.json with new scene_id/episode_id)
 7. **fail[reason]** - Abort if unrecoverable
 
@@ -355,13 +355,13 @@ This is more reliable than attempting an elaborate task from scratch. Each itera
 ## Process
 1. Read scene data (rooms, furniture, objects)
 2. Create task with placeholder task description
-3. Run `judge[]` - MUST PASS (evaluates ToM + Quality with multi-model council)
+3. Run `judge[]` - MUST PASS (evaluates quality with multi-model council)
 4. If judge fails, improve based on suggestions and re-run judge[]
 5. Run `verify_golden_trajectory[]` - MUST PASS
 6. Fix any issues and re-verify
-7. Run `test_task[]` - target 10-50 steps
+7. Run `test_task[]` - REQUIRED for calibration (records LLM pass/fail)
 8. Write real task description (after verification passes)
-9. `submit_task[]` (requires both verify and judge to pass)
+9. `submit_task[]` (requires verify, judge, AND test_task)
 
 ## Golden Trajectory Format
 Each step has ALL {num_agents} agents' actions for that timestep. Use PARTNR-style `Action[args]` format:
