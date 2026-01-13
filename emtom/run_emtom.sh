@@ -96,7 +96,7 @@ MODEL="gpt-5.2"
 LLM_PROVIDER=""  # LLM provider: auto-detected from model
 SUBTASKS_MIN=3
 SUBTASKS_MAX=20
-MAX_ITERATIONS=100
+ITERATIONS_PER_TASK=100
 AGENTS_MIN=2
 AGENTS_MAX=10
 AGENT_TYPE="robot"  # robot or human
@@ -160,7 +160,7 @@ print_usage() {
     echo "  --subtasks N         Exact number of subtasks per task (sets both min and max)"
     echo "  --subtasks-min N     Minimum subtasks per task (default: $SUBTASKS_MIN)"
     echo "  --subtasks-max N     Maximum subtasks per task (default: $SUBTASKS_MAX)"
-    echo "  --max-iterations N   Max agent iterations before stopping (default: 100)"
+    echo "  --iterations-per-task N   Max iterations per task (default: 100)"
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
     echo "  --retry-verification FILE  Retry generation using suggestions from failed ToM verification"
     echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
@@ -320,7 +320,7 @@ run_generate() {
     echo "LLM: $LLM_PROVIDER ($MODEL)"
     echo "Category: ${CATEGORY:-random}"
     echo "Subtasks: $SUBTASKS_MIN - $SUBTASKS_MAX"
-    echo "Max iterations: $MAX_ITERATIONS"
+    echo "Iterations per task: $ITERATIONS_PER_TASK"
     if [ -n "$QUERY" ]; then
         echo "Query: $QUERY"
     fi
@@ -355,7 +355,7 @@ run_generate() {
         +llm_provider=$LLM_PROVIDER \
         +subtasks_min=$SUBTASKS_MIN \
         +subtasks_max=$SUBTASKS_MAX \
-        +max_iterations=$MAX_ITERATIONS \
+        +iterations_per_task=$ITERATIONS_PER_TASK \
         +output_dir=data/emtom/tasks \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-generate"
 }
@@ -538,8 +538,8 @@ while [[ $# -gt 0 ]]; do
             SUBTASKS_MAX=$2
             shift 2
             ;;
-        --max-iterations)
-            MAX_ITERATIONS=$2
+        --iterations-per-task)
+            ITERATIONS_PER_TASK=$2
             shift 2
             ;;
         --query)

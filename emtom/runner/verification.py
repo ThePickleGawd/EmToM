@@ -64,20 +64,14 @@ class VerificationRunner(EMTOMBaseRunner):
         self._setup_llm_for_tools()
 
     def _setup_llm_for_tools(self) -> None:
-        """Setup LLM client for perception tools (FindObjectTool, etc.)."""
-        try:
-            from habitat_llm.llm import instantiate_llm
+        """Setup LLM client for perception tools (FindObjectTool, etc.).
 
-            # Use gpt-5 for perception tools
-            self._llm_client = instantiate_llm("openai_chat", model="gpt-5")
-
-            # Pass LLM to agent tools
-            for uid, agent in self.agents.items():
-                if hasattr(agent, 'pass_llm_to_tools'):
-                    agent.pass_llm_to_tools(self._llm_client)
-        except Exception as e:
-            # Log but don't fail - some trajectories may not need perception tools
-            print(f"[VerificationRunner] Warning: Could not setup LLM for tools: {e}")
+        SKIP for golden trajectory verification - trajectories use exact object IDs
+        and don't need FindObjectTool/FindReceptacleTool. This saves ~2-3 seconds
+        per verification by avoiding LLM client initialization.
+        """
+        # Skip LLM setup for verification - golden trajectories have exact IDs
+        pass
 
     def _task_to_mechanics_dict(self, task: "GeneratedTask") -> Dict[str, Any]:
         """Convert GeneratedTask to task data for GameStateManager initialization."""
