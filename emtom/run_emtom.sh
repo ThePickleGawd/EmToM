@@ -104,6 +104,7 @@ QUERY=""  # seed query for task generation
 THRESHOLD=0.7  # ToM judge threshold
 RETRY_VERIFICATION=""  # Path to failed ToM verification file
 NO_AUTO_RETRY=false  # Disable automatic retry on judge failure
+CATEGORY=""  # Task category: cooperative, competitive, or mixed
 
 print_usage() {
     echo -e "${BOLD}EMTOM Benchmark Pipeline${NC}"
@@ -162,6 +163,7 @@ print_usage() {
     echo "  --max-iterations N   Max agent iterations before stopping (default: 100)"
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
     echo "  --retry-verification FILE  Retry generation using suggestions from failed ToM verification"
+    echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
     echo ""
     echo -e "${BOLD}Benchmark Options:${NC}"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
@@ -288,6 +290,7 @@ run_generate() {
     echo "Target tasks: $NUM_TASKS"
     echo "Agents: $AGENTS_MIN - $AGENTS_MAX ($AGENT_TYPE)"
     echo "LLM: $LLM_PROVIDER ($MODEL)"
+    echo "Category: ${CATEGORY:-random}"
     echo "Subtasks: $SUBTASKS_MIN - $SUBTASKS_MAX"
     echo "Max iterations: $MAX_ITERATIONS"
     if [ -n "$QUERY" ]; then
@@ -307,6 +310,9 @@ run_generate() {
     fi
     if [ -n "$RETRY_VERIFICATION" ]; then
         EXTRA_ARGS+=(--retry-verification "$RETRY_VERIFICATION")
+    fi
+    if [ -n "$CATEGORY" ]; then
+        EXTRA_ARGS+=(--category "$CATEGORY")
     fi
 
     # Use Hydra config system with custom overrides
@@ -572,6 +578,14 @@ while [[ $# -gt 0 ]]; do
                 shift
             done
             LLM_AGENTS=$(echo "$LLM_AGENTS" | xargs)  # trim whitespace
+            ;;
+        --category)
+            CATEGORY=$2
+            if [[ "$CATEGORY" != "cooperative" && "$CATEGORY" != "competitive" && "$CATEGORY" != "mixed" ]]; then
+                echo "Error: --category must be 'cooperative', 'competitive', or 'mixed'"
+                exit 1
+            fi
+            shift 2
             ;;
         -h|--help)
             print_usage

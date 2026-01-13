@@ -46,6 +46,9 @@ def parse_extra_args():
                         help="Model to calibrate dataset difficulty against (default: gpt-5.2)")
     parser.add_argument("--target-pass-rate", type=float, default=0.10,
                         help="Target pass rate for calibration model (default: 0.10 = 10%%)")
+    parser.add_argument("--category", type=str, default=None,
+                        choices=["cooperative", "competitive", "mixed"],
+                        help="Task category to generate (default: random)")
 
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
@@ -120,6 +123,7 @@ def main(config: DictConfig) -> None:
     retry_verification = extra_args.retry_verification if extra_args else None
     calibration_model = extra_args.calibration_model if extra_args else "gpt-5.2"
     target_pass_rate = extra_args.target_pass_rate if extra_args else 0.10
+    category = extra_args.category if extra_args else None
 
     # Load failed verification suggestions if retrying
     verification_feedback = None
@@ -183,6 +187,7 @@ def main(config: DictConfig) -> None:
     cprint(f"Target tasks: {num_tasks}", "blue")
     cprint(f"Agents: {agents_min} - {agents_max}", "blue")
     cprint(f"LLM: {llm_provider} ({model})", "blue")
+    cprint(f"Category: {category or 'random'}", "blue")
     if query:
         cprint(f"Query: {query}", "green")
     cprint(f"Working dir: {working_dir}", "blue")
@@ -257,6 +262,7 @@ def main(config: DictConfig) -> None:
         query=query,  # Optional seed query for task generation
         verification_feedback=verification_feedback,  # Failed ToM verification suggestions
         calibration_stats=calibration_stats,  # Dataset calibration stats for difficulty guidance
+        category=category,  # Task category: cooperative, competitive, or mixed
     )
 
     # Run agent

@@ -57,6 +57,7 @@ class TaskGeneratorAgent:
         query: Optional[str] = None,
         verification_feedback: Optional[Dict[str, Any]] = None,
         calibration_stats: Optional[Dict[str, Any]] = None,
+        category: Optional[str] = None,
     ):
         """
         Initialize the agent.
@@ -78,6 +79,7 @@ class TaskGeneratorAgent:
             query: Optional seed query to guide task generation (e.g., "A task where agents use the radio")
             verification_feedback: Optional dict with suggestions from a failed ToM verification to incorporate
             calibration_stats: Dataset calibration stats (pass rate, target rate) for difficulty guidance
+            category: Task category to generate: "cooperative", "competitive", or "mixed" (None = random)
         """
         self.llm = llm_client
         self.config = config
@@ -94,6 +96,7 @@ class TaskGeneratorAgent:
         self.query = query
         self.verification_feedback = verification_feedback
         self.calibration_stats = calibration_stats or {}
+        self.category = category  # None means random selection
 
         # Task file paths
         self.task_file = self.working_dir / "working_task.json"
@@ -306,6 +309,10 @@ class TaskGeneratorAgent:
         from emtom.mechanics import get_mechanics_for_task_generation
         available_mechanics = get_mechanics_for_task_generation()
 
+        # Select category (random if not specified)
+        import random
+        task_category = self.category or random.choice(["cooperative", "competitive", "mixed"])
+
         # Initialize conversation with action descriptions and paths injected
         system_prompt = SYSTEM_PROMPT.replace(
             "{action_descriptions}",
@@ -334,6 +341,9 @@ class TaskGeneratorAgent:
         ).replace(
             "{max_agent_id}",
             str(self.agents_max - 1)
+        ).replace(
+            "{category}",
+            task_category.upper()
         )
         self.messages = [
             {"role": "system", "content": system_prompt}
