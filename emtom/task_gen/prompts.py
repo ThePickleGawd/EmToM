@@ -40,10 +40,13 @@ Create multi-agent challenges in one of three categories: **{category}**.
 - Use agent_secrets to give different information to each agent
 - Design subtask DAGs with cross-agent dependencies
 
-**COMPETITIVE**: Two teams with opposing win conditions. One wins = other loses.
+**COMPETITIVE**: Two teams with opposing win conditions. One wins means the other loses.
 - Define teams and team_goals (mutually exclusive objectives)
 - Use team_secrets for team-shared information
 - Ensure both teams have fair chance of winning
+- Ensure to tell agents what other agents are on their team
+- Split up the teams however you want (does not have to be even), but if there are significantly more agents on one team compared to the other, give the team with less number of agents less subtasks
+
 
 **MIXED**: Shared main goal, but agents have secret subgoals that may conflict.
 - Clear main goal that all agents work toward
@@ -51,7 +54,7 @@ Create multi-agent challenges in one of three categories: **{category}**.
 - Task can succeed even if subgoals conflict with each other
 
 ## Task Quality (CRITICAL for judge)
-Tasks are evaluated by a multi-model council (Claude Opus + GPT-5).
+Tasks are evaluated by a multi-model council.
 
 **Shared Quality Criteria** (all categories):
 - Narrative Consistency - description matches actual subtasks
