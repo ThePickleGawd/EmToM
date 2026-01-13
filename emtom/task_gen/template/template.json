@@ -5,6 +5,11 @@
   "task": "REPLACE_WITH_TASK_DESCRIPTION",
   "scene_id": "",
   "episode_id": "",
+  "agent_spawns": {
+    "_COMMENT": "Calculated once during task generation, reused for all runs",
+    "agent_0": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1]},
+    "agent_1": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1]}
+  },
   "initial_states": {
     "EXAMPLE_cabinet_20": {"is_open": true},
     "EXAMPLE_table_22": {"is_clean": false}

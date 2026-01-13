@@ -96,7 +96,7 @@ MODEL="gpt-5.2"
 LLM_PROVIDER=""  # LLM provider: auto-detected from model
 SUBTASKS_MIN=3
 SUBTASKS_MAX=20
-ITERATIONS_PER_TASK=100
+ITERATIONS_PER_TASK=200
 AGENTS_MIN=2
 AGENTS_MAX=10
 AGENT_TYPE="robot"  # robot or human
@@ -229,33 +229,8 @@ get_agent_config() {
     fi
 }
 
-# Get headless config name (no visual sensors) for task generation - faster loading
-get_headless_agent_config() {
-    local num_agents=$1
-    local agent_type=$2
-
-    if [ "$agent_type" = "human" ]; then
-        # Human headless configs not yet created - fall back to regular configs
-        get_agent_config $num_agents $agent_type
-    else
-        # Robot headless configs (support 2-10 agents)
-        case $num_agents in
-            2) echo "examples/emtom_2_robots_headless" ;;
-            3) echo "examples/emtom_3_robots_headless" ;;
-            4) echo "examples/emtom_4_robots_headless" ;;
-            5) echo "examples/emtom_5_robots_headless" ;;
-            6) echo "examples/emtom_6_robots_headless" ;;
-            7) echo "examples/emtom_7_robots_headless" ;;
-            8) echo "examples/emtom_8_robots_headless" ;;
-            9) echo "examples/emtom_9_robots_headless" ;;
-            10) echo "examples/emtom_10_robots_headless" ;;
-            *)
-                echo "Error: --agents must be 2-10 for robot agents" >&2
-                exit 1
-                ;;
-        esac
-    fi
-}
+# Note: Headless configs removed - spawn positions are now cached in task.json
+# First scene load calculates spawns (slow), subsequent loads reuse cached spawns (fast)
 
 run_exploration() {
     # Auto-detect LLM provider if not specified
@@ -309,11 +284,12 @@ run_generate() {
     # Expand short model names to full IDs
     MODEL=$(expand_model_name "$MODEL")
 
-    # Get the appropriate HEADLESS config for the max number of agents (faster loading, no visual sensors)
-    CONFIG_NAME=$(get_headless_agent_config $AGENTS_MAX $AGENT_TYPE)
+    # Get the appropriate config for the max number of agents
+    # Note: Spawn positions are cached in task.json for fast subsequent loads
+    CONFIG_NAME=$(get_agent_config $AGENTS_MAX $AGENT_TYPE)
 
     echo "=============================================="
-    echo "Running EMTOM Task Generation (Live Scene Mode, Headless)"
+    echo "Running EMTOM Task Generation (Live Scene Mode)"
     echo "=============================================="
     echo "Target tasks: $NUM_TASKS"
     echo "Agents: $AGENTS_MIN - $AGENTS_MAX ($AGENT_TYPE)"

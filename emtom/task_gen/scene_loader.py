@@ -40,6 +40,9 @@ class SceneData:
     furniture_in_rooms: Dict[str, List[str]] = field(default_factory=dict)
     objects_on_furniture: Dict[str, List[str]] = field(default_factory=dict)
 
+    # Agent spawn positions (calculated once, reused for all runs)
+    agent_spawns: Dict[str, Dict[str, List[float]]] = field(default_factory=dict)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format."""
         return {
@@ -51,6 +54,7 @@ class SceneData:
             "articulated_furniture": self.articulated_furniture,
             "furniture_in_rooms": self.furniture_in_rooms,
             "objects_on_furniture": self.objects_on_furniture,
+            "agent_spawns": self.agent_spawns,
         }
 
     def to_scene_inventory(self) -> Dict[str, List[str]]:
@@ -127,8 +131,11 @@ def load_scene(
     env_interface = EnvironmentInterface(config, dataset=dataset, init_wg=False)
     env_interface.reset_environment(episode_id=episode_id)
 
-    # Extract world graph
-    scene_data = extract_scene_data(env_interface, episode_id, actual_scene_id)
+    # Get number of agents from config
+    num_agents = len(config.habitat.simulator.agents)
+
+    # Extract world graph and agent spawns
+    scene_data = extract_scene_data(env_interface, episode_id, actual_scene_id, num_agents)
 
     # Cleanup
     try:
@@ -143,6 +150,7 @@ def extract_scene_data(
     env_interface: "EnvironmentInterface",
     episode_id: str,
     scene_id: str,
+    num_agents: int = 2,
 ) -> SceneData:
     """
     Extract complete scene data from environment's world graph.
@@ -151,12 +159,28 @@ def extract_scene_data(
         env_interface: Initialized EnvironmentInterface
         episode_id: The episode ID
         scene_id: The scene ID
+        num_agents: Number of agents to extract spawn positions for
 
     Returns:
         SceneData with all scene information
     """
     # Get world graph (use agent 0's view, which should be complete)
     world_graph = env_interface.world_graph[0]
+
+    # Extract agent spawn positions (these are calculated by the episode)
+    agent_spawns = {}
+    for agent_uid in range(num_agents):
+        try:
+            agent = env_interface.sim.agents_mgr[agent_uid].articulated_agent
+            position = list(agent.base_pos)
+            rotation = float(agent.base_rot)  # yaw angle
+            agent_spawns[f"agent_{agent_uid}"] = {
+                "position": position,
+                "rotation": rotation,
+            }
+        except (IndexError, AttributeError):
+            # Agent doesn't exist or can't get position
+            pass
 
     # Extract rooms
     rooms = []
@@ -215,6 +239,7 @@ def extract_scene_data(
         articulated_furniture=articulated,
         furniture_in_rooms=furniture_in_rooms,
         objects_on_furniture=objects_on_furniture,
+        agent_spawns=agent_spawns,
     )
 
 

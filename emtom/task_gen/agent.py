@@ -555,6 +555,9 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
         if self.scene_data:
             task["scene_id"] = self.scene_data.scene_id
             task["episode_id"] = self.scene_data.episode_id
+            # Include agent spawn positions (calculated once, reused for all runs)
+            if self.scene_data.agent_spawns:
+                task["agent_spawns"] = self.scene_data.agent_spawns
 
         task["num_agents"] = num_agents
 
@@ -1722,9 +1725,8 @@ SUMMARY:"""
             }
 
         # Run test in subprocess with trajectory output directory
-        # Use headless config for faster loading (no visual sensors needed)
         num_agents = task_data.get("num_agents", 2)
-        config_name = f"examples/emtom_{num_agents}_robots_headless"
+        config_name = f"examples/emtom_{num_agents}_robots"
         script_path = Path(__file__).parent / "test_task.py"
 
         cmd = [
@@ -1905,9 +1907,8 @@ SUMMARY:"""
             })
 
         # Run verification in subprocess (fresh GL context)
-        # Use headless config for faster loading (no visual sensors needed)
         num_agents = task_data.get("num_agents", 2)
-        config_name = f"examples/emtom_{num_agents}_robots_headless"
+        config_name = f"examples/emtom_{num_agents}_robots"
         script_path = Path(__file__).parent / "verify_trajectory.py"
         cmd = [
             sys.executable,
@@ -2345,8 +2346,7 @@ Use new_scene[] if you want a different scene, or start creating your next task.
 
         try:
             # Use subprocess to load scene (fresh GL context)
-            # Use headless config for faster loading (no visual sensors needed)
-            config_name = f"examples/emtom_{num_agents}_robots_headless"
+            config_name = f"examples/emtom_{num_agents}_robots"
             new_seed = get_random_seed()
             script_path = Path(__file__).parent / "load_scene.py"
 
@@ -2394,6 +2394,7 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                 articulated_furniture=scene_dict["articulated_furniture"],
                 furniture_in_rooms=scene_dict["furniture_in_rooms"],
                 objects_on_furniture=scene_dict["objects_on_furniture"],
+                agent_spawns=scene_dict.get("agent_spawns", {}),
             )
 
             self._log(f"Loaded scene {self.scene_data.scene_id} (episode {self.scene_data.episode_id})")
@@ -2412,15 +2413,18 @@ Use new_scene[] if you want a different scene, or start creating your next task.
             self.consecutive_tom_failures = 0
 
             if keep_mode:
-                # Keep mode: preserve working_task.json, just update num_agents
+                # Keep mode: preserve working_task.json, update num_agents and spawns
                 task_file = self.working_dir / "working_task.json"
                 if task_file.exists():
                     with open(task_file) as f:
                         task_data = json.load(f)
                     task_data["num_agents"] = num_agents
+                    # Update spawn positions (recalculated for new agent count)
+                    if self.scene_data.agent_spawns:
+                        task_data["agent_spawns"] = self.scene_data.agent_spawns
                     with open(task_file, "w") as f:
                         json.dump(task_data, f, indent=2)
-                    self._log(f"Updated num_agents to {num_agents} in working_task.json (preserved other fields)")
+                    self._log(f"Updated num_agents to {num_agents} and spawns in working_task.json")
                 else:
                     # No task file exists, create from template
                     self._create_working_task_from_template(num_agents=num_agents)

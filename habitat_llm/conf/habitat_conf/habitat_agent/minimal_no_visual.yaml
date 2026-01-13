@@ -1,5 +1,0 @@
-# @package habitat.simulator.agents.minimal_no_visual
-# Minimal agent config WITHOUT visual sensors - for fast task generation
-# Only includes proprioceptive sensors needed for oracle perception
-
-sim_sensors: {}
