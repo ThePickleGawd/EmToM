@@ -155,6 +155,7 @@ class TaskGeneratorAgent:
         self.iteration_count = 0
         self.last_verify_passed = False  # Track if golden trajectory verified
         self.last_judge_passed = False  # Track if Judge passed
+        self.last_test_passed = False  # Track if test_task was run (for calibration)
         self.last_judgment: Optional[CouncilVerdict] = None  # Last judgment result
         self.judge = Judge(verbose=verbose)  # Unified judge (council)
         self.failed = False  # Track if agent called fail[]
@@ -948,6 +949,7 @@ SUMMARY:"""
             if "working_task.json" in args and (">" in args or "cat" in args):
                 self.last_verify_passed = False
                 self.last_judge_passed = False  # Also reset judgment
+                self.last_test_passed = False  # Also reset test
             return self._bash(args)
         elif tool == "test_task":
             return self._test_task()
@@ -1106,6 +1108,9 @@ SUMMARY:"""
 
             # Save calibration results to task JSON for dataset tracking
             self._save_calibration_result(task_data, results)
+
+            # Mark test as passed (for submit_task gate)
+            self.last_test_passed = True
 
             return json.dumps(validation_result, indent=2)
         except Exception as e:
@@ -1892,7 +1897,7 @@ SUMMARY:"""
         Copy working task to output directory AND submitted_tasks/.
 
         Called when the agent determines task quality is good.
-        Requires both verify_golden_trajectory[] and judge[] to pass first.
+        Requires verify_golden_trajectory[], judge[], and test_task[] to pass first.
         """
         if not self.last_verify_passed:
             return json.dumps({
@@ -1906,6 +1911,12 @@ SUMMARY:"""
                 "hint": "Run judge[] to verify the task quality and ToM requirements.",
                 "last_score": self.last_judgment.overall_score if self.last_judgment else None,
                 "suggestions": self.last_judgment.suggestions if self.last_judgment else []
+            })
+
+        if not self.last_test_passed:
+            return json.dumps({
+                "error": "Must run test_task[] before submitting (required for calibration data).",
+                "hint": "Run test_task[] to benchmark LLM agent performance and record pass/fail for dataset calibration."
             })
 
         if not self.task_file.exists():
@@ -1973,6 +1984,7 @@ SUMMARY:"""
         # Reset verification state for next task
         self.last_verify_passed = False
         self.last_judge_passed = False
+        self.last_test_passed = False
         self.last_judgment = None
         self.consecutive_tom_failures = 0  # Reset failure counter for new task
 
@@ -2156,8 +2168,9 @@ Use new_scene[] if you want a different scene, or start creating your next task.
 
             # Reset verification state for new task
             self.last_verify_passed = False
-            self.last_tom_passed = False
-            self.last_tom_judgment = None
+            self.last_judge_passed = False
+            self.last_test_passed = False
+            self.last_judgment = None
             self.consecutive_tom_failures = 0  # Reset failure counter for new task
 
             # Reset context with fresh scene data (old scene data is now stale)
