@@ -1432,6 +1432,8 @@ SUMMARY:"""
                             }
 
         # Check mechanic_bindings structure
+        # Mechanics that require trigger_object vs those that use other keys
+        TRIGGER_OBJECT_MECHANICS = {"inverse_state", "remote_control", "conditional_unlock", "state_mirroring"}
         for i, binding in enumerate(task_data.get("mechanic_bindings", [])):
             if "mechanic_type" not in binding:
                 return {
@@ -1439,10 +1441,12 @@ SUMMARY:"""
                     "error": f"mechanic_bindings[{i}] missing mechanic_type",
                     "summary": "Task validation failed"
                 }
-            if "trigger_object" not in binding:
+            # Only require trigger_object for mechanics that use it
+            mechanic_type = binding.get("mechanic_type", "")
+            if mechanic_type in TRIGGER_OBJECT_MECHANICS and "trigger_object" not in binding:
                 return {
                     "valid": False,
-                    "error": f"mechanic_bindings[{i}] missing trigger_object",
+                    "error": f"mechanic_bindings[{i}] ({mechanic_type}) missing trigger_object",
                     "summary": "Task validation failed"
                 }
 

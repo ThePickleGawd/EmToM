@@ -109,15 +109,6 @@ MECHANIC_INFO = {
         "recommended_for_tom": True,
     },
     # === Communication Mechanics ===
-    "limited_bandwidth": {
-        "description": "Agents can only send N messages total during the episode",
-        "category": "communication_constraint",
-        "setup_keys": ["max_messages"],
-        "agent_observation": "Message sent. You have {remaining} messages left.",
-        "tom_use": "Must prioritize what to share - forces strategic communication decisions.",
-        "example_binding": {"mechanic_type": "limited_bandwidth", "max_messages": 3},
-        "recommended_for_tom": True,
-    },
     "delayed_messages": {
         "description": "Messages arrive after N turns delay",
         "category": "communication_constraint",
@@ -745,68 +736,6 @@ def handle_state_change_unseen(
 # Communication Mechanic Handlers
 # =============================================================================
 
-def handle_limited_bandwidth(
-    action_name: str,
-    agent_id: str,
-    target: Optional[str],
-    state: EMTOMGameState,
-) -> HandlerResult:
-    """
-    Limited Bandwidth: Agents can only send N messages total.
-
-    Forces strategic communication decisions - agents must prioritize
-    what information to share when messages are scarce.
-
-    Setup in state via mechanic_bindings:
-        {"mechanic_type": "limited_bandwidth", "max_messages": 3}
-
-    Triggers on Communicate actions.
-    """
-    if action_name.lower() != "communicate":
-        return no_effect(state)
-
-    # Check for limited_bandwidth binding
-    max_msgs = None
-    for binding in state.mechanic_bindings:
-        if binding.get("mechanic_type") == "limited_bandwidth":
-            max_msgs = binding.get("max_messages", 5)
-            break
-
-    if max_msgs is None:
-        return no_effect(state)
-
-    # Get current message count for this agent
-    current_count = state.message_counts.get(agent_id, 0)
-
-    # Check if agent has exceeded limit
-    if current_count >= max_msgs:
-        return HandlerResult(
-            applies=True,
-            state=state,
-            observation=f"You try to send a message, but you've used all {max_msgs} of your messages!",
-            success=False,
-            effects=["message_blocked=bandwidth_exceeded"],
-            surprise_trigger="Out of messages",
-            blocked=True,
-            mechanic_type="limited_bandwidth",
-        )
-
-    # Increment message count
-    new_state = copy.copy(state)
-    new_state.message_counts = copy.copy(state.message_counts)
-    new_state.message_counts[agent_id] = current_count + 1
-
-    remaining = max_msgs - (current_count + 1)
-    return HandlerResult(
-        applies=True,
-        state=new_state,
-        observation=f"Message sent. You have {remaining} message{'s' if remaining != 1 else ''} remaining.",
-        success=True,
-        effects=[f"message_count={agent_id}:{current_count + 1}/{max_msgs}"],
-        mechanic_type="limited_bandwidth",
-    )
-
-
 def handle_delayed_messages(
     action_name: str,
     agent_id: str,
@@ -1145,7 +1074,6 @@ MECHANIC_HANDLERS: Dict[str, MechanicHandler] = {
     "container_swap": handle_container_swap,
     "state_change_unseen": handle_state_change_unseen,
     # Communication mechanics
-    "limited_bandwidth": handle_limited_bandwidth,
     "delayed_messages": handle_delayed_messages,
     "noisy_channel": handle_noisy_channel,
     # Coordination mechanics

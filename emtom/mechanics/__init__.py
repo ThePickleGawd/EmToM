@@ -40,7 +40,6 @@ from emtom.mechanics.handlers import (
     handle_container_swap,
     handle_state_change_unseen,
     # Communication handlers
-    handle_limited_bandwidth,
     handle_delayed_messages,
     handle_noisy_channel,
     # Coordination handlers
@@ -70,7 +69,6 @@ __all__ = [
     "handle_container_swap",
     "handle_state_change_unseen",
     # Communication handlers
-    "handle_limited_bandwidth",
     "handle_delayed_messages",
     "handle_noisy_channel",
     # Coordination handlers

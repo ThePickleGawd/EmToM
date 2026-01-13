@@ -116,10 +116,6 @@ class EMTOMGameState:
     agent_room_history: Dict[str, List[Tuple[int, str]]] = field(default_factory=dict)
 
     # === Communication mechanics state ===
-    # limited_bandwidth: tracks message counts per agent {agent_id: count}
-    message_counts: Dict[str, int] = field(default_factory=dict)
-    # max messages allowed per agent (set via mechanic binding)
-    max_messages: Dict[str, int] = field(default_factory=dict)
     # delayed_messages: messages waiting to be delivered [{msg_id, from, to, content, deliver_at_step, sent_at_step}, ...]
     pending_messages: List[Dict[str, Any]] = field(default_factory=list)
     # noisy_channel: tracks noise settings {"corruption_rate": 0.0-1.0, "drop_rate": 0.0-1.0}
@@ -258,8 +254,6 @@ class EMTOMGameState:
             "delayed_info": self.delayed_info,
             "agent_room_history": self.agent_room_history,
             # Communication mechanics state
-            "message_counts": self.message_counts,
-            "max_messages": self.max_messages,
             "pending_messages": self.pending_messages,
             "channel_noise": self.channel_noise,
             "message_history": self.message_history,
@@ -313,8 +307,6 @@ class EMTOMGameState:
         state.delayed_info = data.get("delayed_info", {})
         state.agent_room_history = data.get("agent_room_history", {})
         # Communication mechanics state
-        state.message_counts = data.get("message_counts", {})
-        state.max_messages = data.get("max_messages", {})
         state.pending_messages = data.get("pending_messages", [])
         state.channel_noise = data.get("channel_noise", {})
         state.message_history = data.get("message_history", [])

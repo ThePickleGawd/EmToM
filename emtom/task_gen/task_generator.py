@@ -130,8 +130,8 @@ class SuccessCondition:
 @dataclass
 class MechanicBinding:
     """Specifies how a mechanic is bound to scene objects."""
-    mechanic_type: str  # "inverse_state", "remote_control", "state_mirroring", "conditional_unlock"
-    trigger_object: str  # Object that triggers the mechanic (e.g., "fridge_58")
+    mechanic_type: str  # "inverse_state", "remote_control", "state_mirroring", "conditional_unlock", etc.
+    trigger_object: Optional[str] = None  # Object that triggers (optional - some mechanics use other keys)
     target_object: Optional[str] = None  # For remote_control/state_mirroring: the affected object
     target_state: Optional[str] = None  # State being affected (e.g., "is_open")
     count: Optional[int] = None  # Reserved for future use
@@ -147,9 +147,11 @@ class MechanicBinding:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MechanicBinding":
+        # trigger_object is optional - some mechanics use different keys
+        # (e.g., location_change uses object_id, container_swap uses container_a/b)
         return cls(
             mechanic_type=data["mechanic_type"],
-            trigger_object=data["trigger_object"],
+            trigger_object=data.get("trigger_object"),  # Optional for some mechanics
             target_object=data.get("target_object"),
             target_state=data.get("target_state"),
             count=data.get("count"),
