@@ -128,7 +128,7 @@ class BenchmarkRollout:
 # =============================================================================
 
 # Shared quality criteria (apply to ALL categories)
-SHARED_CRITERIA = ["narrative_consistency", "subtask_relevance", "mechanic_utilization", "trajectory_efficiency"]
+SHARED_CRITERIA = ["narrative_consistency", "subtask_relevance", "mechanic_utilization", "trajectory_efficiency", "agent_necessity"]
 
 # Category-specific criteria
 CATEGORY_CRITERIA = {
@@ -159,6 +159,11 @@ CRITERIA_DESCRIPTIONS = {
         "name": "Trajectory Efficiency",
         "description": "Does the golden trajectory avoid wasteful actions?",
         "rubric": "0.0: Many wasteful actions | 0.5: Some inefficiency | 1.0: All actions purposeful",
+    },
+    "agent_necessity": {
+        "name": "Agent Necessity",
+        "description": "Is EVERY agent required? Could any agent be removed without breaking the task?",
+        "rubric": "0.0: Some agents are idle/removable | 0.5: Some agents only marginally needed | 1.0: Every agent is essential",
     },
     # Cooperative-specific
     "task_interdependence": {
