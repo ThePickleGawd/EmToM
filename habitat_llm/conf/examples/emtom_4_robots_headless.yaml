@@ -4,7 +4,7 @@
 defaults:
   - /training@             : base_train
   - /habitat_conf          : emtom_headless_4_agents
-  - /habitat_conf/task     : rearrange_easy_multi_agent
+  - /habitat_conf/task     : rearrange_easy_multi_agent_4
   - /evaluation: decentralized_evaluation_runner_4_agent_openai
   - /world_model@world_model: gt_graph
   - /trajectory@trajectory : trajectory_logger
