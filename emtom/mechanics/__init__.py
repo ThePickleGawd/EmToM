@@ -39,11 +39,6 @@ from emtom.mechanics.handlers import (
     handle_location_change,
     handle_container_swap,
     handle_state_change_unseen,
-    # Communication handlers
-    handle_delayed_messages,
-    handle_noisy_channel,
-    # Coordination handlers
-    handle_simultaneous_action,
 )
 
 __all__ = [
@@ -68,9 +63,4 @@ __all__ = [
     "handle_location_change",
     "handle_container_swap",
     "handle_state_change_unseen",
-    # Communication handlers
-    "handle_delayed_messages",
-    "handle_noisy_channel",
-    # Coordination handlers
-    "handle_simultaneous_action",
 ]

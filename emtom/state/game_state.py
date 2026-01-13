@@ -115,21 +115,9 @@ class EMTOMGameState:
     # Track which room each agent was in at each step (for absence tracking)
     agent_room_history: Dict[str, List[Tuple[int, str]]] = field(default_factory=dict)
 
-    # === Communication mechanics state ===
-    # delayed_messages: messages waiting to be delivered [{msg_id, from, to, content, deliver_at_step, sent_at_step}, ...]
-    pending_messages: List[Dict[str, Any]] = field(default_factory=list)
-    # noisy_channel: tracks noise settings {"corruption_rate": 0.0-1.0, "drop_rate": 0.0-1.0}
-    channel_noise: Dict[str, float] = field(default_factory=dict)
-    # Message history for all agents
-    message_history: List[Dict[str, Any]] = field(default_factory=list)
-
     # === Coordination mechanics state ===
     # hidden_agenda: per-agent secret goals {agent_id: {"goal": str, "target": str, "achieved": bool, "conflicts_with": [agent_ids]}}
     hidden_agendas: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    # simultaneous_action: tracks coordinated action requirements {action_id: {"required_agents": [...], "action": str, "target": str, "pending_agents": [...], "window_start": step, "window_size": N}}
-    simultaneous_requirements: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    # Track actions taken this step for simultaneous checking {agent_id: {"action": str, "target": str}}
-    current_step_actions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     # Per-agent observation history
     agent_observations: Dict[str, List[str]] = field(default_factory=dict)
@@ -253,14 +241,8 @@ class EMTOMGameState:
             "unseen_state_changes": self.unseen_state_changes,
             "delayed_info": self.delayed_info,
             "agent_room_history": self.agent_room_history,
-            # Communication mechanics state
-            "pending_messages": self.pending_messages,
-            "channel_noise": self.channel_noise,
-            "message_history": self.message_history,
             # Coordination mechanics state
             "hidden_agendas": self.hidden_agendas,
-            "simultaneous_requirements": self.simultaneous_requirements,
-            "current_step_actions": self.current_step_actions,
         }
 
     @classmethod
@@ -306,14 +288,8 @@ class EMTOMGameState:
         state.unseen_state_changes = data.get("unseen_state_changes", {})
         state.delayed_info = data.get("delayed_info", {})
         state.agent_room_history = data.get("agent_room_history", {})
-        # Communication mechanics state
-        state.pending_messages = data.get("pending_messages", [])
-        state.channel_noise = data.get("channel_noise", {})
-        state.message_history = data.get("message_history", [])
         # Coordination mechanics state
         state.hidden_agendas = data.get("hidden_agendas", {})
-        state.simultaneous_requirements = data.get("simultaneous_requirements", {})
-        state.current_step_actions = data.get("current_step_actions", {})
         return state
 
     def to_json(self) -> str:

@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from emtom.task_gen.trajectory_analyzer import TrajectoryAnalysis
 
@@ -70,8 +70,12 @@ class Subtask:
     Subtasks form a DAG where:
     - Each node has a success_condition (PARTNR predicate)
     - Edges are defined by depends_on
-    - required=True subtasks must be completed for task success
-    - required=False subtasks track progress but don't block success
+
+    The `required` field is polymorphic based on task category:
+    - True: Must be completed for task success (cooperative) or shared prerequisite
+    - False: Optional/tracking only
+    - "team_X": Completing this means team_X wins (competitive)
+    - "agent_X": This is agent_X's personal subgoal (mixed)
     """
 
     subtask_id: str
@@ -80,12 +84,29 @@ class Subtask:
     assigned_agent: Optional[str] = None
     depends_on: List[str] = field(default_factory=list)
     hints: List[str] = field(default_factory=list)
-    required: bool = True  # If True, must be completed for task success
+    required: Union[bool, str] = True  # bool for cooperative, str for team/agent ownership
 
     @property
     def id(self) -> str:
         """Alias for subtask_id for cleaner access."""
         return self.subtask_id
+
+    @property
+    def is_required_for_task(self) -> bool:
+        """Check if this subtask is required for overall task success."""
+        return self.required is True
+
+    @property
+    def is_optional(self) -> bool:
+        """Check if this subtask is optional."""
+        return self.required is False
+
+    @property
+    def owner(self) -> Optional[str]:
+        """Get the team/agent owner if this is a team/agent-specific subtask."""
+        if isinstance(self.required, str):
+            return self.required
+        return None
 
     def has_valid_condition(self) -> bool:
         """Check if success_condition is properly defined."""
@@ -196,11 +217,9 @@ class GeneratedTask:
 
     # COMPETITIVE-SPECIFIC (optional, for category="competitive")
     teams: Optional[Dict[str, List[str]]] = None  # team_id -> [agent_ids], e.g. {"team_0": ["agent_0"], "team_1": ["agent_1"]}
-    team_goals: Optional[Dict[str, Dict[str, Any]]] = None  # team_id -> success_condition
     team_secrets: Optional[Dict[str, List[str]]] = None  # team_id -> [secrets]
-
-    # MIXED-SPECIFIC (optional, for category="mixed")
-    agent_subgoals: Optional[Dict[str, Dict[str, Any]]] = None  # agent_id -> {goal, success_condition, conflicts_with}
+    # NOTE: team_goals are now unified into subtasks with required="team_X"
+    # NOTE: agent_subgoals are now unified into subtasks with required="agent_X"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -275,17 +294,10 @@ class GeneratedTask:
         teams = data.get("teams")
         if isinstance(teams, str):
             teams = None
-        team_goals = data.get("team_goals")
-        if isinstance(team_goals, str):
-            team_goals = None
         team_secrets = data.get("team_secrets")
         if isinstance(team_secrets, str):
             team_secrets = None
-
-        # Parse mixed-specific fields
-        agent_subgoals = data.get("agent_subgoals")
-        if isinstance(agent_subgoals, str):
-            agent_subgoals = None
+        # NOTE: team_goals and agent_subgoals are now unified into subtasks
 
         return cls(
             task_id=data.get("task_id", "unknown"),
@@ -305,9 +317,7 @@ class GeneratedTask:
             locked_containers=locked_containers,
             initial_states=initial_states,
             teams=teams,
-            team_goals=team_goals,
             team_secrets=team_secrets,
-            agent_subgoals=agent_subgoals,
         )
 
     # DAG-related methods
@@ -323,13 +333,29 @@ class GeneratedTask:
         return [s.success_condition for s in terminals if s.has_valid_condition()]
 
     def get_required_subtasks(self) -> List[Subtask]:
-        """Get subtasks marked as required for task success."""
-        return [s for s in self.subtasks if getattr(s, 'required', True)]
+        """Get subtasks marked as required for task success (required=True only)."""
+        return [s for s in self.subtasks if s.is_required_for_task]
 
     def get_required_conditions(self) -> List[Dict[str, Any]]:
         """Get success conditions from required subtasks."""
         required = self.get_required_subtasks()
         return [s.success_condition for s in required if s.has_valid_condition()]
+
+    def get_team_subtasks(self, team_id: str) -> List[Subtask]:
+        """Get subtasks owned by a specific team (required="team_X")."""
+        return [s for s in self.subtasks if s.owner == team_id]
+
+    def get_agent_subtasks(self, agent_id: str) -> List[Subtask]:
+        """Get subtasks owned by a specific agent (required="agent_X")."""
+        return [s for s in self.subtasks if s.owner == agent_id]
+
+    def get_all_teams(self) -> List[str]:
+        """Get all team IDs that have subtasks assigned to them."""
+        teams = set()
+        for s in self.subtasks:
+            if s.owner and s.owner.startswith("team_"):
+                teams.add(s.owner)
+        return sorted(teams)
 
     def get_effective_success_condition(self) -> Optional[SuccessCondition]:
         """

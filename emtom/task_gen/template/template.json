@@ -38,8 +38,9 @@
   },
   "subtasks": [
     {
-      "id": "REPLACE_WITH_ID",
-      "description": "REPLACE_WITH_DESCRIPTION",
+      "_COMMENT": "required field is polymorphic: true=task success, false=optional, 'team_X'=team wins, 'agent_X'=agent subgoal",
+      "id": "shared_prereq",
+      "description": "Shared prerequisite that must be done first",
       "required": true,
       "depends_on": [],
       "success_condition": {
@@ -47,6 +48,29 @@
         "property": "REPLACE (ex. has_item)",
         "target": "REPLACE (omit for unary: is_on_floor/is_open/etc)"
       }
+    },
+    {
+      "_COMMENT_COMPETITIVE": "For competitive: use required='team_X' for team win conditions",
+      "id": "team_0_wins",
+      "description": "Team 0 secures the trophy",
+      "required": "team_0",
+      "depends_on": ["shared_prereq"],
+      "success_condition": {"entity": "trophy_1", "property": "is_inside", "target": "cabinet_10"}
+    },
+    {
+      "id": "team_1_wins",
+      "description": "Team 1 secures the trophy",
+      "required": "team_1",
+      "depends_on": ["shared_prereq"],
+      "success_condition": {"entity": "trophy_1", "property": "is_inside", "target": "cabinet_20"}
+    },
+    {
+      "_COMMENT_MIXED": "For mixed: use required='agent_X' for agent subgoals",
+      "id": "agent_0_subgoal",
+      "description": "Agent 0's secret subgoal",
+      "required": "agent_0",
+      "depends_on": [],
+      "success_condition": {"entity": "vase_1", "property": "is_inside", "target": "closet_5"}
     }
   ],
   "num_agents": 2,
@@ -59,31 +83,13 @@
     }
   ],
 
-  "_COMPETITIVE_ONLY_FIELDS": "Remove this section for non-competitive tasks",
+  "_COMPETITIVE_ONLY_FIELDS": "Include teams and team_secrets for competitive tasks",
   "teams": {
     "team_0": ["agent_0"],
     "team_1": ["agent_1"]
   },
-  "team_goals": {
-    "team_0": {"entity": "trophy_1", "property": "is_inside", "target": "cabinet_10"},
-    "team_1": {"entity": "trophy_1", "property": "is_inside", "target": "cabinet_20"}
-  },
   "team_secrets": {
     "team_0": ["Your cabinet is cabinet_10"],
     "team_1": ["Your cabinet is cabinet_20"]
-  },
-
-  "_MIXED_ONLY_FIELDS": "Remove this section for non-mixed tasks",
-  "agent_subgoals": {
-    "agent_0": {
-      "goal": "Hide the vase",
-      "success_condition": {"entity": "vase_1", "property": "is_inside", "target": "closet_5"},
-      "conflicts_with": "Agent 1 wants vase displayed"
-    },
-    "agent_1": {
-      "goal": "Display the vase",
-      "success_condition": {"entity": "vase_1", "property": "is_on_top", "target": "table_22"},
-      "conflicts_with": "Agent 0 wants vase hidden"
-    }
   }
 }

@@ -39,20 +39,23 @@ Create multi-agent challenges in one of three categories: **{category}**.
 - Agents need each other's knowledge or actions to succeed
 - Use agent_secrets to give different information to each agent
 - Design subtask DAGs with cross-agent dependencies
+- Use `required: true` for subtasks that must be completed for task success
 
 **COMPETITIVE**: Two teams with opposing win conditions. One wins means the other loses.
-- Define teams and team_goals (mutually exclusive objectives)
+- Define `teams` mapping (e.g., {{"team_0": ["agent_0"], "team_1": ["agent_1"]}})
 - Use team_secrets for team-shared information
+- Define team win conditions as subtasks with `required: "team_X"` (e.g., `required: "team_0"`)
+- First team to complete all their subtasks wins
 - Ensure both teams have fair chance of winning
-- Ensure to tell agents what other agents are on their team
-- Split up the teams however you want (does not have to be even), but if there are significantly more agents on one team compared to the other, give the team with less number of agents less subtasks
-- You are allowed to create subtasks for the team that sabotages the other team, for example, say team A needs some bread from the fridge, one of team B's subtaks could me take the bread out of the fridge and place it somewhere else. Tell the agents on the team that these sabotage subtasks are optional, but DO NOT tell them that this is a sabotage subtasks, the agents should belive that these are like any other subtask 
-
+- Tell agents what other agents are on their team
+- Split up the teams however you want (does not have to be even), but if there are significantly more agents on one team, give the smaller team fewer subtasks
+- You can create sabotage subtasks for a team (e.g., team B moves bread away from team A's target)
 
 **MIXED**: Shared main goal, but agents have secret subgoals that may conflict.
-- Clear main goal that all agents work toward
-- Use agent_subgoals for hidden objectives that may conflict
-- Task can succeed even if subgoals conflict with each other
+- Main goal uses `required: true` subtasks (must complete for task success)
+- Agent subgoals use `required: "agent_X"` subtasks (e.g., `required: "agent_0"`)
+- Subgoals can conflict with each other or with the main goal
+- Task succeeds if main goal completes, subgoal success is tracked separately
 
 ## Task Quality (CRITICAL for judge)
 Tasks are evaluated by a multi-model council.
