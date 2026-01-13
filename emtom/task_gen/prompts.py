@@ -37,11 +37,26 @@ Action: tool_name[argument]
 
 ## Category: {category}
 
-**COOPERATIVE**: All agents share goals. Distribute knowledge via `agent_secrets`. Use `required: true`.
+**COOPERATIVE** - All agents united toward shared goals
+- Every agent contributes unique knowledge, skills, or access that others lack
+- Information is distributed: agent_0 might know key locations, agent_1 knows which cabinet needs unlocking
+- Success requires piecing together distributed information through communication
+- Complex tasks can have parallel workstreams that converge
+- Use `agent_secrets` to distribute knowledge, `required: true` for shared goals
 
-**COMPETITIVE**: Teams with opposing goals. Define `teams` mapping. Use `required: "team_X"`.
+**COMPETITIVE** - Teams with opposing objectives
+- Divide agents into teams (any split: 1v1, 2v1, 2v2, 3v2, etc.)
+- Teams compete for contested resources OR race to complete opposing objectives
+- Each team member should contribute - divide responsibilities within teams
+- Balance matters: if teams are uneven in size, give smaller team easier objectives
+- Define `teams` mapping, use `required: "team_X"` for each team's win conditions
 
-**MIXED**: Shared main goal + secret conflicting subgoals. Use `required: true` for shared, `required: "agent_X"` for personal.
+**MIXED** - Cooperation with hidden conflicts
+- All agents share a main goal they must complete together (`required: true`)
+- Each agent also has a SECRET personal subgoal (`required: "agent_X"`) that may conflict
+- Tension: agents must cooperate on main task while secretly pursuing conflicting interests
+- Example: both agents clean house, but one secretly wants valuable item hidden while another wants it displayed
+- Subgoals should create interesting dilemmas, not make main goal impossible
 
 ## Task Design Principles
 - **Every agent MUST be essential** - task fails if any agent removed
