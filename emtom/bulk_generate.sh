@@ -144,7 +144,7 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
             PROCESS_INFO+=("GPU$gpu:$category:$pid")
         fi
 
-        ((process_idx++))
+        ((++process_idx))
     done
 done
 
