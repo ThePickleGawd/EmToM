@@ -465,20 +465,11 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
                 })
                 continue
 
-            # Execute all actions sequentially
-            if len(actions) == 1:
-                tool, args = actions[0]
-                observation = self._execute_action(tool, args)
-                response_for_history = response
-            else:
-                # Multiple actions - execute all and combine outputs
-                observations = []
-                for i, (tool, args) in enumerate(actions, 1):
-                    self._log(f"Executing [{i}/{len(actions)}]: {tool}[{args[:60]}...]")
-                    obs = self._execute_action(tool, args)
-                    observations.append(f"[{i}] {tool}: {obs}")
-                observation = "\n\n".join(observations)
-                response_for_history = response
+            # Execute first action only (standard ReAct pattern)
+            tool, args = actions[0]
+            observation = self._execute_action(tool, args)
+            # Keep only content up to first action for clean context
+            response_for_history = self._truncate_to_first_action(response)
 
             # Truncate heredocs in PREVIOUS assistant messages to save context
             self._truncate_old_heredocs()
@@ -637,11 +628,25 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
 
     def _get_llm_response(self) -> str:
         """Get response from LLM."""
-        # Format messages for LLM
         prompt = self._format_messages_for_llm()
-        response = self.llm.generate(prompt)
+        # Stop on "Assigned!" - LLM outputs this after each action
+        response = self.llm.generate(prompt, stop="Assigned!")
         self._log(f"Agent: {response}", truncate_terminal=300)
         return response
+
+    def _truncate_to_first_action(self, content: str) -> str:
+        """Truncate content after the first Action: tool[args] to keep context clean."""
+        action_match = re.search(r'Action:\s*(\w+)\[', content)
+        if not action_match:
+            return content
+
+        start_idx = action_match.end()
+        bracket_content = self._extract_bracket_content(content, start_idx)
+        if bracket_content is None:
+            return content
+
+        end_idx = start_idx + len(bracket_content) + 1
+        return content[:end_idx].rstrip()
 
     def _format_messages_for_llm(self) -> str:
         """Format message history for the LLM."""

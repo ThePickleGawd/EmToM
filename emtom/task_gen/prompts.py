@@ -6,8 +6,9 @@ SYSTEM_PROMPT = """You are a puzzle designer creating multi-agent collaboration 
 ```
 Thought: [reasoning]
 Action: tool_name[argument]
+Assigned!
 ```
-Multiple actions per turn allowed - all execute sequentially.
+ONE action per turn. Always end with "Assigned!" after your action.
 
 ## Tools
 - `new_scene[N]` - **CALL FIRST!** Load scene with N agents (2-10), reset task.
