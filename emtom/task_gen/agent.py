@@ -45,7 +45,7 @@ class TaskGeneratorAgent:
         config: DictConfig,
         working_dir: str = "data/emtom/tasks",
         output_dir: str = "data/emtom/tasks",
-        max_iterations: int = 100,
+        iterations_per_task: int = 100,
         verbose: bool = True,
         subtasks_min: int = 2,
         subtasks_max: int = 5,
@@ -67,7 +67,7 @@ class TaskGeneratorAgent:
             config: Hydra config for BenchmarkRunner
             working_dir: Directory containing working_task.json
             output_dir: Directory for curated output tasks
-            max_iterations: Max ReAct iterations before stopping
+            iterations_per_task: Max ReAct iterations allowed per task
             verbose: Print agent thoughts and actions
             subtasks_min: Minimum number of subtasks per task
             subtasks_max: Maximum number of subtasks per task
@@ -89,7 +89,7 @@ class TaskGeneratorAgent:
         self.agents_min = agents_min
         self.agents_max = agents_max
         self.output_dir = Path(output_dir)
-        self.max_iterations = max_iterations
+        self.iterations_per_task = iterations_per_task
         self.verbose = verbose
         self.scene_data = scene_data
         self.max_context_chars = max_context_chars or self._get_model_context_limit()
@@ -258,21 +258,17 @@ class TaskGeneratorAgent:
         Returns:
             List of paths to submitted task files
         """
+        # Calculate total max iterations from per-task budget
+        self.max_iterations = self.iterations_per_task * num_tasks_target
+
         self._log(f"\n{'='*60}")
         self._log(f"Starting TaskGeneratorAgent")
         self._log(f"Target: {num_tasks_target} tasks")
         self._log(f"Agents: {self.agents_min} - {self.agents_max}")
-        self._log(f"Max iterations: {self.max_iterations} (TOTAL, not per task)")
+        self._log(f"Iterations per task: {self.iterations_per_task}")
+        self._log(f"Max iterations: {self.max_iterations} (total budget)")
         self._log(f"Output: {self.output_dir}")
         self._log(f"{'='*60}\n")
-
-        # Warn if max_iterations seems too low for target tasks
-        # Typical task takes 10-20 iterations (create, verify, fix, test, submit)
-        min_recommended = num_tasks_target * 15
-        if self.max_iterations < min_recommended:
-            self._log(f"WARNING: max_iterations ({self.max_iterations}) may be too low for {num_tasks_target} tasks.")
-            self._log(f"         Recommended: at least {min_recommended} iterations (15 per task)")
-            self._log(f"         Use --max-iterations {min_recommended} to increase")
 
         if not self.scene_data:
             self._log("ERROR: No scene_data provided!")

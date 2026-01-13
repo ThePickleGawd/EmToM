@@ -24,6 +24,7 @@ CATEGORIES=("cooperative" "competitive" "mixed")
 PER_GPU=3
 MODEL="gpt-5.2"
 NUM_TASKS=1
+ITERATIONS_PER_TASK=100  # Max iterations per task (total = this * num-tasks)
 DRY_RUN=false
 
 # Colors
@@ -43,10 +44,11 @@ print_usage() {
     echo "Usage: ./emtom/bulk_generate.sh [options]"
     echo ""
     echo "Options:"
-    echo "  --per-gpu N      Processes per GPU (default: 3, one per category)"
-    echo "  --model MODEL    LLM model (default: gpt-5.2)"
-    echo "  --num-tasks N    Tasks per process (default: 1)"
-    echo "  --dry-run        Show commands without executing"
+    echo "  --per-gpu N         Processes per GPU (default: 3, one per category)"
+    echo "  --model MODEL       LLM model (default: gpt-5.2)"
+    echo "  --num-tasks N       Tasks per process (default: 1)"
+    echo "  --iterations-per-task N  Max iterations per task (default: 100)"
+    echo "  --dry-run           Show commands without executing"
     echo ""
     echo "Examples:"
     echo "  ./emtom/bulk_generate.sh                  # 24 processes (8 GPUs x 3)"
@@ -67,6 +69,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --num-tasks)
             NUM_TASKS=$2
+            shift 2
+            ;;
+        --iterations-per-task)
+            ITERATIONS_PER_TASK=$2
             shift 2
             ;;
         --dry-run)
@@ -109,6 +115,7 @@ echo -e "Total processes:    ${GREEN}$TOTAL_PROCESSES${NC}"
 echo -e "Categories:         ${GREEN}${CATEGORIES[*]}${NC} (all 3)"
 echo -e "Model:              ${GREEN}$MODEL${NC}"
 echo -e "Tasks per process:  ${GREEN}$NUM_TASKS${NC}"
+echo -e "Iterations/task:    ${GREEN}$ITERATIONS_PER_TASK${NC}"
 echo -e "Log directory:      ${CYAN}$LOG_DIR${NC}"
 echo "=============================================="
 echo ""
@@ -129,13 +136,14 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
 
         if [ "$DRY_RUN" = true ]; then
             echo -e "${YELLOW}[DRY-RUN]${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}"
-            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --category $category"
+            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --iterations-per-task $ITERATIONS_PER_TASK --category $category"
         else
             echo -e "${GREEN}Starting${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC} -> $log_file"
 
             CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate \
                 --model "$MODEL" \
                 --num-tasks "$NUM_TASKS" \
+                --iterations-per-task "$ITERATIONS_PER_TASK" \
                 --category "$category" \
                 > "$log_file" 2>&1 &
 

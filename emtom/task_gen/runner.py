@@ -110,7 +110,7 @@ def main(config: DictConfig) -> None:
         cprint("Error: model is required. Use +model=<model_name>", "red")
         sys.exit(1)
     output_dir = config.get("output_dir", "data/emtom/tasks")  # Final output location
-    max_iterations = config.get("max_iterations", 100)
+    iterations_per_task = config.get("iterations_per_task", 100)
     quiet = config.get("quiet", False)
     subtasks_min = config.get("subtasks_min", 2)
     subtasks_max = config.get("subtasks_max", 5)
@@ -251,7 +251,7 @@ def main(config: DictConfig) -> None:
         config=config,
         working_dir=str(working_dir),  # Unique temp dir for this instance
         output_dir=output_dir,  # Shared output for all instances
-        max_iterations=max_iterations,
+        iterations_per_task=iterations_per_task,
         verbose=not quiet,
         subtasks_min=subtasks_min,
         subtasks_max=subtasks_max,
