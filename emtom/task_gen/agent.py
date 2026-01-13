@@ -448,10 +448,10 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
                 })
                 continue
 
-            # Parse action from response
-            action = self._parse_action(response)
+            # Parse all actions from response
+            actions = self._parse_all_actions(response)
 
-            if action is None:
+            if not actions:
                 self._log("No valid action found in response")
                 self.messages.append({
                     "role": "assistant",
@@ -463,17 +463,29 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
                 })
                 continue
 
-            # Execute action and get observation
-            tool, args = action
-            observation = self._execute_action(tool, args)
+            # Execute actions - multiple bash allowed, other tools single only
+            all_bash = all(tool == "bash" for tool, _ in actions)
+
+            if all_bash and len(actions) > 1:
+                # Execute all bash commands and combine outputs
+                observations = []
+                for i, (tool, args) in enumerate(actions, 1):
+                    self._log(f"Executing bash [{i}/{len(actions)}]: {args[:80]}...")
+                    obs = self._execute_action(tool, args)
+                    observations.append(f"[{i}] $ {args}\n{obs}")
+                observation = "\n\n".join(observations)
+                response_for_history = response  # Keep full response with all actions
+            else:
+                # Single action (or mixed - only execute first)
+                tool, args = actions[0]
+                if len(actions) > 1:
+                    self._log(f"Multiple actions found but not all bash - executing only first: {tool}")
+                observation = self._execute_action(tool, args)
+                # Truncate response after first action for clean context
+                response_for_history = self._truncate_after_first_action(response)
 
             # Truncate heredocs in PREVIOUS assistant messages to save context
-            # (keep current response full so LLM sees what it just did)
             self._truncate_old_heredocs()
-
-            # Truncate response after first action for clean context
-            # (LLM may generate multiple actions, we only execute the first)
-            response_for_history = self._truncate_after_first_action(response)
 
             # Add current turn to conversation
             self.messages.append({"role": "assistant", "content": response_for_history})
@@ -776,31 +788,54 @@ SUMMARY:"""
 
     def _parse_action(self, response: str) -> Optional[tuple]:
         """
-        Parse action from LLM response using bracket-matching.
+        Parse first action from LLM response using bracket-matching.
 
         Expected format:
         Thought: [reasoning]
         Action: tool_name[args]
 
-        Uses proper bracket matching to handle nested brackets in JSON, etc.
-
         Returns:
             Tuple of (tool_name, args) or None if parsing fails
         """
-        # Find "Action:" followed by tool name and opening bracket
-        action_match = re.search(r'Action:\s*(\w+)\[', response)
-        if not action_match:
-            return None
+        actions = self._parse_all_actions(response)
+        return actions[0] if actions else None
 
-        tool_name = action_match.group(1)
-        start_idx = action_match.end()  # Position right after the opening [
+    def _parse_all_actions(self, response: str) -> List[tuple]:
+        """
+        Parse ALL actions from LLM response.
 
-        # Use bracket matching to find the closing ]
-        args = self._extract_bracket_content(response, start_idx)
-        if args is None:
-            return None
+        Supports multiple bash actions:
+        Action: bash[cmd1]
+        Action: bash[cmd2]
 
-        return (tool_name, args.strip())
+        Returns:
+            List of (tool_name, args) tuples
+        """
+        actions = []
+        pos = 0
+
+        while True:
+            # Find next "Action:" followed by tool name and opening bracket
+            action_match = re.search(r'Action:\s*(\w+)\[', response[pos:])
+            if not action_match:
+                break
+
+            tool_name = action_match.group(1)
+            start_idx = pos + action_match.end()  # Position right after the opening [
+
+            # Use bracket matching to find the closing ]
+            args = self._extract_bracket_content(response, start_idx)
+            if args is None:
+                break
+
+            actions.append((tool_name, args.strip()))
+
+            # Move position past this action
+            # Find where the bracket content ended
+            end_idx = start_idx + len(args) + 1  # +1 for closing bracket
+            pos = end_idx
+
+        return actions
 
     def _extract_bracket_content(self, text: str, start: int) -> Optional[str]:
         """
