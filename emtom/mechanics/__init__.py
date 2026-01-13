@@ -35,10 +35,6 @@ from emtom.mechanics.handlers import (
     handle_remote_control,
     handle_conditional_unlock,
     handle_state_mirroring,
-    # Belief tracking handlers
-    handle_location_change,
-    handle_container_swap,
-    handle_state_change_unseen,
 )
 
 __all__ = [
@@ -59,8 +55,4 @@ __all__ = [
     "handle_remote_control",
     "handle_conditional_unlock",
     "handle_state_mirroring",
-    # Belief tracking handlers
-    "handle_location_change",
-    "handle_container_swap",
-    "handle_state_change_unseen",
 ]

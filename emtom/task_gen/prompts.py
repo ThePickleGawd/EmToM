@@ -179,7 +179,7 @@ Read the template file for the full JSON structure. Key fields:
 - `subtasks`: Milestone conditions forming a DAG. Each subtask MUST be a dict with:
   - `id`: Unique identifier (e.g., "s1_find_key")
   - `description`: What needs to be achieved
-  - `required`: Boolean (default true) - if true, must be completed for task success
+  - `required`: true/false/"team_X"/"agent_X" (see "The required Field" section below)
   - `success_condition`: Dict with `entity`, `property`, `target` (see Predicates below)
   - `depends_on`: List of prerequisite subtask IDs (e.g., ["s1_find_key"]) - REQUIRED for DAG!
 - `golden_trajectory`: Step-by-step solution with all agents' actions per timestep
@@ -281,19 +281,39 @@ Agent 2 knows which cabinet needs both keys. All three must share information an
 ]
 ```
 
-## Required vs Progress Subtasks
+## The `required` Field (Polymorphic)
 
-- `required: true`: A goal that defines task success
-- `required: false`: An intermediate step that tracks progress
+The `required` field determines how a subtask is evaluated. It can be:
 
-Use `required: true` for outcomes that matter to the task. Use `required: false` for steps that are just means to achieve those outcomes.
+- `required: true` - Task success goal (cooperative). Must complete for task to succeed.
+- `required: false` - Intermediate progress step. Tracks progress but doesn't block success.
+- `required: "team_X"` - Team win condition (competitive). Completing this means team_X wins.
+- `required: "agent_X"` - Agent subgoal (mixed). Agent_X's personal objective.
 
-**Example**: If the task is "get the radio from a locked cabinet":
+**COOPERATIVE Example** (get radio from locked cabinet):
 ```json
 "subtasks": [
   {{"id": "s1_find_key", "required": false, ...}},      // means to an end
   {{"id": "s2_unlock_cabinet", "required": false, ...}}, // means to an end
   {{"id": "s3_get_radio", "required": true, ...}}        // the actual goal
+]
+```
+
+**COMPETITIVE Example** (two teams race to secure a trophy):
+```json
+"subtasks": [
+  {{"id": "s1_unlock_case", "required": true, "depends_on": [], "success_condition": {{"entity": "display_case_1", "property": "is_unlocked"}}}},
+  {{"id": "s2_team0_wins", "required": "team_0", "depends_on": ["s1_unlock_case"], "success_condition": {{"entity": "trophy_1", "property": "is_inside", "target": "cabinet_10"}}}},
+  {{"id": "s3_team1_wins", "required": "team_1", "depends_on": ["s1_unlock_case"], "success_condition": {{"entity": "trophy_1", "property": "is_inside", "target": "cabinet_20"}}}}
+]
+```
+
+**MIXED Example** (clean house, but agents have conflicting subgoals):
+```json
+"subtasks": [
+  {{"id": "s1_clean_house", "required": true, "depends_on": [], "success_condition": {{"entity": "room_1", "property": "is_clean"}}}},
+  {{"id": "s2_agent0_hides_vase", "required": "agent_0", "depends_on": [], "success_condition": {{"entity": "vase_1", "property": "is_inside", "target": "closet_5"}}}},
+  {{"id": "s3_agent1_displays_vase", "required": "agent_1", "depends_on": [], "success_condition": {{"entity": "vase_1", "property": "is_on_top", "target": "table_22"}}}}
 ]
 ```
 
@@ -342,16 +362,20 @@ Agents don't know object IDs upfront - they must discover them!
 - Give each agent different knowledge via agent_secrets
 - Ensure subtasks require actions from multiple agents
 - Design DAGs where later subtasks depend on earlier ones from different agents
+- Use `required: true` for final goals, `required: false` for intermediate steps
 
 ### COMPETITIVE Design Tips:
-- Define teams array: {{"team_0": ["agent_0"], "team_1": ["agent_1"]}}
-- Define team_goals with mutually exclusive win conditions
+- Define `teams` mapping: {{"team_0": ["agent_0"], "team_1": ["agent_1"]}}
+- Use `required: "team_0"` and `required: "team_1"` for mutually exclusive win conditions
+- Shared prerequisites can use `required: true` (both teams need to complete)
 - Make sure both teams have viable paths to victory
+- First team to complete all their subtasks wins
 
 ### MIXED Design Tips:
-- Define a clear main goal in subtasks with required=true
-- Define agent_subgoals with success_condition and conflicts_with
+- Use `required: true` for main goal subtasks
+- Use `required: "agent_X"` for agent subgoals (e.g., `required: "agent_0"`)
 - Subgoals should create interesting choices, not make task impossible
+- Main goal success is tracked separately from subgoal success
 
 ## Iterative Design
 Build tasks incrementally rather than creating complex multi-step tasks all at once.

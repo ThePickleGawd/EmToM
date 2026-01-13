@@ -103,18 +103,6 @@ class EMTOMGameState:
     # remote_control: mappings from trigger -> (target, state)
     remote_mappings: Dict[str, Tuple[str, str]] = field(default_factory=dict)
 
-    # === Theory of Mind mechanics state ===
-    # location_change: tracks original locations and moves {obj_id: {"original": loc, "moved_to": loc, "moved_at_step": N, "absent_agents": [...]}}
-    location_changes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    # container_swap: tracks swapped contents {container_id: {"original_contents": [...], "swapped_with": container_id, "swapped_at_step": N}}
-    container_swaps: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    # state_change_unseen: tracks state changes agents haven't observed {obj_id: {"property": str, "old_value": Any, "new_value": Any, "changed_at_step": N, "unaware_agents": [...]}}
-    unseen_state_changes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    # delayed_information: info revealed after N turns {info_id: {"content": str, "reveal_at_step": N, "target_agents": [...], "revealed": bool}}
-    delayed_info: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    # Track which room each agent was in at each step (for absence tracking)
-    agent_room_history: Dict[str, List[Tuple[int, str]]] = field(default_factory=dict)
-
     # === Coordination mechanics state ===
     # hidden_agenda: per-agent secret goals {agent_id: {"goal": str, "target": str, "achieved": bool, "conflicts_with": [agent_ids]}}
     hidden_agendas: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -235,12 +223,6 @@ class EMTOMGameState:
                 agent_id: list(items)
                 for agent_id, items in self.agent_inventory.items()
             },
-            # ToM mechanics state
-            "location_changes": self.location_changes,
-            "container_swaps": self.container_swaps,
-            "unseen_state_changes": self.unseen_state_changes,
-            "delayed_info": self.delayed_info,
-            "agent_room_history": self.agent_room_history,
             # Coordination mechanics state
             "hidden_agendas": self.hidden_agendas,
         }
@@ -282,12 +264,6 @@ class EMTOMGameState:
             agent_id: set(items)
             for agent_id, items in data.get("agent_inventory", {}).items()
         }
-        # ToM mechanics state
-        state.location_changes = data.get("location_changes", {})
-        state.container_swaps = data.get("container_swaps", {})
-        state.unseen_state_changes = data.get("unseen_state_changes", {})
-        state.delayed_info = data.get("delayed_info", {})
-        state.agent_room_history = data.get("agent_room_history", {})
         # Coordination mechanics state
         state.hidden_agendas = data.get("hidden_agendas", {})
         return state
