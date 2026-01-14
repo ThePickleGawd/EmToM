@@ -361,6 +361,109 @@ class SearchAction(EMTOMAction):
         return targets[:10]
 
 
+@register_action("Stun")
+class StunAction(EMTOMAction):
+    """
+    Stun another agent, causing them to skip their next turn.
+
+    Requirements:
+    - Agent must have StunGun in inventory OR Stun in base action space
+    - Must be in the same room as target
+    - Cannot stun yourself
+    - Cannot stun an already stunned agent
+
+    Format: Stun[agent_id]
+    Example: Stun[agent_1]
+    """
+
+    action_name = "Stun"
+    action_description = (
+        "Stun[agent_id]: Stun another agent, causing them to skip their next turn. "
+        "Must be in the same room as target. Example: Stun[agent_1]"
+    )
+
+    @property
+    def argument_types(self) -> List[str]:
+        return ["AGENT_INSTANCE"]
+
+    def execute(
+        self,
+        agent_id: str,
+        target: Optional[str],
+        world_state: Dict[str, Any],
+    ) -> ActionResult:
+        if not target:
+            return ActionResult(
+                success=False,
+                observation="You need to specify who to stun. Format: Stun[agent_id]",
+            )
+
+        if not self._game_manager:
+            return ActionResult(
+                success=False,
+                observation="Cannot stun: game manager not available.",
+            )
+
+        target_agent = target.strip()
+
+        # Check if trying to stun yourself
+        if target_agent == agent_id:
+            return ActionResult(
+                success=False,
+                observation="You cannot stun yourself.",
+            )
+
+        # Check if target is a valid agent
+        state = self._game_manager.get_state()
+        if target_agent not in state.agent_rooms and target_agent not in state.agent_inventory:
+            # Try to find agent in any tracking
+            valid_agents = set(state.agent_rooms.keys()) | set(state.agent_inventory.keys())
+            if not valid_agents:
+                valid_agents = {"agent_0", "agent_1"}  # Default agents
+            return ActionResult(
+                success=False,
+                observation=f"Unknown agent: {target_agent}. Valid agents: {', '.join(sorted(valid_agents))}",
+            )
+
+        # Check same room requirement
+        my_room = state.agent_rooms.get(agent_id)
+        their_room = state.agent_rooms.get(target_agent)
+
+        if my_room and their_room and my_room != their_room:
+            return ActionResult(
+                success=False,
+                observation=f"{target_agent} is not in the same room. You are in {my_room}, they are in {their_room}.",
+            )
+
+        # Check if target is already stunned
+        if target_agent in state.stunned_agents and state.stunned_agents[target_agent] > 0:
+            return ActionResult(
+                success=False,
+                observation=f"{target_agent} is already stunned.",
+            )
+
+        # Apply stun - target skips 1 turn
+        state.stunned_agents[target_agent] = 1
+        self._game_manager.set_state(state)
+
+        return ActionResult(
+            success=True,
+            observation=f"You stun {target_agent}! They will skip their next turn.",
+            effect=f"stunned={target_agent}",
+            other_observations={
+                target_agent: f"You have been stunned by {agent_id}! You will skip your next turn."
+            },
+        )
+
+    def get_available_targets(self, world_state: Dict[str, Any]) -> List[str]:
+        # Return other agents as potential targets
+        other_agents = world_state.get("other_agents", [])
+        if not other_agents:
+            # Default to standard agent IDs
+            return ["agent_0", "agent_1"]
+        return other_agents
+
+
 class DynamicItemTool(EMTOMAction):
     """
     A tool dynamically created from an inventory item.

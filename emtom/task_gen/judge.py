@@ -225,6 +225,16 @@ CRITERIA_DESCRIPTIONS = {
 0.7: Meaningful conflicts that require strategic choices
 1.0: Real dilemmas - pursuing subgoals risks main goal or conflicts with others' subgoals""",
     },
+    # User requirements (added dynamically when query is provided)
+    "user_requirements_alignment": {
+        "name": "User Requirements Alignment",
+        "description": "Does the task align with the user's specific request/query?",
+        "rubric": """0.0: Task completely ignores user's request (wrong items, wrong mechanics, wrong theme)
+0.3: Task vaguely relates but misses the key elements requested
+0.5: Task partially addresses the request but missing important aspects
+0.7: Task mostly aligns with minor omissions
+1.0: Task fully incorporates what the user requested""",
+    },
 }
 
 
@@ -295,6 +305,7 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 ## Task Category: {category}
 
 {category_description}
+{user_requirements_section}
 
 ## System Capabilities (suggestions must use these!)
 
@@ -418,9 +429,17 @@ CATEGORY_PROMPT_DESCRIPTIONS = {
 }
 
 
-def _build_criteria_section(category: str) -> str:
+def _get_criteria_for_category(category: str, user_query: Optional[str] = None) -> List[str]:
+    """Get the list of criteria for a category, optionally including user_requirements_alignment."""
+    criteria = list(CATEGORY_CRITERIA.get(category, SHARED_CRITERIA))
+    if user_query:
+        criteria.append("user_requirements_alignment")
+    return criteria
+
+
+def _build_criteria_section(category: str, user_query: Optional[str] = None) -> str:
     """Build the criteria section for a given category."""
-    criteria = CATEGORY_CRITERIA.get(category, SHARED_CRITERIA)
+    criteria = _get_criteria_for_category(category, user_query)
     lines = []
     for i, criterion in enumerate(criteria, 1):
         info = CRITERIA_DESCRIPTIONS.get(criterion, {})
@@ -431,9 +450,9 @@ def _build_criteria_section(category: str) -> str:
     return "\n".join(lines)
 
 
-def _build_response_format(category: str) -> str:
+def _build_response_format(category: str, user_query: Optional[str] = None) -> str:
     """Build the JSON response format for a given category."""
-    criteria = CATEGORY_CRITERIA.get(category, SHARED_CRITERIA)
+    criteria = _get_criteria_for_category(category, user_query)
     lines = []
     for criterion in criteria:
         lines.append(f'  "{criterion}": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},')
@@ -465,6 +484,7 @@ class Judge:
         overall_threshold: float = 0.6,
         min_criterion_threshold: float = 0.4,
         verbose: bool = False,
+        user_query: Optional[str] = None,
     ):
         """
         Initialize the judge.
@@ -474,11 +494,13 @@ class Judge:
             overall_threshold: Minimum overall score to pass (default 0.6)
             min_criterion_threshold: Minimum score for any criterion (default 0.4)
             verbose: Print debug information
+            user_query: Optional user query that the task should align with
         """
         self.models = models or self.DEFAULT_MODELS
         self.overall_threshold = overall_threshold
         self.min_criterion_threshold = min_criterion_threshold
         self.verbose = verbose
+        self.user_query = user_query
 
         # LLM clients (created lazily)
         self._llm_clients: Dict[str, "BaseLLM"] = {}
@@ -680,6 +702,18 @@ class Judge:
         if category not in CATEGORY_CRITERIA:
             category = "cooperative"
 
+        # Build user requirements section if query was provided
+        user_requirements_section = ""
+        if self.user_query:
+            user_requirements_section = f"""
+## User Requirements
+
+The user specifically requested:
+> {self.user_query}
+
+**IMPORTANT**: The task MUST align with this request. Evaluate whether the task incorporates the requested elements (items, mechanics, themes, etc.).
+"""
+
         # Build category-aware prompt
         grounding = self._get_grounding_info()
         scene_objects = self._format_scene_objects(scene_data)
@@ -688,8 +722,9 @@ class Judge:
         prompt = EVALUATION_PROMPT.format(
             category=category.upper(),
             category_description=CATEGORY_PROMPT_DESCRIPTIONS.get(category, ""),
-            criteria_section=_build_criteria_section(category),
-            response_format=_build_response_format(category),
+            user_requirements_section=user_requirements_section,
+            criteria_section=_build_criteria_section(category, self.user_query),
+            response_format=_build_response_format(category, self.user_query),
             task_json=task_json,
             available_actions=grounding["available_actions"],
             available_mechanics=grounding["available_mechanics"],
@@ -712,10 +747,10 @@ class Judge:
         if self.verbose:
             print(f"[Judge/{model}] Received response ({len(response)} chars)")
 
-        # Parse response
-        return self._parse_response(response, model, category)
+        # Parse response (pass user_query so it knows which criteria to expect)
+        return self._parse_response(response, model, category, self.user_query)
 
-    def _parse_response(self, response: str, model: str, category: str = "cooperative") -> Judgment:
+    def _parse_response(self, response: str, model: str, category: str = "cooperative", user_query: Optional[str] = None) -> Judgment:
         """Parse LLM response into Judgment."""
         # Extract JSON
         json_match = re.search(r"\{[\s\S]*\}", response)
@@ -727,8 +762,8 @@ class Judge:
         except json.JSONDecodeError as e:
             return self._failed_judgment(f"[{model}] JSON parse error: {e}", category)
 
-        # Get criteria for this category
-        criteria_names = CATEGORY_CRITERIA.get(category, SHARED_CRITERIA)
+        # Get criteria for this category (includes user_requirements_alignment if query provided)
+        criteria_names = _get_criteria_for_category(category, user_query)
 
         criteria_scores = {}
         scores = []

@@ -141,6 +141,11 @@ class EMTOMGameState:
     is_terminated: bool = False
     termination_reason: Optional[str] = None
 
+    # === Stun tracking ===
+    # Maps agent_id -> number of turns remaining stunned
+    # When stunned, agent's action is skipped
+    stunned_agents: Dict[str, int] = field(default_factory=dict)
+
     def get_object_property(self, obj_id: str, prop: str, default: Any = None) -> Any:
         """Get a custom property for an object."""
         return self.object_properties.get(obj_id, {}).get(prop, default)
@@ -243,6 +248,8 @@ class EMTOMGameState:
             "termination_condition": self.termination_condition,
             "is_terminated": self.is_terminated,
             "termination_reason": self.termination_reason,
+            # Stun tracking
+            "stunned_agents": self.stunned_agents,
         }
 
     @classmethod
@@ -290,6 +297,8 @@ class EMTOMGameState:
         state.termination_condition = data.get("termination_condition")
         state.is_terminated = data.get("is_terminated", False)
         state.termination_reason = data.get("termination_reason")
+        # Stun tracking
+        state.stunned_agents = data.get("stunned_agents", {})
         return state
 
     def to_json(self) -> str:

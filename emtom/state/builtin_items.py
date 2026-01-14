@@ -119,6 +119,59 @@ class Radio(BaseItem):
         return False, "Use Communicate[message] instead of Use for the radio."
 
 
+@register_item("item_stun_gun")
+class StunGun(BaseItem):
+    """
+    A device that grants the Stun action.
+
+    When obtained, agent can use Stun[agent_id] to make target skip their turn.
+    Similar to how Radio grants Communicate.
+
+    The stun effect:
+    - Target agent's next action is skipped
+    - Must be in the same room as target
+    - Cannot stun yourself
+    - Cannot stun an already stunned agent
+
+    Example task setup:
+        items: [
+            {"item_id": "item_stun_gun_1", "base_id": "item_stun_gun", "hidden_in": "drawer_5"}
+        ]
+    """
+
+    name = "Stun Gun"
+    description = (
+        "A stun device. Grants Stun[agent_id] action when held. "
+        "Target agent skips their next turn. Must be in the same room as target."
+    )
+    consumable = False
+    use_args = []  # Uses granted action instead
+
+    # Grants Stun action
+    grants_action = "Stun"
+    action_description = "Stun[agent_id]: Target agent skips their next turn. Must be in same room."
+
+    def on_acquire(
+        self,
+        game_manager: "GameStateManager",
+        agent_id: str,
+    ) -> str:
+        """StunGun enables stun when obtained."""
+        msg = "Obtained Stun Gun! You can now use Stun[agent_id] to make another agent skip their turn."
+        if self.task_info:
+            msg += f" {self.task_info}"
+        return msg
+
+    def on_use(
+        self,
+        game_manager: "GameStateManager",
+        agent_id: str,
+        args: Optional[List[str]] = None,
+    ) -> Tuple[bool, str]:
+        """StunGun is used via the granted Stun action."""
+        return False, "Use Stun[agent_id] instead of UseItem for the stun gun."
+
+
 @register_item("item_gold_coin")
 class GoldCoin(BaseItem):
     """

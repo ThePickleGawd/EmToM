@@ -126,7 +126,7 @@ def main():
         register_measures(config)
 
         dataset = CollaborationDatasetV0(config.habitat.dataset)
-        env_interface = EnvironmentInterface(config, dataset=dataset, init_wg=False)
+        env_interface = EnvironmentInterface(config, dataset=dataset, init_wg=True)
 
         # Load the specific episode from the task
         print(f"Loading episode: {task.episode_id} (scene: {task.scene_id})", file=sys.stderr)

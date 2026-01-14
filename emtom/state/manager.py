@@ -689,6 +689,107 @@ class GameStateManager:
         """Get the reason for termination, if terminated."""
         return self.state.termination_reason
 
+    # ========== Stun Methods ==========
+
+    def is_agent_stunned(self, agent_id: str) -> bool:
+        """
+        Check if an agent is currently stunned.
+
+        Args:
+            agent_id: Agent to check
+
+        Returns:
+            True if agent has remaining stun turns
+        """
+        return self.state.stunned_agents.get(agent_id, 0) > 0
+
+    def get_stun_turns_remaining(self, agent_id: str) -> int:
+        """
+        Get remaining stun turns for an agent.
+
+        Args:
+            agent_id: Agent to check
+
+        Returns:
+            Number of turns remaining (0 if not stunned)
+        """
+        return self.state.stunned_agents.get(agent_id, 0)
+
+    def stun_agent(self, agent_id: str, turns: int = 1) -> None:
+        """
+        Apply stun to an agent.
+
+        Args:
+            agent_id: Agent to stun
+            turns: Number of turns to skip (default 1)
+        """
+        self.state.stunned_agents[agent_id] = turns
+
+    def clear_stun(self, agent_id: str) -> None:
+        """
+        Remove stun from an agent.
+
+        Args:
+            agent_id: Agent to clear stun from
+        """
+        if agent_id in self.state.stunned_agents:
+            del self.state.stunned_agents[agent_id]
+
+    def check_and_process_stun(self, agent_id: str) -> Optional[str]:
+        """
+        Check if agent is stunned and process the stun effect.
+
+        Call this BEFORE processing an agent's action each turn.
+        If stunned, decrements the stun counter and returns a skip message.
+        If stun counter reaches 0, removes the stun.
+
+        Args:
+            agent_id: Agent about to act
+
+        Returns:
+            Skip message if stunned (action should be skipped),
+            None if agent can act normally
+        """
+        if not self.is_agent_stunned(agent_id):
+            return None
+
+        turns_left = self.state.stunned_agents[agent_id]
+
+        # Decrement stun counter
+        self.state.stunned_agents[agent_id] = turns_left - 1
+
+        # Clean up if stun is over
+        if self.state.stunned_agents[agent_id] <= 0:
+            del self.state.stunned_agents[agent_id]
+
+        return f"You are stunned and cannot act this turn! ({turns_left} turn(s) of stun remaining before this)"
+
+    def decrement_all_stuns(self) -> Dict[str, str]:
+        """
+        Decrement stun counters for all stunned agents.
+
+        Alternative to check_and_process_stun - call this once per game tick
+        instead of per-agent. Returns messages for any agents whose stun ended.
+
+        Returns:
+            Dict of agent_id -> message for agents whose stun ended
+        """
+        messages = {}
+        to_remove = []
+
+        for agent_id, turns in list(self.state.stunned_agents.items()):
+            new_turns = turns - 1
+            if new_turns <= 0:
+                to_remove.append(agent_id)
+                messages[agent_id] = "You are no longer stunned."
+            else:
+                self.state.stunned_agents[agent_id] = new_turns
+
+        for agent_id in to_remove:
+            del self.state.stunned_agents[agent_id]
+
+        return messages
+
     def check_goals(self, state: Optional[EMTOMGameState] = None) -> List[Goal]:
         """
         Check which goals have been completed.

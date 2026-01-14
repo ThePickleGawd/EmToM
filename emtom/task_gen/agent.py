@@ -157,7 +157,7 @@ class TaskGeneratorAgent:
         self.last_judge_passed = False  # Track if Judge passed
         self.last_test_passed = False  # Track if test_task was run (for calibration)
         self.last_judgment: Optional[CouncilVerdict] = None  # Last judgment result
-        self.judge = Judge(verbose=verbose)  # Unified judge (council)
+        self.judge = Judge(verbose=verbose, user_query=query)  # Unified judge (council)
         self.failed = False  # Track if agent called fail[]
         self.fail_reason = ""  # Reason for failure
         self.task_memories: List[str] = []  # Learnings from completed tasks
