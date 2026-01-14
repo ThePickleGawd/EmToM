@@ -230,7 +230,13 @@ class BenchmarkRunner(EMTOMBaseRunner):
                             "mode": "human",
                         })
 
-                        self._check_subtasks()
+                        newly_completed = self._check_subtasks()
+                        if newly_completed:
+                            self._action_history.append({
+                                "turn": turn_count,
+                                "type": "subtask_completion",
+                                "subtasks_completed": newly_completed,
+                            })
                         self.check_and_inject_item_tools(uid)
 
                 except AssertionError as e:
@@ -419,7 +425,13 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     print(f"[Agent {uid} DONE]", flush=True)
 
             # Check subtasks and task completion after all agents acted
-            self._check_subtasks()
+            newly_completed = self._check_subtasks()
+            if newly_completed:
+                self._action_history.append({
+                    "turn": turn_count,
+                    "type": "subtask_completion",
+                    "subtasks_completed": newly_completed,
+                })
             world_graph = self.get_world_graph()
 
             eval_result = self._check_task_completion()

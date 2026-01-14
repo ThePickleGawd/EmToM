@@ -1204,6 +1204,48 @@ SUMMARY:"""
             validation_result["summary"] = f"Task structure valid. Benchmark skipped: {e}"
             return json.dumps(validation_result, indent=2)
 
+    def _build_trajectory(self, action_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Transform flat action_history into grouped trajectory format.
+
+        Returns list of turn entries, each containing:
+        - turn: turn number
+        - agents: dict mapping agent_id -> {action, observation}
+        - subtasks_completed: list of subtask IDs completed this turn
+        """
+        from collections import defaultdict
+
+        # Group by turn
+        turns: Dict[int, Dict[str, Any]] = defaultdict(lambda: {
+            "agents": {},
+            "subtasks_completed": []
+        })
+
+        for record in action_history:
+            turn = record.get("turn", 0)
+
+            # Check if this is a subtask completion record
+            if record.get("type") == "subtask_completion":
+                turns[turn]["subtasks_completed"].extend(record.get("subtasks_completed", []))
+            else:
+                # Regular action record
+                agent_id = record.get("agent", "unknown")
+                turns[turn]["agents"][agent_id] = {
+                    "action": record.get("action", ""),
+                    "observation": record.get("result", ""),
+                }
+
+        # Convert to sorted list
+        trajectory = []
+        for turn_num in sorted(turns.keys()):
+            entry = turns[turn_num]
+            trajectory.append({
+                "turn": turn_num,
+                "agents": entry["agents"],
+                "subtasks_completed": entry["subtasks_completed"],
+            })
+
+        return trajectory
+
     def _save_calibration_result(self, task_data: Dict[str, Any], results: Dict[str, Any]) -> None:
         """Save calibration results to task JSON for dataset pass rate tracking."""
         from datetime import datetime
@@ -1216,12 +1258,17 @@ SUMMARY:"""
         elif hasattr(self.llm, 'generation_params'):
             model_name = getattr(self.llm.generation_params, 'model', 'unknown')
 
+        # Build trajectory from action history
+        action_history = results.get("action_history", [])
+        trajectory = self._build_trajectory(action_history)
+
         # Extract calibration data from results
         calibration_entry = {
             "passed": results.get("done", False),
             "tested_at": datetime.now().isoformat(),
             "steps": results.get("steps", 0),
             "percent_complete": results.get("evaluation", {}).get("percent_complete", 0.0),
+            "trajectory": trajectory,
         }
 
         # Update task data with calibration results
