@@ -473,10 +473,10 @@ class EMTOMBaseRunner(ABC):
                     action=action_name,
                     target=target,
                     result=stun_msg,
-                    success=False,
+                    success=True,
                 )
                 return {
-                    "success": False,
+                    "success": True,
                     "observation": stun_msg,
                     "skipped": True,
                     "stunned": True,
@@ -690,10 +690,10 @@ class EMTOMBaseRunner(ABC):
                         action=action_name,
                         target=target,
                         result=stun_msg,
-                        success=False,
+                        success=True,
                     )
                     results[uid] = {
-                        "success": False,
+                        "success": True,
                         "observation": stun_msg,
                         "skipped": True,
                         "stunned": True,
