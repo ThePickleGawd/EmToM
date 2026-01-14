@@ -1050,6 +1050,10 @@ SUMMARY:"""
         Allows file exploration and editing within allowed directories only.
         Allows command chaining (&&, ||, ;, |) but validates each sub-command.
         """
+        # Convert literal escape sequences to actual characters
+        # LLMs often output \n as literal backslash-n instead of actual newlines
+        command = command.replace("\\n", "\n").replace("\\t", "\t")
+
         # Block command substitution (dangerous - allows arbitrary code execution)
         dangerous_patterns = ["`", "$(", "${"]
         for pattern in dangerous_patterns:
