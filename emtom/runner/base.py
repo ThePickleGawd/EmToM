@@ -461,6 +461,26 @@ class EMTOMBaseRunner(ABC):
         from emtom.mechanics.handlers import apply_mechanics
 
         agent_id = f"agent_{uid}"
+        target = target or ""
+
+        # Skip action if agent is stunned
+        if self.game_manager:
+            stun_msg = self.game_manager.check_and_process_stun(agent_id)
+            if stun_msg:
+                self.event_log.log_action(
+                    step=self.get_sim_steps(),
+                    agent_id=agent_id,
+                    action=action_name,
+                    target=target,
+                    result=stun_msg,
+                    success=False,
+                )
+                return {
+                    "success": False,
+                    "observation": stun_msg,
+                    "skipped": True,
+                    "stunned": True,
+                }
 
         # 1. Check mechanics (doesn't modify state yet)
         mech_result = apply_mechanics(
@@ -659,6 +679,26 @@ class EMTOMBaseRunner(ABC):
         for uid, (action_name, target) in actions.items():
             agent_id = f"agent_{uid}"
             target = target or ""
+
+            # Skip action if agent is stunned
+            if self.game_manager:
+                stun_msg = self.game_manager.check_and_process_stun(agent_id)
+                if stun_msg:
+                    self.event_log.log_action(
+                        step=self.get_sim_steps(),
+                        agent_id=agent_id,
+                        action=action_name,
+                        target=target,
+                        result=stun_msg,
+                        success=False,
+                    )
+                    results[uid] = {
+                        "success": False,
+                        "observation": stun_msg,
+                        "skipped": True,
+                        "stunned": True,
+                    }
+                    continue
 
             # Check mechanics
             mech_result = apply_mechanics(
