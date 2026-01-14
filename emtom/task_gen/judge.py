@@ -3,9 +3,13 @@
 Category-aware Task Judge for EMTOM task validation.
 
 Evaluates tasks using category-specific criteria:
-- Cooperative: shared goals, agent interdependence, coordination requirements
-- Competitive: team opposition, balance, meaningful strategic choices
-- Mixed: main goal + hidden subgoals with tension
+- Cooperative: agent necessity, secrets, interdependence
+- Competitive: agent necessity, secrets, goal opposition
+- Mixed: agent necessity, secrets, subgoal tension
+
+Priority criteria (evaluated first, suggestions prioritized):
+- agent_necessity: Every agent must be indispensable
+- secret_relevance: Secrets must be required for task completion
 
 Uses a multi-LLM council (Claude Opus + GPT-5) to reduce bias.
 Both models must agree for a task to pass.
@@ -129,18 +133,44 @@ class BenchmarkRollout:
 # =============================================================================
 
 # Shared quality criteria (apply to ALL categories)
-SHARED_CRITERIA = ["narrative_consistency", "subtask_relevance", "mechanic_utilization", "trajectory_efficiency", "agent_necessity"]
+# Ordered by importance - agent design criteria first
+SHARED_CRITERIA = [
+    "agent_necessity",       # Every agent must be essential
+    "secret_relevance",      # Secrets must be useful and required
+    "narrative_consistency",
+    "subtask_relevance",
+    "mechanic_utilization",
+]
 
 # Category-specific criteria
 CATEGORY_CRITERIA = {
     "cooperative": SHARED_CRITERIA + ["task_interdependence"],
-    "competitive": SHARED_CRITERIA + ["goal_opposition", "team_balance"],
+    "competitive": SHARED_CRITERIA + ["goal_opposition"],
     "mixed": SHARED_CRITERIA + ["subgoal_tension"],
 }
 
 # Criteria descriptions for prompts
 CRITERIA_DESCRIPTIONS = {
-    # Shared quality criteria
+    # Core agent design criteria (most important)
+    "agent_necessity": {
+        "name": "Agent Necessity",
+        "description": "Is EVERY agent essential? Could the task work with fewer agents?",
+        "rubric": """0.0: One or more agents are completely idle or removable
+0.3: Some agents do trivial work that others could handle
+0.5: All agents participate but some are only marginally needed
+0.7: Most agents essential, one could theoretically be merged
+1.0: Every agent is indispensable - removing any would make task impossible""",
+    },
+    "secret_relevance": {
+        "name": "Secret Relevance",
+        "description": "Are agent secrets actually useful and required for task completion?",
+        "rubric": """0.0: Secrets restate global information or are completely useless
+0.3: Secrets provide minor flavor but aren't needed to complete the task
+0.5: Secrets are somewhat helpful but task could be solved without them
+0.7: Secrets provide important information, minor redundancy
+1.0: Each secret provides unique, essential information that agent must use to succeed""",
+    },
+    # Task quality criteria
     "narrative_consistency": {
         "name": "Narrative Consistency",
         "description": "Does the task description accurately describe what agents must do?",
@@ -167,24 +197,6 @@ CRITERIA_DESCRIPTIONS = {
 0.5: Mechanics add flavor but aren't essential
 0.7: Mechanics contribute meaningfully
 1.0: Listed mechanics are essential - task wouldn't work without them""",
-    },
-    "trajectory_efficiency": {
-        "name": "Trajectory Efficiency",
-        "description": "Does the golden trajectory take the optimal path without wasteful actions?",
-        "rubric": """0.0: Many wasteful actions (unnecessary navigation, redundant opens/closes)
-0.3: Several inefficient steps
-0.5: Some unnecessary actions but mostly efficient
-0.7: Minor inefficiencies only
-1.0: Every action serves a purpose - no wasted steps""",
-    },
-    "agent_necessity": {
-        "name": "Agent Necessity",
-        "description": "Is EVERY agent essential? Could the task work with fewer agents?",
-        "rubric": """0.0: One or more agents are completely idle or removable
-0.3: Some agents do trivial work that others could handle
-0.5: All agents participate but some are only marginally needed
-0.7: Most agents essential, one could theoretically be merged
-1.0: Every agent is indispensable - removing any would make task impossible""",
     },
     # Cooperative-specific
     "task_interdependence": {
@@ -351,21 +363,20 @@ The `required` field in subtasks determines ownership and win conditions:
 
 ## What Makes a Good Task
 
-**Information Asymmetry**: Each agent has UNIQUE knowledge via `agent_secrets` that others need.
-- Good: Agent 0 knows key location, Agent 1 knows target cabinet
-- Bad: All agents know everything, or information isn't needed
+**Every Agent Indispensable**: Removing ANY agent makes the task impossible.
+- Each agent must have unique capabilities, knowledge, or access
+- No idle agents or agents doing work others could handle
 
-**Forced Coordination**: Subtask dependencies require sharing discoveries through `Communicate`.
-- Good: Agent 1 must tell Agent 0 which cabinet to unlock
+**Secrets Drive the Task**: `agent_secrets` contain information the agent MUST use.
+- Secrets should NOT restate global information or be generic flavor text
+- Each secret enables actions only that agent can take
+- Good: "The key is hidden in drawer_12" → agent must retrieve it
+- Bad: "You are a helpful robot" → useless for task completion
+
+**Forced Coordination**: Subtask dependencies require `Communicate` to share discoveries.
+- Agents must exchange secret information to succeed
+- Good: Agent 1 knows location, must tell Agent 0 to unlock it
 - Bad: Agents work in parallel without needing to talk
-
-**Every Agent Essential**: Removing ANY agent should make task impossible.
-- Good: 3 agents each have 1 of 3 required components
-- Bad: 2 agents do real work while 1 just watches
-
-**DAG Structure**: Later subtasks depend on earlier ones across multiple agents.
-- Good: s3 depends on s1 (agent_0's work) AND s2 (agent_1's work)
-- Bad: Linear chain that one agent could complete alone
 
 ---
 
@@ -464,9 +475,13 @@ class Judge:
     Multi-LLM council judge for task validation.
 
     Evaluates tasks using category-specific criteria:
-    - Cooperative: 5 criteria (4 shared + task_interdependence)
-    - Competitive: 6 criteria (4 shared + goal_opposition + team_balance)
-    - Mixed: 5 criteria (4 shared + subgoal_tension)
+    - Cooperative: 6 criteria (5 shared + task_interdependence)
+    - Competitive: 6 criteria (5 shared + goal_opposition)
+    - Mixed: 6 criteria (5 shared + subgoal_tension)
+
+    Priority criteria (suggestions appear first):
+    - agent_necessity: Every agent must be essential
+    - secret_relevance: Secrets must be useful and required
 
     Both models must agree for a task to pass.
     """
@@ -821,6 +836,9 @@ The user specifically requested:
             suggestions=["Re-run evaluation"],
         )
 
+    # Priority criteria - suggestions for these appear first
+    PRIORITY_CRITERIA = ["agent_necessity", "secret_relevance"]
+
     def _aggregate(self, judgments: Dict[str, Judgment]) -> CouncilVerdict:
         """Aggregate judgments from multiple models."""
         # Check if all models pass
@@ -829,14 +847,21 @@ The user specifically requested:
         # Average overall scores
         avg_score = sum(j.overall_score for j in judgments.values()) / len(judgments)
 
-        # Merge suggestions (deduplicated)
-        all_suggestions = []
+        # Merge suggestions (deduplicated), prioritizing agent_necessity and secret_relevance
+        priority_suggestions = []
+        other_suggestions = []
         seen = set()
         for j in judgments.values():
             for s in j.suggestions:
                 if s not in seen:
                     seen.add(s)
-                    all_suggestions.append(s)
+                    # Check if this suggestion relates to priority criteria
+                    is_priority = any(crit in s.lower() for crit in self.PRIORITY_CRITERIA)
+                    if is_priority:
+                        priority_suggestions.append(s)
+                    else:
+                        other_suggestions.append(s)
+        all_suggestions = priority_suggestions + other_suggestions
 
         # Find disagreements
         disagreements = []

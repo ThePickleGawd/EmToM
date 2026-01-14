@@ -21,6 +21,8 @@ cd "$PROJECT_ROOT"
 PER_GPU=1
 MODEL="gpt-5.2"
 STEPS=20
+AGENTS_MIN=2
+AGENTS_MAX=10
 DRY_RUN=false
 
 # Colors
@@ -35,7 +37,7 @@ print_usage() {
     echo -e "${BOLD}Bulk EMTOM Exploration${NC}"
     echo ""
     echo "Runs exploration across all GPUs (1 process per GPU by default)"
-    echo "Each process explores a random scene independently"
+    echo "Each process explores a random scene with random agent count"
     echo ""
     echo "Usage: ./emtom/bulk_explore.sh [options]"
     echo ""
@@ -43,12 +45,16 @@ print_usage() {
     echo "  --per-gpu N      Processes per GPU (default: 1)"
     echo "  --model MODEL    LLM model (default: gpt-5.2)"
     echo "  --steps N        Exploration steps per process (default: 20)"
+    echo "  --agents N       Exact number of agents (default: random 2-10)"
+    echo "  --agents-min N   Minimum agents (default: 2)"
+    echo "  --agents-max N   Maximum agents (default: 10)"
     echo "  --dry-run        Show commands without executing"
     echo ""
     echo "Examples:"
-    echo "  ./emtom/bulk_explore.sh                   # 8 processes (1 per GPU)"
+    echo "  ./emtom/bulk_explore.sh                   # 8 processes, random 2-10 agents each"
+    echo "  ./emtom/bulk_explore.sh --agents 4        # All processes use 4 agents"
+    echo "  ./emtom/bulk_explore.sh --agents-min 2 --agents-max 5"
     echo "  ./emtom/bulk_explore.sh --per-gpu 2       # 16 processes"
-    echo "  ./emtom/bulk_explore.sh --steps 50        # More steps"
 }
 
 # Parse arguments
@@ -64,6 +70,19 @@ while [[ $# -gt 0 ]]; do
             ;;
         --steps)
             STEPS=$2
+            shift 2
+            ;;
+        --agents)
+            AGENTS_MIN=$2
+            AGENTS_MAX=$2
+            shift 2
+            ;;
+        --agents-min)
+            AGENTS_MIN=$2
+            shift 2
+            ;;
+        --agents-max)
+            AGENTS_MAX=$2
             shift 2
             ;;
         --dry-run)
@@ -104,6 +123,7 @@ echo -e "Processes per GPU:  ${GREEN}$PER_GPU${NC}"
 echo -e "Total processes:    ${GREEN}$TOTAL_PROCESSES${NC}"
 echo -e "Model:              ${GREEN}$MODEL${NC}"
 echo -e "Steps per process:  ${GREEN}$STEPS${NC}"
+echo -e "Agents:             ${GREEN}$AGENTS_MIN-$AGENTS_MAX${NC} (random per process)"
 echo -e "Log directory:      ${CYAN}$LOG_DIR${NC}"
 echo "=============================================="
 echo ""
@@ -116,25 +136,28 @@ process_idx=0
 
 for gpu in $(seq 0 $((NUM_GPUS - 1))); do
     for slot in $(seq 0 $((PER_GPU - 1))); do
-        log_file="$LOG_DIR/gpu${gpu}_slot${slot}.log"
+        # Random agent count in range [AGENTS_MIN, AGENTS_MAX]
+        num_agents=$((AGENTS_MIN + RANDOM % (AGENTS_MAX - AGENTS_MIN + 1)))
+        log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${num_agents}agents.log"
 
         if [ "$DRY_RUN" = true ]; then
-            echo -e "${YELLOW}[DRY-RUN]${NC} GPU $gpu, Slot $slot"
-            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh explore --model $MODEL --steps $STEPS"
+            echo -e "${YELLOW}[DRY-RUN]${NC} GPU $gpu, Slot $slot, Agents: $num_agents"
+            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh explore --model $MODEL --steps $STEPS --agents $num_agents"
         else
-            echo -e "${GREEN}Starting${NC} GPU $gpu, Slot $slot -> $log_file"
+            echo -e "${GREEN}Starting${NC} GPU $gpu, Slot $slot, Agents: ${CYAN}$num_agents${NC} -> $log_file"
 
             CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh explore \
                 --model "$MODEL" \
                 --steps "$STEPS" \
+                --agents "$num_agents" \
                 > "$log_file" 2>&1 &
 
             pid=$!
             PIDS+=($pid)
-            PROCESS_INFO+=("GPU$gpu:slot$slot:$pid")
+            PROCESS_INFO+=("GPU$gpu:${num_agents}agents:$pid")
         fi
 
-        ((process_idx++))
+        ((++process_idx))
     done
 done
 

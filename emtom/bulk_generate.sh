@@ -23,8 +23,8 @@ CATEGORIES=("cooperative" "competitive" "mixed")
 # Defaults
 PER_GPU=3
 MODEL="gpt-5.2"
-NUM_TASKS=1
-ITERATIONS_PER_TASK=100  # Max iterations per task (total = this * num-tasks)
+NUM_TASKS=3
+ITERATIONS_PER_TASK=300  # Max iterations per task (total = this * num-tasks)
 DRY_RUN=false
 
 # Colors
