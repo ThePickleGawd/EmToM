@@ -1187,11 +1187,14 @@ SUMMARY:"""
                 # Don't include full traces in the JSON response (too large)
                 results["planner_traces"] = f"See {trace_file}"
 
+            # Save calibration results to task JSON for dataset tracking (needs action_history)
+            self._save_calibration_result(task_data, results)
+
+            # Remove action_history from results before merging (too large for agent context)
+            results.pop("action_history", None)
+
             # Benchmark ran successfully - merge results with validation
             validation_result.update(results)
-
-            # Save calibration results to task JSON for dataset tracking
-            self._save_calibration_result(task_data, results)
 
             # Mark test as passed (for submit_task gate)
             self.last_test_passed = True
@@ -1790,9 +1793,9 @@ SUMMARY:"""
                 except Exception:
                     pass
 
-            # Remove full traces from result (agent reads files instead via bash)
+            # Remove full planner traces from result (agent reads files instead via bash)
+            # Keep action_history for calibration tracking - it will be removed after saving
             result.pop("planner_traces", None)
-            result.pop("action_history", None)
 
             return result
 
