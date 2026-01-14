@@ -40,7 +40,7 @@ nn_rearrange:
       threshold_for_ao_state         : 0.01  # Threshold to determine whether the receptacle is closed
       force_end_on_timeout       : True
       pick_distance              : 0.4
-      grasping_distance          : 2.0
+      grasping_distance          : 4.0
 
     place_skill_config:
       name                       : 'Place'
