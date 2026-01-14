@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from habitat_llm.sims.collaboration_sim import CollaborationSim
     from habitat_llm.world_model import Graph
     from emtom.task_gen.task_generator import GeneratedTask
+    from emtom.state.manager import GameStateManager
 
 
 @dataclass
@@ -52,6 +53,8 @@ class CompetitiveResult:
     team_status: Dict[str, bool]  # team_id -> completed all their subtasks
     team_progress: Dict[str, float]  # team_id -> percent of subtasks completed
     proposition_status: Dict[str, bool] = field(default_factory=dict)
+    in_progress: bool = False  # True if episode hasn't terminated yet
+    termination_reason: Optional[str] = None  # Why episode ended
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -59,6 +62,8 @@ class CompetitiveResult:
             "team_status": self.team_status,
             "team_progress": self.team_progress,
             "proposition_status": self.proposition_status,
+            "in_progress": self.in_progress,
+            "termination_reason": self.termination_reason,
         }
 
 
@@ -86,7 +91,10 @@ PARTNR_PREDICATES = {
 }
 
 # EMTOM-specific predicates (not in PARTNR)
-EMTOM_PREDICATES = {"is_open", "is_closed", "is_held_by"}
+EMTOM_PREDICATES = {"is_open", "is_closed", "is_held_by", "has_at_least", "has_most"}
+
+# Predicates that require GameStateManager instead of simulator
+GAME_STATE_PREDICATES = {"has_at_least", "has_most"}
 
 
 def is_open(
@@ -153,6 +161,112 @@ def is_held_by(
             continue
 
     return PropositionResult(False, {"object_handles": object_handles, "agent_ids": agent_ids})
+
+
+def has_at_least(
+    game_manager: "GameStateManager",
+    entity: str,
+    item_type: str,
+    count: int,
+) -> PropositionResult:
+    """
+    Check if an agent or team has at least N items of a given type.
+
+    Use this for cooperative tasks where agents need to collect a certain
+    number of items together.
+
+    Args:
+        game_manager: The game state manager
+        entity: Agent ID (e.g., "agent_0") or team ID (e.g., "team_0")
+        item_type: Base item type (e.g., "item_gold_coin")
+        count: Minimum number required
+
+    Returns:
+        PropositionResult indicating if condition is met
+    """
+    is_team = entity.startswith("team_")
+
+    if is_team:
+        actual = game_manager.count_team_items_by_type(entity, item_type)
+    else:
+        actual = game_manager.count_items_by_type(entity, item_type)
+
+    return PropositionResult(
+        actual >= count,
+        {
+            "entity": entity,
+            "item_type": item_type,
+            "count": actual,
+            "required": count,
+            "satisfied": actual >= count,
+        }
+    )
+
+
+def has_most(
+    game_manager: "GameStateManager",
+    entity: str,
+    item_type: str,
+) -> PropositionResult:
+    """
+    Check if an agent or team has more items of a type than all others.
+
+    Use this for competitive tasks where the winner is whoever collects
+    the most items. This predicate should only be evaluated at episode
+    termination (handled by CategoryTaskEvaluator).
+
+    Args:
+        game_manager: The game state manager
+        entity: Agent ID (e.g., "agent_0") or team ID (e.g., "team_0")
+        item_type: Base item type (e.g., "item_gold_coin")
+
+    Returns:
+        PropositionResult indicating if entity has the most items.
+        Returns False on ties (neither side wins).
+    """
+    is_team = entity.startswith("team_")
+
+    if is_team:
+        my_count = game_manager.count_team_items_by_type(entity, item_type)
+        others = game_manager.get_all_team_ids()
+    else:
+        my_count = game_manager.count_items_by_type(entity, item_type)
+        others = game_manager.get_all_agent_ids()
+
+    # Compare against all others
+    for other in others:
+        if other == entity:
+            continue
+
+        if is_team:
+            other_count = game_manager.count_team_items_by_type(other, item_type)
+        else:
+            other_count = game_manager.count_items_by_type(other, item_type)
+
+        # Tie or beaten = not the winner
+        if other_count >= my_count:
+            status = "tied" if other_count == my_count else "lost"
+            return PropositionResult(
+                False,
+                {
+                    "entity": entity,
+                    "item_type": item_type,
+                    "my_count": my_count,
+                    "status": status,
+                    "beaten_by": other,
+                    "their_count": other_count,
+                }
+            )
+
+    return PropositionResult(
+        True,
+        {
+            "entity": entity,
+            "item_type": item_type,
+            "count": my_count,
+            "status": "won",
+        }
+    )
 
 
 class TaskEvaluator:
@@ -301,8 +415,8 @@ class CategoryTaskEvaluator:
     Category-aware task evaluator.
 
     Evaluates tasks based on their category:
-    - Cooperative: Check required=True subtasks
-    - Competitive: Check required="team_X" subtasks, determine winner
+    - Cooperative: Check required=True subtasks (evaluated each step)
+    - Competitive: Check required="team_X" subtasks, determine winner (evaluated at termination)
     - Mixed: Check required=True for main goal, required="agent_X" for subgoals
     """
 
@@ -313,10 +427,12 @@ class CategoryTaskEvaluator:
         task: "GeneratedTask",
         sim: "CollaborationSim",
         world_graph: Optional["Graph"] = None,
+        game_manager: Optional["GameStateManager"] = None,
     ):
         self.task = task
         self.sim = sim
         self.world_graph = world_graph
+        self.game_manager = game_manager
 
     def _resolve_handle(self, name: str) -> str:
         """Resolve name to simulator handle via world graph."""
@@ -344,6 +460,10 @@ class CategoryTaskEvaluator:
 
         if property_name not in self.PREDICATES:
             return PropositionResult(False, {"error": f"Unknown predicate: {property_name}"})
+
+        # Handle game state predicates (require GameStateManager, not simulator)
+        if property_name in GAME_STATE_PREDICATES:
+            return self._check_game_state_predicate(prop)
 
         predicate_fn = self._get_predicate_fn(property_name)
         entity_handle = self._resolve_handle(entity) if entity else None
@@ -383,6 +503,34 @@ class CategoryTaskEvaluator:
             return PropositionResult(not result.is_satisfied, result.info)
 
         return result
+
+    def _check_game_state_predicate(self, prop: Dict[str, Any]) -> PropositionResult:
+        """Check a game state predicate (requires GameStateManager)."""
+        if not self.game_manager:
+            return PropositionResult(False, {"error": "GameStateManager required for game state predicates"})
+
+        entity = prop.get("entity")
+        property_name = prop.get("property")
+        target = prop.get("target")  # item_type for has_most/has_at_least
+        value = prop.get("value")  # count for has_at_least
+
+        if property_name == "has_at_least":
+            # entity: agent_id or team_id
+            # target: item_type
+            # value: count required
+            if not target:
+                return PropositionResult(False, {"error": "has_at_least requires 'target' (item_type)"})
+            count = value if isinstance(value, int) else 1
+            return has_at_least(self.game_manager, entity, target, count)
+
+        elif property_name == "has_most":
+            # entity: agent_id or team_id
+            # target: item_type
+            if not target:
+                return PropositionResult(False, {"error": "has_most requires 'target' (item_type)"})
+            return has_most(self.game_manager, entity, target)
+
+        return PropositionResult(False, {"error": f"Unknown game state predicate: {property_name}"})
 
     def evaluate(self):
         """Evaluate based on task category."""
@@ -434,7 +582,12 @@ class CategoryTaskEvaluator:
         )
 
     def _evaluate_competitive(self) -> CompetitiveResult:
-        """Evaluate competitive task: first team to complete all their subtasks wins."""
+        """
+        Evaluate competitive task: determine winner based on team subtasks.
+
+        For predicates like has_most, evaluation only happens at episode termination.
+        If the episode hasn't terminated yet, returns in_progress=True.
+        """
         teams = self.task.get_all_teams()
 
         if not teams:
@@ -444,6 +597,24 @@ class CategoryTaskEvaluator:
                 team_status={},
                 team_progress={},
                 proposition_status={},
+            )
+
+        # Check if episode has terminated (required for has_most predicates)
+        is_terminated = False
+        termination_reason = None
+        if self.game_manager:
+            is_terminated = self.game_manager.state.is_terminated
+            termination_reason = self.game_manager.state.termination_reason
+
+        # If not terminated, return in_progress result
+        if not is_terminated:
+            return CompetitiveResult(
+                winner=None,
+                team_status={team_id: False for team_id in teams},
+                team_progress={team_id: 0.0 for team_id in teams},
+                proposition_status={},
+                in_progress=True,
+                termination_reason=None,
             )
 
         proposition_status = {}
@@ -485,6 +656,8 @@ class CategoryTaskEvaluator:
             team_status=team_status,
             team_progress=team_progress,
             proposition_status=proposition_status,
+            in_progress=False,
+            termination_reason=termination_reason,
         )
 
     def _evaluate_mixed(self) -> MixedResult:
@@ -519,13 +692,20 @@ def evaluate_category_task(
     task: "GeneratedTask",
     sim: "CollaborationSim",
     world_graph: Optional["Graph"] = None,
+    game_manager: Optional["GameStateManager"] = None,
 ):
     """
     Evaluate a task based on its category.
+
+    Args:
+        task: The generated task to evaluate
+        sim: Habitat simulator for physical state predicates
+        world_graph: Optional world graph for handle resolution
+        game_manager: GameStateManager for game state predicates (has_most, has_at_least)
 
     Returns:
     - EvaluationResult for cooperative tasks
     - CompetitiveResult for competitive tasks
     - MixedResult for mixed tasks
     """
-    return CategoryTaskEvaluator(task, sim, world_graph).evaluate()
+    return CategoryTaskEvaluator(task, sim, world_graph, game_manager).evaluate()

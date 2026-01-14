@@ -176,6 +176,16 @@ class GameStateManager:
                 for prop_name, prop_value in properties.items():
                     state = state.set_object_property(object_id, prop_name, prop_value)
 
+        # Load termination condition (for competitive tasks)
+        termination = task_data.get("termination")
+        if termination:
+            state.termination_condition = termination
+
+        # Load team membership (defaults to team_N -> [agent_N] if not specified)
+        team_members = task_data.get("team_members", {})
+        if team_members:
+            state.team_members = team_members
+
         self.state = state
 
         # Store success condition for evaluation
@@ -600,6 +610,85 @@ class GameStateManager:
         self.state = new_state
         return new_state, []
 
+    def check_termination(self) -> bool:
+        """
+        Check if episode should terminate based on termination condition.
+
+        Call this after each step. For competitive tasks, predicates like
+        has_most are only evaluated after termination.
+
+        Returns:
+            True if episode is terminated (or just became terminated)
+        """
+        if self.state.is_terminated:
+            return True
+
+        condition = self.state.termination_condition
+        if not condition:
+            return False
+
+        term_type = condition.get("type")
+        value = condition.get("value")
+
+        if term_type == "max_steps":
+            if self.state.current_step >= value:
+                self.state.is_terminated = True
+                self.state.termination_reason = f"Reached step limit ({value})"
+                return True
+
+        elif term_type == "all_collected":
+            # value is the item_type to check (e.g., "item_gold_coin")
+            item_type = value
+            if not item_type.startswith("item_"):
+                item_type = f"item_{item_type}"
+
+            # Count total defined items of this type
+            total_defined = sum(
+                1 for item_id in self.state.item_definitions
+                if ItemRegistry.get_base_id(item_id) == item_type
+            )
+
+            # Count total collected across all agents
+            total_collected = sum(
+                self.count_items_by_type(agent_id, item_type)
+                for agent_id in self.state.agent_inventory.keys()
+            )
+
+            if total_collected >= total_defined and total_defined > 0:
+                self.state.is_terminated = True
+                self.state.termination_reason = f"All {item_type} collected ({total_collected}/{total_defined})"
+                return True
+
+        elif term_type == "any_at_location":
+            # value is the room/location to check
+            room = value
+            for agent_id, agent_room in self.state.agent_rooms.items():
+                if agent_room == room:
+                    self.state.is_terminated = True
+                    self.state.termination_reason = f"{agent_id} reached {room}"
+                    return True
+
+        elif term_type == "all_at_location":
+            # value is the room/location to check
+            room = value
+            all_agents = list(self.state.agent_rooms.keys())
+            if all_agents and all(
+                self.state.agent_rooms.get(aid) == room for aid in all_agents
+            ):
+                self.state.is_terminated = True
+                self.state.termination_reason = f"All agents reached {room}"
+                return True
+
+        return False
+
+    def is_terminated(self) -> bool:
+        """Check if episode is terminated."""
+        return self.state.is_terminated
+
+    def get_termination_reason(self) -> Optional[str]:
+        """Get the reason for termination, if terminated."""
+        return self.state.termination_reason
+
     def check_goals(self, state: Optional[EMTOMGameState] = None) -> List[Goal]:
         """
         Check which goals have been completed.
@@ -889,6 +978,66 @@ class GameStateManager:
             if item:
                 items.append(item)
         return items
+
+    def count_items_by_type(self, agent_id: str, item_type: str) -> int:
+        """
+        Count how many items of a base type an agent has.
+
+        Args:
+            agent_id: Agent to count for
+            item_type: Base item type (e.g., "item_gold_coin" or "gold_coin")
+
+        Returns:
+            Number of items of that type in agent's inventory
+        """
+        # Normalize item_type to include "item_" prefix
+        if not item_type.startswith("item_"):
+            item_type = f"item_{item_type}"
+
+        count = 0
+        for item_id in self.state.agent_inventory.get(agent_id, set()):
+            base_id = ItemRegistry.get_base_id(item_id)
+            if base_id == item_type:
+                count += 1
+        return count
+
+    def count_team_items_by_type(self, team_id: str, item_type: str) -> int:
+        """
+        Count how many items of a base type a team has (sum across all team members).
+
+        Args:
+            team_id: Team to count for (e.g., "team_0")
+            item_type: Base item type (e.g., "item_gold_coin")
+
+        Returns:
+            Total items of that type across all team members
+        """
+        # Get team members (default: team_N -> [agent_N])
+        team_members = self.state.team_members.get(team_id)
+        if team_members is None:
+            # Default mapping: team_0 -> agent_0, team_1 -> agent_1
+            agent_num = team_id.replace("team_", "")
+            team_members = [f"agent_{agent_num}"]
+
+        total = 0
+        for agent_id in team_members:
+            total += self.count_items_by_type(agent_id, item_type)
+        return total
+
+    def get_all_agent_ids(self) -> List[str]:
+        """Get list of all agent IDs that have inventory entries."""
+        return list(self.state.agent_inventory.keys())
+
+    def get_all_team_ids(self) -> List[str]:
+        """
+        Get list of all team IDs.
+
+        Returns configured teams, or defaults to team_0, team_1 based on agents.
+        """
+        if self.state.team_members:
+            return list(self.state.team_members.keys())
+        # Default: one team per agent
+        return [f"team_{i}" for i in range(len(self.state.agent_inventory))]
 
     def get_inventory_text(self, agent_id: str) -> str:
         """

@@ -119,6 +119,58 @@ class Radio(BaseItem):
         return False, "Use Communicate[message] instead of Use for the radio."
 
 
+@register_item("item_gold_coin")
+class GoldCoin(BaseItem):
+    """
+    A collectible gold coin.
+
+    Cannot be used directly - purely for collection and scoring.
+    Hidden in containers, found via Search action.
+
+    Common use case: Competitive tasks where agents/teams race to collect
+    the most coins. Use has_most predicate for competitive win conditions,
+    or has_at_least for cooperative collection goals.
+
+    Example task setup:
+        items: [
+            {"item_id": "item_gold_coin_1", "base_id": "item_gold_coin", "hidden_in": "cabinet_1"},
+            {"item_id": "item_gold_coin_2", "base_id": "item_gold_coin", "hidden_in": "drawer_3"},
+        ]
+        subtasks: [
+            {"success_condition": {"entity": "team_0", "property": "has_most", "target": "item_gold_coin"}}
+        ]
+    """
+
+    name = "Gold Coin"
+    description = (
+        "A shiny gold coin. Collect as many as you can! "
+        "Commonly used in competitive tasks where the goal is to collect more coins than the opposing team."
+    )
+    consumable = False
+    use_args = []  # No use action - just for collection
+
+    def on_use(
+        self,
+        game_manager: "GameStateManager",
+        agent_id: str,
+        args: Optional[List[str]] = None,
+    ) -> Tuple[bool, str]:
+        """Gold coins cannot be used directly."""
+        return False, "Gold coins cannot be used directly. They're for collecting!"
+
+    def on_acquire(
+        self,
+        game_manager: "GameStateManager",
+        agent_id: str,
+    ) -> str:
+        """Report coin acquisition with current count."""
+        count = game_manager.count_items_by_type(agent_id, "item_gold_coin")
+        msg = f"Found a Gold Coin! (You now have {count})"
+        if self.task_info:
+            msg += f" {self.task_info}"
+        return msg
+
+
 @register_item("item_oracle_crystal")
 class OracleCrystal(BaseItem):
     """

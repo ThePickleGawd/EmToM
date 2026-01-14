@@ -129,6 +129,18 @@ class EMTOMGameState:
     # Maps item_id -> item data dict (stored as dict for serialization)
     item_definitions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
+    # === Team membership ===
+    # Maps team_id -> list of agent_ids (e.g., "team_0" -> ["agent_0"])
+    # If not set, defaults to team_N containing agent_N
+    team_members: Dict[str, List[str]] = field(default_factory=dict)
+
+    # === Termination (for competitive tasks) ===
+    # Defines when episode ends: {"type": "max_steps", "value": 30}
+    # Types: "max_steps", "all_collected", "any_at_location", "all_at_location"
+    termination_condition: Optional[Dict[str, Any]] = None
+    is_terminated: bool = False
+    termination_reason: Optional[str] = None
+
     def get_object_property(self, obj_id: str, prop: str, default: Any = None) -> Any:
         """Get a custom property for an object."""
         return self.object_properties.get(obj_id, {}).get(prop, default)
@@ -225,6 +237,12 @@ class EMTOMGameState:
             },
             # Coordination mechanics state
             "hidden_agendas": self.hidden_agendas,
+            # Team membership
+            "team_members": self.team_members,
+            # Termination
+            "termination_condition": self.termination_condition,
+            "is_terminated": self.is_terminated,
+            "termination_reason": self.termination_reason,
         }
 
     @classmethod
@@ -266,6 +284,12 @@ class EMTOMGameState:
         }
         # Coordination mechanics state
         state.hidden_agendas = data.get("hidden_agendas", {})
+        # Team membership
+        state.team_members = data.get("team_members", {})
+        # Termination
+        state.termination_condition = data.get("termination_condition")
+        state.is_terminated = data.get("is_terminated", False)
+        state.termination_reason = data.get("termination_reason")
         return state
 
     def to_json(self) -> str:
