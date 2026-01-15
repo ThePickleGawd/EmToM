@@ -122,10 +122,11 @@ class Radio(BaseItem):
 @register_item("item_stun_gun")
 class StunGun(BaseItem):
     """
-    A device that grants the Stun action.
+    A device that grants the Stun action for competitive advantage.
 
-    When obtained, agent can use Stun[agent_id] to make target skip their turn.
-    Similar to how Radio grants Communicate.
+    Best used in competitive and mixed game modes where agents may have
+    conflicting goals. Stunning an opponent can help you reach objectives
+    first or prevent them from interfering with your plans.
 
     The stun effect:
     - Target agent's next action is skipped
@@ -141,15 +142,15 @@ class StunGun(BaseItem):
 
     name = "Stun Gun"
     description = (
-        "A stun device. Grants Stun[agent_id] action when held. "
-        "Target agent skips their next turn. Must be in the same room as target."
+        "A tactical device for competitive scenarios. Grants Stun[agent_id] action when held. "
+        "Target agent skips their next turn, giving you a strategic advantage."
     )
     consumable = False
     use_args = []  # Uses granted action instead
 
     # Grants Stun action
     grants_action = "Stun"
-    action_description = "Stun[agent_id]: Target agent skips their next turn. Must be in same room."
+    action_description = "Stun[agent_id]: Target agent skips their next turn. Useful for gaining advantage in competitive scenarios."
 
     def on_acquire(
         self,

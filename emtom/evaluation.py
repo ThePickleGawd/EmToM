@@ -91,10 +91,10 @@ PARTNR_PREDICATES = {
 }
 
 # EMTOM-specific predicates (not in PARTNR)
-EMTOM_PREDICATES = {"is_open", "is_closed", "is_held_by", "has_at_least", "has_most", "is_stunned"}
+EMTOM_PREDICATES = {"is_open", "is_closed", "is_held_by", "has_at_least", "has_most"}
 
 # Predicates that require GameStateManager instead of simulator
-GAME_STATE_PREDICATES = {"has_at_least", "has_most", "is_stunned"}
+GAME_STATE_PREDICATES = {"has_at_least", "has_most"}
 
 
 def is_open(
@@ -265,33 +265,6 @@ def has_most(
             "item_type": item_type,
             "count": my_count,
             "status": "won",
-        }
-    )
-
-
-def is_stunned(
-    game_manager: "GameStateManager",
-    agent_id: str,
-) -> PropositionResult:
-    """
-    Check if an agent is currently stunned.
-
-    Args:
-        game_manager: The game state manager
-        agent_id: Agent ID to check (e.g., "agent_0")
-
-    Returns:
-        PropositionResult indicating if agent is stunned
-    """
-    stunned = game_manager.is_agent_stunned(agent_id)
-    turns_remaining = game_manager.get_stun_turns_remaining(agent_id)
-
-    return PropositionResult(
-        stunned,
-        {
-            "agent": agent_id,
-            "is_stunned": stunned,
-            "turns_remaining": turns_remaining,
         }
     )
 
@@ -556,14 +529,6 @@ class CategoryTaskEvaluator:
             if not target:
                 return PropositionResult(False, {"error": "has_most requires 'target' (item_type)"})
             return has_most(self.game_manager, entity, target)
-
-        elif property_name == "is_stunned":
-            # entity: agent_id
-            result = is_stunned(self.game_manager, entity)
-            # Handle value=False (checking if NOT stunned)
-            if value is False:
-                return PropositionResult(not result.is_satisfied, result.info)
-            return result
 
         return PropositionResult(False, {"error": f"Unknown game state predicate: {property_name}"})
 

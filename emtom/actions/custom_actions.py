@@ -366,6 +366,10 @@ class StunAction(EMTOMAction):
     """
     Stun another agent, causing them to skip their next turn.
 
+    This is a strategic action for competitive and mixed game modes. Use it to
+    gain an advantage over opponents - for example, stunning an agent who is
+    about to grab a contested item, or preventing interference with your plans.
+
     Requirements:
     - Agent must have StunGun in inventory OR Stun in base action space
     - Must be in the same room as target
@@ -379,6 +383,7 @@ class StunAction(EMTOMAction):
     action_name = "Stun"
     action_description = (
         "Stun[agent_id]: Stun another agent, causing them to skip their next turn. "
+        "Useful for gaining a strategic advantage in competitive scenarios. "
         "Must be in the same room as target. Example: Stun[agent_1]"
     )
 
