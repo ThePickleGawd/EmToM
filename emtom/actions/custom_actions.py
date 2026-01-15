@@ -413,19 +413,23 @@ class StunAction(EMTOMAction):
                 observation="You cannot stun yourself.",
             )
 
-        # Check if target is a valid agent
+        # Get state and determine valid agents
         state = self._game_manager.get_state()
-        if target_agent not in state.agent_rooms and target_agent not in state.agent_inventory:
-            # Try to find agent in any tracking
-            valid_agents = set(state.agent_rooms.keys()) | set(state.agent_inventory.keys())
-            if not valid_agents:
-                valid_agents = {"agent_0", "agent_1"}  # Default agents
+
+        # Build valid agents from multiple sources
+        valid_agents = set(state.agent_rooms.keys()) | set(state.agent_inventory.keys())
+        if not valid_agents:
+            # Default fallback - assume standard 2-agent setup
+            valid_agents = {"agent_0", "agent_1"}
+
+        # Check if target is a valid agent
+        if target_agent not in valid_agents:
             return ActionResult(
                 success=False,
                 observation=f"Unknown agent: {target_agent}. Valid agents: {', '.join(sorted(valid_agents))}",
             )
 
-        # Check same room requirement
+        # Check same room requirement (skip if room info not available)
         my_room = state.agent_rooms.get(agent_id)
         their_room = state.agent_rooms.get(target_agent)
 

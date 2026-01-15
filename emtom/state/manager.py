@@ -240,39 +240,87 @@ class GameStateManager:
             return state
 
         try:
-            world_graph = self.env.world_graph
+            world_graph_dict = self.env.world_graph
         except AttributeError:
             return state
 
-        # Sync agent positions and rooms
+        # Sync agent positions and rooms from WorldGraph objects
         agent_positions = {}
         agent_rooms = {}
 
-        for agent in world_graph.get("agents", []):
-            agent_id = agent.get("id") or agent.get("name")
-            if agent_id:
-                pos = agent.get("position")
-                if pos:
-                    agent_positions[agent_id] = tuple(pos) if isinstance(pos, list) else pos
-                room = agent.get("room") or agent.get("location")
-                if room:
-                    agent_rooms[agent_id] = room
+        # world_graph_dict is Dict[int, WorldGraph] - use first available graph to get all agents
+        wg = None
+        for uid, graph in world_graph_dict.items():
+            if graph is not None:
+                wg = graph
+                break
 
-        # Sync object states
+        if wg is not None:
+            try:
+                agents = wg.get_agents()
+                for agent_node in agents:
+                    # Get agent name from node
+                    agent_name = agent_node.name if hasattr(agent_node, 'name') else None
+                    if not agent_name:
+                        continue
+
+                    # Normalize to agent_N format
+                    if agent_name.startswith("agent_"):
+                        agent_id = agent_name
+                    elif agent_name.isdigit():
+                        agent_id = f"agent_{agent_name}"
+                    else:
+                        # Try to extract number or use as-is
+                        agent_id = agent_name
+
+                    # Get position if available
+                    if hasattr(agent_node, 'position'):
+                        agent_positions[agent_id] = agent_node.position
+
+                    # Get room for this agent
+                    try:
+                        rooms = wg.get_room_for_entity(agent_node)
+                        if rooms and len(rooms) > 0:
+                            room_node = rooms[0]
+                            room_name = room_node.name if hasattr(room_node, 'name') else str(room_node)
+                            agent_rooms[agent_id] = room_name
+                    except (ValueError, AttributeError):
+                        pass
+            except (ValueError, AttributeError):
+                # WorldGraph might not have agents yet
+                pass
+
+        # Sync object states from entities in world graph
         object_states = {}
         entities = []
 
-        for entity in world_graph.get("entities", []):
-            entity_id = entity.get("id") or entity.get("name")
-            entities.append(entity)
+        for uid, wg in world_graph_dict.items():
+            if wg is None:
+                continue
+            try:
+                # Get all object nodes from the graph
+                objects = wg.get_all_objects() if hasattr(wg, 'get_all_objects') else []
+                for obj_node in objects:
+                    entity_id = obj_node.name if hasattr(obj_node, 'name') else str(obj_node)
+                    entity_dict = {"id": entity_id, "name": entity_id}
 
-            if entity_id:
-                states = {}
-                for key, value in entity.items():
-                    if key.startswith("is_"):
-                        states[key] = value
-                if states:
-                    object_states[entity_id] = states
+                    # Extract is_* states
+                    states = {}
+                    for attr in dir(obj_node):
+                        if attr.startswith("is_") and not callable(getattr(obj_node, attr, None)):
+                            try:
+                                states[attr] = getattr(obj_node, attr)
+                            except:
+                                pass
+                    if states:
+                        object_states[entity_id] = states
+                        entity_dict.update(states)
+
+                    entities.append(entity_dict)
+            except (ValueError, AttributeError):
+                pass
+            # Only need to process one agent's world graph for entities
+            break
 
         new_state = copy.copy(state)
         new_state.agent_positions = agent_positions
