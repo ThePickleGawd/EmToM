@@ -91,8 +91,10 @@ class BenchmarkRunner(EMTOMBaseRunner):
     def _task_to_mechanics_dict(self, task: "GeneratedTask") -> Dict[str, Any]:
         """Convert GeneratedTask to task data for GameStateManager."""
         result = {}
+        if task.active_mechanics:
+            result["active_mechanics"] = task.active_mechanics
         if task.mechanic_bindings:
-            result["mechanics"] = [
+            result["mechanic_bindings"] = [
                 {"mechanic_type": b.mechanic_type, **b.to_dict()}
                 for b in task.mechanic_bindings
             ]

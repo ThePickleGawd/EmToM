@@ -113,9 +113,10 @@ class EMTOMBaseRunner(ABC):
         if task_data is not None:
             # Task mode: use only the mechanics defined in the task
             self.game_manager.initialize_from_task(task_data)
-            mechanics_count = len(task_data.get("mechanics", []))
-            if mechanics_count > 0:
-                print(f"[EMTOMBaseRunner] Loaded mechanics from task: {mechanics_count} bindings")
+            bindings = task_data.get("mechanic_bindings", task_data.get("mechanics", []))
+            active = task_data.get("active_mechanics", [])
+            if bindings or active:
+                print(f"[EMTOMBaseRunner] Loaded mechanics: {active} ({len(bindings)} bindings)")
             else:
                 print("[EMTOMBaseRunner] Task has no mechanics defined")
         else:

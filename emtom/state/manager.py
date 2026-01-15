@@ -99,8 +99,9 @@ class GameStateManager:
         state = EMTOMGameState()
 
         # Set active mechanics from bindings
-        mechanics = task_data.get("mechanics", [])
-        state.active_mechanics = []
+        # Support both "mechanics" (old) and "mechanic_bindings" (new) field names
+        mechanics = task_data.get("mechanic_bindings", task_data.get("mechanics", []))
+        state.active_mechanics = task_data.get("active_mechanics", []).copy()
         state.mechanic_bindings = mechanics
 
         for binding in mechanics:

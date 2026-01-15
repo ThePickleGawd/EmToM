@@ -151,31 +151,44 @@ class SuccessCondition:
 @dataclass
 class MechanicBinding:
     """Specifies how a mechanic is bound to scene objects."""
-    mechanic_type: str  # "inverse_state", "remote_control", "state_mirroring", "conditional_unlock", etc.
+    mechanic_type: str  # "inverse_state", "remote_control", "state_mirroring", "conditional_unlock", "room_restriction", etc.
     trigger_object: Optional[str] = None  # Object that triggers (optional - some mechanics use other keys)
     target_object: Optional[str] = None  # For remote_control/state_mirroring: the affected object
     target_state: Optional[str] = None  # State being affected (e.g., "is_open")
     count: Optional[int] = None  # Reserved for future use
+    # room_restriction mechanic fields
+    restricted_rooms: Optional[List[str]] = None  # Rooms agents cannot enter
+    for_agents: Optional[List[str]] = None  # Which agents are restricted
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "mechanic_type": self.mechanic_type,
-            "trigger_object": self.trigger_object,
-            "target_object": self.target_object,
-            "target_state": self.target_state,
-            "count": self.count,
         }
+        # Only include non-None fields
+        if self.trigger_object is not None:
+            result["trigger_object"] = self.trigger_object
+        if self.target_object is not None:
+            result["target_object"] = self.target_object
+        if self.target_state is not None:
+            result["target_state"] = self.target_state
+        if self.count is not None:
+            result["count"] = self.count
+        if self.restricted_rooms is not None:
+            result["restricted_rooms"] = self.restricted_rooms
+        if self.for_agents is not None:
+            result["for_agents"] = self.for_agents
+        return result
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MechanicBinding":
-        # trigger_object is optional - some mechanics use different keys
-        # (e.g., location_change uses object_id, container_swap uses container_a/b)
         return cls(
             mechanic_type=data["mechanic_type"],
-            trigger_object=data.get("trigger_object"),  # Optional for some mechanics
+            trigger_object=data.get("trigger_object"),
             target_object=data.get("target_object"),
             target_state=data.get("target_state"),
             count=data.get("count"),
+            restricted_rooms=data.get("restricted_rooms"),
+            for_agents=data.get("for_agents"),
         )
 
 
