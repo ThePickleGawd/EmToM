@@ -146,6 +146,11 @@ class EMTOMGameState:
     # When stunned, agent's action is skipped
     stunned_agents: Dict[str, int] = field(default_factory=dict)
 
+    # === Room restriction mechanic ===
+    # Maps agent_id -> set of room names they cannot enter
+    # Used to force collaboration (agent with info can't access location)
+    restricted_rooms: Dict[str, Set[str]] = field(default_factory=dict)
+
     def get_object_property(self, obj_id: str, prop: str, default: Any = None) -> Any:
         """Get a custom property for an object."""
         return self.object_properties.get(obj_id, {}).get(prop, default)
@@ -250,6 +255,11 @@ class EMTOMGameState:
             "termination_reason": self.termination_reason,
             # Stun tracking
             "stunned_agents": self.stunned_agents,
+            # Room restrictions (convert sets to lists for JSON)
+            "restricted_rooms": {
+                agent_id: list(rooms)
+                for agent_id, rooms in self.restricted_rooms.items()
+            },
         }
 
     @classmethod
@@ -299,6 +309,11 @@ class EMTOMGameState:
         state.termination_reason = data.get("termination_reason")
         # Stun tracking
         state.stunned_agents = data.get("stunned_agents", {})
+        # Room restrictions (convert lists back to sets)
+        state.restricted_rooms = {
+            agent_id: set(rooms)
+            for agent_id, rooms in data.get("restricted_rooms", {}).items()
+        }
         return state
 
     def to_json(self) -> str:

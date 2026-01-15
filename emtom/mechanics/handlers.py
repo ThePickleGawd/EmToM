@@ -80,6 +80,15 @@ MECHANIC_INFO = {
         "tom_use": "Agents in different rooms see linked effects",
         "example_binding": {"mechanic_type": "state_mirroring", "trigger_object": "drawer_1", "target_object": "drawer_2", "target_state": "is_open"},
     },
+    "room_restriction": {
+        "description": "Specific agents cannot enter certain rooms, forcing collaboration",
+        "category": "navigation_block",
+        "setup_keys": ["restricted_rooms", "for_agents"],
+        "agent_observation": "You cannot enter {room}. The area is off-limits to you.",
+        "tom_use": "Agent with knowledge of item location cannot access it, must communicate with partner who can",
+        "example_binding": {"mechanic_type": "room_restriction", "restricted_rooms": ["bathroom_1"], "for_agents": ["agent_0"]},
+        "recommended_for_tom": True,
+    },
 }
 
 
@@ -432,6 +441,55 @@ def handle_state_mirroring(
     )
 
 
+def handle_room_restriction(
+    action_name: str,
+    agent_id: str,
+    target: Optional[str],
+    state: EMTOMGameState,
+) -> HandlerResult:
+    """
+    Room Restriction: Certain agents cannot navigate to specific rooms.
+
+    Forces collaboration by preventing an agent from accessing locations
+    they may have information about. They must communicate with partners
+    who can reach those areas.
+
+    Setup in task.json:
+        mechanic_bindings: [
+            {
+                "mechanic_type": "room_restriction",
+                "restricted_rooms": ["bathroom_1", "office_2"],
+                "for_agents": ["agent_0"]
+            }
+        ]
+
+    Result: agent_0 cannot Navigate to bathroom_1 or office_2.
+    """
+    # Only applies to Navigate actions
+    if action_name.lower() != "navigate" or not target:
+        return no_effect(state)
+
+    # Check if this agent has any room restrictions
+    restricted = state.restricted_rooms.get(agent_id, set())
+    if not restricted:
+        return no_effect(state)
+
+    # Check if target room is restricted for this agent
+    if target not in restricted:
+        return no_effect(state)
+
+    # Block the navigation
+    return HandlerResult(
+        applies=True,
+        state=state,
+        observation=f"You cannot enter {target}. The area is off-limits to you.",
+        success=False,
+        effects=[f"blocked_navigation={agent_id}_to_{target}"],
+        surprise_trigger=f"{target} is restricted for {agent_id}",
+        blocked=True,
+    )
+
+
 # =============================================================================
 # Handler Registry
 # =============================================================================
@@ -441,6 +499,7 @@ MECHANIC_HANDLERS: Dict[str, MechanicHandler] = {
     "remote_control": handle_remote_control,
     "conditional_unlock": handle_conditional_unlock,
     "state_mirroring": handle_state_mirroring,
+    "room_restriction": handle_room_restriction,
 }
 
 

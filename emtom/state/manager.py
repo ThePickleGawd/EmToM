@@ -223,6 +223,14 @@ class GameStateManager:
                     state.object_properties.setdefault(trigger, {})["prerequisite"] = prereq
                     state.object_properties.setdefault(prereq, {})["unlocks"] = trigger
 
+        elif mech_type == "room_restriction":
+            restricted_rooms = binding.get("restricted_rooms", [])
+            for_agents = binding.get("for_agents", [])
+            for agent_id in for_agents:
+                if agent_id not in state.restricted_rooms:
+                    state.restricted_rooms[agent_id] = set()
+                state.restricted_rooms[agent_id].update(restricted_rooms)
+
     def sync_from_habitat(self, state: Optional[EMTOMGameState] = None) -> EMTOMGameState:
         """
         Sync state from Habitat simulator.
