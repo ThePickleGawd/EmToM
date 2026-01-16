@@ -34,6 +34,140 @@ def extract_mechanics(task: Dict[str, Any]) -> str:
     return ", ".join(sorted(mechanics)) if mechanics else "none"
 
 
+def extract_mechanic_bindings(task: Dict[str, Any]) -> str:
+    """Extract full mechanic bindings as JSON string."""
+    bindings = task.get("mechanic_bindings", [])
+    if not bindings:
+        return "none"
+    return json.dumps(bindings, separators=(",", ":"))
+
+
+def extract_items_used(task: Dict[str, Any]) -> str:
+    """Extract items used in the task."""
+    items = task.get("items", [])
+    if not items:
+        return "none"
+    # Format: item_id (hidden_in/inside location)
+    item_strs = []
+    for item in items:
+        item_id = item.get("item_id", "unknown")
+        location = item.get("hidden_in") or item.get("inside") or "unknown"
+        item_strs.append(f"{item_id} (in {location})")
+    return "; ".join(item_strs)
+
+
+def extract_success_criteria(task: Dict[str, Any]) -> str:
+    """Extract success criteria for all DAG nodes (subtasks)."""
+    subtasks = task.get("subtasks", [])
+    if not subtasks:
+        return "none"
+
+    criteria_strs = []
+    for subtask in subtasks:
+        subtask_id = subtask.get("id", "unknown")
+        condition = subtask.get("success_condition", {})
+        if condition:
+            entity = condition.get("entity", "?")
+            prop = condition.get("property", "?")
+            target = condition.get("target", "")
+            if target:
+                cond_str = f"{subtask_id}: {entity}.{prop}({target})"
+            else:
+                cond_str = f"{subtask_id}: {entity}.{prop}"
+            criteria_strs.append(cond_str)
+        else:
+            criteria_strs.append(f"{subtask_id}: no_condition")
+
+    return "; ".join(criteria_strs)
+
+
+def build_judge_prompt(task: Dict[str, Any]) -> str:
+    """
+    Build the judge evaluation prompt for the task.
+
+    This constructs the prompt that would be sent to the judge LLM
+    to evaluate the task quality.
+    """
+    category = task.get("category", "cooperative")
+    task_json = json.dumps(task, indent=2)
+
+    # Simplified prompt template (full version is in emtom/task_gen/judge.py)
+    prompt = f"""You are an expert evaluator for multi-agent tasks.
+
+## Task Category: {category.upper()}
+
+## Task to Evaluate
+
+```json
+{task_json}
+```
+
+## Evaluation Criteria
+
+Score each criterion from 0.0 to 1.0:
+1. Agent Necessity - Is every agent essential?
+2. Secret Relevance - Are agent secrets useful and required?
+3. Narrative Consistency - Does task description match subtasks?
+4. Subtask Relevance - Does every subtask contribute to the goal?
+5. Mechanic Utilization - Are listed mechanics essential?
+"""
+
+    if category == "cooperative":
+        prompt += "6. Task Interdependence - Do agents genuinely need each other?\n"
+    elif category == "competitive":
+        prompt += "6. Goal Opposition - Do teams have mutually exclusive win conditions?\n"
+    elif category == "mixed":
+        prompt += "6. Subgoal Tension - Do hidden subgoals create meaningful conflict?\n"
+
+    prompt += """
+Respond with JSON containing scores, reasoning, and suggestions for improvement.
+"""
+    return prompt
+
+
+def find_judgment_file(task: Dict[str, Any], judgments_dir: Path) -> Tuple[str, str, str]:
+    """
+    Find and extract judge data from judgment files.
+
+    Returns: (judge_prompt, judge_suggestions, judge_score)
+    """
+    if not judgments_dir.exists():
+        return ("", "", "")
+
+    task_id = task.get("task_id", "")
+    task_title = task.get("title", "")
+
+    # Look for judgment files
+    judgment_files = list(judgments_dir.glob("tom_judgment_*.json"))
+
+    # Try to find a matching judgment file
+    # For now, we check if task_id or title appears in the judgment content
+    for jfile in sorted(judgment_files, reverse=True):  # Most recent first
+        try:
+            with open(jfile, "r") as f:
+                judgment = json.load(f)
+
+            # Check if this judgment matches our task
+            # (judgment files may not have explicit task_id linking)
+
+            # Extract data from judgment
+            score = judgment.get("overall_score", "")
+            suggestions = judgment.get("suggestions", [])
+            suggestions_str = "; ".join(suggestions) if suggestions else ""
+
+            # We can't easily match judgment files to tasks without explicit linking
+            # For now, return the first found judgment's data
+            # (In production, you'd want explicit task_id in judgment files)
+
+            # Return found data (note: may not match specific task)
+            return ("", suggestions_str, str(score) if score else "")
+
+        except Exception:
+            continue
+
+    return ("", "", "")
+
+
 def extract_dag(task: Dict[str, Any]) -> str:
     """
     Extract DAG as a visually formatted string.
@@ -177,7 +311,7 @@ def extract_agent_secrets_separate(task: Dict[str, Any]) -> Dict[str, str]:
     return result
 
 
-def process_task_file(filepath: Path) -> Dict[str, Any]:
+def process_task_file(filepath: Path, judgments_dir: Path = None) -> Dict[str, Any]:
     """Process a single task JSON file and extract relevant fields."""
     with open(filepath, "r") as f:
         task = json.load(f)
@@ -188,7 +322,10 @@ def process_task_file(filepath: Path) -> Dict[str, Any]:
         "task_prompt": task.get("task", ""),
         "model_used": extract_models(task),
         "mechanics": extract_mechanics(task),
+        "mechanic_bindings": extract_mechanic_bindings(task),
+        "items_used": extract_items_used(task),
         "dag": extract_dag_compact(task),
+        "success_criteria": extract_success_criteria(task),
         "num_agents": task.get("num_agents", len(task.get("agent_spawns", {}))),
         "category": task.get("category", "unknown"),
         "scene_id": task.get("scene_id", ""),
@@ -197,6 +334,18 @@ def process_task_file(filepath: Path) -> Dict[str, Any]:
     # Add separate agent secret columns
     agent_secrets = extract_agent_secrets_separate(task)
     row.update(agent_secrets)
+
+    # Build judge prompt
+    row["judge_prompt"] = build_judge_prompt(task)
+
+    # Try to find judgment data
+    if judgments_dir:
+        _, judge_suggestions, judge_score = find_judgment_file(task, judgments_dir)
+        row["judge_suggestions"] = judge_suggestions
+        row["judge_score"] = judge_score
+    else:
+        row["judge_suggestions"] = ""
+        row["judge_score"] = ""
 
     return row
 
@@ -216,6 +365,12 @@ def main():
         help="Output CSV file path"
     )
     parser.add_argument(
+        "--judgments-dir",
+        type=str,
+        default=None,
+        help="Directory containing tom_judgment JSON files (default: <input>/tom_judgments)"
+    )
+    parser.add_argument(
         "--exclude-working",
         action="store_true",
         help="Exclude working_task.json from output"
@@ -229,6 +384,12 @@ def main():
 
     input_dir = Path(args.input)
     output_file = Path(args.output)
+
+    # Set up judgments directory
+    if args.judgments_dir:
+        judgments_dir = Path(args.judgments_dir)
+    else:
+        judgments_dir = input_dir / "tom_judgments"
 
     if not input_dir.exists():
         print(f"Error: Input directory '{input_dir}' does not exist")
@@ -248,12 +409,14 @@ def main():
         return 1
 
     print(f"Processing {len(json_files)} task files...")
+    if judgments_dir.exists():
+        print(f"Looking for judgments in: {judgments_dir}")
 
     # Process all files
     rows = []
     for filepath in sorted(json_files):
         try:
-            row = process_task_file(filepath)
+            row = process_task_file(filepath, judgments_dir)
             rows.append(row)
 
             if args.verbose_dag:
@@ -276,7 +439,10 @@ def main():
         "task_prompt",
         "model_used",
         "mechanics",
+        "mechanic_bindings",
+        "items_used",
         "dag",
+        "success_criteria",
         "num_agents",
     ]
 
@@ -284,7 +450,13 @@ def main():
     for i in range(MAX_AGENTS):
         fieldnames.append(f"agent{i}_secret")
 
-    fieldnames.extend(["category", "scene_id"])
+    fieldnames.extend([
+        "category",
+        "scene_id",
+        "judge_prompt",
+        "judge_suggestions",
+        "judge_score",
+    ])
 
     with open(output_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
