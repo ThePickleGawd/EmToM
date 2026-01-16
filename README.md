@@ -112,21 +112,32 @@ Create benchmark tasks using an LLM agent that iteratively designs and tests tas
 
 **Supported Models:**
 
-| Provider | Model Aliases | Full Model ID |
-|----------|---------------|---------------|
-| `openai_chat` | `gpt-5`, `gpt5` | gpt-5 |
-| `openai_chat` | `gpt-5-mini`, `gpt5-mini` | gpt-5-mini |
-| `openai_chat` | `gpt-5.1`, `gpt5.1` | gpt-5.1 |
-| `openai_chat` | `gpt-5.2`, `gpt5.2` | gpt-5.2 |
-| `bedrock_claude` | `sonnet`, `sonnet-4.5` | Claude Sonnet 4.5 |
-| `bedrock_claude` | `haiku`, `haiku-4.5` | Claude Haiku 4.5 |
-| `bedrock_claude` | `opus`, `opus-4.5` | Claude Opus 4.5 |
-| `bedrock_claude` | `qwen3-80b`, `qwen3-next` | Qwen3 Next 80B A3B |
-| `bedrock_claude` | `qwen3-vl`, `qwen3-vl-235b` | Qwen3 VL 235B A22B |
-| `bedrock_claude` | `kimi-k2`, `kimi-thinking` | Kimi K2 Thinking |
-| `bedrock_claude` | `ministral-8b` | Ministral 3 8B |
-| `bedrock_claude` | `ministral-14b` | Ministral 3 14B |
-| `bedrock_claude` | `mistral-large` | Mistral Large 3 675B |
+*OpenAI (provider: `openai_chat`, requires `OPENAI_API_KEY`):*
+
+| Model | Aliases | Model ID |
+|-------|---------|----------|
+| GPT-5 | `gpt-5`, `gpt5` | `gpt-5` |
+| GPT-5 Mini | `gpt-5-mini`, `gpt5-mini` | `gpt-5-mini` |
+| GPT-5.1 | `gpt-5.1`, `gpt5.1` | `gpt-5.1` |
+| GPT-5.2 | `gpt-5.2`, `gpt5.2` | `gpt-5.2` |
+
+*AWS Bedrock (provider: `bedrock_claude`, requires `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`):*
+
+| Model | Aliases | Model ID |
+|-------|---------|----------|
+| **Claude (Anthropic)** | | |
+| Claude Sonnet 4.5 | `sonnet`, `sonnet-4.5`, `sonnet4.5` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
+| Claude Haiku 4.5 | `haiku`, `haiku-4.5`, `haiku4.5` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| Claude Opus 4.5 | `opus`, `opus-4.5`, `opus4.5` | `us.anthropic.claude-opus-4-5-20251101-v1:0` |
+| **Qwen (Alibaba)** | | |
+| Qwen3 Next 80B A3B | `qwen3-80b`, `qwen3-next`, `qwen3-next-80b` | `qwen.qwen3-next-80b-a3b` |
+| Qwen3 VL 235B A22B | `qwen3-vl`, `qwen3-vl-235b` | `qwen.qwen3-vl-235b-a22b` |
+| **Kimi (Moonshot)** | | |
+| Kimi K2 Thinking | `kimi-k2`, `kimi-thinking`, `kimi-k2-thinking` | `moonshot.kimi-k2-thinking` |
+| **Mistral** | | |
+| Ministral 3 8B | `ministral-8b`, `ministral-3-8b` | `mistral.ministral-3-8b-instruct` |
+| Ministral 3 14B | `ministral-14b`, `ministral-3-14b` | `mistral.ministral-3-14b-instruct` |
+| Mistral Large 3 675B | `mistral-large`, `mistral-large-3` | `mistral.mistral-large-3-675b-instruct` |
 
 **How it works:**
 1. Loads a random scene from the PARTNR dataset
