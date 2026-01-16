@@ -72,7 +72,7 @@ def main():
         config = compose(config_name=args.config_name)
 
         # Manually override Hydra interpolations BEFORE fix_config tries to resolve them
-        output_dir = "/tmp/emtom_test"
+        output_dir = "/tmp/emtom_test_writable"
         with open_dict(config):
             if "evaluation" in config:
                 config.evaluation.output_dir = output_dir

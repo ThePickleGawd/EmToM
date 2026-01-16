@@ -70,22 +70,3 @@ hydra:
     chdir: False
   run:
     dir: outputs/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}-${file_stem:${habitat.dataset.data_path}}
-
-# Patch for scene loader: satisfy mandatory Habitat Baselines RL field
-habitat_baselines:
-  rl:
-    policy:
-      main_agent:
-        action_dist:
-          std_init: -1.0
-
-
-# Patch for scene loader: satisfy mandatory field under examples.*
-examples:
-  habitat_baselines:
-    rl:
-      policy:
-        main_agent:
-          action_dist:
-            std_init: -1.0
-
