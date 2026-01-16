@@ -118,9 +118,15 @@ Create benchmark tasks using an LLM agent that iteratively designs and tests tas
 | `openai_chat` | `gpt-5-mini`, `gpt5-mini` | gpt-5-mini |
 | `openai_chat` | `gpt-5.1`, `gpt5.1` | gpt-5.1 |
 | `openai_chat` | `gpt-5.2`, `gpt5.2` | gpt-5.2 |
-| `bedrock_claude` | `sonnet`, `sonnet-4.5`, `sonnet4.5` | Claude Sonnet 4.5 |
-| `bedrock_claude` | `haiku`, `haiku-4.5`, `haiku4.5` | Claude Haiku 4.5 |
-| `bedrock_claude` | `opus`, `opus-4.5`, `opus4.5` | Claude Opus 4.5 |
+| `bedrock_claude` | `sonnet`, `sonnet-4.5` | Claude Sonnet 4.5 |
+| `bedrock_claude` | `haiku`, `haiku-4.5` | Claude Haiku 4.5 |
+| `bedrock_claude` | `opus`, `opus-4.5` | Claude Opus 4.5 |
+| `bedrock_claude` | `qwen3-80b`, `qwen3-next` | Qwen3 Next 80B A3B |
+| `bedrock_claude` | `qwen3-vl`, `qwen3-vl-235b` | Qwen3 VL 235B A22B |
+| `bedrock_claude` | `kimi-k2`, `kimi-thinking` | Kimi K2 Thinking |
+| `bedrock_claude` | `ministral-8b` | Ministral 3 8B |
+| `bedrock_claude` | `ministral-14b` | Ministral 3 14B |
+| `bedrock_claude` | `mistral-large` | Mistral Large 3 675B |
 
 **How it works:**
 1. Loads a random scene from the PARTNR dataset

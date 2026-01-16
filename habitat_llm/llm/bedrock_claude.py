@@ -32,18 +32,32 @@ if _env_file.exists():
 
 class BedrockClaude(BaseLLM):
     """
-    LLM implementation using AWS Bedrock with Claude models.
+    LLM implementation using AWS Bedrock with multiple model families.
     Uses environment variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
 
     Supports model aliases for convenience:
-        sonnet, sonnet-4.5, sonnet4.5  -> us.anthropic.claude-sonnet-4-5-20250929-v1:0
-        haiku, haiku-4.5, haiku4.5     -> us.anthropic.claude-haiku-4-5-20251001-v1:0
-        opus, opus-4.5, opus4.5        -> us.anthropic.claude-opus-4-5-20251101-v1:0
+
+    Claude (Anthropic):
+        sonnet, sonnet-4.5       -> us.anthropic.claude-sonnet-4-5-20250929-v1:0
+        haiku, haiku-4.5         -> us.anthropic.claude-haiku-4-5-20251001-v1:0
+        opus, opus-4.5           -> us.anthropic.claude-opus-4-5-20251101-v1:0
+
+    Qwen (Alibaba):
+        qwen3-80b, qwen3-next    -> qwen.qwen3-next-80b-a3b
+        qwen3-vl, qwen3-vl-235b  -> qwen.qwen3-vl-235b-a22b
+
+    Kimi (Moonshot):
+        kimi-k2, kimi-thinking   -> moonshot.kimi-k2-thinking
+
+    Mistral:
+        ministral-8b             -> mistral.ministral-3-8b-instruct
+        ministral-14b            -> mistral.ministral-3-14b-instruct
+        mistral-large            -> mistral.mistral-large-3-675b-instruct
     """
 
-    # Model aliases mapping short names to full Bedrock inference profile IDs
-    # Note: Newer Claude models require regional inference profiles (us. prefix)
+    # Model aliases mapping short names to full Bedrock model IDs
     MODEL_ALIASES: Dict[str, str] = {
+        # ============ Claude (Anthropic) ============
         # Claude Sonnet 4.5
         "sonnet": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "sonnet-4.5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -56,6 +70,37 @@ class BedrockClaude(BaseLLM):
         "opus": "us.anthropic.claude-opus-4-5-20251101-v1:0",
         "opus-4.5": "us.anthropic.claude-opus-4-5-20251101-v1:0",
         "opus4.5": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+
+        # ============ Qwen (Alibaba) ============
+        # Qwen3 Next 80B A3B Instruct
+        "qwen3-80b": "qwen.qwen3-next-80b-a3b",
+        "qwen3-next": "qwen.qwen3-next-80b-a3b",
+        "qwen3-next-80b": "qwen.qwen3-next-80b-a3b",
+        # Qwen3 VL 235B A22B (Vision-Language)
+        "qwen3-vl": "qwen.qwen3-vl-235b-a22b",
+        "qwen3-vl-235b": "qwen.qwen3-vl-235b-a22b",
+
+        # ============ Kimi (Moonshot) ============
+        # Kimi K2 Thinking
+        "kimi-k2": "moonshot.kimi-k2-thinking",
+        "kimi-thinking": "moonshot.kimi-k2-thinking",
+        "kimi-k2-thinking": "moonshot.kimi-k2-thinking",
+
+        # ============ Mistral ============
+        # Ministral 3 8B Instruct
+        "ministral-8b": "mistral.ministral-3-8b-instruct",
+        "ministral-3-8b": "mistral.ministral-3-8b-instruct",
+        # Ministral 3 14B Instruct
+        "ministral-14b": "mistral.ministral-3-14b-instruct",
+        "ministral-3-14b": "mistral.ministral-3-14b-instruct",
+        # Mistral Large 3 (675B)
+        "mistral-large": "mistral.mistral-large-3-675b-instruct",
+        "mistral-large-3": "mistral.mistral-large-3-675b-instruct",
+    }
+
+    # Models that use the Converse API (non-Claude models)
+    CONVERSE_API_MODELS = {
+        "qwen.", "moonshot.", "mistral."
     }
 
     @classmethod
@@ -63,9 +108,14 @@ class BedrockClaude(BaseLLM):
         """Resolve a model alias to the full Bedrock model ID."""
         return cls.MODEL_ALIASES.get(model.lower(), model)
 
+    @classmethod
+    def uses_converse_api(cls, model_id: str) -> bool:
+        """Check if a model should use the Converse API instead of invoke_model."""
+        return any(model_id.startswith(prefix) for prefix in cls.CONVERSE_API_MODELS)
+
     def __init__(self, conf: DictConfig):
         """
-        Initialize the Bedrock Claude model.
+        Initialize the Bedrock model.
         :param conf: the configuration of the language model
         """
         self.llm_conf = conf
@@ -89,7 +139,7 @@ class BedrockClaude(BaseLLM):
         request_timeout: int = 40,
     ):
         """
-        Generate a response using AWS Bedrock Claude.
+        Generate a response using AWS Bedrock.
         :param prompt: A string with the input to the language model.
         :param stop: A string that determines when to stop generation
         :param max_length: The max number of tokens to generate.
@@ -106,6 +156,20 @@ class BedrockClaude(BaseLLM):
         # Override max_length if provided
         max_tokens = max_length if max_length is not None else self.generation_params.max_tokens
 
+        # Route to appropriate API based on model
+        if self.uses_converse_api(model_id):
+            return self._generate_converse(prompt, model_id, max_tokens, stop)
+        else:
+            return self._generate_claude(prompt, model_id, max_tokens, stop)
+
+    def _generate_claude(
+        self,
+        prompt: Prompt,
+        model_id: str,
+        max_tokens: int,
+        stop: Optional[str],
+    ) -> str:
+        """Generate using Claude's native API format."""
         # Build messages
         messages = self.message_history.copy()
 
@@ -172,6 +236,117 @@ class BedrockClaude(BaseLLM):
         # Update message history
         if self.keep_message_history:
             self.message_history = messages.copy()
+            self.message_history.append({"role": "assistant", "content": text_response})
+
+        # Handle stop sequence
+        if stop is not None and stop in text_response:
+            text_response = text_response.split(stop)[0]
+
+        return text_response
+
+    def _generate_converse(
+        self,
+        prompt: Prompt,
+        model_id: str,
+        max_tokens: int,
+        stop: Optional[str],
+    ) -> str:
+        """
+        Generate using Bedrock's Converse API.
+        Works with Qwen, Mistral, Kimi, and other non-Claude models.
+        """
+        # Build messages in Converse API format
+        messages = []
+
+        # Add message history
+        for msg in self.message_history:
+            if msg["role"] == "user":
+                if isinstance(msg["content"], str):
+                    messages.append({
+                        "role": "user",
+                        "content": [{"text": msg["content"]}]
+                    })
+                else:
+                    messages.append({"role": "user", "content": msg["content"]})
+            else:
+                messages.append({
+                    "role": "assistant",
+                    "content": [{"text": msg["content"]}]
+                })
+
+        # Add current message
+        if isinstance(prompt, str):
+            messages.append({
+                "role": "user",
+                "content": [{"text": prompt}]
+            })
+        else:
+            # Multimodal prompt - convert to Converse format
+            content = []
+            for prompt_type, prompt_value in prompt:
+                if prompt_type == "text":
+                    content.append({"text": prompt_value})
+                else:
+                    # Image - extract base64 data
+                    if prompt_value.startswith("data:"):
+                        parts = prompt_value.split(",", 1)
+                        if len(parts) == 2:
+                            media_type = parts[0].split(";")[0].replace("data:", "")
+                            base64_data = parts[1]
+                            # Map media type to format
+                            format_map = {
+                                "image/jpeg": "jpeg",
+                                "image/png": "png",
+                                "image/gif": "gif",
+                                "image/webp": "webp",
+                            }
+                            img_format = format_map.get(media_type, "jpeg")
+                            content.append({
+                                "image": {
+                                    "format": img_format,
+                                    "source": {
+                                        "bytes": base64_data
+                                    }
+                                }
+                            })
+            messages.append({"role": "user", "content": content})
+
+        # Build inference config
+        inference_config = {
+            "maxTokens": max_tokens,
+        }
+
+        # Add temperature if specified
+        if hasattr(self.generation_params, "temperature"):
+            inference_config["temperature"] = self.generation_params.temperature
+        elif hasattr(self.generation_params, "top_p"):
+            inference_config["topP"] = self.generation_params.top_p
+
+        # Add stop sequences if specified
+        if stop:
+            inference_config["stopSequences"] = [stop] if isinstance(stop, str) else stop
+
+        # Build request kwargs
+        request_kwargs = {
+            "modelId": model_id,
+            "messages": messages,
+            "inferenceConfig": inference_config,
+        }
+
+        # Add system message if specified
+        if self.system_message:
+            request_kwargs["system"] = [{"text": self.system_message}]
+
+        # Call Bedrock Converse API
+        response = self.client.converse(**request_kwargs)
+
+        # Parse response
+        text_response = response["output"]["message"]["content"][0]["text"]
+        self.response = text_response
+
+        # Update message history (convert back to simple format)
+        if self.keep_message_history:
+            self.message_history.append({"role": "user", "content": prompt if isinstance(prompt, str) else prompt})
             self.message_history.append({"role": "assistant", "content": text_response})
 
         # Handle stop sequence
