@@ -130,41 +130,38 @@ def find_judgment_file(task: Dict[str, Any], judgments_dir: Path) -> Tuple[str, 
     Find and extract judge data from judgment files.
 
     Returns: (judge_prompt, judge_suggestions, judge_score)
+
+    Note: Judgment files must contain a 'task_id' field that matches the task.
+    Without this linking, we cannot match judgments to tasks.
     """
     if not judgments_dir.exists():
         return ("", "", "")
 
     task_id = task.get("task_id", "")
-    task_title = task.get("title", "")
+    if not task_id:
+        return ("", "", "")
 
     # Look for judgment files
     judgment_files = list(judgments_dir.glob("tom_judgment_*.json"))
 
-    # Try to find a matching judgment file
-    # For now, we check if task_id or title appears in the judgment content
+    # Try to find a matching judgment file by task_id
     for jfile in sorted(judgment_files, reverse=True):  # Most recent first
         try:
             with open(jfile, "r") as f:
                 judgment = json.load(f)
 
-            # Check if this judgment matches our task
-            # (judgment files may not have explicit task_id linking)
-
-            # Extract data from judgment
-            score = judgment.get("overall_score", "")
-            suggestions = judgment.get("suggestions", [])
-            suggestions_str = "; ".join(suggestions) if suggestions else ""
-
-            # We can't easily match judgment files to tasks without explicit linking
-            # For now, return the first found judgment's data
-            # (In production, you'd want explicit task_id in judgment files)
-
-            # Return found data (note: may not match specific task)
-            return ("", suggestions_str, str(score) if score else "")
+            # Only match if judgment has explicit task_id
+            judgment_task_id = judgment.get("task_id", "")
+            if judgment_task_id and judgment_task_id == task_id:
+                score = judgment.get("overall_score", "")
+                suggestions = judgment.get("suggestions", [])
+                suggestions_str = "; ".join(suggestions) if suggestions else ""
+                return ("", suggestions_str, str(score) if score else "")
 
         except Exception:
             continue
 
+    # No matching judgment found
     return ("", "", "")
 
 
@@ -285,14 +282,6 @@ def extract_dag_compact(task: Dict[str, Any]) -> str:
     return "; ".join(chains) if chains else "none"
 
 
-def extract_models(task: Dict[str, Any]) -> str:
-    """Extract models used for calibration."""
-    calibration = task.get("calibration", {})
-    if not calibration:
-        return "none"
-    return ", ".join(sorted(calibration.keys()))
-
-
 def extract_agent_secrets_separate(task: Dict[str, Any]) -> Dict[str, str]:
     """Extract agent secrets as separate columns."""
     secrets = task.get("agent_secrets", {})
@@ -320,7 +309,6 @@ def process_task_file(filepath: Path, judgments_dir: Path = None) -> Dict[str, A
         "filename": filepath.name,
         "task_name": task.get("title", task.get("task_id", "unknown")),
         "task_prompt": task.get("task", ""),
-        "model_used": extract_models(task),
         "mechanics": extract_mechanics(task),
         "mechanic_bindings": extract_mechanic_bindings(task),
         "items_used": extract_items_used(task),
@@ -437,7 +425,6 @@ def main():
         "filename",
         "task_name",
         "task_prompt",
-        "model_used",
         "mechanics",
         "mechanic_bindings",
         "items_used",
