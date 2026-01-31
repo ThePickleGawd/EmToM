@@ -23,6 +23,7 @@ from omegaconf import DictConfig
 
 from .prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
 from .judge import Judge, Judgment, CouncilVerdict, Colors
+from .diversity import DiversityTracker
 from emtom.actions import ActionRegistry
 
 if TYPE_CHECKING:
@@ -162,6 +163,7 @@ class TaskGeneratorAgent:
         self.fail_reason = ""  # Reason for failure
         self.task_memories: List[str] = []  # Learnings from completed tasks
         self.consecutive_tom_failures = 0  # Track failures to suggest new_scene
+        self.diversity_tracker = DiversityTracker(llm=self.llm)  # Track task patterns for diversity
 
         # Setup logging to file
         # Prefer log_dir (Hydra output), fallback to output_dir/logs
@@ -332,6 +334,9 @@ class TaskGeneratorAgent:
         ).replace(
             "{category}",
             task_category.upper()
+        ).replace(
+            "{diversity_section}",
+            self._build_diversity_section()
         )
         self.messages = [
             {"role": "system", "content": system_prompt}
@@ -2178,6 +2183,11 @@ SUMMARY:"""
         task_title = task_data.get("title", "untitled")
         memory = self._extract_task_memory(task_title)
         self.task_memories.append(memory)
+
+        # Track task pattern for diversity (persists across runs)
+        pattern = self.diversity_tracker.add_pattern(output_filename, task_data)
+        self._log(f"Diversity pattern added: {pattern}")
+
         self._reset_context_for_next_task()
 
         return f"Task '{task_title}' saved!\n  - {output_path} (permanent)\n  - {submitted_path} (session)\nTotal submitted: {len(self.submitted_tasks)}\n\n[Context reset for next task. Your learnings have been preserved.]\n\nFor next task: Use new_scene[] for a fresh scene, or modify working_task.json to build on a previous task from submitted_tasks/."
@@ -2479,6 +2489,23 @@ working_task.json reset. Use new_scene[N, keep] to change agent count without lo
                 lines.append(f"  - {obj}")
 
         return "\n".join(lines)
+
+    def _build_diversity_section(self) -> str:
+        """Build the diversity section for the system prompt."""
+        pattern_count = self.diversity_tracker.get_pattern_count()
+        patterns = self.diversity_tracker.get_patterns_for_prompt()
+
+        if pattern_count == 0:
+            return "No previous tasks yet. Be creative with your task structure and win conditions!"
+
+        return f"""Previously generated task patterns ({pattern_count} total):
+{patterns}
+
+**CRITICAL - DIVERSITY REQUIRED**:
+- Do NOT repeat similar win conditions (e.g., if there are many "race to find X" tasks, create something else)
+- Do NOT repeat similar mechanics combinations or dependency structures
+- Create a FUNDAMENTALLY DIFFERENT task structure, not just a reskin with different objects
+- Consider: sabotage, collection, arrangement, defense, sequential unlocking, information trading, etc."""
 
     def _log(self, message: str, truncate_terminal: int = 0) -> None:
         """Print log message and write to log file.
