@@ -217,3 +217,119 @@ class DiversityTracker:
     def get_pattern_count(self) -> int:
         """Return total number of tracked patterns."""
         return len(self.patterns)
+
+    def check_novelty(self, task_data: dict) -> dict:
+        """
+        Check if a task is sufficiently novel compared to existing patterns.
+
+        Args:
+            task_data: The task JSON data to evaluate
+
+        Returns:
+            dict with:
+                - score: 0.0-1.0 novelty score
+                - reason: Explanation of the score
+                - similar_to: List of similar existing patterns (if any)
+        """
+        if not self.patterns:
+            return {
+                "score": 1.0,
+                "reason": "First task - automatically novel",
+                "similar_to": []
+            }
+
+        # Get structural pattern for this task
+        new_pattern = self.summarize_task(task_data)
+
+        # If no LLM, do basic comparison
+        if not self.llm:
+            return self._basic_novelty_check(new_pattern, task_data)
+
+        # Use LLM to compare against existing patterns
+        existing_patterns = self.get_patterns_for_prompt(limit=30)
+
+        prompt = f"""Compare this new task's structure to existing tasks and rate its NOVELTY.
+
+NEW TASK PATTERN: {new_pattern}
+
+NEW TASK JSON:
+{json.dumps(task_data, indent=2)[:3000]}
+
+EXISTING TASK PATTERNS:
+{existing_patterns}
+
+Evaluate:
+1. Is the WIN CONDITION structurally different from existing tasks?
+2. Are the MECHANICS used in a novel way?
+3. Is the DEPENDENCY STRUCTURE (what forces collaboration) different?
+4. Does it feel like a fresh design or a reskin of an existing pattern?
+
+Respond in this exact format:
+SCORE: <0.0-1.0>
+SIMILAR_TO: <comma-separated list of pattern numbers that are similar, or "none">
+REASON: <one sentence explanation>
+
+Scoring guide:
+- 1.0: Completely novel structure, nothing similar exists
+- 0.7-0.9: Mostly novel with some minor similarities
+- 0.4-0.6: Shares significant structural elements with existing tasks
+- 0.1-0.3: Very similar to existing task(s), feels like a reskin
+- 0.0: Nearly identical to an existing task"""
+
+        try:
+            response = self.llm.generate(prompt)
+            return self._parse_novelty_response(response)
+        except Exception as e:
+            return {
+                "score": 0.5,
+                "reason": f"Novelty check failed: {e}",
+                "similar_to": []
+            }
+
+    def _basic_novelty_check(self, new_pattern: str, task_data: dict) -> dict:
+        """Fallback novelty check without LLM - uses simple string matching."""
+        new_pattern_lower = new_pattern.lower()
+        similar = []
+
+        for i, p in enumerate(self.patterns):
+            existing = p["pattern"].lower()
+            # Simple word overlap check
+            new_words = set(new_pattern_lower.split())
+            existing_words = set(existing.split())
+            overlap = len(new_words & existing_words) / max(len(new_words | existing_words), 1)
+            if overlap > 0.5:
+                similar.append(f"{i+1}. {p['pattern']}")
+
+        if not similar:
+            return {"score": 0.8, "reason": "No obvious pattern matches", "similar_to": []}
+        elif len(similar) <= 2:
+            return {"score": 0.5, "reason": f"Some similarity to existing patterns", "similar_to": similar}
+        else:
+            return {"score": 0.2, "reason": "High similarity to multiple existing patterns", "similar_to": similar}
+
+    def _parse_novelty_response(self, response: str) -> dict:
+        """Parse LLM novelty check response."""
+        result = {"score": 0.5, "reason": "Could not parse response", "similar_to": []}
+
+        for line in response.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("SCORE:"):
+                try:
+                    score_str = line.split(":", 1)[1].strip()
+                    result["score"] = float(score_str)
+                except (ValueError, IndexError):
+                    pass
+            elif line.startswith("SIMILAR_TO:"):
+                try:
+                    similar_str = line.split(":", 1)[1].strip().lower()
+                    if similar_str != "none" and similar_str:
+                        result["similar_to"] = [s.strip() for s in similar_str.split(",")]
+                except (ValueError, IndexError):
+                    pass
+            elif line.startswith("REASON:"):
+                try:
+                    result["reason"] = line.split(":", 1)[1].strip()
+                except (ValueError, IndexError):
+                    pass
+
+        return result

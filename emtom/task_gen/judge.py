@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from habitat_llm.llm.base_llm import BaseLLM
     from .task_generator import GeneratedTask
     from .scene_loader import SceneData
+    from .diversity import DiversityTracker
 
 
 # ANSI color codes
@@ -137,6 +138,7 @@ class BenchmarkRollout:
 SHARED_CRITERIA = [
     "agent_necessity",       # Every agent must be essential
     "secret_relevance",      # Secrets must be useful and required
+    "secret_naturalness",    # Secrets use natural language, not object IDs
     "narrative_consistency",
     "subtask_relevance",
     "mechanic_utilization",
@@ -169,6 +171,15 @@ CRITERIA_DESCRIPTIONS = {
 0.5: Secrets are somewhat helpful but task could be solved without them
 0.7: Secrets provide important information, minor redundancy
 1.0: Each secret provides unique, essential information that agent must use to succeed""",
+    },
+    "secret_naturalness": {
+        "name": "Secret Natural Language Quality",
+        "description": "Do secrets avoid explicit object IDs and prescriptive instructions? Check for patterns like cabinet_29, item_small_key_1, chest_of_drawers_31.",
+        "rubric": """0.0: Secrets contain object IDs (cabinet_29, item_small_key_1) and step-by-step instructions
+0.3: Secrets use some IDs, mixed with natural language
+0.5: Mostly natural language but some IDs slip through
+0.7: All natural language, but secrets are still too instructional ("Search X to find Y")
+1.0: All natural language, secrets provide clues not instructions, require reasoning""",
     },
     # Task quality criteria
     "narrative_consistency": {
@@ -246,6 +257,16 @@ CRITERIA_DESCRIPTIONS = {
 0.5: Task partially addresses the request but missing important aspects
 0.7: Task mostly aligns with minor omissions
 1.0: Task fully incorporates what the user requested""",
+    },
+    # Task novelty (added dynamically when diversity tracker is provided)
+    "task_novelty": {
+        "name": "Task Novelty",
+        "description": "Is this task structurally different from existing tasks in the dataset?",
+        "rubric": """0.0: Nearly identical to an existing task (same structure, just different items/names)
+0.3: Very similar to existing task(s), feels like a reskin
+0.5: Shares significant structural elements with existing tasks
+0.7: Mostly novel with some minor similarities to existing patterns
+1.0: Completely novel structure, nothing similar exists in the dataset""",
     },
 }
 
@@ -370,8 +391,14 @@ The `required` field in subtasks determines ownership and win conditions:
 **Secrets Drive the Task**: `agent_secrets` contain information the agent MUST use.
 - Secrets should NOT restate global information or be generic flavor text
 - Each secret enables actions only that agent can take
-- Good: "The key is hidden in drawer_12" → agent must retrieve it
+- Good: "There's a key hidden in one of the bedroom drawers" → agent must explore
+- Bad: "Search chest_of_drawers_31 to find the key" → too prescriptive, no reasoning needed
 - Bad: "You are a helpful robot" → useless for task completion
+
+**Secrets Must Use Natural Language** (check for object ID patterns like `[a-z_]+_\\d+`):
+- NEVER use object IDs like "cabinet_29", "chest_of_drawers_31", "item_small_key_1"
+- Use descriptions: "the bedroom", "a drawer", "the tall cabinet", "a small key"
+- Secrets should provide CLUES that require reasoning, not step-by-step instructions
 
 **Forced Coordination**: Subtask dependencies require `Communicate` to share discoveries.
 - Agents must exchange secret information to succeed
@@ -500,6 +527,7 @@ class Judge:
         min_criterion_threshold: float = 0.4,
         verbose: bool = False,
         user_query: Optional[str] = None,
+        diversity_tracker: Optional["DiversityTracker"] = None,
     ):
         """
         Initialize the judge.
@@ -510,12 +538,14 @@ class Judge:
             min_criterion_threshold: Minimum score for any criterion (default 0.4)
             verbose: Print debug information
             user_query: Optional user query that the task should align with
+            diversity_tracker: Optional tracker to check task novelty against existing tasks
         """
         self.models = models or self.DEFAULT_MODELS
         self.overall_threshold = overall_threshold
         self.min_criterion_threshold = min_criterion_threshold
         self.verbose = verbose
         self.user_query = user_query
+        self.diversity_tracker = diversity_tracker
 
         # LLM clients (created lazily)
         self._llm_clients: Dict[str, "BaseLLM"] = {}
@@ -698,6 +728,37 @@ class Judge:
                 except Exception as e:
                     print(f"[Judge] {model} failed: {e}")
                     judgments[model] = self._failed_judgment(f"[{model}] Error: {e}")
+
+        # Check novelty if diversity tracker is available
+        if self.diversity_tracker:
+            novelty_result = self.diversity_tracker.check_novelty(task_dict)
+            novelty_score = CriterionScore(
+                name="task_novelty",
+                score=novelty_result["score"],
+                reasoning=novelty_result["reason"],
+            )
+            if self.verbose:
+                print(f"[Judge] Novelty check: {novelty_result['score']:.2f} - {novelty_result['reason']}")
+
+            # Inject novelty score into each judgment
+            for model, judgment in judgments.items():
+                judgment.criteria_scores["task_novelty"] = novelty_score
+                # Add suggestion if novelty is low
+                if novelty_result["score"] < self.min_criterion_threshold:
+                    similar_str = ", ".join(novelty_result.get("similar_to", [])[:3])
+                    suggestion = f"[Task Novelty] Task is too similar to existing patterns"
+                    if similar_str:
+                        suggestion += f" (similar to: {similar_str})"
+                    suggestion += ". Try a different win condition, mechanics, or dependency structure."
+                    judgment.suggestions.insert(0, suggestion)
+                # Recalculate overall score to include novelty
+                all_scores = [c.score for c in judgment.criteria_scores.values()]
+                judgment.overall_score = sum(all_scores) / len(all_scores)
+                # Recalculate validity
+                judgment.is_valid = (
+                    judgment.overall_score >= self.overall_threshold
+                    and all(c.score >= self.min_criterion_threshold for c in judgment.criteria_scores.values())
+                )
 
         # Aggregate results
         return self._aggregate(judgments)

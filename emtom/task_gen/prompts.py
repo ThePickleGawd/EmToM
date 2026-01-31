@@ -87,6 +87,34 @@ Assigned!
 - Use locked containers + hidden keys for dependencies
 - Agents must `Communicate` to share discoveries
 
+## Agent Secrets - Theory of Mind Requirements
+
+Secrets must require REASONING, not just following instructions.
+
+**AVOID** (too prescriptive - tells agent exactly what to do):
+- "Search chest_of_drawers_31 in bedroom_1 to find the Small Key"
+- "Use the key on cabinet_29 to unlock it"
+- "You are the key-finder. Your job is to retrieve keys."
+
+**PREFERRED** (requires exploration and deduction):
+- "There's a key hidden in one of the bedroom drawers."
+- "You noticed the kitchen cabinet seems connected to something elsewhere."
+- "You can only access the storage closet - others can't enter."
+
+**Natural Language Requirements**:
+- Use room names: "the bedroom", "somewhere in the kitchen"
+- Use descriptions: "a drawer", "the tall cabinet", "a piece of furniture"
+- NEVER use object IDs like "cabinet_29" or "chest_of_drawers_31" in secrets
+- NEVER use item IDs like "item_small_key_1" - say "a small key" instead
+
+**Information Asymmetry Patterns for ToM**:
+1. Agent A knows WHERE (location hint), Agent B knows WHAT (purpose) - must communicate
+2. Agent A observed a behavior, must describe it to others
+3. Agent A has partial clue, needs Agent B's clue to complete the picture
+4. Agents have different access restrictions they must discover
+
+**Do NOT assign roles** - let agents figure out coordination themselves.
+
 ## Task JSON Structure
 ```json
 {{
