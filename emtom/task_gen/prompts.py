@@ -124,7 +124,9 @@ Assigned!
 ## Golden Trajectory
 Each step has ALL agents. Format: `{{"actions": [{{"agent": "agent_0", "action": "Navigate[room]"}}, ...]}}`
 Actions: Navigate, Pick, Place, Open, Close, Search, UseItem, Communicate, Wait
-"""
+
+## Structural Diversity
+{diversity_section}"""
 
 # Template for initial user message - just the dynamic parts
 USER_PROMPT_TEMPLATE = """Generate {num_tasks} quality benchmark tasks.

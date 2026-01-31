@@ -71,7 +71,8 @@ def fix_config(cfg, root: bool = True) -> None:
     keys = list(cfg.keys())
     if root:
         # skip habitat config because this config is missing required param
-        keys = [k for k in keys if k not in ["habitat", "habitat_baselines"]]
+        # also skip "examples" which contains nested habitat_baselines structured configs
+        keys = [k for k in keys if k not in ["habitat", "habitat_baselines", "examples"]]
     for k in keys:
         if type(cfg[k]) is DictConfig:
             fix_config(cfg[k], False)
