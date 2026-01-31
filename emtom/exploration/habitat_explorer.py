@@ -96,6 +96,12 @@ class HabitatWorldAdapter:
 
         # Get furniture (can be opened/closed)
         for furniture in self.get_all_furniture():
+            room_name = None
+            try:
+                room = self.full_world_graph.get_room_for_entity(furniture)
+                room_name = room.name if hasattr(room, "name") else str(room)
+            except Exception:
+                room_name = None
             entity_info = {
                 "id": getattr(furniture, "sim_handle", furniture.name),
                 "name": furniture.name,
@@ -103,11 +109,18 @@ class HabitatWorldAdapter:
                 "states": self._get_entity_states(furniture),
                 "is_articulated": furniture.is_articulated() if hasattr(furniture, "is_articulated") else False,
                 "properties": getattr(furniture, "properties", {}),
+                "room": room_name,
             }
             entities.append(entity_info)
 
         # Get objects (can be picked up)
         for obj in self.get_all_objects():
+            room_name = None
+            try:
+                room = self.full_world_graph.get_room_for_entity(obj)
+                room_name = room.name if hasattr(room, "name") else str(room)
+            except Exception:
+                room_name = None
             entity_info = {
                 "id": getattr(obj, "sim_handle", obj.name),
                 "name": obj.name,
@@ -115,6 +128,7 @@ class HabitatWorldAdapter:
                 "states": self._get_entity_states(obj),
                 "is_articulated": False,
                 "properties": getattr(obj, "properties", {}),
+                "room": room_name,
             }
             entities.append(entity_info)
 

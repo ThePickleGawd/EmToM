@@ -265,9 +265,16 @@ def handle_remote_control(
     # Apply the state change to the remote target
     new_state = state.set_object_property(remote_target, remote_property, new_value)
 
+    # Special-case unlock semantics: treat is_unlocked as the inverse of is_locked
+    # so remote triggers can actually unlock containers.
+    if remote_property == "is_unlocked":
+        new_state = new_state.set_object_property(remote_target, "is_locked", not new_value)
+
     # Describe what happened
     if remote_property == "is_open":
         effect_desc = "opened" if new_value else "closed"
+    elif remote_property == "is_unlocked":
+        effect_desc = "unlocked" if new_value else "locked"
     elif remote_property == "is_on":
         effect_desc = "turned on" if new_value else "turned off"
     else:
@@ -475,19 +482,38 @@ def handle_room_restriction(
         return no_effect(state)
 
     # Check if target room is restricted for this agent
-    if target not in restricted:
-        return no_effect(state)
+    if target in restricted:
+        return HandlerResult(
+            applies=True,
+            state=state,
+            observation=f"You cannot enter {target}. The area is off-limits to you.",
+            success=False,
+            effects=[f"blocked_navigation={agent_id}_to_{target}"],
+            surprise_trigger=f"{target} is restricted for {agent_id}",
+            blocked=True,
+        )
 
-    # Block the navigation
-    return HandlerResult(
-        applies=True,
-        state=state,
-        observation=f"You cannot enter {target}. The area is off-limits to you.",
-        success=False,
-        effects=[f"blocked_navigation={agent_id}_to_{target}"],
-        surprise_trigger=f"{target} is restricted for {agent_id}",
-        blocked=True,
-    )
+    # If navigating to an object/furniture, block if it's located in a restricted room
+    target_room = state.get_object_property(target, "room", None)
+    if not target_room:
+        for entity in state.entities:
+            name = entity.get("name") or entity.get("id")
+            if name == target:
+                target_room = entity.get("room")
+                break
+
+    if target_room and target_room in restricted:
+        return HandlerResult(
+            applies=True,
+            state=state,
+            observation=f"You cannot enter {target_room} to reach {target}. The area is off-limits to you.",
+            success=False,
+            effects=[f"blocked_navigation={agent_id}_to_{target}"],
+            surprise_trigger=f"{target_room} is restricted for {agent_id}",
+            blocked=True,
+        )
+
+    return no_effect(state)
 
 
 # =============================================================================

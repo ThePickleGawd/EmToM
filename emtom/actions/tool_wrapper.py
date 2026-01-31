@@ -34,6 +34,11 @@ def check_not_locked(target: str, game_manager) -> Tuple[bool, Optional[str]]:
         (False, None) if allowed (not locked or no lock state)
     """
     state = game_manager.get_state()
+    # If an explicit is_unlocked flag exists, honor it.
+    is_unlocked = state.get_object_property(target, "is_unlocked", None)
+    if is_unlocked is True:
+        return False, None
+
     is_locked = state.get_object_property(target, "is_locked", False)
 
     if is_locked:

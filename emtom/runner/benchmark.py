@@ -295,6 +295,66 @@ class BenchmarkRunner(EMTOMBaseRunner):
                             print(f"[Agent {uid} DONE]", flush=True)
                         continue
 
+                    # Pre-check mechanics (block/transform) using current game state.
+                    mech_result = None
+                    orig_action_name, orig_target = self._parse_action_to_tuple(high_level_action)
+                    action_target = orig_target if orig_target not in ("", "None") else None
+                    actual_action_name = orig_action_name
+                    actual_target = action_target
+
+                    if self.game_manager:
+                        from emtom.mechanics.handlers import apply_mechanics
+                        mech_result = apply_mechanics(
+                            orig_action_name, agent_id, action_target, self.game_manager.get_state()
+                        )
+
+                        # If blocked, skip execution and return mechanic observation
+                        if mech_result.blocked:
+                            llm_agent_state[uid] = {
+                                'planner': planner,
+                                'instruction': agent_instruction,
+                                'high_level_action': high_level_action,
+                                'low_level_actions': {},
+                                'planner_info': planner_info,
+                                'planner_done': planner_done,
+                                'action_done': True,
+                                'response': mech_result.observation,
+                                'skill_steps': 0,
+                                'mech_result': mech_result,
+                                'orig_action': orig_action_name,
+                                'orig_target': action_target,
+                            }
+                            continue
+
+                        actual_action_name = mech_result.actual_action or orig_action_name
+                        actual_target = mech_result.actual_target or action_target
+
+                        # If mechanic transformed the action, recompute low-level action.
+                        if actual_action_name != orig_action_name or actual_target != action_target:
+                            agent = self.agents.get(uid)
+                            obs = self.env_interface.get_observations()
+                            low_level_action, response = agent.process_high_level_action(
+                                actual_action_name, actual_target or "", obs
+                            )
+                            if low_level_action is None:
+                                llm_agent_state[uid] = {
+                                    'planner': planner,
+                                    'instruction': agent_instruction,
+                                    'high_level_action': f"{actual_action_name}[{actual_target or ''}]",
+                                    'low_level_actions': {},
+                                    'planner_info': planner_info,
+                                    'planner_done': planner_done,
+                                    'action_done': True,
+                                    'response': response or "",
+                                    'skill_steps': 0,
+                                    'mech_result': mech_result,
+                                    'orig_action': orig_action_name,
+                                    'orig_target': action_target,
+                                }
+                                continue
+                            low_level_actions = {uid: low_level_action}
+                            high_level_action = f"{actual_action_name}[{actual_target or ''}]"
+
                     llm_agent_state[uid] = {
                         'planner': planner,
                         'instruction': agent_instruction,
@@ -305,6 +365,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         'action_done': False,
                         'response': "",
                         'skill_steps': 0,
+                        'mech_result': mech_result,
+                        'orig_action': orig_action_name,
+                        'orig_target': action_target,
                     }
 
                     # Check if action already completed in first call
@@ -406,6 +469,24 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 high_level_action = state['high_level_action']
                 response = state['response']
                 skill_steps = state['skill_steps']
+
+                # Apply mechanic state changes after successful execution
+                mech_result = state.get('mech_result')
+                if self.game_manager and mech_result and not getattr(mech_result, "blocked", False):
+                    obs_text = response or ""
+                    habitat_failed = any(
+                        fail_phrase in obs_text.lower()
+                        for fail_phrase in ["too far", "occluded", "failed to", "unexpected failure", "cannot"]
+                    )
+                    if not habitat_failed and mech_result.applies:
+                        orig_action = state.get('orig_action')
+                        orig_target = state.get('orig_target')
+                        _, mechanic_result = self.game_manager.apply_action(
+                            orig_action, agent_id, orig_target
+                        )
+                        self._sync_remote_effects_to_simulator(mechanic_result.effects)
+                        if mech_result.observation:
+                            response = f"{response} {mech_result.observation}".strip()
 
                 print(f"Agent_{uid}_Observation: {response}", flush=True)
                 print(f"  ({skill_steps} steps)", flush=True)
@@ -740,6 +821,13 @@ class BenchmarkRunner(EMTOMBaseRunner):
         if not self.task or not self.task.subtasks:
             return None
 
+        # Category-aware handling
+        category = getattr(self.task, "category", "cooperative")
+        if category == "competitive":
+            return self._check_competitive_completion()
+        if category == "mixed":
+            return self._check_mixed_completion()
+
         # Get all required subtasks
         required_subtasks = [
             s for s in self.task.subtasks
@@ -789,6 +877,102 @@ class BenchmarkRunner(EMTOMBaseRunner):
         return {
             "success": all_satisfied,
             "conditions_checked": conditions_checked,
+            "completed_subtasks": list(self._completed_subtasks),
+            "total_subtasks": total_subtasks,
+            "required_subtasks": required_count,
+            "completed_required": completed_required,
+            "percent_complete": len(self._completed_subtasks) / total_subtasks if total_subtasks else 0.0,
+            "percent_required_complete": completed_required / required_count if required_count else 0.0,
+        }
+
+    def _check_competitive_completion(self) -> Dict[str, Any]:
+        """
+        Competitive tasks: any team can win.
+
+        - Shared required=True subtasks act as global prerequisites.
+        - Team-owned subtasks (required="team_X") determine the winner.
+        """
+        subtasks = self.task.subtasks
+        total_subtasks = len(subtasks)
+
+        # Shared prerequisites (required=True only)
+        shared_required = [s for s in subtasks if s.required is True]
+        shared_ok = all(
+            (s.id in self._completed_subtasks) or not s.has_valid_condition()
+            for s in shared_required
+        )
+
+        teams = self.task.get_all_teams()
+        team_status: Dict[str, bool] = {}
+        team_progress: Dict[str, float] = {}
+        winner: Optional[str] = None
+
+        for team_id in teams:
+            team_subtasks = self.task.get_team_subtasks(team_id)
+            valid_team_subtasks = [s for s in team_subtasks if s.has_valid_condition()]
+            if not valid_team_subtasks:
+                # No explicit subtasks: treat as completed
+                team_status[team_id] = shared_ok
+                team_progress[team_id] = 1.0 if shared_ok else 0.0
+                if shared_ok and winner is None:
+                    winner = team_id
+                continue
+
+            completed = sum(1 for s in valid_team_subtasks if s.id in self._completed_subtasks)
+            progress = completed / len(valid_team_subtasks)
+            team_progress[team_id] = progress
+            team_status[team_id] = shared_ok and (progress == 1.0)
+
+            if team_status[team_id] and winner is None:
+                winner = team_id
+
+        # Aggregate counts for summaries
+        required_subtasks = [s for s in subtasks if getattr(s, "required", True)]
+        required_count = len(required_subtasks)
+        completed_required = len([s for s in self._completed_subtasks if s in {st.id for st in required_subtasks}])
+
+        return {
+            "success": winner is not None,
+            "winner": winner,
+            "team_status": team_status,
+            "team_progress": team_progress,
+            "completed_subtasks": list(self._completed_subtasks),
+            "total_subtasks": total_subtasks,
+            "required_subtasks": required_count,
+            "completed_required": completed_required,
+            "percent_complete": len(self._completed_subtasks) / total_subtasks if total_subtasks else 0.0,
+            "percent_required_complete": completed_required / required_count if required_count else 0.0,
+        }
+
+    def _check_mixed_completion(self) -> Dict[str, Any]:
+        """
+        Mixed tasks: success is defined by completing the shared main goal (required=True).
+        Agent-specific subtasks are tracked but do not block main success.
+        """
+        subtasks = self.task.subtasks
+        total_subtasks = len(subtasks)
+
+        # Shared main goal
+        shared_required = [s for s in subtasks if s.required is True]
+        shared_valid = [s for s in shared_required if s.has_valid_condition()]
+        completed_shared = sum(1 for s in shared_valid if s.id in self._completed_subtasks)
+        main_goal_success = completed_shared == len(shared_valid) if shared_valid else True
+
+        # Agent subgoals
+        agent_subgoal_status: Dict[str, bool] = {}
+        for subtask in subtasks:
+            owner = subtask.owner
+            if owner and owner.startswith("agent_") and subtask.has_valid_condition():
+                agent_subgoal_status[owner] = subtask.id in self._completed_subtasks
+
+        required_count = len(shared_required)
+        completed_required = completed_shared
+
+        return {
+            "success": main_goal_success,
+            "main_goal_success": main_goal_success,
+            "main_goal_progress": completed_shared / len(shared_valid) if shared_valid else 1.0,
+            "agent_subgoal_status": agent_subgoal_status,
             "completed_subtasks": list(self._completed_subtasks),
             "total_subtasks": total_subtasks,
             "required_subtasks": required_count,

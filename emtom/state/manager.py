@@ -303,6 +303,7 @@ class GameStateManager:
         object_states = {}
         entities = []
 
+        room_by_entity: Dict[str, str] = {}
         for uid, wg in world_graph_dict.items():
             if wg is None:
                 continue
@@ -325,6 +326,15 @@ class GameStateManager:
                         object_states[entity_id] = states
                         entity_dict.update(states)
 
+                    # Try to resolve room for this entity
+                    try:
+                        room = wg.get_room_for_entity(obj_node)
+                        room_name = room.name if hasattr(room, "name") else str(room)
+                        entity_dict["room"] = room_name
+                        room_by_entity[entity_id] = room_name
+                    except Exception:
+                        pass
+
                     entities.append(entity_dict)
             except (ValueError, AttributeError):
                 pass
@@ -336,6 +346,10 @@ class GameStateManager:
         new_state.agent_rooms = agent_rooms
         new_state.object_states = object_states
         new_state.entities = entities
+
+        # Persist room mapping into object_properties for quick lookup
+        for entity_id, room_name in room_by_entity.items():
+            new_state = new_state.set_object_property(entity_id, "room", room_name)
 
         self.state = new_state
         return new_state
@@ -1331,6 +1345,11 @@ class GameStateManager:
         Returns:
             True if container is NOT locked
         """
+        # Prefer explicit is_unlocked flag if present (e.g., remote unlock mechanics)
+        is_unlocked = self.state.get_object_property(entity, "is_unlocked", None)
+        if is_unlocked is not None:
+            return bool(is_unlocked)
+
         is_locked = self.state.get_object_property(entity, "is_locked", False)
         return not is_locked
 
