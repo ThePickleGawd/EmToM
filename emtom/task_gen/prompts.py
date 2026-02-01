@@ -121,7 +121,7 @@ Secrets must require REASONING, not just following instructions.
 {{
   "category": "cooperative|competitive|mixed",
   "num_agents": N,
-  "task": "Natural language description (NO object IDs, NO solution hints)",
+  "task": "Natural language description (NO object IDs, NO solution hints, NO agent roles)"
   "agent_secrets": {{"agent_0": [...], "agent_1": [...]}},
   "agent_actions": {{"agent_0": [...], "agent_1": [...]}},
   "subtasks": [{{"id": "...", "required": true/false/"team_X"/"agent_X", "depends_on": [], "success_condition": {{...}}}}],
