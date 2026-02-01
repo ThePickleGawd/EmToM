@@ -2501,17 +2501,62 @@ working_task.json reset. Use new_scene[N, keep] to change agent count without lo
         pattern_count = self.diversity_tracker.get_pattern_count()
         patterns = self.diversity_tracker.get_patterns_for_prompt()
 
-        if pattern_count == 0:
+        # Load existing task categories to avoid repetition
+        existing_categories = self._load_existing_categories()
+
+        if pattern_count == 0 and not existing_categories:
             return "No previous tasks yet. Be creative with your task structure and win conditions!"
 
-        return f"""Previously generated task patterns ({pattern_count} total):
-{patterns}
+        sections = []
 
-**CRITICAL - DIVERSITY REQUIRED**:
-- Do NOT repeat similar win conditions (e.g., if there are many "race to find X" tasks, create something else)
-- Do NOT repeat similar mechanics combinations or dependency structures
-- Create a FUNDAMENTALLY DIFFERENT task structure, not just a reskin with different objects
-- Consider: sabotage, collection, arrangement, defense, sequential unlocking, information trading, etc."""
+        # Add existing category information
+        if existing_categories:
+            sections.append(f"""## EXISTING TASK CATEGORIES (DO NOT REPEAT THESE)
+
+The following task types ALREADY EXIST in the dataset. You MUST create something FUNDAMENTALLY DIFFERENT.
+
+{existing_categories}
+
+**YOU ARE FORBIDDEN FROM CREATING TASKS THAT FIT THE ABOVE CATEGORIES.**
+Think of entirely new gameplay patterns, win conditions, and mechanics combinations.""")
+
+        # Add recent patterns if any
+        if pattern_count > 0:
+            sections.append(f"""## Recent Task Patterns ({pattern_count} total)
+{patterns}""")
+
+        # Add diversity guidance
+        sections.append("""**CRITICAL - NOVELTY REQUIRED**:
+- Your task MUST NOT fit any of the existing categories above
+- Invent NEW win conditions (not race/retrieval/unlock/stash/placement)
+- Invent NEW mechanics interactions (not just key chains or remote triggers)
+- Invent NEW collaboration patterns (not just information sharing or room restrictions)
+- Think: deception, time pressure, resource management, defense, sabotage, trading, voting, signaling, bluffing
+- The task should make reviewers say "we've never seen a task like this before" """)
+
+        return "\n\n".join(sections)
+
+    def _load_existing_categories(self) -> str:
+        """Load and format existing task categories from task_categories.json."""
+        categories_file = Path("data/emtom/task_categories.json")
+        if not categories_file.exists():
+            return ""
+
+        try:
+            with open(categories_file) as f:
+                categories = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return ""
+
+        lines = []
+        for main_category, subcategories in categories.items():
+            lines.append(f"### {main_category.upper()}")
+            for subcat_name, subcat_info in subcategories.items():
+                description = subcat_info.get("description", "")
+                lines.append(f"- **{subcat_name}**: {description}")
+            lines.append("")  # Empty line between categories
+
+        return "\n".join(lines)
 
     def _log(self, message: str, truncate_terminal: int = 0) -> None:
         """Print log message and write to log file.
