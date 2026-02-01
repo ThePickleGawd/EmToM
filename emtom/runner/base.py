@@ -852,9 +852,9 @@ class EMTOMBaseRunner(ABC):
                 results[uid] = {"success": False, "observation": obs_text}
             else:
                 # Apply mechanic state changes
+                action_name = state["action_name"]
                 if mech_result.applies:
                     agent_id = f"agent_{uid}"
-                    action_name = state["action_name"]
                     target = state["target"]
                     _, mechanic_result = self.game_manager.apply_action(action_name, agent_id, target)
                     self._sync_remote_effects_to_simulator(mechanic_result.effects)

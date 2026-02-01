@@ -285,6 +285,11 @@ class TaskEvaluator:
         self.world_graph = world_graph
         self.required_states = success_condition.get("required_states", [])
 
+        # Build ao_link_map for proper articulated object handling
+        # This maps link object IDs to their parent articulated object IDs
+        from habitat.sims.habitat_simulator import sim_utilities
+        self.ao_link_map = sim_utilities.get_ao_link_id_map(sim)
+
     def _resolve_handle(self, name: str) -> str:
         """Resolve name to simulator handle via world graph."""
         if not self.world_graph:
@@ -316,21 +321,21 @@ class TaskEvaluator:
         entity_handle = self._resolve_handle(entity) if entity else None
         target_handle = self._resolve_handle(target) if target else None
 
-        # Relational predicates
+        # Relational predicates - pass ao_link_map for proper articulated object handling
         if property_name in ("is_on_top", "is_inside"):
             if not target_handle:
                 return PropositionResult(False, {"error": f"{property_name} requires 'target'"})
-            result = predicate_fn(self.sim, [entity_handle], [target_handle])
+            result = predicate_fn(self.sim, [entity_handle], [target_handle], ao_link_map=self.ao_link_map)
 
         elif property_name == "is_in_room":
             if not target:
                 return PropositionResult(False, {"error": "is_in_room requires 'target'"})
-            result = predicate_fn(self.sim, [entity_handle], [target])
+            result = predicate_fn(self.sim, [entity_handle], [target], ao_link_map=self.ao_link_map)
 
         elif property_name == "is_next_to":
             if not target_handle:
                 return PropositionResult(False, {"error": "is_next_to requires 'target'"})
-            result = predicate_fn(self.sim, [entity_handle], [target_handle])
+            result = predicate_fn(self.sim, [entity_handle], [target_handle], ao_link_map=self.ao_link_map)
 
         elif property_name == "is_held_by":
             if not target:
@@ -340,7 +345,7 @@ class TaskEvaluator:
 
         # Unary predicates
         else:
-            result = predicate_fn(self.sim, [entity_handle])
+            result = predicate_fn(self.sim, [entity_handle], ao_link_map=self.ao_link_map)
 
         # Convert PARTNR result to our format if needed
         if not isinstance(result, PropositionResult):
@@ -434,6 +439,10 @@ class CategoryTaskEvaluator:
         self.world_graph = world_graph
         self.game_manager = game_manager
 
+        # Build ao_link_map for proper articulated object handling
+        from habitat.sims.habitat_simulator import sim_utilities
+        self.ao_link_map = sim_utilities.get_ao_link_id_map(sim)
+
     def _resolve_handle(self, name: str) -> str:
         """Resolve name to simulator handle via world graph."""
         if not self.world_graph:
@@ -469,21 +478,21 @@ class CategoryTaskEvaluator:
         entity_handle = self._resolve_handle(entity) if entity else None
         target_handle = self._resolve_handle(target) if target else None
 
-        # Relational predicates
+        # Relational predicates - pass ao_link_map for proper articulated object handling
         if property_name in ("is_on_top", "is_inside"):
             if not target_handle:
                 return PropositionResult(False, {"error": f"{property_name} requires 'target'"})
-            result = predicate_fn(self.sim, [entity_handle], [target_handle])
+            result = predicate_fn(self.sim, [entity_handle], [target_handle], ao_link_map=self.ao_link_map)
 
         elif property_name == "is_in_room":
             if not target:
                 return PropositionResult(False, {"error": "is_in_room requires 'target'"})
-            result = predicate_fn(self.sim, [entity_handle], [target])
+            result = predicate_fn(self.sim, [entity_handle], [target], ao_link_map=self.ao_link_map)
 
         elif property_name == "is_next_to":
             if not target_handle:
                 return PropositionResult(False, {"error": "is_next_to requires 'target'"})
-            result = predicate_fn(self.sim, [entity_handle], [target_handle])
+            result = predicate_fn(self.sim, [entity_handle], [target_handle], ao_link_map=self.ao_link_map)
 
         elif property_name == "is_held_by":
             if not target:
@@ -492,7 +501,7 @@ class CategoryTaskEvaluator:
 
         # Unary predicates
         else:
-            result = predicate_fn(self.sim, [entity_handle])
+            result = predicate_fn(self.sim, [entity_handle], ao_link_map=self.ao_link_map)
 
         # Convert PARTNR result to our format if needed
         if not isinstance(result, PropositionResult):

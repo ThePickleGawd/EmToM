@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -42,6 +43,7 @@ def main():
     parser = argparse.ArgumentParser(description="Verify golden trajectory")
     parser.add_argument("--task-file", required=True, help="Path to task JSON")
     parser.add_argument("--result-file", required=True, help="Path to write result JSON")
+    parser.add_argument("--working-dir", default=None, help="Working directory for Hydra config output")
     parser.add_argument("--config-name", default="examples/emtom_2_robots")
     args = parser.parse_args()
 
@@ -93,7 +95,11 @@ def main():
 
         # Manually override Hydra interpolations BEFORE fix_config tries to resolve them
         # These would fail with "HydraConfig was not set" otherwise
-        output_dir = "/tmp/emtom_verify"
+        # Use working_dir if provided, otherwise fall back to PID-based tmp directory
+        if args.working_dir:
+            output_dir = f"{args.working_dir}/hydra_verify_{os.getpid()}"
+        else:
+            output_dir = f"/tmp/emtom_verify_{os.getpid()}"
         with open_dict(config):
             # Override evaluation.output_dir (uses ${hydra:runtime.output_dir})
             if "evaluation" in config:
@@ -167,7 +173,7 @@ def main():
         runner.setup(
             env_interface=env_interface,
             task_data=task_mechanics,
-            output_dir="/tmp/emtom_verify",
+            output_dir=output_dir,
             task=task,
             save_video=False,
         )

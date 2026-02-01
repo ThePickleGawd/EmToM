@@ -38,8 +38,8 @@
     "agent_1": ["REPLACE_WITH_SECRET_INFO"]
   },
   "agent_actions": {
-    "agent_0": ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"],
-    "agent_1": ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]
+    "agent_0": ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"],
+    "agent_1": ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
   },
   "subtasks": [
     {

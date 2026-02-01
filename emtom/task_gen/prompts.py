@@ -106,6 +106,7 @@ Secrets must require REASONING, not just following instructions.
 - Use descriptions: "a drawer", "the tall cabinet", "a piece of furniture"
 - NEVER use object IDs like "cabinet_29" or "chest_of_drawers_31" in secrets
 - NEVER use item IDs like "item_small_key_1" - say "a small key" instead
+- Agents have FindObjectTool and FindRoomTool to resolve descriptions to IDs at runtime
 
 **Information Asymmetry Patterns for ToM**:
 1. Agent A knows WHERE (location hint), Agent B knows WHAT (purpose) - must communicate
@@ -120,7 +121,7 @@ Secrets must require REASONING, not just following instructions.
 {{
   "category": "cooperative|competitive|mixed",
   "num_agents": N,
-  "task": "Description (NO solution hints)",
+  "task": "Natural language description (NO object IDs, NO solution hints)",
   "agent_secrets": {{"agent_0": [...], "agent_1": [...]}},
   "agent_actions": {{"agent_0": [...], "agent_1": [...]}},
   "subtasks": [{{"id": "...", "required": true/false/"team_X"/"agent_X", "depends_on": [], "success_condition": {{...}}}}],
@@ -129,6 +130,12 @@ Secrets must require REASONING, not just following instructions.
   "golden_trajectory": [{{"actions": [{{"agent": "agent_0", "action": "Navigate[room]"}}]}}]
 }}
 ```
+
+**IMPORTANT: Task Description Rules**
+- Use natural language: "the microwave in the kitchen", "the toy airplane"
+- NEVER put object IDs (toy_airplane_0, microwave_29) in the task description
+- Agents have FindObjectTool to resolve descriptions to IDs at runtime
+- Only subtask success_conditions use exact IDs (for machine evaluation)
 
 ## Success Conditions
 - Spatial: `is_on_top`, `is_inside`, `is_in_room` (need `target`)

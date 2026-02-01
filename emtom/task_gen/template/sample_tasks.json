@@ -30,6 +30,9 @@
       "Open",
       "Close",
       "Navigate",
+      "FindObjectTool",
+      "FindReceptacleTool",
+      "FindRoomTool",
       "Wait"
     ],
     "agent_1": [
@@ -37,6 +40,9 @@
       "Navigate",
       "Pick",
       "Place",
+      "FindObjectTool",
+      "FindReceptacleTool",
+      "FindRoomTool",
       "Wait"
     ]
   },

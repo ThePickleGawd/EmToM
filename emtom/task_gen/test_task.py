@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -72,7 +73,11 @@ def main():
         config = compose(config_name=args.config_name)
 
         # Manually override Hydra interpolations BEFORE fix_config tries to resolve them
-        output_dir = "/tmp/emtom_test_writable"
+        # Use trajectory_dir parent if provided, otherwise fall back to PID-based tmp directory
+        if args.trajectory_dir:
+            output_dir = str(Path(args.trajectory_dir).parent / f"hydra_test_{os.getpid()}")
+        else:
+            output_dir = f"/tmp/emtom_test_{os.getpid()}"
         with open_dict(config):
             if "evaluation" in config:
                 config.evaluation.output_dir = output_dir

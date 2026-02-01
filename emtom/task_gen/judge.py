@@ -139,6 +139,7 @@ SHARED_CRITERIA = [
     "agent_necessity",       # Every agent must be essential
     "secret_relevance",      # Secrets must be useful and required
     "secret_naturalness",    # Secrets use natural language, not object IDs
+    "task_naturalness",      # Task description uses natural language, not object IDs
     "narrative_consistency",
     "subtask_relevance",
     "mechanic_utilization",
@@ -180,6 +181,15 @@ CRITERIA_DESCRIPTIONS = {
 0.5: Mostly natural language but some IDs slip through
 0.7: All natural language, but secrets are still too instructional ("Search X to find Y")
 1.0: All natural language, secrets provide clues not instructions, require reasoning""",
+    },
+    "task_naturalness": {
+        "name": "Task Description Natural Language",
+        "description": "Does the task description use natural language instead of object IDs? Agents use FindObjectTool to resolve descriptions. Check for patterns like toy_airplane_0, microwave_29, table_54.",
+        "rubric": """0.0: Task contains many object IDs (toy_airplane_0, microwave_29) or a 'Grounding note' with IDs
+0.3: Task has some object IDs mixed with natural descriptions
+0.5: Mostly natural language but a few IDs slip through
+0.7: Natural language throughout, minor specificity issues
+1.0: Pure natural language ('the toy airplane', 'the kitchen microwave') - agents discover IDs via FindObjectTool""",
     },
     # Task quality criteria
     "narrative_consistency": {
@@ -733,7 +743,6 @@ class Judge:
         if self.diversity_tracker:
             novelty_result = self.diversity_tracker.check_novelty(task_dict)
             novelty_score = CriterionScore(
-                name="task_novelty",
                 score=novelty_result["score"],
                 reasoning=novelty_result["reason"],
             )

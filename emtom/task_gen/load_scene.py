@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -21,6 +22,7 @@ sys.path.insert(0, str(project_root))
 def main():
     parser = argparse.ArgumentParser(description="Load a scene (random or specific)")
     parser.add_argument("--result-file", required=True, help="Path to write result JSON")
+    parser.add_argument("--working-dir", default=None, help="Working directory for Hydra config output")
     parser.add_argument("--config-name", default="examples/emtom_2_robots")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for scene selection")
     parser.add_argument("--scene-id", type=str, default=None, help="Specific scene ID to load (e.g., '102817140')")
@@ -51,7 +53,11 @@ def main():
         config = compose(config_name=args.config_name)
 
         # Set output directory to avoid Hydra interpolation errors
-        output_dir = "/tmp/emtom_scene_load"
+        # Use working_dir if provided, otherwise fall back to PID-based tmp directory
+        if args.working_dir:
+            output_dir = f"{args.working_dir}/hydra_scene_{os.getpid()}"
+        else:
+            output_dir = f"/tmp/emtom_scene_load_{os.getpid()}"
         with open_dict(config):
             if "evaluation" in config:
                 config.evaluation.output_dir = output_dir

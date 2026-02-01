@@ -570,7 +570,8 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
         task["num_agents"] = num_agents
 
         # Generate agent_secrets and agent_actions
-        default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]
+        # Include Find* tools so agents can discover objects at runtime instead of hardcoded IDs
+        default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
         task["agent_secrets"] = {
             f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
             for i in range(num_agents)
@@ -1519,20 +1520,16 @@ SUMMARY:"""
                 "summary": "Task validation failed"
             }
 
-        # Check task is grounded in real objects (must contain at least one object ID pattern)
+        # Validate object IDs in task description (if any) exist in scene
+        # Note: Task descriptions should use natural language (e.g., "the microwave in the kitchen")
+        # and agents use FindObjectTool to resolve to actual IDs at runtime.
+        # We only validate that any IDs mentioned actually exist (to catch typos).
         task_desc = task_data.get("task", "")
-        # Look for patterns like "table_59", "chest_of_drawers_54", "kettle_3"
         import re
         object_pattern = r'\b[a-z_]+_\d+\b'
         object_refs = re.findall(object_pattern, task_desc)
-        if not object_refs:
-            return {
-                "valid": False,
-                "error": "task must reference real object IDs from scene_inventory (e.g., 'chest_of_drawers_54', 'table_59'). Do not use generic descriptions like 'a drawer' or 'the table'.",
-                "summary": "Task validation failed - task not grounded"
-            }
 
-        # Check that object IDs in task actually exist in scene
+        # Check that any object IDs in task actually exist in scene
         if self.scene_data:
             valid_scene_ids = set(
                 self.scene_data.rooms +
@@ -1900,6 +1897,7 @@ SUMMARY:"""
             str(script_path),
             "--task-file", str(self.task_file),
             "--result-file", temp_result_file,
+            "--working-dir", str(self.working_dir),
             "--config-name", config_name,
         ]
 
@@ -2339,6 +2337,7 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                 sys.executable,
                 str(script_path),
                 "--result-file", result_file,
+                "--working-dir", str(self.working_dir),
                 "--config-name", config_name,
                 "--seed", str(new_seed),
             ]
@@ -2457,8 +2456,11 @@ working_task.json reset. Use new_scene[N, keep] to change agent count without lo
 
         lines = []
 
-        # Warning about exact IDs
-        lines.append("**WARNING: You MUST use EXACT object IDs from this list. Do NOT invent or guess IDs!**\n")
+        # Guidance about IDs vs natural language
+        lines.append("**ID Usage Rules:**")
+        lines.append("- `golden_trajectory`, `subtasks`, `locked_containers`: Use EXACT object IDs from this list")
+        lines.append("- `task` description: Use NATURAL LANGUAGE (e.g., 'the microwave', 'a toy airplane') - agents use FindObjectTool")
+        lines.append("- `agent_secrets`: Use NATURAL LANGUAGE (e.g., 'a drawer in the bedroom') - no object IDs\n")
 
         # Rooms - show all
         lines.append("### Rooms")
