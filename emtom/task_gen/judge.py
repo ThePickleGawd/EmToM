@@ -137,8 +137,7 @@ class BenchmarkRollout:
 # Ordered by importance - agent design criteria first
 SHARED_CRITERIA = [
     "agent_necessity",       # Every agent must be essential
-    "secret_relevance",      # Secrets must be useful and required
-    "secret_naturalness",    # Secrets use natural language, not object IDs
+    "secret_quality",        # Secrets are actionable, natural, and non-leaking
     "task_naturalness",      # Task description uses natural language, not object IDs
     "narrative_consistency",
     "subtask_relevance",
@@ -164,23 +163,14 @@ CRITERIA_DESCRIPTIONS = {
 0.7: Most agents essential, one could theoretically be merged
 1.0: Every agent is indispensable - removing any would make task impossible""",
     },
-    "secret_relevance": {
-        "name": "Secret Relevance",
-        "description": "Are agent secrets actually useful and required for task completion?",
-        "rubric": """0.0: Secrets restate global information or are completely useless
-0.3: Secrets provide minor flavor but aren't needed to complete the task
-0.5: Secrets are somewhat helpful but task could be solved without them
-0.7: Secrets provide important information, minor redundancy
-1.0: Each secret provides unique, essential information that agent must use to succeed""",
-    },
-    "secret_naturalness": {
-        "name": "Secret Natural Language Quality",
-        "description": "Do secrets avoid explicit object IDs and prescriptive instructions? Check for patterns like cabinet_29, item_small_key_1, chest_of_drawers_31.",
-        "rubric": """0.0: Secrets contain object IDs (cabinet_29, item_small_key_1) and step-by-step instructions
-0.3: Secrets use some IDs, mixed with natural language
-0.5: Mostly natural language but some IDs slip through
-0.7: All natural language, but secrets are still too instructional ("Search X to find Y")
-1.0: All natural language, secrets provide clues not instructions, require reasoning""",
+    "secret_quality": {
+        "name": "Secret Quality",
+        "description": "Are secrets actionable, natural-language, and non-leaking? They must be required to solve the task.",
+        "rubric": """0.0: Secrets leak targets OR use IDs OR are useless/vague
+0.3: Secrets are too vague, too prescriptive, or partially leak key info
+0.5: Mostly OK but still broad, redundant, or weakly necessary
+0.7: Actionable, natural, and mostly non-leaking with minor redundancy
+1.0: Each secret is essential, actionable, natural-language, and does not leak public targets""",
     },
     "task_naturalness": {
         "name": "Task Description Natural Language",
@@ -346,89 +336,39 @@ class CouncilVerdict:
 EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 
 ## Task Category: {category}
-
 {category_description}
 {user_requirements_section}
 
-## System Capabilities (suggestions must use these!)
-
+## System Capabilities (use these in suggestions)
 ### Available Actions
 {available_actions}
-
 ### Available Mechanics
 {available_mechanics}
-
 ### Available Items
 {available_items}
-
 ### Available Predicates (for success_condition)
 {available_predicates}
-
 ### Scene Objects
 {scene_objects}
 
----
+## Checks
+- `task` is GLOBAL; for competitive/mixed it must not leak secret targets or team-specific objectives
+- Secrets must be actionable (room/furniture/key/constraint) and required
+- Secrets must be natural language (no IDs) and not step-by-step
+- `required` semantics: true(shared), false(optional), "team_X"(win), "agent_X"(subgoal)
+- Category must match `required` usage
 
 ## Evaluation Criteria
-
 Score each criterion from 0.0 to 1.0.
-
 {criteria_section}
 
----
-
-## Subtask `required` Field Semantics
-
-The `required` field in subtasks determines ownership and win conditions:
-- `required: true` - Shared goal (must complete for task success)
-- `required: false` - Intermediate step (tracks progress, not required)
-- `required: "team_X"` - Team X wins when complete (competitive)
-- `required: "agent_X"` - Agent X's personal subgoal (mixed)
-
-**Check**: Do `required` values match the task category?
-- Cooperative: Should use `true`/`false` only
-- Competitive: Should have `"team_0"`, `"team_1"` win conditions
-- Mixed: Should have `true` for main goal + `"agent_X"` for subgoals
-
----
-
-## What Makes a Good Task
-
-**Every Agent Indispensable**: Removing ANY agent makes the task impossible.
-- Each agent must have unique capabilities, knowledge, or access
-- No idle agents or agents doing work others could handle
-
-**Secrets Drive the Task**: `agent_secrets` contain information the agent MUST use.
-- Secrets should NOT restate global information or be generic flavor text
-- Each secret enables actions only that agent can take
-- Good: "There's a key hidden in one of the bedroom drawers" → agent must explore
-- Bad: "Search chest_of_drawers_31 to find the key" → too prescriptive, no reasoning needed
-- Bad: "You are a helpful robot" → useless for task completion
-
-**Secrets Must Use Natural Language** (check for object ID patterns like `[a-z_]+_\\d+`):
-- NEVER use object IDs like "cabinet_29", "chest_of_drawers_31", "item_small_key_1"
-- Use descriptions: "the bedroom", "a drawer", "the tall cabinet", "a small key"
-- Secrets should provide CLUES that require reasoning, not step-by-step instructions
-
-**Forced Coordination**: Subtask dependencies require `Communicate` to share discoveries.
-- Agents must exchange secret information to succeed
-- Good: Agent 1 knows location, must tell Agent 0 to unlock it
-- Bad: Agents work in parallel without needing to talk
-
----
-
 ## Task to Evaluate
-
 ```json
 {task_json}
 ```
 
----
-
 ## Response Format
-
-Respond with ONLY valid JSON. Keep reasoning BRIEF (under 15 words each).
-
+Respond with ONLY valid JSON. Keep reasoning brief (under 15 words each).
 {{
 {response_format}
   "overall_reasoning": "<1 sentence>",
@@ -436,12 +376,7 @@ Respond with ONLY valid JSON. Keep reasoning BRIEF (under 15 words each).
 }}
 
 ## Suggestion Requirements
-
-Suggestions MUST be SPECIFIC and use ONLY available system capabilities.
-Only include the MOST IMPORTANT fixes - don't list everything wrong, just what matters most.
-
-**BAD**: "Improve the task design"
-**GOOD**: "Remove subtasks s8, s9 - they open random furniture unrelated to the main goal."
+Be specific and only use available system capabilities. Prioritize the most important fixes.
 """
 
 # Category descriptions for the prompt
@@ -451,29 +386,20 @@ CATEGORY_PROMPT_DESCRIPTIONS = {
 - Information is distributed: one agent might know key locations, another knows which locks need which keys
 - Success requires piecing together distributed information through communication
 - Complex tasks can have parallel workstreams that converge
-- Uses `agent_secrets` to distribute knowledge, `required: true` for shared goals
-
-**Good cooperative task**: Agent 0 knows key location, Agent 1 knows which cabinet → must share info
-**Bad cooperative task**: Agent 0 can find key AND unlock cabinet alone (no interdependence)""",
-
+- Uses `agent_secrets` to distribute knowledge, `required: true` for shared goals""",
     "competitive": """**COMPETITIVE** - Teams with opposing objectives
 - Divide agents into teams (any split: 1v1, 2v1, 2v2, 3v2, etc.)
 - Teams compete for contested resources OR race to complete opposing objectives
 - Each team member should contribute - divide responsibilities within teams
 - Balance matters: if teams are uneven in size, give smaller team easier objectives
 - Uses `teams` mapping, `required: "team_X"` for each team's win conditions
-
-**Good competitive task**: Both teams need to unlock a shared chest, then race to secure the prize in their cabinet
-**Bad competitive task**: One team has overwhelming advantage or goals don't actually conflict""",
-
+- Public `task` must be symmetric; team-specific targets belong in secrets""",
     "mixed": """**MIXED** - Cooperation with hidden conflicts
 - All agents share a main goal they must complete together (`required: true`)
 - Each agent also has a SECRET personal subgoal (`required: "agent_X"`) that may conflict with others
 - Tension: agents must cooperate on the main task while secretly pursuing conflicting interests
 - Subgoals should create interesting dilemmas, not make main goal impossible
-
-**Good mixed task**: Both agents clean house, but one secretly wants valuable item hidden while another wants it displayed
-**Bad mixed task**: Subgoals are trivial or don't actually conflict with anything""",
+- Public `task` must not reveal secret subgoals or targets""",
 }
 
 
@@ -518,7 +444,7 @@ class Judge:
 
     Priority criteria (suggestions appear first):
     - agent_necessity: Every agent must be essential
-    - secret_relevance: Secrets must be useful and required
+    - secret_quality: Secrets must be actionable, natural, and non-leaking
 
     Both models must agree for a task to pass.
     """
@@ -533,8 +459,8 @@ class Judge:
     def __init__(
         self,
         models: Optional[List[str]] = None,
-        overall_threshold: float = 0.6,
-        min_criterion_threshold: float = 0.4,
+        overall_threshold: float = 0.65,
+        min_criterion_threshold: float = 0.5,
         verbose: bool = False,
         user_query: Optional[str] = None,
         diversity_tracker: Optional["DiversityTracker"] = None,
@@ -544,8 +470,8 @@ class Judge:
 
         Args:
             models: List of model names for council (default: ["opus", "gpt-5.2"])
-            overall_threshold: Minimum overall score to pass (default 0.6)
-            min_criterion_threshold: Minimum score for any criterion (default 0.4)
+            overall_threshold: Minimum overall score to pass (default 0.65)
+            min_criterion_threshold: Minimum score for any criterion (default 0.5)
             verbose: Print debug information
             user_query: Optional user query that the task should align with
             diversity_tracker: Optional tracker to check task novelty against existing tasks
@@ -907,7 +833,7 @@ The user specifically requested:
         )
 
     # Priority criteria - suggestions for these appear first
-    PRIORITY_CRITERIA = ["agent_necessity", "secret_relevance"]
+    PRIORITY_CRITERIA = ["agent_necessity", "secret_quality"]
 
     def _aggregate(self, judgments: Dict[str, Judgment]) -> CouncilVerdict:
         """Aggregate judgments from multiple models."""
@@ -1005,12 +931,12 @@ def main():
         help="Comma-separated list of models for council (default: opus,gpt-5)"
     )
     parser.add_argument(
-        "--threshold", type=float, default=0.6,
-        help="Overall score threshold (default: 0.6)"
+        "--threshold", type=float, default=0.65,
+        help="Overall score threshold (default: 0.65)"
     )
     parser.add_argument(
-        "--min-criterion", type=float, default=0.4,
-        help="Minimum criterion score (default: 0.4)"
+        "--min-criterion", type=float, default=0.5,
+        help="Minimum criterion score (default: 0.5)"
     )
     parser.add_argument(
         "--verbose", action="store_true",

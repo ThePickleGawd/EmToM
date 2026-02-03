@@ -62,7 +62,7 @@ Assigned!
 
 **COOPERATIVE** - All agents united toward shared goals
 - Every agent contributes unique knowledge, skills, or access that others lack
-- Information is distributed: agent_0 might know key locations, agent_1 knows which cabinet needs unlocking
+- Information is distributed: one agent might know key locations, another knows which locks need which keys
 - Success requires piecing together distributed information through communication
 - Complex tasks can have parallel workstreams that converge
 - Use `agent_secrets` to distribute knowledge, `required: true` for shared goals
@@ -73,56 +73,30 @@ Assigned!
 - Each team member should contribute - divide responsibilities within teams
 - Balance matters: if teams are uneven in size, give smaller team easier objectives
 - Define `teams` mapping, use `required: "team_X"` for each team's win conditions
+- Keep the public `task` symmetric; do NOT reveal each team's target container
 
 **MIXED** - Cooperation with hidden conflicts
 - All agents share a main goal they must complete together (`required: true`)
-- Each agent also has a SECRET personal subgoal (`required: "agent_X"`) that may conflict
-- Tension: agents must cooperate on main task while secretly pursuing conflicting interests
-- Example: both agents clean house, but one secretly wants valuable item hidden while another wants it displayed
+- Each agent also has a SECRET personal subgoal (`required: "agent_X"`) that may conflict with others
+- Tension: agents must cooperate on the main task while secretly pursuing conflicting interests
 - Subgoals should create interesting dilemmas, not make main goal impossible
+- Public `task` should not reveal secret subgoals or targets
 
-## Task Design Principles
-- **Every agent MUST be essential** - task fails if any agent removed
-- Create information asymmetry via `agent_secrets`
-- Use locked containers + hidden keys for dependencies
-- Agents must `Communicate` to share discoveries
-
-## Agent Secrets - Theory of Mind Requirements
-
-Secrets must require REASONING, not just following instructions.
-
-**AVOID** (too prescriptive - tells agent exactly what to do):
-- "Search chest_of_drawers_31 in bedroom_1 to find the Small Key"
-- "Use the key on cabinet_29 to unlock it"
-- "You are the key-finder. Your job is to retrieve keys."
-
-**PREFERRED** (requires exploration and deduction):
-- "There's a key hidden in one of the bedroom drawers."
-- "You noticed the kitchen cabinet seems connected to something elsewhere."
-- "You can only access the storage closet - others can't enter."
-
-**Natural Language Requirements**:
-- Use room names: "the bedroom", "somewhere in the kitchen"
-- Use descriptions: "a drawer", "the tall cabinet", "a piece of furniture"
-- NEVER use object IDs like "cabinet_29" or "chest_of_drawers_31" in secrets
-- NEVER use item IDs like "item_small_key_1" - say "a small key" instead
-- Agents have FindObjectTool and FindRoomTool to resolve descriptions to IDs at runtime
-
-**Information Asymmetry Patterns for ToM**:
-1. Agent A knows WHERE (location hint), Agent B knows WHAT (purpose) - must communicate
-2. Agent A observed a behavior, must describe it to others
-3. Agent A has partial clue, needs Agent B's clue to complete the picture
-4. Agents have different access restrictions they must discover
-
-**Do NOT assign roles** - let agents figure out coordination themselves.
+## Core Rules
+- Every agent essential; **no assigned roles**
+- `task` is GLOBAL; keep high-level; do not leak secret targets (competitive/mixed)
+- Secrets must be actionable (room/furniture/key/constraint) and not prescriptive
+- Secrets create asymmetry; agents must communicate to combine clues
+- Natural language only; no object/item IDs in `task` or secrets
 
 ## Task JSON Structure
 ```json
 {{
   "category": "cooperative|competitive|mixed",
   "num_agents": N,
-  "task": "Natural language description (NO object IDs, NO solution hints, NO agent roles)"
+  "task": "Natural language description (no IDs, no roles)",
   "agent_secrets": {{"agent_0": [...], "agent_1": [...]}},
+  "team_secrets": {{"team_0": [...], "team_1": [...]}},
   "agent_actions": {{"agent_0": [...], "agent_1": [...]}},
   "subtasks": [{{"id": "...", "required": true/false/"team_X"/"agent_X", "depends_on": [], "success_condition": {{...}}}}],
   "items": [{{"item_id": "item_X", "hidden_in": "container"}}],
@@ -131,21 +105,15 @@ Secrets must require REASONING, not just following instructions.
 }}
 ```
 
-**IMPORTANT: Task Description Rules**
-- Use natural language: "the microwave in the kitchen", "the toy airplane"
-- NEVER put object IDs (toy_airplane_0, microwave_29) in the task description
-- Agents have FindObjectTool to resolve descriptions to IDs at runtime
-- Only subtask success_conditions use exact IDs (for machine evaluation)
-
 ## Success Conditions
 - Spatial: `is_on_top`, `is_inside`, `is_in_room` (need `target`)
 - Unary: `is_open`, `is_closed`, `is_unlocked`
 - Agent: `has_item` (entity=agent, target=item)
 
 ## Items
-- Use `item_` prefix, exist only in inventory
+- Use `item_` prefix, inventory-only
 - Find with `Search[container]`, use with `UseItem[item, target]`
-- **WRONG**: `Pick[item_X]` - items cannot be picked!
+- Do NOT `Pick[item_X]`
 
 ## Available Items
 {available_items}

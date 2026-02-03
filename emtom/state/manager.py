@@ -1387,7 +1387,7 @@ class GameStateManager:
         return False
 
     # EMTOM game state predicates that can be used in success_condition
-    GAME_STATE_PREDICATES = {"has_item", "is_unlocked", "is_used"}
+    GAME_STATE_PREDICATES = {"has_item", "is_unlocked", "is_used", "has_at_least", "has_most"}
 
     def _check_game_state_predicate(self, condition: Dict[str, Any]) -> Optional[bool]:
         """
@@ -1429,6 +1429,41 @@ class GameStateManager:
             if value is False:
                 return not result
             return result
+
+        elif prop == "has_at_least":
+            # entity=agent_id or team_id, target=item_type, value=count
+            if not target:
+                return False
+            count = value if isinstance(value, int) else 1
+            if entity and entity.startswith("team_"):
+                actual = self.count_team_items_by_type(entity, target)
+            else:
+                actual = self.count_items_by_type(entity, target) if entity else 0
+            return actual >= count
+
+        elif prop == "has_most":
+            # entity=agent_id or team_id, target=item_type
+            if not target or not entity:
+                return False
+            is_team = entity.startswith("team_")
+            if is_team:
+                my_count = self.count_team_items_by_type(entity, target)
+                others = self.get_all_team_ids()
+            else:
+                my_count = self.count_items_by_type(entity, target)
+                others = self.get_all_agent_ids()
+
+            for other in others:
+                if other == entity:
+                    continue
+                other_count = (
+                    self.count_team_items_by_type(other, target)
+                    if is_team
+                    else self.count_items_by_type(other, target)
+                )
+                if other_count >= my_count:
+                    return False
+            return True
 
         return None
 

@@ -1052,9 +1052,9 @@ class EMTOMBaseRunner(ABC):
             from emtom.state.manager import GameStateManager
             sim = self.env_interface.sim
 
-            # Get world graph for name-to-handle resolution
-            world_graph = None
-            if hasattr(self.env_interface, 'world_graph') and self.env_interface.world_graph:
+            # Get world graph for name-to-handle resolution (prefer full observability)
+            world_graph = getattr(self.env_interface, "full_world_graph", None)
+            if not world_graph and hasattr(self.env_interface, "world_graph"):
                 for uid in self.agents.keys():
                     if uid in self.env_interface.world_graph:
                         world_graph = self.env_interface.world_graph[uid]
