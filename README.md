@@ -195,18 +195,21 @@ Run multi-agent evaluation on generated tasks.
 
 ```bash
 ./emtom/run_emtom.sh benchmark
-./emtom/run_emtom.sh benchmark --task data/emtom/tasks/my_task.json
-./emtom/run_emtom.sh benchmark --max-sim-steps 1000 --num-agents 4
+./emtom/run_emtom.sh benchmark --task data/emtom/tasks/my_task.json --model sonnet
+./emtom/run_emtom.sh benchmark --max-sim-steps 1000 --model gpt-5
 ```
 
 **Options:**
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--task FILE` | Specific task file | most recent |
+| `--model MODEL` | LLM model for agents (see table below) | gpt-5.2 |
 | `--max-sim-steps N` | Max simulation steps | 200000 |
-| `--max-llm-calls N` | Max LLM calls per agent | 20 |
-| `--num-agents N` | Number of agents (2-5) | 2 |
+| `--max-llm-calls N` | Max LLM calls per agent | 5x golden trajectory |
 | `--agent-type TYPE` | `robot` or `human` | robot |
+| `--no-video` | Disable video recording (faster) | false |
+
+**Supported Models:** Same as Task Generation (see table above).
 
 ---
 

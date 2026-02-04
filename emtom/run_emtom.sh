@@ -86,7 +86,7 @@ print_llm_options() {
 
 # Default values
 MAX_SIM_STEPS=200000
-MAX_LLM_CALLS=""  # Empty = use 3x golden trajectory length
+MAX_LLM_CALLS=""  # Empty = use 5x golden trajectory length
 EXPLORATION_STEPS=20
 MECHANICS=""
 TASK_FILE=""
@@ -105,6 +105,7 @@ THRESHOLD=0.7  # ToM judge threshold
 RETRY_VERIFICATION=""  # Path to failed ToM verification file
 NO_AUTO_RETRY=false  # Disable automatic retry on judge failure
 CATEGORY=""  # Task category: cooperative, competitive, or mixed
+NO_VIDEO=false  # Disable video saving
 
 print_usage() {
     echo -e "${BOLD}EMTOM Benchmark Pipeline${NC}"
@@ -166,8 +167,10 @@ print_usage() {
     echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
     echo ""
     echo -e "${BOLD}Benchmark Options:${NC}"
+    echo "  --model MODEL        LLM model name (default: gpt-5.2, provider auto-detected)"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
-    echo "  --max-llm-calls N    Max LLM calls per agent (default: 3x golden trajectory)"
+    echo "  --max-llm-calls N    Max LLM calls per agent (default: 5x golden trajectory)"
+    echo "  --no-video           Disable video recording (faster)"
     echo ""
     echo -e "${BOLD}Test Options:${NC}"
     echo "  --mechanics M1 M2    Mechanics to enable (e.g., inverse_state remote_control)"
@@ -337,6 +340,19 @@ run_generate() {
 }
 
 run_benchmark() {
+    # Auto-detect LLM provider if not specified
+    if [ -z "$LLM_PROVIDER" ]; then
+        LLM_PROVIDER=$(detect_llm_provider "$MODEL")
+        if [ -z "$LLM_PROVIDER" ]; then
+            echo -e "${RED}Error: Could not auto-detect provider for model '$MODEL'${NC}"
+            print_llm_options
+            exit 1
+        fi
+    fi
+
+    # Expand short model names to full IDs
+    MODEL=$(expand_model_name "$MODEL")
+
     # Determine task file (specified or most recent)
     ACTUAL_TASK_FILE="$TASK_FILE"
     if [ -z "$ACTUAL_TASK_FILE" ]; then
@@ -358,11 +374,12 @@ run_benchmark() {
     echo "=============================================="
     echo "Running EMTOM Habitat Benchmark"
     echo "=============================================="
+    echo "LLM: $LLM_PROVIDER ($MODEL)"
     echo "Max simulation steps: $MAX_SIM_STEPS"
     if [ -n "$MAX_LLM_CALLS" ]; then
         echo "Max LLM calls per agent: $MAX_LLM_CALLS"
     else
-        echo "Max LLM calls per agent: 3x golden trajectory"
+        echo "Max LLM calls per agent: 5x golden trajectory"
     fi
     echo "Task file: $ACTUAL_TASK_FILE"
     echo "Agents: $TASK_NUM_AGENTS (from task file)"
@@ -381,12 +398,21 @@ run_benchmark() {
         done
     fi
 
+    # Build save_video override
+    SAVE_VIDEO_OVERRIDE=""
+    if [ "$NO_VIDEO" = true ]; then
+        SAVE_VIDEO_OVERRIDE="evaluation.save_video=false"
+    fi
+
     python emtom/examples/run_habitat_benchmark.py \
         --config-name $CONFIG_NAME \
         habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
         $MAX_TURNS_OVERRIDE \
         $REPLANNING_OVERRIDES \
+        $SAVE_VIDEO_OVERRIDE \
         +task=$ACTUAL_TASK_FILE \
+        +model=$MODEL \
+        +llm_provider=$LLM_PROVIDER \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-benchmark"
 }
 
@@ -572,6 +598,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-auto-retry)
             NO_AUTO_RETRY=true
+            shift
+            ;;
+        --no-video)
+            NO_VIDEO=true
             shift
             ;;
         --llm-agents)

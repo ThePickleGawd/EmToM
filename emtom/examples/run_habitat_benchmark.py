@@ -97,13 +97,43 @@ def main(config: DictConfig) -> None:
     fix_config(config)
     config = setup_config(config, seed=47668090)
 
-    # Ensure video saving is enabled
+    # Get model and llm_provider from config (passed via +model=X +llm_provider=Y)
+    model = config.get("model", "gpt-5.2")
+    llm_provider = config.get("llm_provider", "openai_chat")
+
+    # Override LLM config for all agents
+    # Note: save_video defaults to True unless --no-video is passed
     with open_dict(config):
-        config.evaluation.save_video = True
+        if not hasattr(config.evaluation, 'save_video'):
+            config.evaluation.save_video = True
+
+        # Override each agent's planner LLM configuration
+        if hasattr(config, 'evaluation') and hasattr(config.evaluation, 'agents'):
+            from habitat_llm.llm import instantiate_llm
+            import habitat_llm
+            import os
+            from omegaconf import OmegaConf
+
+            # Load the base LLM config
+            habitat_llm_dir = os.path.dirname(habitat_llm.__file__)
+            llm_config_path = f"{habitat_llm_dir}/conf/llm/{llm_provider}.yaml"
+
+            if os.path.exists(llm_config_path):
+                base_llm_config = OmegaConf.load(llm_config_path)
+
+                # Override model in the config
+                base_llm_config.generation_params.model = model
+
+                # Apply to all agents
+                for agent_key in config.evaluation.agents:
+                    agent_conf = config.evaluation.agents[agent_key]
+                    if hasattr(agent_conf, 'planner') and hasattr(agent_conf.planner, 'plan_config'):
+                        agent_conf.planner.plan_config.llm = base_llm_config
 
     cprint("\n" + "=" * 60, "blue")
     cprint("EMTOM Habitat Benchmark", "blue")
     cprint("=" * 60, "blue")
+    cprint(f"LLM: {llm_provider} ({model})", "blue")
 
     # Register Habitat components
     register_sensors(config)
@@ -222,13 +252,13 @@ def main(config: DictConfig) -> None:
     # Get max steps from config (set via --max-sim-steps or Hydra)
     max_steps = config.habitat.environment.get("max_episode_steps", 2000)
 
-    # Calculate max turns as 3x golden trajectory length
+    # Calculate max turns as 5x golden trajectory length
     # Config override via +max_turns=N takes precedence if explicitly set
     golden_trajectory = task_raw.get("golden_trajectory", [])
     if "max_turns" in config:
         max_turns = config.max_turns
     else:
-        max_turns = len(golden_trajectory) * 3
+        max_turns = len(golden_trajectory) * 5
 
     cprint(f"\nMax simulation steps: {max_steps}", "blue")
     cprint(f"Max LLM turns: {max_turns} (golden trajectory: {len(golden_trajectory)} steps)", "blue")
