@@ -987,7 +987,8 @@ SUMMARY:"""
 
     def _split_by_operators(self, command: str) -> List[str]:
         """
-        Split command by shell operators (&&, ||, ;, |) while respecting quotes.
+        Split command by shell operators (&&, ||, ;, |) while respecting quotes
+        and backslash escapes.
 
         Returns list of sub-commands.
         """
@@ -999,6 +1000,15 @@ SUMMARY:"""
 
         while i < len(command):
             char = command[i]
+
+            # Handle backslash escapes (skip next character)
+            # In double quotes, \", \\, \$ etc. are escapes
+            # Outside quotes, backslash escapes the next character
+            if char == "\\" and not in_single_quote and i + 1 < len(command):
+                current.append(char)
+                current.append(command[i + 1])
+                i += 2
+                continue
 
             # Track quote state
             if char == "'" and not in_double_quote:
@@ -1764,11 +1774,10 @@ SUMMARY:"""
         ]
 
         try:
-            # Stream stderr to terminal for live logging, capture stdout
             subprocess.run(
                 cmd,
                 stdout=subprocess.DEVNULL,
-                stderr=None,  # Inherit stderr - shows logs in terminal
+                stderr=subprocess.DEVNULL,  # Suppress C++ simulator spam (navmesh errors etc.)
                 text=True,
                 timeout=1200,  # 20 minute timeout for LLM agents
             )
@@ -1908,11 +1917,10 @@ SUMMARY:"""
 
         try:
             timeout = 1200  # 20 minutes - golden trajectory verification
-            # Stream stderr to terminal for live logging
             subprocess.run(
                 cmd,
                 stdout=subprocess.DEVNULL,
-                stderr=None,  # Inherit stderr - shows logs in terminal
+                stderr=subprocess.DEVNULL,  # Suppress C++ simulator spam (navmesh errors etc.)
                 text=True,
                 timeout=timeout,
             )
@@ -2339,45 +2347,57 @@ Use new_scene[] if you want a different scene, or start creating your next task.
 
         self._log(f"Loading scene (num_agents={num_agents}, keep={keep_mode})...")
 
-        try:
-            # Use subprocess to load scene (fresh GL context)
-            config_name = f"examples/emtom_{num_agents}_robots"
-            new_seed = get_random_seed()
-            script_path = Path(__file__).parent / "load_scene.py"
+        max_scene_retries = 5
+        last_error = None
 
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                result_file = f.name
-
-            cmd = [
-                sys.executable,
-                str(script_path),
-                "--result-file", result_file,
-                "--working-dir", str(self.working_dir),
-                "--config-name", config_name,
-                "--seed", str(new_seed),
-            ]
-            if scene_id:
-                cmd.extend(["--scene-id", scene_id])
-
-            self._log(f"Running: {' '.join(cmd)}")
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=600,  # 10 minutes for scene loading
-            )
-
-            # Read result
+        for attempt in range(1, max_scene_retries + 1):
             try:
-                with open(result_file) as f:
-                    result_data = json.load(f)
-            finally:
-                Path(result_file).unlink(missing_ok=True)
+                # Use subprocess to load scene (fresh GL context)
+                config_name = f"examples/emtom_{num_agents}_robots"
+                new_seed = get_random_seed()
+                script_path = Path(__file__).parent / "load_scene.py"
 
-            if not result_data.get("success"):
-                error = result_data.get("error", "Unknown error")
-                self._log(f"Scene loading failed: {error}")
-                return f"Error loading new scene: {error}"
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                    result_file = f.name
+
+                cmd = [
+                    sys.executable,
+                    str(script_path),
+                    "--result-file", result_file,
+                    "--working-dir", str(self.working_dir),
+                    "--config-name", config_name,
+                    "--seed", str(new_seed),
+                ]
+                if scene_id:
+                    cmd.extend(["--scene-id", scene_id])
+
+                self._log(f"Running (attempt {attempt}/{max_scene_retries}): {' '.join(cmd)}")
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,  # 10 minutes for scene loading
+                )
+
+                # Read result
+                try:
+                    with open(result_file) as f:
+                        result_data = json.load(f)
+                finally:
+                    Path(result_file).unlink(missing_ok=True)
+
+                if not result_data.get("success"):
+                    last_error = result_data.get("error", "Unknown error")
+                    self._log(f"Scene loading failed (attempt {attempt}): {last_error}")
+                    if attempt < max_scene_retries:
+                        continue
+                    return f"Error loading new scene after {max_scene_retries} attempts. Last error: {last_error}"
+            except Exception as e:
+                last_error = str(e)
+                self._log(f"Scene loading error (attempt {attempt}): {e}")
+                if attempt < max_scene_retries:
+                    continue
+                return f"Error loading new scene after {max_scene_retries} attempts. Last error: {last_error}"
 
             # Convert dict back to SceneData
             scene_dict = result_data["scene_data"]
@@ -2448,10 +2468,6 @@ Furniture: {len(self.scene_data.furniture)} items
 Objects: {len(self.scene_data.objects)} items
 
 working_task.json reset. Use new_scene[N, keep] to change agent count without losing work."""
-
-        except Exception as e:
-            self._log(f"Error loading new scene: {e}")
-            return f"Error loading new scene: {e}"
 
     def _fail(self, reason: str) -> str:
         """
