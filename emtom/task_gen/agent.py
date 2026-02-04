@@ -30,6 +30,11 @@ if TYPE_CHECKING:
     from habitat_llm.llm.base_llm import BaseLLM
 
 
+# Markers for the diversity section in the system prompt so it can be found and replaced
+_DIVERSITY_START_MARKER = "<!-- DIVERSITY_SECTION_START -->"
+_DIVERSITY_END_MARKER = "<!-- DIVERSITY_SECTION_END -->"
+
+
 class TaskGeneratorAgent:
     """
     ReAct-style agent for iterative task generation.
@@ -340,7 +345,7 @@ class TaskGeneratorAgent:
             task_category.upper()
         ).replace(
             "{diversity_section}",
-            self._build_diversity_section()
+            self._wrap_diversity_section(self._build_diversity_section())
         )
         self.messages = [
             {"role": "system", "content": system_prompt}
@@ -2190,6 +2195,16 @@ SUMMARY:"""
         pattern = self.diversity_tracker.add_pattern(output_filename, task_data)
         self._log(f"Diversity pattern added: {pattern}")
 
+        # Re-categorize all tasks and refresh diversity in prompt
+        try:
+            from emtom.scripts.categorize_tasks import categorize_tasks
+            categories_file = Path("data/emtom/task_categories.json")
+            categorize_tasks(self.llm, self.output_dir, categories_file)
+            self._refresh_diversity_in_prompt()
+            self._log("Task categories updated and diversity prompt refreshed")
+        except Exception as e:
+            self._log(f"Warning: Failed to re-categorize tasks: {e}")
+
         self._reset_context_for_next_task()
 
         return f"Task '{task_title}' saved!\n  - {output_path} (permanent)\n  - {submitted_path} (session)\nTotal submitted: {len(self.submitted_tasks)}\n\n[Context reset for next task. Your learnings have been preserved.]\n\nFor next task: Use new_scene[] for a fresh scene, or modify working_task.json to build on a previous task from submitted_tasks/."
@@ -2557,6 +2572,26 @@ Think of entirely new gameplay patterns, win conditions, and mechanics combinati
             lines.append("")  # Empty line between categories
 
         return "\n".join(lines)
+
+    def _wrap_diversity_section(self, content: str) -> str:
+        """Wrap diversity content with markers so it can be found and replaced later."""
+        return f"{_DIVERSITY_START_MARKER}\n{content}\n{_DIVERSITY_END_MARKER}"
+
+    def _refresh_diversity_in_prompt(self) -> None:
+        """Rebuild the diversity section and replace it in the system prompt."""
+        new_section = self._wrap_diversity_section(self._build_diversity_section())
+        system_content = self.messages[0]["content"]
+
+        start = system_content.find(_DIVERSITY_START_MARKER)
+        end = system_content.find(_DIVERSITY_END_MARKER)
+
+        if start == -1 or end == -1:
+            self._log("Warning: Could not find diversity markers in system prompt, skipping refresh")
+            return
+
+        end += len(_DIVERSITY_END_MARKER)
+        self.messages[0]["content"] = system_content[:start] + new_section + system_content[end:]
+        self._log("Refreshed diversity section in system prompt")
 
     def _log(self, message: str, truncate_terminal: int = 0) -> None:
         """Print log message and write to log file.

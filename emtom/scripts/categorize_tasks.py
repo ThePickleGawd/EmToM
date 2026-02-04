@@ -3,11 +3,15 @@
 Categorize tasks from the emtom task dataset.
 
 Reads all tasks from data/emtom/tasks, groups them by category (cooperative,
-competitive, mixed), and uses GPT-5.2 to generate descriptive subcategories
+competitive, mixed), and uses an LLM to generate descriptive subcategories
 for each task type.
 
 Usage:
-    python emtom/scripts/categorize_tasks.py [--output OUTPUT_PATH]
+    python emtom/scripts/categorize_tasks.py [--output OUTPUT_PATH] [--model MODEL_NAME]
+
+Programmatic usage:
+    from emtom.scripts.categorize_tasks import categorize_tasks
+    categorize_tasks(llm, tasks_dir, output_path)
 """
 
 import argparse
@@ -15,22 +19,10 @@ import json
 import os
 from pathlib import Path
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
-from openai import OpenAI
-
-# Load .env file if it exists
-_env_file = Path(__file__).resolve().parent.parent.parent / ".env"
-if _env_file.exists():
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(_env_file)
-    except ImportError:
-        with open(_env_file) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, _, value = line.partition("=")
-                    os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+if TYPE_CHECKING:
+    from habitat_llm.llm.base_llm import BaseLLM
 
 
 def load_tasks(tasks_dir: Path) -> dict[str, list[dict]]:
@@ -53,8 +45,8 @@ def load_tasks(tasks_dir: Path) -> dict[str, list[dict]]:
     return dict(tasks_by_category)
 
 
-def categorize_with_gpt(client: OpenAI, category: str, tasks: list[dict]) -> dict:
-    """Use GPT-5.2 to categorize tasks into subcategories."""
+def categorize_with_llm(llm: "BaseLLM", category: str, tasks: list[dict]) -> dict:
+    """Use an LLM to categorize tasks into subcategories."""
 
     # Build task list for the prompt
     task_descriptions = []
@@ -85,16 +77,13 @@ Respond in this exact JSON format:
 
 Only output valid JSON, nothing else."""
 
-    response = client.chat.completions.create(
-        model="gpt-5.2",
-        messages=[
-            {"role": "system", "content": "You are an expert at analyzing game tasks and identifying patterns. Output only valid JSON."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.7,
-    )
+    response = llm.generate(prompt)
 
-    response_text = response.choices[0].message.content.strip()
+    # Handle potential list return from batch mode
+    if isinstance(response, list):
+        response = response[0]
+
+    response_text = response.strip()
 
     # Parse JSON from response (handle potential markdown code blocks)
     if response_text.startswith("```"):
@@ -104,7 +93,7 @@ Only output valid JSON, nothing else."""
     return json.loads(response_text)
 
 
-def build_output(tasks_by_category: dict[str, list[dict]], client: OpenAI) -> dict:
+def build_output(tasks_by_category: dict[str, list[dict]], llm: "BaseLLM") -> dict:
     """Build the final categorized output structure."""
     output = {}
 
@@ -114,12 +103,12 @@ def build_output(tasks_by_category: dict[str, list[dict]], client: OpenAI) -> di
         if len(tasks) == 0:
             continue
 
-        # Get subcategories from GPT
-        gpt_result = categorize_with_gpt(client, category, tasks)
+        # Get subcategories from LLM
+        llm_result = categorize_with_llm(llm, category, tasks)
 
         # Build category output
         category_output = {}
-        for subcat in gpt_result.get("subcategories", []):
+        for subcat in llm_result.get("subcategories", []):
             name = subcat["name"]
             description = subcat["description"]
             task_indices = subcat.get("task_indices", [])
@@ -138,8 +127,45 @@ def build_output(tasks_by_category: dict[str, list[dict]], client: OpenAI) -> di
     return output
 
 
+def categorize_tasks(llm: "BaseLLM", tasks_dir: Path, output_path: Path) -> dict:
+    """Run categorization using any BaseLLM, save to output_path.
+
+    Args:
+        llm: A BaseLLM instance to use for categorization.
+        tasks_dir: Directory containing task JSON files.
+        output_path: Path to write the task_categories.json output.
+
+    Returns:
+        The categorized output dict.
+    """
+    tasks_dir = Path(tasks_dir)
+    output_path = Path(output_path)
+
+    if not tasks_dir.exists():
+        print(f"Warning: Tasks directory not found: {tasks_dir}")
+        return {}
+
+    tasks_by_category = load_tasks(tasks_dir)
+    total_tasks = sum(len(tasks) for tasks in tasks_by_category.values())
+
+    if total_tasks == 0:
+        print("No tasks found to categorize.")
+        return {}
+
+    print(f"Categorizing {total_tasks} tasks across {len(tasks_by_category)} categories...")
+    output = build_output(tasks_by_category, llm)
+
+    # Save output
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        json.dump(output, f, indent=2)
+
+    print(f"Saved categorized tasks to {output_path}")
+    return output
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Categorize emtom tasks using GPT-5.2")
+    parser = argparse.ArgumentParser(description="Categorize emtom tasks using an LLM")
     parser.add_argument(
         "--tasks-dir",
         type=Path,
@@ -152,6 +178,12 @@ def main():
         default=Path(__file__).resolve().parent.parent.parent / "data" / "emtom" / "task_categories.json",
         help="Output JSON file path"
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="gpt-5.2",
+        help="LLM model name (must have a config in conf/llm/)"
+    )
     args = parser.parse_args()
 
     # Validate tasks directory
@@ -159,13 +191,23 @@ def main():
         print(f"Error: Tasks directory not found: {args.tasks_dir}")
         return 1
 
-    # Initialize OpenAI client
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("Error: OPENAI_API_KEY environment variable not set")
-        return 1
+    # Load .env file if it exists
+    _env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+    if _env_file.exists():
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(_env_file)
+        except ImportError:
+            with open(_env_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, _, value = line.partition("=")
+                        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
-    client = OpenAI(api_key=api_key)
+    # Instantiate LLM via habitat_llm
+    from habitat_llm.llm import instantiate_llm
+    llm = instantiate_llm(args.model)
 
     # Load tasks
     print(f"Loading tasks from {args.tasks_dir}...")
@@ -178,8 +220,8 @@ def main():
         print(f"  - {category}: {len(tasks)} tasks")
 
     # Build categorized output
-    print("\nAnalyzing tasks with GPT-5.2...")
-    output = build_output(tasks_by_category, client)
+    print(f"\nAnalyzing tasks with {args.model}...")
+    output = build_output(tasks_by_category, llm)
 
     # Save output
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -114,7 +114,7 @@ def parse_log(log_path: Path) -> dict:
     return info
 
 
-def find_latest_bulk_dir(project_root: Path) -> Path | None:
+def find_latest_bulk_dir(project_root: Path):
     """Find the most recent bulk-generate output directory."""
     outputs_dir = project_root / "outputs" / "emtom"
     if not outputs_dir.exists():
@@ -123,7 +123,7 @@ def find_latest_bulk_dir(project_root: Path) -> Path | None:
     return bulk_dirs[0] if bulk_dirs else None
 
 
-def render_dashboard(log_dir: Path, infos: list[dict]):
+def render_dashboard(log_dir, infos):
     """Render the monitoring dashboard."""
     # Clear screen
     print("\033[2J\033[H", end="")
