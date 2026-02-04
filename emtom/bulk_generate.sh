@@ -25,6 +25,8 @@ PER_GPU=3
 MODEL="gpt-5.2"
 NUM_TASKS=3
 ITERATIONS_PER_TASK=300  # Max iterations per task (total = this * num-tasks)
+SUBTASKS_MIN=""
+SUBTASKS_MAX=""
 DRY_RUN=false
 
 # Colors
@@ -48,6 +50,8 @@ print_usage() {
     echo "  --model MODEL       LLM model (default: gpt-5.2)"
     echo "  --num-tasks N       Tasks per process (default: 1)"
     echo "  --iterations-per-task N  Max iterations per task (default: 100)"
+    echo "  --subtasks-min N    Minimum subtasks per task"
+    echo "  --subtasks-max N    Maximum subtasks per task"
     echo "  --dry-run           Show commands without executing"
     echo ""
     echo "Examples:"
@@ -73,6 +77,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --iterations-per-task)
             ITERATIONS_PER_TASK=$2
+            shift 2
+            ;;
+        --subtasks-min)
+            SUBTASKS_MIN=$2
+            shift 2
+            ;;
+        --subtasks-max)
+            SUBTASKS_MAX=$2
             shift 2
             ;;
         --dry-run)
@@ -116,6 +128,8 @@ echo -e "Categories:         ${GREEN}${CATEGORIES[*]}${NC} (all 3)"
 echo -e "Model:              ${GREEN}$MODEL${NC}"
 echo -e "Tasks per process:  ${GREEN}$NUM_TASKS${NC}"
 echo -e "Iterations/task:    ${GREEN}$ITERATIONS_PER_TASK${NC}"
+[ -n "$SUBTASKS_MIN" ] && echo -e "Subtasks min:       ${GREEN}$SUBTASKS_MIN${NC}"
+[ -n "$SUBTASKS_MAX" ] && echo -e "Subtasks max:       ${GREEN}$SUBTASKS_MAX${NC}"
 echo -e "Log directory:      ${CYAN}$LOG_DIR${NC}"
 echo "=============================================="
 echo ""
@@ -134,9 +148,14 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
 
         log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}.log"
 
+        # Build subtask flags
+        SUBTASK_FLAGS=""
+        [ -n "$SUBTASKS_MIN" ] && SUBTASK_FLAGS="$SUBTASK_FLAGS --subtasks-min $SUBTASKS_MIN"
+        [ -n "$SUBTASKS_MAX" ] && SUBTASK_FLAGS="$SUBTASK_FLAGS --subtasks-max $SUBTASKS_MAX"
+
         if [ "$DRY_RUN" = true ]; then
             echo -e "${YELLOW}[DRY-RUN]${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}"
-            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --iterations-per-task $ITERATIONS_PER_TASK --category $category"
+            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --iterations-per-task $ITERATIONS_PER_TASK --category $category$SUBTASK_FLAGS"
         else
             echo -e "${GREEN}Starting${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC} -> $log_file"
 
@@ -145,6 +164,7 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
                 --num-tasks "$NUM_TASKS" \
                 --iterations-per-task "$ITERATIONS_PER_TASK" \
                 --category "$category" \
+                $SUBTASK_FLAGS \
                 > "$log_file" 2>&1 &
 
             pid=$!
