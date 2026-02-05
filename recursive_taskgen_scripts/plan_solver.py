@@ -54,22 +54,15 @@ SYSTEM_PROMPT = "You are an expert planner. You solve planning problems by outpu
 
 def strip_query(query: str) -> str:
     """
-    Strip the query to include (one-shot format):
-      - Action descriptions and restrictions
-      - First [STATEMENT] with its full plan (the one-shot example)
-      - Last [STATEMENT] with initial conditions + goal only (problem to solve)
-    The plan for the last statement is removed so the LLM generates it.
+    Strip the query to:
+      - Action descriptions and restrictions (preamble)
+      - Last [STATEMENT]: initial conditions + goal only
+    No one-shot example, no [PLAN] blocks.
     """
-    # Split on [STATEMENT] markers
     parts = query.split("[STATEMENT]")
 
-    # Part 0: action descriptions and restrictions
     preamble = parts[0].rstrip()
 
-    # Part 1: one-shot example (keep fully intact including its plan)
-    oneshot_example = parts[1].rstrip()
-
-    # Last part: the test problem (strip the empty plan section)
     last_statement = parts[-1]
     goal_match = re.search(
         r"(.*?My goal is to have that[^\n]*\.)", last_statement, re.DOTALL
@@ -79,10 +72,7 @@ def strip_query(query: str) -> str:
     else:
         test_problem = last_statement.split("My plan is as follows")[0].strip()
 
-    return (
-        f"{preamble}\n\n[STATEMENT]\n{oneshot_example}\n\n"
-        f"[STATEMENT]\n{test_problem}"
-    )
+    return f"{preamble}\n\n[STATEMENT]\n{test_problem}"
 
 
 def build_prompt(stripped_query: str) -> str:
@@ -100,17 +90,20 @@ def build_prompt(stripped_query: str) -> str:
     )
 
 
+FIXED_TEMP_MODELS = ["o1", "o3", "gpt-5"]
+
+
 def call_chatgpt(client: OpenAI, prompt: str, model: str) -> str:
     """Send a prompt to ChatGPT and return the response."""
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0,
-        max_tokens=1024,
-    )
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ]
+    uses_fixed_temp = any(m in model.lower() for m in FIXED_TEMP_MODELS)
+    kwargs = dict(model=model, messages=messages, max_completion_tokens=1024)
+    if not uses_fixed_temp:
+        kwargs["temperature"] = 0
+    response = client.chat.completions.create(**kwargs)
     return response.choices[0].message.content.strip()
 
 
