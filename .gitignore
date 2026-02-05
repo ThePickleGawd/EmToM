@@ -1,6 +1,7 @@
 
 
 .env
+recursive_taskgen_data
 
 .vscode/**
 **.ipynb
