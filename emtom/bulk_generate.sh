@@ -221,3 +221,21 @@ echo -e "Succeeded: ${GREEN}$succeeded${NC}"
 echo -e "Failed:    ${RED}$failed${NC}"
 echo -e "Logs:      $LOG_DIR/"
 echo "=============================================="
+
+# Show saved task file paths extracted from logs
+task_paths=$(grep -rh --no-filename 'data/emtom/tasks/.*\.json' "$LOG_DIR"/*.log 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -oP 'data/emtom/tasks/\S+\.json' | sort -u)
+
+if [ -n "$task_paths" ]; then
+    task_count=$(echo "$task_paths" | wc -l)
+    echo ""
+    echo -e "${BOLD}${GREEN}=============================================="
+    echo -e "Saved Tasks ($task_count)"
+    echo -e "==============================================${NC}"
+    while IFS= read -r path; do
+        echo -e "  ${CYAN}${BOLD}$path${NC}"
+    done <<< "$task_paths"
+    echo -e "${BOLD}${GREEN}==============================================${NC}"
+else
+    echo ""
+    echo -e "${YELLOW}No tasks were saved during this run.${NC}"
+fi

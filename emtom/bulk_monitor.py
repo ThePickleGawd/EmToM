@@ -90,17 +90,18 @@ def parse_log(log_path: Path) -> dict:
     info["test_passes"] = len(re.findall(r"Result: PASSED", tail))
     info["test_fails"] = len(re.findall(r"Result: FAILED", tail))
 
-    # Determine status
-    if "Done!" in tail[-200:]:
-        if info["submitted"] > 0 or re.search(r"Submitted: [1-9]", tail):
-            info["status"] = "done"
-        else:
-            info["status"] = "done_empty"
-    elif "Agent FAILED:" in tail:
+    # Determine status (check failure before "Done!" since the shell wrapper
+    # prints "Done!" even when the agent failed)
+    if "Agent FAILED:" in tail:
         info["status"] = "failed"
         fail_match = re.search(r"Agent FAILED: (.+)", tail)
         if fail_match:
             info["fail_reason"] = fail_match.group(1)[:80]
+    elif "Done!" in tail[-200:]:
+        if info["submitted"] > 0 or re.search(r"Submitted: [1-9]", tail):
+            info["status"] = "done"
+        else:
+            info["status"] = "done_empty"
     elif iter_matches:
         info["status"] = "running"
     else:
