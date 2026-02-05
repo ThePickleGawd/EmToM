@@ -14,16 +14,17 @@ Usage:
 """
 
 import json
+import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 import hydra
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from habitat_llm.agent.env import (
     EnvironmentInterface,
@@ -35,6 +36,250 @@ from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 from habitat_llm.utils import cprint, setup_config, fix_config
 
 from emtom.task_gen import GeneratedTask
+
+
+MODEL_ALIASES = {
+    "kimi-k2-thinking": "moonshot.kimi-k2-thinking",
+    "ministral-3-8b": "mistral.ministral-3-8b-instruct",
+    "ministral-3-14b": "mistral.ministral-3-14b-instruct",
+    "mistral-large-3": "mistral.mistral-large-3-675b-instruct",
+    "qwen3-next-80b": "qwen.qwen3-next-80b-a3b",
+    "qwen3-vl-235b": "qwen.qwen3-vl-235b-a22b",
+}
+
+MODEL_PROVIDER_MAP = {
+    "gpt-5": "openai_chat",
+    "gpt-5-mini": "openai_chat",
+    "gpt-5.1": "openai_chat",
+    "gpt-5.2": "openai_chat",
+    "sonnet": "bedrock_claude",
+    "haiku": "bedrock_claude",
+    "opus": "bedrock_claude",
+    "kimi-k2-thinking": "bedrock_kimi",
+    "moonshot.kimi-k2-thinking": "bedrock_kimi",
+    "ministral-3-8b": "bedrock_mistral",
+    "ministral-3-14b": "bedrock_mistral",
+    "mistral-large-3": "bedrock_mistral",
+    "mistral.ministral-3-8b-instruct": "bedrock_mistral",
+    "mistral.ministral-3-14b-instruct": "bedrock_mistral",
+    "mistral.mistral-large-3-675b-instruct": "bedrock_mistral",
+    "qwen3-next-80b": "bedrock_qwen",
+    "qwen3-vl-235b": "bedrock_qwen",
+    "qwen.qwen3-next-80b-a3b": "bedrock_qwen",
+    "qwen.qwen3-vl-235b-a22b": "bedrock_qwen",
+}
+
+KNOWN_LLM_PROVIDERS = {
+    "openai_chat",
+    "bedrock_claude",
+    "bedrock_kimi",
+    "bedrock_mistral",
+    "bedrock_qwen",
+}
+
+
+def expand_model_name(model: str) -> str:
+    """Expand shorthand model names to full IDs."""
+    return MODEL_ALIASES.get(model, model)
+
+
+def detect_llm_provider(model: str) -> Optional[str]:
+    """Auto-detect provider from model name."""
+    return MODEL_PROVIDER_MAP.get(model)
+
+
+def parse_team_model_map(raw_value: Any) -> Dict[str, str]:
+    """Parse team model mapping from 'team_0=model_a,team_1=model_b'."""
+    if raw_value is None:
+        return {}
+
+    if isinstance(raw_value, dict):
+        parsed = {}
+        for team_id, model in raw_value.items():
+            team_text = str(team_id).strip()
+            model_text = str(model).strip()
+            if team_text and model_text:
+                parsed[team_text] = model_text
+        return parsed
+
+    raw_text = str(raw_value).strip()
+    if not raw_text:
+        return {}
+
+    mapping: Dict[str, str] = {}
+    for entry in raw_text.split(","):
+        token = entry.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            raise ValueError(
+                f"Invalid --team-model-map entry '{token}'. "
+                "Expected format: team_0=sonnet,team_1=gpt-5"
+            )
+        team_id, model = token.split("=", 1)
+        team_id = team_id.strip()
+        model = model.strip()
+        if not team_id or not model:
+            raise ValueError(
+                f"Invalid --team-model-map entry '{token}'. "
+                "Team ID and model must both be non-empty."
+            )
+        mapping[team_id] = model
+
+    return mapping
+
+
+def resolve_model_spec(model_ref: str, fallback_provider: Optional[str] = None) -> Dict[str, str]:
+    """
+    Resolve model/provider from model string.
+
+    Supports:
+    - model only: "sonnet"
+    - explicit provider: "bedrock_claude:sonnet"
+    """
+    raw = model_ref.strip()
+    if not raw:
+        raise ValueError("Model reference cannot be empty.")
+
+    provider: Optional[str] = None
+    model = raw
+
+    if ":" in raw:
+        provider_candidate, model_candidate = raw.split(":", 1)
+        provider_candidate = provider_candidate.strip()
+        model_candidate = model_candidate.strip()
+        if provider_candidate in KNOWN_LLM_PROVIDERS and model_candidate:
+            provider = provider_candidate
+            model = model_candidate
+
+    model = expand_model_name(model)
+    provider = provider or detect_llm_provider(model) or fallback_provider
+
+    if not provider:
+        raise ValueError(
+            f"Could not detect provider for model '{model_ref}'. "
+            "Use provider:model syntax, e.g. bedrock_claude:sonnet."
+        )
+
+    return {"model": model, "llm_provider": provider}
+
+
+def get_task_team_members(task: GeneratedTask, num_agents: int) -> Dict[str, List[str]]:
+    """Get task team -> agents mapping with a safe default."""
+    teams = task.teams if isinstance(task.teams, dict) else None
+    if teams:
+        normalized: Dict[str, List[str]] = {}
+        for team_id, members in teams.items():
+            if isinstance(members, list):
+                normalized[team_id] = [str(agent).strip() for agent in members if str(agent).strip()]
+        if normalized:
+            return normalized
+
+    return {f"team_{i}": [f"agent_{i}"] for i in range(num_agents)}
+
+
+def build_task_model_assignment(
+    task: GeneratedTask,
+    num_agents: int,
+    default_model_spec: Dict[str, str],
+    team_model_specs: Dict[str, Dict[str, str]],
+) -> Dict[str, Any]:
+    """
+    Build per-task model assignments.
+
+    For competitive tasks, team overrides are applied when provided.
+    For other categories, all agents use default_model_spec.
+    """
+    team_members = get_task_team_members(task, num_agents)
+    agent_to_team: Dict[str, str] = {}
+    for team_id, members in team_members.items():
+        for agent_id in members:
+            agent_to_team[agent_id] = team_id
+
+    use_team_overrides = task.category == "competitive" and bool(team_model_specs)
+
+    agent_model_mapping: Dict[str, Dict[str, str]] = {}
+    for i in range(num_agents):
+        agent_id = f"agent_{i}"
+        team_id = agent_to_team.get(agent_id, f"team_{i}")
+
+        spec = default_model_spec
+        if use_team_overrides and team_id in team_model_specs:
+            spec = team_model_specs[team_id]
+
+        agent_model_mapping[agent_id] = {
+            "team": team_id,
+            "model": spec["model"],
+            "llm_provider": spec["llm_provider"],
+        }
+
+    team_model_mapping: Dict[str, Dict[str, Any]] = {}
+    for team_id, members in team_members.items():
+        spec = default_model_spec
+        if use_team_overrides and team_id in team_model_specs:
+            spec = team_model_specs[team_id]
+        team_model_mapping[team_id] = {
+            "agents": members,
+            "model": spec["model"],
+            "llm_provider": spec["llm_provider"],
+        }
+
+    unused_requested = (
+        sorted([team_id for team_id in team_model_specs if team_id not in team_members])
+        if use_team_overrides
+        else sorted(team_model_specs.keys())
+    )
+
+    return {
+        "team_members": team_members,
+        "team_model_mapping": team_model_mapping,
+        "agent_model_mapping": agent_model_mapping,
+        "team_model_overrides_applied": use_team_overrides,
+        "unused_requested_team_mappings": unused_requested,
+    }
+
+
+def apply_agent_llm_configs(config: DictConfig, agent_model_mapping: Dict[str, Dict[str, str]]) -> None:
+    """Apply per-agent llm provider/model configs into Hydra config."""
+    import habitat_llm
+
+    if not hasattr(config, "evaluation") or not hasattr(config.evaluation, "agents"):
+        return
+
+    habitat_llm_dir = os.path.dirname(habitat_llm.__file__)
+    llm_cfg_cache: Dict[Tuple[str, str], Any] = {}
+
+    with open_dict(config):
+        for agent_id in config.evaluation.agents:
+            agent_spec = agent_model_mapping.get(agent_id)
+            if not agent_spec:
+                continue
+
+            agent_conf = config.evaluation.agents[agent_id]
+            if not hasattr(agent_conf, "planner") or not hasattr(agent_conf.planner, "plan_config"):
+                continue
+
+            llm_provider = agent_spec["llm_provider"]
+            model = agent_spec["model"]
+            cache_key = (llm_provider, model)
+
+            if cache_key not in llm_cfg_cache:
+                llm_config_path = f"{habitat_llm_dir}/conf/llm/{llm_provider}.yaml"
+                if not os.path.exists(llm_config_path):
+                    raise FileNotFoundError(
+                        f"LLM provider config not found for '{llm_provider}' at {llm_config_path}"
+                    )
+                llm_cfg = OmegaConf.load(llm_config_path)
+                if not hasattr(llm_cfg, "generation_params"):
+                    llm_cfg.generation_params = {}
+                llm_cfg.generation_params.model = model
+                llm_cfg_cache[cache_key] = llm_cfg
+
+            # Deep copy so agents do not share mutable OmegaConf state.
+            copied_cfg = OmegaConf.create(
+                OmegaConf.to_container(llm_cfg_cache[cache_key], resolve=True)
+            )
+            agent_conf.planner.plan_config.llm = copied_cfg
 
 
 def load_tasks_from_file(task_file: str) -> Tuple[List[GeneratedTask], List[Dict]]:
@@ -98,6 +343,9 @@ def run_single_task(
     task: GeneratedTask,
     task_raw: Dict[str, Any],
     output_dir: str,
+    default_model_spec: Dict[str, str],
+    team_model_specs: Dict[str, Dict[str, str]],
+    team_model_map_requested: Dict[str, str],
     task_index: int = 0,
     total_tasks: int = 1,
 ) -> Dict[str, Any]:
@@ -133,10 +381,29 @@ def run_single_task(
         return {
             "task_id": task_id,
             "title": task.title,
+            "category": task.category,
             "skipped": True,
             "skip_reason": f"Agent count mismatch: task needs {task_num_agents}, config has {config_num_agents}",
             "success": False,
+            "team_model_map_requested": team_model_map_requested,
         }
+
+    model_assignment = build_task_model_assignment(
+        task=task,
+        num_agents=task_num_agents,
+        default_model_spec=default_model_spec,
+        team_model_specs=team_model_specs,
+    )
+    apply_agent_llm_configs(config, model_assignment["agent_model_mapping"])
+
+    if task.category == "competitive":
+        cprint("Team model mapping for this task:", "blue")
+        for team_id, team_data in sorted(model_assignment["team_model_mapping"].items()):
+            cprint(
+                f"  {team_id} ({', '.join(team_data['agents'])}): "
+                f"{team_data['llm_provider']} ({team_data['model']})",
+                "blue",
+            )
 
     # Reset environment to the correct episode for this task
     if task.episode_id and task.episode_id != "unknown":
@@ -149,9 +416,13 @@ def run_single_task(
             return {
                 "task_id": task_id,
                 "title": task.title,
+                "category": task.category,
                 "skipped": True,
                 "skip_reason": f"Episode not found: {task.episode_id}",
                 "success": False,
+                "team_model_map_requested": team_model_map_requested,
+                "team_model_mapping": model_assignment["team_model_mapping"],
+                "agent_model_mapping": model_assignment["agent_model_mapping"],
             }
 
     # Create task-specific output directory
@@ -196,11 +467,17 @@ def run_single_task(
     results = {
         "task_id": task_id,
         "title": task.title,
+        "category": task.category,
         "skipped": False,
         "success": False,
         "steps": 0,
         "turns": 0,
         "error": None,
+        "team_model_map_requested": team_model_map_requested,
+        "team_model_mapping": model_assignment["team_model_mapping"],
+        "agent_model_mapping": model_assignment["agent_model_mapping"],
+        "team_model_overrides_applied": model_assignment["team_model_overrides_applied"],
+        "unused_requested_team_mappings": model_assignment["unused_requested_team_mappings"],
     }
 
     try:
@@ -243,39 +520,36 @@ def main(config: DictConfig) -> None:
     fix_config(config)
     config = setup_config(config, seed=47668090)
 
-    # Get model and llm_provider from config (passed via +model=X +llm_provider=Y)
-    model = config.get("model", "gpt-5.2")
-    llm_provider = config.get("llm_provider", "openai_chat")
+    # Get default model and provider from config (passed via +model=X +llm_provider=Y)
+    model = expand_model_name(config.get("model", "gpt-5.2"))
+    llm_provider = config.get("llm_provider", "") or detect_llm_provider(model) or "openai_chat"
+    default_model_spec = {"model": model, "llm_provider": llm_provider}
 
-    # Override LLM config for all agents
+    # Team mapping may be passed via shell env var (preferred) or hydra override.
+    team_model_map_raw = os.environ.get("EMTOM_TEAM_MODEL_MAP", config.get("team_model_map", ""))
+    try:
+        team_model_map_requested = parse_team_model_map(team_model_map_raw)
+        team_model_specs = {
+            team_id: resolve_model_spec(model_ref)
+            for team_id, model_ref in team_model_map_requested.items()
+        }
+    except ValueError as e:
+        cprint(f"ERROR: {e}", "red")
+        sys.exit(1)
+
+    # Ensure save_video exists in config for runners.
     with open_dict(config):
         if not hasattr(config.evaluation, 'save_video'):
             config.evaluation.save_video = True
-
-        # Override each agent's planner LLM configuration
-        if hasattr(config, 'evaluation') and hasattr(config.evaluation, 'agents'):
-            import habitat_llm
-            import os
-            from omegaconf import OmegaConf
-
-            # Load the base LLM config
-            habitat_llm_dir = os.path.dirname(habitat_llm.__file__)
-            llm_config_path = f"{habitat_llm_dir}/conf/llm/{llm_provider}.yaml"
-
-            if os.path.exists(llm_config_path):
-                base_llm_config = OmegaConf.load(llm_config_path)
-                base_llm_config.generation_params.model = model
-
-                # Apply to all agents
-                for agent_key in config.evaluation.agents:
-                    agent_conf = config.evaluation.agents[agent_key]
-                    if hasattr(agent_conf, 'planner') and hasattr(agent_conf.planner, 'plan_config'):
-                        agent_conf.planner.plan_config.llm = base_llm_config
 
     cprint("\n" + "=" * 60, "blue")
     cprint("EMTOM Habitat Benchmark", "blue")
     cprint("=" * 60, "blue")
     cprint(f"LLM: {llm_provider} ({model})", "blue")
+    if team_model_specs:
+        cprint(f"Team model mapping requested: {team_model_map_requested}", "blue")
+        for team_id, spec in sorted(team_model_specs.items()):
+            cprint(f"  {team_id}: {spec['llm_provider']} ({spec['model']})", "blue")
 
     # Register Habitat components
     register_sensors(config)
@@ -300,6 +574,16 @@ def main(config: DictConfig) -> None:
     # Determine which tasks to run
     task_file_arg = config.get("task", None)
     num_agents_filter = config.get("num_agents_filter", None)
+    task_category_filter = config.get("task_category_filter", None)
+    if task_category_filter:
+        task_category_filter = str(task_category_filter).strip().lower()
+        if task_category_filter not in ("cooperative", "competitive", "mixed"):
+            cprint(
+                f"ERROR: Invalid task_category_filter '{task_category_filter}'. "
+                "Expected one of cooperative|competitive|mixed.",
+                "red",
+            )
+            sys.exit(1)
     task_dir = Path(config.get("task_dir", "data/emtom/tasks"))
 
     if task_file_arg:
@@ -342,6 +626,22 @@ def main(config: DictConfig) -> None:
         else:
             cprint(f"All tasks mode: {len(tasks)} tasks found", "blue")
 
+    # Filter by category if specified
+    if task_category_filter:
+        filtered_tasks = []
+        filtered_raw = []
+        for task, raw in zip(tasks, raw_data):
+            if str(getattr(task, "category", "cooperative")).lower() == task_category_filter:
+                filtered_tasks.append(task)
+                filtered_raw.append(raw)
+        tasks, raw_data = filtered_tasks, filtered_raw
+
+        if not tasks:
+            cprint(f"No tasks found with category '{task_category_filter}'", "yellow")
+            return
+
+        cprint(f"Running {len(tasks)} task(s) with category '{task_category_filter}'", "blue")
+
     output_dir = config.paths.results_dir
 
     # Run all tasks
@@ -353,6 +653,9 @@ def main(config: DictConfig) -> None:
             task=task,
             task_raw=task_raw,
             output_dir=output_dir,
+            default_model_spec=default_model_spec,
+            team_model_specs=team_model_specs,
+            team_model_map_requested=team_model_map_requested,
             task_index=i,
             total_tasks=len(tasks),
         )
@@ -398,6 +701,9 @@ def main(config: DictConfig) -> None:
         json.dump({
             "model": model,
             "llm_provider": llm_provider,
+            "task_category_filter": task_category_filter,
+            "team_model_map_requested": team_model_map_requested,
+            "team_model_map_resolved": team_model_specs,
             "total": total,
             "passed": passed,
             "failed": failed,

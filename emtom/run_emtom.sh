@@ -108,6 +108,7 @@ CATEGORY=""  # Task category: cooperative, competitive, or mixed
 SEED_TASK=""  # Path to existing task to use as seed
 NO_VIDEO=false  # Disable video saving
 TASKS_DIR=""  # Custom tasks directory for benchmark
+TEAM_MODEL_MAP=""  # Optional team -> model mapping for benchmark competitive tasks
 
 print_usage() {
     echo -e "${BOLD}EMTOM Benchmark Pipeline${NC}"
@@ -173,7 +174,10 @@ print_usage() {
     echo "  --model MODEL        LLM model name (default: gpt-5.2, provider auto-detected)"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
     echo "  --max-llm-calls N    Max LLM calls per agent (default: 5x golden trajectory)"
+    echo "  --category TYPE      Filter benchmark tasks by category: cooperative|competitive|mixed"
     echo "  --tasks-dir DIR      Custom tasks directory (default: data/emtom/tasks)"
+    echo "  --team-model-map MAP Team->model mapping for competitive tasks"
+    echo "                       Format: team_0=sonnet,team_1=gpt-5"
     echo "  --no-video           Disable video recording (faster)"
     echo ""
     echo -e "${BOLD}Test Options:${NC}"
@@ -197,6 +201,8 @@ print_usage() {
     echo "  ./emtom/run_emtom.sh all"
     echo "  ./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/my_tasks"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
+    echo "  ./emtom/run_emtom.sh benchmark --category competitive"
+    echo "  ./emtom/run_emtom.sh benchmark --team-model-map team_0=sonnet,team_1=gpt-5"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
     echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
 }
@@ -367,6 +373,12 @@ run_benchmark() {
         SAVE_VIDEO_OVERRIDE="++evaluation.save_video=false"
     fi
 
+    # Optional benchmark task category filter
+    CATEGORY_OVERRIDE=""
+    if [ -n "$CATEGORY" ]; then
+        CATEGORY_OVERRIDE="+task_category_filter=$CATEGORY"
+    fi
+
     # Single task mode: auto-detect agents from task file
     if [ -n "$TASK_FILE" ]; then
         if [ ! -f "$TASK_FILE" ]; then
@@ -387,6 +399,12 @@ run_benchmark() {
         echo "Task file: $TASK_FILE"
         echo "Agents: $TASK_NUM_AGENTS (from task)"
         echo "Max simulation steps: $MAX_SIM_STEPS"
+        if [ -n "$CATEGORY" ]; then
+            echo "Category filter: $CATEGORY"
+        fi
+        if [ -n "$TEAM_MODEL_MAP" ]; then
+            echo "Team model map: $TEAM_MODEL_MAP"
+        fi
         echo "=============================================="
 
         CONFIG_NAME=$(get_agent_config $TASK_NUM_AGENTS $AGENT_TYPE)
@@ -401,12 +419,13 @@ run_benchmark() {
             done
         fi
 
-        python emtom/examples/run_habitat_benchmark.py \
+        EMTOM_TEAM_MODEL_MAP="$TEAM_MODEL_MAP" python emtom/examples/run_habitat_benchmark.py \
             --config-name $CONFIG_NAME \
             habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
             $MAX_TURNS_OVERRIDE \
             $REPLANNING_OVERRIDES \
             $SAVE_VIDEO_OVERRIDE \
+            $CATEGORY_OVERRIDE \
             +task=$TASK_FILE \
             +model=$MODEL \
             +llm_provider=$LLM_PROVIDER \
@@ -451,6 +470,12 @@ print(' '.join(map(str, sorted(counts))))
     echo "Task source: $TASK_DIR"
     echo "Agent counts found: $AGENT_COUNTS"
     echo "Max simulation steps: $MAX_SIM_STEPS"
+    if [ -n "$CATEGORY" ]; then
+        echo "Category filter: $CATEGORY"
+    fi
+    if [ -n "$TEAM_MODEL_MAP" ]; then
+        echo "Team model map: $TEAM_MODEL_MAP"
+    fi
     echo "=============================================="
 
     # Create timestamp for this benchmark run
@@ -476,12 +501,13 @@ print(' '.join(map(str, sorted(counts))))
             done
         fi
 
-        python emtom/examples/run_habitat_benchmark.py \
+        EMTOM_TEAM_MODEL_MAP="$TEAM_MODEL_MAP" python emtom/examples/run_habitat_benchmark.py \
             --config-name $CONFIG_NAME \
             habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
             $MAX_TURNS_OVERRIDE \
             $REPLANNING_OVERRIDES \
             $SAVE_VIDEO_OVERRIDE \
+            $CATEGORY_OVERRIDE \
             +num_agents_filter=$NUM_AGENTS \
             +task_dir=$TASK_DIR \
             +model=$MODEL \
@@ -682,6 +708,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --tasks-dir)
             TASKS_DIR=$2
+            shift 2
+            ;;
+        --team-model-map)
+            TEAM_MODEL_MAP=$2
+            if [[ "$TEAM_MODEL_MAP" != *"="* ]]; then
+                echo "Error: --team-model-map must include '=' entries, e.g. team_0=sonnet,team_1=gpt-5"
+                exit 1
+            fi
             shift 2
             ;;
         --no-video)

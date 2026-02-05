@@ -108,6 +108,7 @@ Create benchmark tasks using an LLM agent that iteratively designs and tests tas
 | `--subtasks N` | Steps per task | 3 |
 | `--max-iterations N` | Max agent iterations | 100 |
 | `--query "TEXT"` | Seed query to guide generation | - |
+| `--seed-task FILE` | Use existing task JSON as seed instead of blank template | - |
 | `--retry-verification FILE` | Retry with ToM judge suggestions | - |
 
 **Supported Models:**
@@ -205,6 +206,12 @@ Run multi-agent evaluation on generated tasks. By default, runs **all tasks** in
 
 # Run all tasks without video (faster)
 ./emtom/run_emtom.sh benchmark --model sonnet --no-video
+
+# Run only competitive tasks
+./emtom/run_emtom.sh benchmark --category competitive
+
+# Pit models by team in competitive tasks
+./emtom/run_emtom.sh benchmark --team-model-map team_0=sonnet,team_1=gpt-5
 ```
 
 **Options:**
@@ -214,12 +221,37 @@ Run multi-agent evaluation on generated tasks. By default, runs **all tasks** in
 | `--model MODEL` | LLM model for agents (see table below) | gpt-5.2 |
 | `--max-sim-steps N` | Max simulation steps | 200000 |
 | `--max-llm-calls N` | Max LLM calls per agent | 5x golden trajectory |
+| `--category TYPE` | Filter benchmark tasks by category (`cooperative`, `competitive`, `mixed`) | all categories |
 | `--agent-type TYPE` | `robot` or `human` | robot |
+| `--team-model-map MAP` | Team-to-model mapping for competitive tasks (`team_0=sonnet,team_1=gpt-5`) | none |
 | `--no-video` | Disable video recording (faster) | false |
 
 **Supported Models:** Same as Task Generation (see table above).
 
-**Output:** Results are saved to `outputs/emtom/<timestamp>-benchmark/benchmark_summary.json` with per-task pass/fail status and overall pass rate.
+**Output:** Results are saved to `outputs/emtom/<timestamp>-benchmark/benchmark_summary.json` with per-task pass/fail status, overall pass rate, and per-task `team_model_mapping`/`agent_model_mapping`.
+
+**Communication Metrics:** After each benchmark run, communication is automatically scored:
+- **Secret leakage score** (0-1): Did agents dump their private secrets into the group chat?
+- **Efficiency score** (0-1): Were messages strategic and concise vs redundant/wasteful? (LLM-judged via gpt-5.2)
+- **Overall communication score**: Weighted combination of leakage and efficiency
+
+These metrics appear in the benchmark output JSON under `communication_metrics`.
+
+---
+
+### Seed Task Workflow
+
+Use `--seed-task` to iterate on existing tasks (e.g., elevating Theory of Mind depth):
+
+```bash
+# Generate a basic task
+./emtom/run_emtom.sh generate --model gpt-5.2 --category cooperative
+
+# Re-generate with higher ToM using the basic task as seed
+./emtom/run_emtom.sh generate --model gpt-5.2 \
+  --seed-task data/emtom/tasks/task_abc123.json \
+  --query "Elevate to level 2 theory of mind with false beliefs"
+```
 
 ---
 
@@ -268,6 +300,8 @@ Generated tasks are saved to `data/emtom/tasks/` as JSON:
     "agent_0": ["The drawer opens when you try to close it"],
     "agent_1": []
   },
+  "tom_level": 2,
+  "tom_reasoning": "Agent 0 must reason about Agent 1's false belief about the drawer",
   "golden_trajectory": [...]
 }
 ```
