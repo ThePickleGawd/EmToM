@@ -300,7 +300,7 @@ def main(config: DictConfig) -> None:
     # Determine which tasks to run
     task_file_arg = config.get("task", None)
     num_agents_filter = config.get("num_agents_filter", None)
-    task_dir = Path("data/emtom/tasks")
+    task_dir = Path(config.get("task_dir", "data/emtom/tasks"))
 
     if task_file_arg:
         # Single task mode: run only the specified task

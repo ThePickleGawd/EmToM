@@ -105,7 +105,9 @@ THRESHOLD=0.7  # ToM judge threshold
 RETRY_VERIFICATION=""  # Path to failed ToM verification file
 NO_AUTO_RETRY=false  # Disable automatic retry on judge failure
 CATEGORY=""  # Task category: cooperative, competitive, or mixed
+SEED_TASK=""  # Path to existing task to use as seed
 NO_VIDEO=false  # Disable video saving
+TASKS_DIR=""  # Custom tasks directory for benchmark
 
 print_usage() {
     echo -e "${BOLD}EMTOM Benchmark Pipeline${NC}"
@@ -165,11 +167,13 @@ print_usage() {
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
     echo "  --retry-verification FILE  Retry generation using suggestions from failed ToM verification"
     echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
+    echo "  --seed-task FILE     Use existing task JSON as seed instead of blank template"
     echo ""
     echo -e "${BOLD}Benchmark Options:${NC}"
     echo "  --model MODEL        LLM model name (default: gpt-5.2, provider auto-detected)"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
     echo "  --max-llm-calls N    Max LLM calls per agent (default: 5x golden trajectory)"
+    echo "  --tasks-dir DIR      Custom tasks directory (default: data/emtom/tasks)"
     echo "  --no-video           Disable video recording (faster)"
     echo ""
     echo -e "${BOLD}Test Options:${NC}"
@@ -191,6 +195,7 @@ print_usage() {
     echo -e "  ./emtom/run_emtom.sh generate --agents-min 2 --agents-max 4 ${GREEN}--model gpt-5${NC}"
     echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model mistral-large-3${NC} --query \"A task using the radio\""
     echo "  ./emtom/run_emtom.sh all"
+    echo "  ./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/my_tasks"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
     echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
@@ -321,6 +326,9 @@ run_generate() {
     if [ -n "$CATEGORY" ]; then
         EXTRA_ARGS+=(--category "$CATEGORY")
     fi
+    if [ -n "$SEED_TASK" ]; then
+        EXTRA_ARGS+=(--seed-task "$SEED_TASK")
+    fi
 
     # Use Hydra config system with custom overrides
     # Scene is loaded live from PARTNR dataset - no trajectories needed
@@ -407,7 +415,7 @@ run_benchmark() {
     fi
 
     # All tasks mode: scan tasks and group by agent count
-    TASK_DIR="data/emtom/tasks"
+    TASK_DIR="${TASKS_DIR:-data/emtom/tasks}"
     if [ ! -d "$TASK_DIR" ]; then
         echo -e "${RED}ERROR: Task directory not found: $TASK_DIR${NC}"
         echo "Run task generation first: ./emtom/run_emtom.sh generate"
@@ -475,6 +483,7 @@ print(' '.join(map(str, sorted(counts))))
             $REPLANNING_OVERRIDES \
             $SAVE_VIDEO_OVERRIDE \
             +num_agents_filter=$NUM_AGENTS \
+            +task_dir=$TASK_DIR \
             +model=$MODEL \
             +llm_provider=$LLM_PROVIDER \
             "hydra.run.dir=${OUTPUT_BASE}-${NUM_AGENTS}agents"
@@ -671,6 +680,10 @@ while [[ $# -gt 0 ]]; do
             NO_AUTO_RETRY=true
             shift
             ;;
+        --tasks-dir)
+            TASKS_DIR=$2
+            shift 2
+            ;;
         --no-video)
             NO_VIDEO=true
             shift
@@ -690,6 +703,10 @@ while [[ $# -gt 0 ]]; do
                 echo "Error: --category must be 'cooperative', 'competitive', or 'mixed'"
                 exit 1
             fi
+            shift 2
+            ;;
+        --seed-task)
+            SEED_TASK=$2
             shift 2
             ;;
         -h|--help)
