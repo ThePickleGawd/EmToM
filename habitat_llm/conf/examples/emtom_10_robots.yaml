@@ -1,3 +1,5 @@
+# @package _global_
+
 defaults:
 - /training@: base_train
 - /habitat_conf: emtom_spot_multi_agent_10

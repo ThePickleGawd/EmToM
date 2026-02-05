@@ -191,18 +191,26 @@ Tasks must score ≥0.7 overall and ≥0.5 on each criterion to pass. Mental sta
 
 ### 4. Benchmark
 
-Run multi-agent evaluation on generated tasks.
+Run multi-agent evaluation on generated tasks. By default, runs **all tasks** in `data/emtom/tasks/`.
 
 ```bash
+# Run all tasks with default model (gpt-5.2)
 ./emtom/run_emtom.sh benchmark
-./emtom/run_emtom.sh benchmark --task data/emtom/tasks/my_task.json --model sonnet
-./emtom/run_emtom.sh benchmark --max-sim-steps 1000 --model gpt-5
+
+# Run all tasks with Claude Sonnet
+./emtom/run_emtom.sh benchmark --model sonnet
+
+# Run a single specific task
+./emtom/run_emtom.sh benchmark --task data/emtom/tasks/my_task.json
+
+# Run all tasks without video (faster)
+./emtom/run_emtom.sh benchmark --model sonnet --no-video
 ```
 
 **Options:**
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--task FILE` | Specific task file | most recent |
+| `--task FILE` | Run single task file only | all tasks |
 | `--model MODEL` | LLM model for agents (see table below) | gpt-5.2 |
 | `--max-sim-steps N` | Max simulation steps | 200000 |
 | `--max-llm-calls N` | Max LLM calls per agent | 5x golden trajectory |
@@ -210,6 +218,8 @@ Run multi-agent evaluation on generated tasks.
 | `--no-video` | Disable video recording (faster) | false |
 
 **Supported Models:** Same as Task Generation (see table above).
+
+**Output:** Results are saved to `outputs/emtom/<timestamp>-benchmark/benchmark_summary.json` with per-task pass/fail status and overall pass rate.
 
 ---
 

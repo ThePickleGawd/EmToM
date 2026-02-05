@@ -353,67 +353,138 @@ run_benchmark() {
     # Expand short model names to full IDs
     MODEL=$(expand_model_name "$MODEL")
 
-    # Determine task file (specified or most recent)
-    ACTUAL_TASK_FILE="$TASK_FILE"
-    if [ -z "$ACTUAL_TASK_FILE" ]; then
-        # Find most recent task file
-        ACTUAL_TASK_FILE=$(ls -t data/emtom/tasks/*.json 2>/dev/null | head -1)
-        if [ -z "$ACTUAL_TASK_FILE" ]; then
-            echo -e "${RED}ERROR: No task files found in data/emtom/tasks/${NC}"
-            echo "Run task generation first: ./emtom/run_emtom.sh generate"
-            exit 1
-        fi
-    fi
-
-    # Auto-detect num_agents from task file
-    TASK_NUM_AGENTS=$(python3 -c "import json; print(json.load(open('$ACTUAL_TASK_FILE')).get('num_agents', 2))" 2>/dev/null)
-    if [ -z "$TASK_NUM_AGENTS" ]; then
-        TASK_NUM_AGENTS=2
-    fi
-
-    echo "=============================================="
-    echo "Running EMTOM Habitat Benchmark"
-    echo "=============================================="
-    echo "LLM: $LLM_PROVIDER ($MODEL)"
-    echo "Max simulation steps: $MAX_SIM_STEPS"
-    if [ -n "$MAX_LLM_CALLS" ]; then
-        echo "Max LLM calls per agent: $MAX_LLM_CALLS"
-    else
-        echo "Max LLM calls per agent: 5x golden trajectory"
-    fi
-    echo "Task file: $ACTUAL_TASK_FILE"
-    echo "Agents: $TASK_NUM_AGENTS (from task file)"
-    echo "=============================================="
-
-    # Get the appropriate config for the number of agents (from task)
-    CONFIG_NAME=$(get_agent_config $TASK_NUM_AGENTS $AGENT_TYPE)
-
-    # Build optional overrides (only if MAX_LLM_CALLS is explicitly set)
-    MAX_TURNS_OVERRIDE=""
-    REPLANNING_OVERRIDES=""
-    if [ -n "$MAX_LLM_CALLS" ]; then
-        MAX_TURNS_OVERRIDE="+max_turns=$MAX_LLM_CALLS"
-        for ((i=0; i<TASK_NUM_AGENTS; i++)); do
-            REPLANNING_OVERRIDES="$REPLANNING_OVERRIDES ++evaluation.agents.agent_${i}.planner.plan_config.replanning_threshold=$MAX_LLM_CALLS"
-        done
-    fi
-
     # Build save_video override
     SAVE_VIDEO_OVERRIDE=""
     if [ "$NO_VIDEO" = true ]; then
-        SAVE_VIDEO_OVERRIDE="evaluation.save_video=false"
+        SAVE_VIDEO_OVERRIDE="++evaluation.save_video=false"
     fi
 
-    python emtom/examples/run_habitat_benchmark.py \
-        --config-name $CONFIG_NAME \
-        habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
-        $MAX_TURNS_OVERRIDE \
-        $REPLANNING_OVERRIDES \
-        $SAVE_VIDEO_OVERRIDE \
-        +task=$ACTUAL_TASK_FILE \
-        +model=$MODEL \
-        +llm_provider=$LLM_PROVIDER \
-        "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-benchmark"
+    # Single task mode: auto-detect agents from task file
+    if [ -n "$TASK_FILE" ]; then
+        if [ ! -f "$TASK_FILE" ]; then
+            echo -e "${RED}ERROR: Task file not found: $TASK_FILE${NC}"
+            exit 1
+        fi
+
+        # Auto-detect num_agents from task file
+        TASK_NUM_AGENTS=$(python3 -c "import json; print(json.load(open('$TASK_FILE')).get('num_agents', 2))" 2>/dev/null)
+        if [ -z "$TASK_NUM_AGENTS" ]; then
+            TASK_NUM_AGENTS=2
+        fi
+
+        echo "=============================================="
+        echo "Running EMTOM Habitat Benchmark (Single Task)"
+        echo "=============================================="
+        echo "LLM: $LLM_PROVIDER ($MODEL)"
+        echo "Task file: $TASK_FILE"
+        echo "Agents: $TASK_NUM_AGENTS (from task)"
+        echo "Max simulation steps: $MAX_SIM_STEPS"
+        echo "=============================================="
+
+        CONFIG_NAME=$(get_agent_config $TASK_NUM_AGENTS $AGENT_TYPE)
+
+        # Build optional overrides
+        MAX_TURNS_OVERRIDE=""
+        REPLANNING_OVERRIDES=""
+        if [ -n "$MAX_LLM_CALLS" ]; then
+            MAX_TURNS_OVERRIDE="+max_turns=$MAX_LLM_CALLS"
+            for ((i=0; i<TASK_NUM_AGENTS; i++)); do
+                REPLANNING_OVERRIDES="$REPLANNING_OVERRIDES ++evaluation.agents.agent_${i}.planner.plan_config.replanning_threshold=$MAX_LLM_CALLS"
+            done
+        fi
+
+        python emtom/examples/run_habitat_benchmark.py \
+            --config-name $CONFIG_NAME \
+            habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
+            $MAX_TURNS_OVERRIDE \
+            $REPLANNING_OVERRIDES \
+            $SAVE_VIDEO_OVERRIDE \
+            +task=$TASK_FILE \
+            +model=$MODEL \
+            +llm_provider=$LLM_PROVIDER \
+            "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-benchmark"
+        return
+    fi
+
+    # All tasks mode: scan tasks and group by agent count
+    TASK_DIR="data/emtom/tasks"
+    if [ ! -d "$TASK_DIR" ]; then
+        echo -e "${RED}ERROR: Task directory not found: $TASK_DIR${NC}"
+        echo "Run task generation first: ./emtom/run_emtom.sh generate"
+        exit 1
+    fi
+
+    # Find all unique agent counts in tasks
+    AGENT_COUNTS=$(python3 -c "
+import json
+from pathlib import Path
+counts = set()
+for f in Path('$TASK_DIR').glob('*.json'):
+    try:
+        data = json.load(open(f))
+        if 'tasks' in data:
+            for t in data['tasks']:
+                counts.add(t.get('num_agents', 2))
+        elif 'task_id' in data:
+            counts.add(data.get('num_agents', 2))
+    except: pass
+print(' '.join(map(str, sorted(counts))))
+" 2>/dev/null)
+
+    if [ -z "$AGENT_COUNTS" ]; then
+        echo -e "${RED}ERROR: No valid tasks found in $TASK_DIR${NC}"
+        exit 1
+    fi
+
+    echo "=============================================="
+    echo "Running EMTOM Habitat Benchmark (All Tasks)"
+    echo "=============================================="
+    echo "LLM: $LLM_PROVIDER ($MODEL)"
+    echo "Task source: $TASK_DIR"
+    echo "Agent counts found: $AGENT_COUNTS"
+    echo "Max simulation steps: $MAX_SIM_STEPS"
+    echo "=============================================="
+
+    # Create timestamp for this benchmark run
+    TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+    OUTPUT_BASE="./outputs/emtom/${TIMESTAMP}-benchmark"
+
+    # Run benchmark for each agent count
+    for NUM_AGENTS in $AGENT_COUNTS; do
+        echo ""
+        echo -e "${CYAN}========================================${NC}"
+        echo -e "${CYAN}Running tasks with $NUM_AGENTS agents${NC}"
+        echo -e "${CYAN}========================================${NC}"
+
+        CONFIG_NAME=$(get_agent_config $NUM_AGENTS $AGENT_TYPE)
+
+        # Build optional overrides
+        MAX_TURNS_OVERRIDE=""
+        REPLANNING_OVERRIDES=""
+        if [ -n "$MAX_LLM_CALLS" ]; then
+            MAX_TURNS_OVERRIDE="+max_turns=$MAX_LLM_CALLS"
+            for ((i=0; i<NUM_AGENTS; i++)); do
+                REPLANNING_OVERRIDES="$REPLANNING_OVERRIDES ++evaluation.agents.agent_${i}.planner.plan_config.replanning_threshold=$MAX_LLM_CALLS"
+            done
+        fi
+
+        python emtom/examples/run_habitat_benchmark.py \
+            --config-name $CONFIG_NAME \
+            habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
+            $MAX_TURNS_OVERRIDE \
+            $REPLANNING_OVERRIDES \
+            $SAVE_VIDEO_OVERRIDE \
+            +num_agents_filter=$NUM_AGENTS \
+            +model=$MODEL \
+            +llm_provider=$LLM_PROVIDER \
+            "hydra.run.dir=${OUTPUT_BASE}-${NUM_AGENTS}agents"
+    done
+
+    echo ""
+    echo -e "${GREEN}=============================================="
+    echo "All benchmark runs complete!"
+    echo "Results in: $OUTPUT_BASE-*"
+    echo -e "==============================================${NC}"
 }
 
 run_test() {
