@@ -228,6 +228,10 @@ class GeneratedTask:
     locked_containers: Dict[str, str] = field(default_factory=dict)
     initial_states: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Object -> {property: value}
 
+    # THEORY OF MIND
+    tom_level: int = 1  # 1=info asymmetry, 2=false belief, 3=nested beliefs
+    tom_reasoning: Optional[str] = None  # Why this task requires this ToM level
+
     # COMPETITIVE-SPECIFIC (optional, for category="competitive")
     teams: Optional[Dict[str, List[str]]] = None  # team_id -> [agent_ids], e.g. {"team_0": ["agent_0"], "team_1": ["agent_1"]}
     team_secrets: Optional[Dict[str, List[str]]] = None  # team_id -> [secrets]
@@ -329,6 +333,8 @@ class GeneratedTask:
             items=items,
             locked_containers=locked_containers,
             initial_states=initial_states,
+            tom_level=data.get("tom_level", 1),
+            tom_reasoning=data.get("tom_reasoning"),
             teams=teams,
             team_secrets=team_secrets,
         )

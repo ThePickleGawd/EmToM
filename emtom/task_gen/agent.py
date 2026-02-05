@@ -64,6 +64,7 @@ class TaskGeneratorAgent:
         verification_feedback: Optional[Dict[str, Any]] = None,
         calibration_stats: Optional[Dict[str, Any]] = None,
         category: Optional[str] = None,
+        seed_task: Optional[str] = None,
     ):
         """
         Initialize the agent.
@@ -86,6 +87,7 @@ class TaskGeneratorAgent:
             verification_feedback: Optional dict with suggestions from a failed ToM verification to incorporate
             calibration_stats: Dataset calibration stats (pass rate, target rate) for difficulty guidance
             category: Task category to generate: "cooperative", "competitive", or "mixed" (None = random)
+            seed_task: Optional path to existing task JSON to use as seed instead of blank template
         """
         self.llm = llm_client
         self.config = config
@@ -103,6 +105,7 @@ class TaskGeneratorAgent:
         self.verification_feedback = verification_feedback
         self.calibration_stats = calibration_stats or {}
         self.category = category  # None means random selection
+        self.seed_task = seed_task  # Path to existing task to use as seed
 
         # Task file paths
         self.task_file = self.working_dir / "working_task.json"
@@ -420,8 +423,19 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
             else:
                 calibration_section += f"No calibration data yet for {model}. Generate tasks of varied difficulty.\n"
 
+        # Build seed task section if using a seed
+        seed_section = ""
+        if self.seed_task:
+            seed_section = f"""
+## Seed Task
+A previous task has been loaded into working_task.json as your starting point.
+Use it as a foundation and modify it based on the query/requirements above.
+After calling `new_scene[N]`, view it with: `bash[cat {self.task_file}]`
+The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adapt it to the new scene and any requested changes.
+"""
+
         # Build extra sections string
-        extra_sections = query_section + verification_section + calibration_section
+        extra_sections = query_section + seed_section + verification_section + calibration_section
 
         # Initial user message - use template from prompts.py
         user_msg = USER_PROMPT_TEMPLATE.format(
@@ -549,7 +563,10 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
             self._log(f"Warning: Could not save context window: {e}")
 
     def _create_working_task_from_template(self, num_agents: Optional[int] = None) -> int:
-        """Create working_task.json from template with scene fields and num_agents pre-populated.
+        """Create working_task.json from template or seed task.
+
+        If self.seed_task is set, loads the seed task instead of the blank template.
+        Scene fields (scene_id, episode_id, agent_spawns) are always updated from the current scene.
 
         Args:
             num_agents: Number of agents to use. If None, uses agents_max.
@@ -560,11 +577,20 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
         if num_agents is None:
             num_agents = self.agents_max
 
-        # Load template
-        with open(self.template_file) as f:
-            task = json.load(f)
+        # Load seed task or blank template
+        if self.seed_task:
+            seed_path = Path(self.seed_task)
+            with open(seed_path) as f:
+                task = json.load(f)
+            self._log(f"Loaded seed task from {seed_path}")
+            # Use seed task's num_agents if not overridden
+            if num_agents == self.agents_max and "num_agents" in task:
+                num_agents = task["num_agents"]
+        else:
+            with open(self.template_file) as f:
+                task = json.load(f)
 
-        # Auto-populate scene fields
+        # Auto-populate scene fields (always from current scene, even for seed tasks)
         if self.scene_data:
             task["scene_id"] = self.scene_data.scene_id
             task["episode_id"] = self.scene_data.episode_id
@@ -574,33 +600,37 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
 
         task["num_agents"] = num_agents
 
-        # Generate agent_secrets and agent_actions
-        # Include Find* tools so agents can discover objects at runtime instead of hardcoded IDs
-        default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
-        task["agent_secrets"] = {
-            f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
-            for i in range(num_agents)
-        }
-        task["agent_actions"] = {
-            f"agent_{i}": default_actions.copy()
-            for i in range(num_agents)
-        }
-
-        # Generate golden_trajectory template
-        task["golden_trajectory"] = [
-            {
-                "actions": [
-                    {"agent": f"agent_{i}", "action": "ACTION_NAME[TARGET]" if i == 0 else "Wait"}
-                    for i in range(num_agents)
-                ]
+        # Only generate placeholder agent fields when not using a seed task
+        if not self.seed_task:
+            # Include Find* tools so agents can discover objects at runtime instead of hardcoded IDs
+            default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
+            task["agent_secrets"] = {
+                f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
+                for i in range(num_agents)
             }
-        ]
+            task["agent_actions"] = {
+                f"agent_{i}": default_actions.copy()
+                for i in range(num_agents)
+            }
+
+            # Generate golden_trajectory template
+            task["golden_trajectory"] = [
+                {
+                    "actions": [
+                        {"agent": f"agent_{i}", "action": "ACTION_NAME[TARGET]" if i == 0 else "Wait"}
+                        for i in range(num_agents)
+                    ]
+                }
+            ]
+
+        # Clear task_id so a new one gets assigned on submit
+        task["task_id"] = "REPLACE_WITH_UNIQUE_ID"
 
         # Write to working_task.json
         with open(self.task_file, 'w') as f:
             json.dump(task, f, indent=2)
 
-        self._log(f"Created {self.task_file} with {num_agents} agents")
+        self._log(f"Created {self.task_file} with {num_agents} agents{' (from seed)' if self.seed_task else ''}")
         return num_agents
 
     def _truncate_old_heredocs(self) -> None:

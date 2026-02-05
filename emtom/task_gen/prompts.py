@@ -95,6 +95,8 @@ Assigned!
   "category": "cooperative|competitive|mixed",
   "num_agents": N,
   "task": "Natural language description (no IDs, no roles)",
+  "tom_level": 1,
+  "tom_reasoning": "Why this task requires this level of Theory of Mind",
   "agent_secrets": {{"agent_0": [...], "agent_1": [...]}},
   "team_secrets": {{"team_0": [...], "team_1": [...]}},
   "agent_actions": {{"agent_0": [...], "agent_1": [...]}},
@@ -104,6 +106,14 @@ Assigned!
   "golden_trajectory": [{{"actions": [{{"agent": "agent_0", "action": "Navigate[room]"}}]}}]
 }}
 ```
+
+## Theory of Mind Levels
+Set `tom_level` to indicate the depth of mental state reasoning required:
+- **Level 1**: Information asymmetry. Agent A has info B needs. B must communicate to get it. (e.g., "Only you know the key is in the kitchen drawer")
+- **Level 2**: False belief reasoning. Agent A must reason about what B *believes* (possibly falsely) and act on that inference. (e.g., "Agent B thinks the key is in the kitchen, but you moved it to the bedroom. You need to coordinate without revealing the new location to the opposing team.")
+- **Level 3**: Nested belief reasoning. Agent A reasons about B's belief about C's knowledge or intent. (e.g., "Agent B doesn't know that Agent C knows the secret code. You must get C to reveal it without B realizing.")
+
+Higher levels are harder and more valuable. Aim for level 2+ when possible. Set `tom_reasoning` to explain WHY the task requires this level.
 
 ## Success Conditions
 - Spatial: `is_on_top`, `is_inside`, `is_in_room` (need `target`)

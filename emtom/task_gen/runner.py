@@ -49,6 +49,8 @@ def parse_extra_args():
     parser.add_argument("--category", type=str, default=None,
                         choices=["cooperative", "competitive", "mixed"],
                         help="Task category to generate (default: random)")
+    parser.add_argument("--seed-task", type=str, default=None,
+                        help="Path to existing task JSON to use as seed (instead of blank template)")
 
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
@@ -124,6 +126,15 @@ def main(config: DictConfig) -> None:
     calibration_model = extra_args.calibration_model if extra_args else "gpt-5.2"
     target_pass_rate = extra_args.target_pass_rate if extra_args else 0.10
     category = extra_args.category if extra_args else None
+    seed_task = extra_args.seed_task if extra_args else None
+
+    # Validate seed task path
+    if seed_task:
+        seed_task_path = Path(seed_task)
+        if not seed_task_path.exists():
+            cprint(f"ERROR: Seed task file not found: {seed_task_path}", "red")
+            sys.exit(1)
+        cprint(f"Seed task: {seed_task_path}", "green")
 
     # Load failed verification suggestions if retrying
     verification_feedback = None
@@ -251,6 +262,7 @@ def main(config: DictConfig) -> None:
         verification_feedback=verification_feedback,  # Failed ToM verification suggestions
         calibration_stats=calibration_stats,  # Dataset calibration stats for difficulty guidance
         category=category,  # Task category: cooperative, competitive, or mixed
+        seed_task=seed_task,  # Existing task to use as seed instead of blank template
     )
 
     # Run agent

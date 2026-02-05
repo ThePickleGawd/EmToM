@@ -3,6 +3,8 @@
   "title": "REPLACE_WITH_TITLE",
   "category": "cooperative|competitive|mixed",
   "task": "REPLACE_WITH_TASK_DESCRIPTION",
+  "tom_level": 1,
+  "tom_reasoning": "REPLACE_WITH_TOM_REASONING",
   "scene_id": "",
   "episode_id": "",
   "agent_spawns": {

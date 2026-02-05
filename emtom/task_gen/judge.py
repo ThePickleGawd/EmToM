@@ -142,6 +142,7 @@ SHARED_CRITERIA = [
     "narrative_consistency",
     "subtask_relevance",
     "mechanic_utilization",
+    "tom_depth",             # Theory of Mind depth matches claimed tom_level
 ]
 
 # Category-specific criteria
@@ -247,6 +248,16 @@ CRITERIA_DESCRIPTIONS = {
 0.5: Minor tension that doesn't create real dilemmas
 0.7: Meaningful conflicts that require strategic choices
 1.0: Real dilemmas - pursuing subgoals risks main goal or conflicts with others' subgoals""",
+    },
+    # Theory of Mind depth
+    "tom_depth": {
+        "name": "Theory of Mind Depth",
+        "description": "Does the task require the claimed level of ToM reasoning? Is tom_level accurate? Level 1 = info asymmetry (ask to get info). Level 2 = false belief reasoning (reason about what others believe). Level 3 = nested beliefs (reason about beliefs about beliefs).",
+        "rubric": """0.0: No ToM required (agents can solve independently without communication)
+0.3: Shallow ToM (just needs basic info sharing, level 1 at best)
+0.5: Moderate ToM (requires reasoning about what others know, solid level 1)
+0.7: Good ToM (requires reasoning about others' beliefs/plans, level 2)
+1.0: Deep ToM (requires nested belief reasoning or deception detection, level 2-3)""",
     },
     # User requirements (added dynamically when query is provided)
     "user_requirements_alignment": {
