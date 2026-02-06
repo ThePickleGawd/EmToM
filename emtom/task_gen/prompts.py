@@ -89,6 +89,7 @@ Assigned!
 - Secrets must be actionable (room/furniture/key/constraint) and not prescriptive
 - Secrets create asymmetry; agents must communicate to combine clues
 - Natural language only; no object/item IDs in `task` or secrets
+- Each agent's secrets MUST include which other agents are on their team (e.g., "You are on a team with agent_1." for cooperative, or "You are on team_0 with agent_1. The opposing team is agent_2." for competitive)
 
 ## Task JSON Structure
 ```json

@@ -1145,7 +1145,10 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
     """Convert GeneratedTask to per-agent instructions."""
     instructions = {}
 
-    for agent_id in task.agent_actions.keys():
+    # Build team membership lookup: agent_id -> list of teammate agent_ids
+    all_agents = sorted(task.agent_actions.keys())
+
+    for agent_id in all_agents:
         parts = []
 
         # Header with agent identity
@@ -1158,7 +1161,13 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
             parts.append("")
 
         # Known Information - what this agent knows
-        secrets = task.agent_secrets.get(agent_id, [])
+        secrets = list(task.agent_secrets.get(agent_id, []))
+
+        # Prepend teammate info if not already present in secrets
+        teammate_info = _build_teammate_info(agent_id, all_agents, task.teams)
+        if teammate_info and not any("team" in s.lower() and "agent_" in s.lower() for s in secrets):
+            secrets.insert(0, teammate_info)
+
         if secrets:
             parts.append("[Known Information]:")
             for s in secrets:
@@ -1167,3 +1176,32 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
         instructions[agent_id] = "\n".join(parts)
 
     return instructions
+
+
+def _build_teammate_info(agent_id: str, all_agents: list, teams: dict = None) -> str:
+    """Build a string describing which agents are on this agent's team."""
+    if teams:
+        # Competitive/team-based: find this agent's team and opponents
+        my_team = None
+        for team_id, members in teams.items():
+            if agent_id in members:
+                my_team = team_id
+                break
+        if my_team:
+            teammates = [a for a in teams[my_team] if a != agent_id]
+            opponents = []
+            for team_id, members in teams.items():
+                if team_id != my_team:
+                    opponents.extend(members)
+            parts = [f"You are on {my_team}"]
+            if teammates:
+                parts[0] += f" with {', '.join(teammates)}"
+            if opponents:
+                parts.append(f"the opposing {'team is' if len(opponents) == 1 else 'agents are'} {', '.join(opponents)}")
+            return ". ".join(parts) + "."
+    else:
+        # Cooperative/mixed: all other agents are teammates
+        others = [a for a in all_agents if a != agent_id]
+        if others:
+            return f"Your teammates are: {', '.join(others)}."
+    return ""
