@@ -1612,7 +1612,7 @@ SUMMARY:"""
                 sc = subtask.get("success_condition", {})
                 for field in ["entity", "target"]:
                     val = sc.get(field, "")
-                    if val and not val.startswith("agent_"):
+                    if val and isinstance(val, str) and not val.startswith("agent_"):
                         val_refs = re.findall(object_pattern, val)
                         invalid_sc_refs = [ref for ref in val_refs if ref not in valid_scene_ids and not ref.startswith("item_")]
                         if invalid_sc_refs:

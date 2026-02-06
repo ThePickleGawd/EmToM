@@ -109,13 +109,16 @@ Assigned!
 }}
 ```
 
-## Theory of Mind Levels
-Set `tom_level` to indicate the depth of mental state reasoning required:
-- **Level 1**: Information asymmetry. Agent A has info B needs. B must communicate to get it. (e.g., "Only you know the key is in the kitchen drawer")
-- **Level 2**: False belief reasoning. Agent A must reason about what B *believes* (possibly falsely) and act on that inference. (e.g., "Agent B thinks the key is in the kitchen, but you moved it to the bedroom. You need to coordinate without revealing the new location to the opposing team.")
-- **Level 3**: Nested belief reasoning. Agent A reasons about B's belief about C's knowledge or intent. (e.g., "Agent B doesn't know that Agent C knows the secret code. You must get C to reveal it without B realizing.")
+## Theory of Mind Order
+Set `tom_level` to indicate the order of recursive mental modeling required to solve the task.
+The "order" counts how many layers of "X thinks that..." are nested:
+- **Order 1** (I think about what YOU know/believe/want): Agent A must reason about Agent B's knowledge, beliefs, goals, or intentions. Example: "A knows the key is moved, but B doesn't — A must reason about B's outdated belief."
+- **Order 2** (I think about what YOU think THEY know/believe): Agent A must reason about what Agent B believes about Agent C's mental state. Example: "A must figure out what B thinks C knows about the hidden item."
+- **Order 3** (I think about what YOU think THEY think someone knows): Agent A must model B's model of C's model of something. Very rare in practice.
 
-Higher levels are harder and more valuable. Aim for level 2+ when possible. Set `tom_reasoning` to explain WHY the task requires this level.
+**Common mistake**: Simply needing to know what another agent can see or access is Order 1, NOT Order 2. Order 2 requires a belief *about* a belief, not just a belief about the world.
+
+Set `tom_reasoning` to a very simple explanation of WHY this task requires this order. Explicitly name the nested beliefs, e.g. "Agent A must reason about what B believes about C's knowledge of the key location."
 
 ## Success Conditions
 - Spatial: `is_on_top`, `is_inside`, `is_in_room` (need `target`)

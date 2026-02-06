@@ -415,7 +415,12 @@ class EMTOMBaseRunner(ABC):
 
             # Resolve object handle from world graph
             try:
-                node = self.env_interface.world_graph.get_node_from_name(obj_id)
+                world_graph = getattr(self.env_interface, "full_world_graph", None)
+                if world_graph is None:
+                    for uid in self.env_interface.world_graph:
+                        world_graph = self.env_interface.world_graph[uid]
+                        break
+                node = world_graph.get_node_from_name(obj_id)
                 handle = node.sim_handle
             except (ValueError, AttributeError):
                 handle = obj_id

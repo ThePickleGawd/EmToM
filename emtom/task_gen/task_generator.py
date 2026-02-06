@@ -229,7 +229,7 @@ class GeneratedTask:
     initial_states: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Object -> {property: value}
 
     # THEORY OF MIND
-    tom_level: int = 1  # 1=info asymmetry, 2=false belief, 3=nested beliefs
+    tom_level: int = 1  # 1=beliefs about others, 2=beliefs about beliefs, 3=3rd-order nesting
     tom_reasoning: Optional[str] = None  # Why this task requires this ToM level
 
     # COMPETITIVE-SPECIFIC (optional, for category="competitive")
