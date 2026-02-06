@@ -21,6 +21,54 @@ ConditionCheck = Callable[[str, Any], Tuple[bool, Optional[str]]]
 PostActionHook = Callable[[str, Tuple[Any, str], Any, str], Tuple[Any, str]]
 
 
+def _did_action_succeed(tool_name: str, tool: Any, result: Tuple[Any, str]) -> bool:
+    """
+    Heuristic success check for running post-action hooks safely.
+
+    For motor skills (notably Open), process_high_level_action is called multiple
+    times while the skill is still in progress. We only want to run post-hooks
+    after a confirmed success signal, not on the first in-progress tick.
+    """
+    action_output, observation = result
+    obs_text = (observation or "").lower()
+
+    # Explicit failure signals should never trigger post-hooks.
+    failure_tokens = ("failed", "cannot", "too far", "occluded", "error")
+    if any(token in obs_text for token in failure_tokens):
+        return False
+
+    # Explicit success signals from skills/planners.
+    if "successful execution" in obs_text or "successfully" in obs_text:
+        return True
+
+    # Instant actions: no low-level action and no failure message.
+    if action_output is None:
+        return bool(observation)
+
+    # Open is a multi-step motor skill. Defer until skill reports success.
+    if tool_name == "Open":
+        skill = getattr(tool, "skill", None)
+        if skill is None:
+            return False
+
+        if getattr(skill, "failed", False):
+            return False
+
+        # Open/Close skills expose this signal once interaction succeeded.
+        if bool(getattr(skill, "was_successful", False)):
+            # Oracle open toggles _is_action_issued while action is in-flight.
+            issued = getattr(skill, "_is_action_issued", None)
+            if issued is not None:
+                try:
+                    if bool(issued[0]):
+                        return False
+                except Exception:
+                    pass
+            return True
+
+    return False
+
+
 # =============================================================================
 # CONDITION CHECKS
 # =============================================================================
@@ -166,10 +214,8 @@ def wrap_tool(tool, game_manager, agent_uid: int = 0) -> None:
         # Execute original action
         result = original_method(input_query, observations)
 
-        # POST-ACTION: Run hooks (only if action succeeded)
-        # Check if action succeeded (result[0] is not None or observation doesn't indicate failure)
-        action_output, observation = result
-        if action_output is not None or "failed" not in observation.lower():
+        # POST-ACTION: Run hooks only after a confirmed success signal.
+        if _did_action_succeed(tool_name, tool, result):
             for hook in post_hooks:
                 result = hook(input_query, result, game_manager, agent_id)
 

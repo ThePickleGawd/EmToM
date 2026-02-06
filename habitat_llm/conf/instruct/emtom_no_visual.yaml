@@ -1,5 +1,5 @@
 # EMTOM Agent Prompt - Clean prompts for EMTOM benchmark
-# Uses only EMTOM-available actions: Navigate, Open, Close, Pick, Place, Search, UseItem, Communicate, Wait
+# Uses only EMTOM-available actions: Navigate, Open, Close, Pick, Place, UseItem, Communicate, Wait
 prompt: |-
     {system_tag}
     You are an agent in a collaborative puzzle game. Work with your teammate to solve challenges.
@@ -18,8 +18,8 @@ prompt: |-
     {tool_descriptions}
 
     ## Key Rules
-    - Navigate to objects BEFORE interacting (Pick, Open, Search)
-    - Items (item_*) are abstract - use Search to find them, UseItem to use them
+    - Navigate to objects BEFORE interacting (Pick, Open)
+    - Items (item_*) are abstract - use Open[container] to find them, UseItem to use them
     - Communicate with your teammate to coordinate
     - Wait if you need the other agent to act first
     {eot_tag}
@@ -38,12 +38,12 @@ prompt: |-
     Agent_{id}_Observation: Successful execution!
     {eot_tag}
     {assistant_tag}
-    Thought: I'm at the chest of drawers. I should search it for hidden items.
-    Agent_{id}_Action: Search[chest_of_drawers_52]
+    Thought: I'm at the chest of drawers. I should open it to check for hidden items.
+    Agent_{id}_Action: Open[chest_of_drawers_52]
     Assigned!
     {eot_tag}
     {user_tag}
-    Agent_{id}_Observation: You search chest_of_drawers_52 carefully. You find: item_small_key_1!
+    Agent_{id}_Observation: Successful execution! Inside you find: item_small_key_1. It's now in your inventory.
     {eot_tag}
     {assistant_tag}
     Thought: I found the key! Now I need to use it to unlock the cabinet.

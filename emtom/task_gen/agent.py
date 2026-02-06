@@ -138,7 +138,7 @@ class TaskGeneratorAgent:
                 template = json.load(f)
             # Set num_agents to max (LLM will choose within range)
             template["num_agents"] = self.agents_max
-            default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "Communicate", "Wait"]
+            default_actions = ["Navigate", "Open", "Pick", "Place", "UseItem", "Communicate", "Wait"]
             template["agent_secrets"] = {
                 f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
                 for i in range(self.agents_max)
@@ -603,7 +603,7 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
         # Only generate placeholder agent fields when not using a seed task
         if not self.seed_task:
             # Include Find* tools so agents can discover objects at runtime instead of hardcoded IDs
-            default_actions = ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
+            default_actions = ["Navigate", "Open", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
             task["agent_secrets"] = {
                 f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
                 for i in range(num_agents)
@@ -1493,14 +1493,14 @@ SUMMARY:"""
         # Validate locked_containers references
         locked_containers = task_data.get("locked_containers", {})
         if locked_containers and isinstance(locked_containers, dict):
-            # Keys should be valid scene furniture
+            # Keys should be valid articulated furniture (must be openable)
             if self.scene_data:
-                all_furniture = set(self.scene_data.furniture)
-                invalid_containers = [c for c in locked_containers.keys() if c not in all_furniture]
+                all_articulated = set(self.scene_data.articulated_furniture)
+                invalid_containers = [c for c in locked_containers.keys() if c not in all_articulated]
                 if invalid_containers:
                     return {
                         "valid": False,
-                        "error": f"locked_containers references containers not in scene: {invalid_containers}",
+                        "error": f"locked_containers must reference articulated furniture (openable containers). Invalid: {invalid_containers}",
                         "summary": "Task validation failed - invalid locked container"
                     }
             # Values should be defined items
@@ -1512,16 +1512,16 @@ SUMMARY:"""
                     "summary": "Task validation failed - invalid key item"
                 }
 
-        # Validate items hidden_in references exist in scene
+        # Validate items inside references are articulated furniture (Open[] only)
         for item in task_data.get("items", []):
-            hidden_in = item.get("hidden_in")
-            if hidden_in and self.scene_data:
-                all_furniture = set(self.scene_data.furniture)
-                if hidden_in not in all_furniture:
+            inside = item.get("inside")
+            if inside and self.scene_data:
+                all_articulated = set(self.scene_data.articulated_furniture)
+                if inside not in all_articulated:
                     return {
                         "valid": False,
-                        "error": f"item '{item.get('item_id')}' has hidden_in='{hidden_in}' which doesn't exist in scene furniture",
-                        "summary": "Task validation failed - invalid hidden_in container"
+                        "error": f"item '{item.get('item_id')}' has inside='{inside}' which is not articulated/openable furniture",
+                        "summary": "Task validation failed - invalid inside container"
                     }
 
         # Validate agent IDs are consistent with num_agents
@@ -1685,7 +1685,7 @@ SUMMARY:"""
 
         # Valid action names
         valid_actions = {
-            "Navigate", "Open", "Close", "Pick", "Place", "Search",
+            "Navigate", "Open", "Close", "Pick", "Place",
             "UseItem", "Communicate", "Wait", "Clean", "Pour", "PowerOn", "PowerOff",
             "Fill", "FindObjectTool", "FindReceptacleTool", "FindRoomTool"
         }
