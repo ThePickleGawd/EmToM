@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import boto3
+from botocore.exceptions import ClientError
 from omegaconf import DictConfig
 
 from habitat_llm.llm.base_llm import BaseLLM, Prompt
@@ -337,8 +338,25 @@ class BedrockClaude(BaseLLM):
         if self.system_message:
             request_kwargs["system"] = [{"text": self.system_message}]
 
-        # Call Bedrock Converse API
-        response = self.client.converse(**request_kwargs)
+        # Call Bedrock Converse API.
+        # Some models (notably certain Mistral variants) reject stopSequences.
+        try:
+            response = self.client.converse(**request_kwargs)
+        except ClientError as e:
+            err = e.response.get("Error", {})
+            code = err.get("Code", "")
+            message = err.get("Message", "")
+            normalized_message = message.lower().replace(" ", "")
+            should_retry_without_stop = (
+                "stopSequences" in inference_config
+                and code == "ValidationException"
+                and "stopsequences" in normalized_message
+            )
+            if not should_retry_without_stop:
+                raise
+
+            inference_config.pop("stopSequences", None)
+            response = self.client.converse(**request_kwargs)
 
         # Parse response
         text_response = response["output"]["message"]["content"][0]["text"]
