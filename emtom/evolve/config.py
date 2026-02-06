@@ -26,7 +26,8 @@ class EvolutionConfig:
     icl_total_examples: int = 10
     output_dir: str = "outputs/evolve"
     max_workers: int = 50
-    judge_threshold: float = 0.65
+    # Match run_emtom.sh default judge threshold.
+    judge_threshold: float = 0.7
     seed_query: str = (
         "Simple 2-agent cooperative task. No mechanics. "
         "Basic object rearrangement with minimal information asymmetry."

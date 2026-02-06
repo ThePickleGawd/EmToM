@@ -66,8 +66,8 @@ def parse_args() -> argparse.Namespace:
         "--seed-query", type=str,
         default="Simple 2-agent cooperative task. No mechanics. Basic object rearrangement with minimal information asymmetry.",
     )
-    parser.add_argument("--judge-threshold", type=float, default=0.0,
-                        help="Judge threshold for generation (0 = accept all, default: 0.0)")
+    parser.add_argument("--judge-threshold", type=float, default=0.7,
+                        help="Judge threshold for generation quality gate (default: 0.7)")
     parser.add_argument("--output-dir", type=str, default="outputs/evolve")
     parser.add_argument("--max-workers", type=int, default=50,
                         help="Max parallel generation/benchmark processes (default: 50)")
@@ -349,7 +349,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
             max_workers=config.max_workers,
             query=config.seed_query,
             category="cooperative",
-            judge_threshold=0.0,
+            judge_threshold=config.judge_threshold,
             subtasks_min=seed_sub_min,
             subtasks_max=seed_sub_max,
         )
@@ -429,9 +429,8 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
             # d. Build evolution query
             evolution_query = build_evolution_query(results, model, tier_idx + 1)
 
-            # e. Generate harder tasks (ramp judge threshold across tiers)
-            num_gen_tiers = max(1, len(config.model_ladder) - 1)
-            tier_threshold = config.judge_threshold * (tier_idx + 1) / num_gen_tiers
+            # e. Generate harder tasks while keeping a fixed quality bar.
+            tier_threshold = config.judge_threshold
             print(f"[evolve] Judge threshold for tier {tier_idx + 1}: {tier_threshold:.2f}")
 
             tier_tasks_dir = tier_dir / "tasks"

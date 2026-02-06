@@ -111,6 +111,9 @@ TASKS_DIR=""  # Custom tasks directory for benchmark
 TEAM_MODEL_MAP=""  # Optional team -> model mapping for benchmark competitive tasks
 SAMPLED_TASKS_DIR=""  # Pre-built sampled_tasks directory (skips random sampling)
 OUTPUT_DIR=""  # Override output directory for generate/benchmark
+SCENE_DATA_FILE=""  # Optional scene data JSON for static verification
+STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
+REPORT_FILE=""  # Optional JSON report output path for static verification
 
 print_usage() {
     echo -e "${BOLD}EMTOM Benchmark Pipeline${NC}"
@@ -123,6 +126,8 @@ print_usage() {
     echo "  benchmark   Run benchmark with generated tasks"
     echo "  test        Human-in-the-loop testing mode (manual command input)"
     echo "  judge       Evaluate task quality + ToM with multi-model council (Claude Opus + GPT-5)"
+    echo "  verify      Verify a task by executing its golden trajectory in simulator"
+    echo "  verify-static  Static task verification (no Habitat/GPU required)"
     echo "  all         Run full pipeline: explore -> generate -> benchmark"
     echo ""
     echo -e "${BOLD}Agent Options:${NC}"
@@ -195,6 +200,19 @@ print_usage() {
     echo "  --threshold N        Overall score threshold for passing (default: 0.7)"
     echo "  --no-auto-retry      Disable automatic retry on failure (just show suggestions)"
     echo ""
+    echo -e "${BOLD}Static Verify Options:${NC}"
+    echo "  --task FILE          Task JSON file to verify"
+    echo "  --tasks-dir DIR      Verify all task JSON files in directory (default: data/emtom/tasks)"
+    echo "  --scene-data FILE    Optional scene data JSON with rooms/furniture/objects for strict checks"
+    echo "  --strict-object-ids  Fail on unknown object IDs in trajectory actions"
+    echo "  --report-file FILE   Write JSON verification report to this path"
+    echo ""
+    echo -e "${BOLD}Golden Verify Options:${NC}"
+    echo "  --task FILE          Task JSON file to verify by executing golden trajectory (required)"
+    echo "  --report-file FILE   Write JSON verification report to this path"
+    echo "  --output-dir DIR     Working directory for Hydra verify outputs (default: /tmp)"
+    echo "  (Use this for agent-driven mechanics/simulator bug triage with Claude/Codex.)"
+    echo ""
     echo -e "${YELLOW}Examples:${NC}"
     echo -e "  ./emtom/run_emtom.sh explore --steps 30 ${GREEN}--model gpt-5${NC}"
     echo -e "  ./emtom/run_emtom.sh explore --agents 3 ${GREEN}--model sonnet${NC}"
@@ -209,6 +227,8 @@ print_usage() {
     echo "  ./emtom/run_emtom.sh benchmark --team-model-map team_0=sonnet,team_1=gpt-5"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
     echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
+    echo "  ./emtom/run_emtom.sh verify --task data/emtom/tasks/my_task.json"
+    echo "  ./emtom/run_emtom.sh verify-static --task data/emtom/tasks/my_task.json"
 }
 
 # Get config name based on number of agents and type
@@ -611,11 +631,130 @@ run_judge() {
     python -m emtom.task_gen.judge $CMD_ARGS
 }
 
+run_verify() {
+    if [ -z "$TASK_FILE" ]; then
+        echo "Error: --task is required for verify command"
+        echo "Usage: ./emtom/run_emtom.sh verify --task <path_to_task.json>"
+        exit 1
+    fi
+    if [ ! -f "$TASK_FILE" ]; then
+        echo -e "${RED}ERROR: Task file not found: $TASK_FILE${NC}"
+        exit 1
+    fi
+
+    # Auto-detect num_agents from task file
+    TASK_NUM_AGENTS=$(python3 -c "import json; print(json.load(open('$TASK_FILE')).get('num_agents', 2))" 2>/dev/null)
+    if [ -z "$TASK_NUM_AGENTS" ]; then
+        TASK_NUM_AGENTS=2
+    fi
+    CONFIG_NAME=$(get_agent_config $TASK_NUM_AGENTS $AGENT_TYPE)
+
+    VERIFY_RESULT_FILE="${REPORT_FILE:-/tmp/emtom_verify_$(date +%Y%m%d_%H%M%S)_$$.json}"
+    VERIFY_WORKDIR="${OUTPUT_DIR:-/tmp}"
+    VERIFY_LOG_FILE="${VERIFY_RESULT_FILE%.json}.log"
+    mkdir -p "$(dirname "$VERIFY_RESULT_FILE")"
+    mkdir -p "$VERIFY_WORKDIR"
+
+    echo "=============================================="
+    echo "Running EMTOM Golden Trajectory Verification"
+    echo "=============================================="
+    echo "Task file: $TASK_FILE"
+    echo "Agents: $TASK_NUM_AGENTS ($AGENT_TYPE)"
+    echo "Config: $CONFIG_NAME"
+    echo "Result file: $VERIFY_RESULT_FILE"
+    echo "Log file: $VERIFY_LOG_FILE"
+    echo "Working dir: $VERIFY_WORKDIR"
+    echo "=============================================="
+    echo ""
+
+    set +e
+    python emtom/task_gen/verify_trajectory.py \
+        --task-file "$TASK_FILE" \
+        --result-file "$VERIFY_RESULT_FILE" \
+        --working-dir "$VERIFY_WORKDIR" \
+        --config-name "$CONFIG_NAME" \
+        >"$VERIFY_LOG_FILE" 2>&1
+    VERIFY_CMD_EXIT=$?
+    set -e
+
+    # Print log output so users can see simulator/runtime issues directly.
+    cat "$VERIFY_LOG_FILE"
+
+    if [ ! -f "$VERIFY_RESULT_FILE" ]; then
+        python3 - <<PY
+import json
+result = {
+  "valid": False,
+  "error": f"Verification failed before producing result file (exit=$VERIFY_CMD_EXIT)",
+  "log_file": "$VERIFY_LOG_FILE",
+}
+with open("$VERIFY_RESULT_FILE", "w") as f:
+  json.dump(result, f, indent=2)
+print(json.dumps(result, indent=2))
+raise SystemExit(1)
+PY
+    fi
+
+    python3 - <<PY
+import json
+from pathlib import Path
+p = Path("$VERIFY_RESULT_FILE")
+data = json.load(p.open())
+valid = bool(data.get("valid", False))
+print(json.dumps(data, indent=2))
+if valid:
+    print("\\nVerification: PASS")
+else:
+    print("\\nVerification: FAIL")
+raise SystemExit(0 if valid else 1)
+PY
+}
+
+run_verify_static() {
+    echo "=============================================="
+    echo "Running EMTOM Static Task Verification"
+    echo "=============================================="
+    if [ -n "$TASK_FILE" ]; then
+        echo "Task file: $TASK_FILE"
+    else
+        echo "Tasks dir: ${TASKS_DIR:-data/emtom/tasks}"
+    fi
+    if [ -n "$SCENE_DATA_FILE" ]; then
+        echo "Scene data: $SCENE_DATA_FILE"
+    fi
+    if [ "$STRICT_OBJECT_IDS" = true ]; then
+        echo "Strict object ID checks: enabled"
+    fi
+    if [ -n "$REPORT_FILE" ]; then
+        echo "JSON report: $REPORT_FILE"
+    fi
+    echo "=============================================="
+    echo ""
+
+    VERIFY_ARGS=()
+    if [ -n "$TASK_FILE" ]; then
+        VERIFY_ARGS+=(--task "$TASK_FILE")
+    else
+        VERIFY_ARGS+=(--task-dir "${TASKS_DIR:-data/emtom/tasks}")
+    fi
+    if [ -n "$SCENE_DATA_FILE" ]; then
+        VERIFY_ARGS+=(--scene-data "$SCENE_DATA_FILE")
+    fi
+    if [ "$STRICT_OBJECT_IDS" = true ]; then
+        VERIFY_ARGS+=(--strict-object-ids)
+    fi
+    if [ -n "$REPORT_FILE" ]; then
+        VERIFY_ARGS+=(--output "$REPORT_FILE")
+    fi
+
+    python -m emtom.task_gen.static_verify "${VERIFY_ARGS[@]}"
+}
+
 # Parse command line arguments
 COMMAND=""
 while [[ $# -gt 0 ]]; do
     case $1 in
-        explore|generate|benchmark|test|judge|all)
+        explore|generate|benchmark|test|judge|verify|verify-static|all)
             COMMAND=$1
             shift
             ;;
@@ -761,6 +900,18 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_DIR=$2
             shift 2
             ;;
+        --scene-data)
+            SCENE_DATA_FILE=$2
+            shift 2
+            ;;
+        --strict-object-ids)
+            STRICT_OBJECT_IDS=true
+            shift
+            ;;
+        --report-file)
+            REPORT_FILE=$2
+            shift 2
+            ;;
         -h|--help)
             print_usage
             exit 0
@@ -793,6 +944,12 @@ case $COMMAND in
         ;;
     judge)
         run_judge
+        ;;
+    verify)
+        run_verify
+        ;;
+    verify-static)
+        run_verify_static
         ;;
     all)
         run_all

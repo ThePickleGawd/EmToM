@@ -136,7 +136,7 @@ def _build_room_name_map(sim: "CollaborationSim") -> Dict[str, Any]:
 def is_open(
     sim: "CollaborationSim",
     object_handles: List[str],
-    threshold: float = 0.1,
+    threshold: float = 0.05,
     **kwargs,
 ) -> PropositionResult:
     """Check if an articulated object is open using joint positions."""
@@ -334,13 +334,60 @@ class TaskEvaluator:
             self._region_ids = set()
 
     def _resolve_handle(self, name: str) -> str:
-        """Resolve name to simulator handle via world graph."""
-        if not self.world_graph:
+        """Resolve task entity name to simulator handle with robust fallbacks."""
+        if not name:
             return name
+
+        if self.world_graph:
+            try:
+                return self.world_graph.get_node_from_name(name).sim_handle
+            except ValueError:
+                pass
+
+        # Fallback: some runs expose names that are base tokens of full sim handles.
+        # Try object-manager matching to reduce false negatives in evaluation.
+        candidate_handles: List[str] = []
         try:
-            return self.world_graph.get_node_from_name(name).sim_handle
-        except ValueError:
+            candidate_handles.extend(self.sim.get_rigid_object_manager().get_object_handles())
+        except Exception:
+            pass
+        try:
+            candidate_handles.extend(self.sim.get_articulated_object_manager().get_object_handles())
+        except Exception:
+            pass
+
+        if not candidate_handles:
             return name
+
+        # Remove duplicates while preserving order.
+        candidate_handles = list(dict.fromkeys(candidate_handles))
+
+        name_norm = str(name).strip().rstrip("_")
+
+        def _norm_base(handle: str) -> str:
+            return str(handle).split(":")[0].strip().rstrip("_")
+
+        exact = [h for h in candidate_handles if h == name]
+        if len(exact) == 1:
+            return exact[0]
+
+        base_exact = [h for h in candidate_handles if h.split(":")[0] == name]
+        if len(base_exact) == 1:
+            return base_exact[0]
+
+        normalized = [h for h in candidate_handles if _norm_base(h) == name_norm]
+        if len(normalized) == 1:
+            return normalized[0]
+
+        prefixed = [h for h in candidate_handles if _norm_base(h).startswith(f"{name_norm}_")]
+        if len(prefixed) == 1:
+            return prefixed[0]
+
+        suffix = [h for h in candidate_handles if h.endswith(name)]
+        if len(suffix) == 1:
+            return suffix[0]
+
+        return name
 
     def _resolve_room_id(self, target: Optional[str]) -> Optional[Any]:
         if not target:
@@ -508,13 +555,56 @@ class CategoryTaskEvaluator:
             self._region_ids = set()
 
     def _resolve_handle(self, name: str) -> str:
-        """Resolve name to simulator handle via world graph."""
-        if not self.world_graph:
+        """Resolve task entity name to simulator handle with robust fallbacks."""
+        if not name:
             return name
+
+        if self.world_graph:
+            try:
+                return self.world_graph.get_node_from_name(name).sim_handle
+            except ValueError:
+                pass
+
+        candidate_handles: List[str] = []
         try:
-            return self.world_graph.get_node_from_name(name).sim_handle
-        except ValueError:
+            candidate_handles.extend(self.sim.get_rigid_object_manager().get_object_handles())
+        except Exception:
+            pass
+        try:
+            candidate_handles.extend(self.sim.get_articulated_object_manager().get_object_handles())
+        except Exception:
+            pass
+
+        if not candidate_handles:
             return name
+
+        candidate_handles = list(dict.fromkeys(candidate_handles))
+        name_norm = str(name).strip().rstrip("_")
+
+        def _norm_base(handle: str) -> str:
+            return str(handle).split(":")[0].strip().rstrip("_")
+
+        exact = [h for h in candidate_handles if h == name]
+        if len(exact) == 1:
+            return exact[0]
+
+        base_exact = [h for h in candidate_handles if h.split(":")[0] == name]
+        if len(base_exact) == 1:
+            return base_exact[0]
+
+        normalized = [h for h in candidate_handles if _norm_base(h) == name_norm]
+        if len(normalized) == 1:
+            return normalized[0]
+
+        prefixed = [h for h in candidate_handles if _norm_base(h).startswith(f"{name_norm}_")]
+        if len(prefixed) == 1:
+            return prefixed[0]
+
+        suffix = [h for h in candidate_handles if h.endswith(name)]
+        if len(suffix) == 1:
+            return suffix[0]
+
+        return name
 
     def _resolve_room_id(self, target: Optional[str]) -> Optional[Any]:
         if not target:

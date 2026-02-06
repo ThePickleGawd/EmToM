@@ -643,6 +643,22 @@ class EMTOMBaseRunner(ABC):
                 "observation": obs_text,
             }
 
+        postcondition_error = self._check_action_postcondition(uid, actual_action, actual_target)
+        if postcondition_error:
+            obs_text = f"{obs_text} Postcondition check failed: {postcondition_error}".strip()
+            self.event_log.log_action(
+                step=self.get_sim_steps(),
+                agent_id=agent_id,
+                action=action_name,
+                target=target,
+                result=obs_text,
+                success=False,
+            )
+            return {
+                "success": False,
+                "observation": obs_text,
+            }
+
         # 5. Habitat action succeeded - now apply mechanic state changes
         # Log the successful action
         action_event = self.event_log.log_action(
@@ -693,6 +709,80 @@ class EMTOMBaseRunner(ABC):
         """Detect explicit success signals from skill/tool responses."""
         lower = (text or "").lower()
         return "successful execution" in lower or "was a success" in lower
+
+    @staticmethod
+    def _parse_place_target(target: Optional[str]) -> Optional[Dict[str, str]]:
+        """Parse Place target string into object/relation/receptacle parts."""
+        if not target:
+            return None
+        parts = [p.strip() for p in str(target).split(",")]
+        if len(parts) < 3:
+            return None
+        return {
+            "object": parts[0],
+            "relation": parts[1].lower(),
+            "receptacle": parts[2],
+        }
+
+    def _build_action_postcondition(
+        self,
+        uid: int,
+        action_name: str,
+        target: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Build a predicate that should hold after a successful action."""
+        if action_name == "Open" and target:
+            return {"entity": target, "property": "is_open"}
+        if action_name == "Close" and target:
+            return {"entity": target, "property": "is_closed"}
+        if action_name == "Pick" and target:
+            return {"entity": target, "property": "is_held_by", "target": f"agent_{uid}"}
+        if action_name == "Place":
+            parsed = self._parse_place_target(target)
+            if not parsed:
+                return None
+            relation = parsed["relation"]
+            if relation in ("on", "on_top"):
+                prop = "is_on_top"
+            elif relation in ("within", "inside", "in"):
+                prop = "is_inside"
+            else:
+                return None
+            return {
+                "entity": parsed["object"],
+                "property": prop,
+                "target": parsed["receptacle"],
+            }
+        return None
+
+    def _check_action_postcondition(
+        self,
+        uid: int,
+        action_name: str,
+        target: Optional[str],
+    ) -> Optional[str]:
+        """
+        Verify action postcondition to avoid reporting false action successes.
+
+        Returns an error string when postcondition is not satisfied.
+        """
+        proposition = self._build_action_postcondition(uid, action_name, target)
+        if proposition is None:
+            return None
+
+        result = self.evaluate_task(
+            {
+                "description": f"postcondition::{action_name}",
+                "required_states": [proposition],
+            }
+        )
+        if result.get("success", False):
+            return None
+
+        failures = result.get("failure_explanations", [])
+        if failures:
+            return failures[0]
+        return "Action postcondition did not hold after execution."
 
     def execute_parsed_action(self, uid: int, action_str: str) -> Dict[str, Any]:
         """
@@ -943,6 +1033,16 @@ class EMTOMBaseRunner(ABC):
             if state["failed"] or not state["completed"]:
                 if not obs_text:
                     obs_text = "Action failed without an explicit error message."
+                results[uid] = {"success": False, "observation": obs_text}
+                continue
+
+            postcondition_error = self._check_action_postcondition(
+                uid,
+                state["action_name"],
+                state["target"],
+            )
+            if postcondition_error:
+                obs_text = f"{obs_text} Postcondition check failed: {postcondition_error}".strip()
                 results[uid] = {"success": False, "observation": obs_text}
                 continue
 

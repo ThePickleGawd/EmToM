@@ -179,7 +179,6 @@ class TaskGeneratorAgent:
         )
         if judge_threshold is not None:
             judge_kwargs["overall_threshold"] = judge_threshold
-            judge_kwargs["min_criterion_threshold"] = 0.0
         self.judge = Judge(**judge_kwargs)
 
         # Setup logging to file
@@ -1450,6 +1449,38 @@ SUMMARY:"""
                 "summary": "Task validation failed"
             }
 
+        # Validate success-condition predicates use supported schema.
+        from emtom.evaluation import PARTNR_PREDICATES, EMTOM_PREDICATES
+        from emtom.state.manager import GameStateManager
+        supported_predicates = PARTNR_PREDICATES | EMTOM_PREDICATES | GameStateManager.GAME_STATE_PREDICATES
+
+        def _check_supported_predicate(condition: Dict[str, Any], scope: str) -> Optional[Dict[str, Any]]:
+            prop = condition.get("property")
+            if not prop:
+                return {
+                    "valid": False,
+                    "error": f"{scope} missing 'property' field in success_condition",
+                    "summary": "Task validation failed - invalid success_condition schema",
+                }
+            if prop not in supported_predicates:
+                return {
+                    "valid": False,
+                    "error": (
+                        f"{scope} uses unsupported predicate '{prop}'. "
+                        f"Supported predicates: {sorted(supported_predicates)}"
+                    ),
+                    "summary": "Task validation failed - unsupported predicate",
+                }
+            return None
+
+        top_level_condition = task_data.get("success_condition")
+        if isinstance(top_level_condition, dict):
+            for idx, cond in enumerate(top_level_condition.get("required_states", [])):
+                if isinstance(cond, dict):
+                    error = _check_supported_predicate(cond, f"success_condition.required_states[{idx}]")
+                    if error:
+                        return error
+
         # If using subtasks, validate DAG structure
         if has_subtasks:
             from emtom.task_gen.dag import validate_dag
@@ -1496,6 +1527,14 @@ SUMMARY:"""
                     "error": f"subtasks reference undefined items: {list(set(invalid_items_in_subtasks))}. Defined items: {list(defined_items)}",
                     "summary": "Task validation failed - item ID mismatch in subtasks"
                 }
+
+            for i, s in enumerate(task_data["subtasks"]):
+                if isinstance(s, dict):
+                    condition = s.get("success_condition", {})
+                    if isinstance(condition, dict):
+                        error = _check_supported_predicate(condition, f"subtasks[{i}]")
+                        if error:
+                            return error
 
         # Validate locked_containers references
         locked_containers = task_data.get("locked_containers", {})
