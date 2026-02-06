@@ -538,10 +538,31 @@ class BenchmarkRunner(EMTOMBaseRunner):
         # Final evaluation
         evaluation = self._check_task_completion() or {}
 
-        # Save outputs
-        self._save_outputs(instruction, evaluation, turn_count)
+        # Communication metrics
+        comm_metrics = None
+        if self.task and self._action_history:
+            try:
+                from emtom.evaluation_comms import evaluate_communication
+                comm_metrics = evaluate_communication(
+                    self._action_history, self.task, model="gpt-5.2",
+                )
+                comm_dict = comm_metrics.to_dict()
+                print(f"\n[Communication Metrics]", flush=True)
+                print(f"  Leakage score: {comm_metrics.overall_leakage_score:.2f}", flush=True)
+                print(f"  Efficiency score: {comm_metrics.overall_efficiency_score:.2f}", flush=True)
+                print(f"  Overall: {comm_metrics.overall_score:.2f}", flush=True)
+                if comm_metrics.efficiency_reasoning:
+                    print(f"  Reasoning: {comm_metrics.efficiency_reasoning}", flush=True)
+            except Exception as e:
+                print(f"[Communication Metrics] Error: {e}", flush=True)
+                comm_dict = None
+        else:
+            comm_dict = None
 
-        return {
+        # Save outputs
+        self._save_outputs(instruction, evaluation, turn_count, comm_metrics=comm_dict)
+
+        result = {
             "steps": self._step_count,
             "turns": turn_count,
             "done": done,
@@ -550,6 +571,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
             "evaluation": evaluation,
             "success": evaluation.get("success", False),
         }
+        if comm_dict:
+            result["communication_metrics"] = comm_dict
+        return result
 
     # -------------------------------------------------------------------------
     # Human input methods
@@ -1041,6 +1065,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         instruction: Dict[str, str],
         evaluation: Dict[str, Any],
         turn_count: int,
+        comm_metrics: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Save video, planner log, and prompts."""
         task_id = self.task.task_id if self.task else "unknown"
@@ -1071,6 +1096,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
         if self.task and self.task.mechanic_bindings:
             log_data["mechanic_bindings"] = [b.to_dict() for b in self.task.mechanic_bindings]
+
+        if comm_metrics:
+            log_data["communication_metrics"] = comm_metrics
 
         self.save_planner_log(log_data)
 

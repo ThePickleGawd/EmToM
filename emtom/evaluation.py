@@ -36,14 +36,18 @@ class EvaluationResult:
     success: bool
     failure_explanations: List[str]
     proposition_status: Dict[str, bool] = field(default_factory=dict)
+    communication_metrics: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "percent_complete": self.percent_complete,
             "success": self.success,
             "failure_explanations": self.failure_explanations,
             "proposition_status": self.proposition_status,
         }
+        if self.communication_metrics:
+            result["communication_metrics"] = self.communication_metrics
+        return result
 
 
 @dataclass
@@ -55,9 +59,10 @@ class CompetitiveResult:
     proposition_status: Dict[str, bool] = field(default_factory=dict)
     in_progress: bool = False  # True if episode hasn't terminated yet
     termination_reason: Optional[str] = None  # Why episode ended
+    communication_metrics: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "winner": self.winner,
             "team_status": self.team_status,
             "team_progress": self.team_progress,
@@ -65,6 +70,9 @@ class CompetitiveResult:
             "in_progress": self.in_progress,
             "termination_reason": self.termination_reason,
         }
+        if self.communication_metrics:
+            result["communication_metrics"] = self.communication_metrics
+        return result
 
 
 @dataclass
@@ -74,14 +82,18 @@ class MixedResult:
     main_goal_progress: float  # Percent of main goal subtasks completed
     agent_subgoal_status: Dict[str, bool]  # agent_id -> completed their subgoal
     proposition_status: Dict[str, bool] = field(default_factory=dict)
+    communication_metrics: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "main_goal_success": self.main_goal_success,
             "main_goal_progress": self.main_goal_progress,
             "agent_subgoal_status": self.agent_subgoal_status,
             "proposition_status": self.proposition_status,
         }
+        if self.communication_metrics:
+            result["communication_metrics"] = self.communication_metrics
+        return result
 
 
 # PARTNR predicates (from SimBasedPredicates)

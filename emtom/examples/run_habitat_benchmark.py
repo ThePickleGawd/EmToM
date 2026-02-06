@@ -514,6 +514,128 @@ def run_single_task(
     return results
 
 
+def _build_category_stats(all_results: list) -> dict:
+    """Build per-category aggregate statistics from benchmark results."""
+    # Group results by category (skip skipped tasks)
+    by_category = {}
+    for r in all_results:
+        if r.get("skipped"):
+            continue
+        cat = r.get("category", "unknown")
+        by_category.setdefault(cat, []).append(r)
+
+    stats = {}
+
+    for cat, results in by_category.items():
+        evals = [r.get("evaluation", {}) for r in results]
+        total = len(results)
+        passed = sum(1 for r in results if r.get("success"))
+        timed_out = sum(1 for r in results if not r.get("done", True))
+        avg_steps = sum(r.get("steps", 0) for r in results) / total
+        avg_progress = sum(
+            e.get("percent_required_complete", e.get("main_goal_progress", 0))
+            for e in evals
+        ) / total
+
+        cat_stats = {
+            "total": total,
+            "passed": passed,
+            "pass_rate": passed / total * 100,
+            "avg_progress": round(avg_progress, 3),
+            "avg_steps": round(avg_steps, 1),
+            "timed_out": timed_out,
+        }
+
+        if cat == "cooperative":
+            # Nothing extra beyond the common stats
+            pass
+
+        elif cat == "competitive":
+            team_0_wins = 0
+            team_1_wins = 0
+            draws = 0
+            team_progress = {}  # model -> [progress values]
+            for r, e in zip(results, evals):
+                winner = e.get("winner")
+                if winner == "team_0":
+                    team_0_wins += 1
+                elif winner == "team_1":
+                    team_1_wins += 1
+                else:
+                    draws += 1
+                # Track progress per team
+                tp = e.get("team_progress", {})
+                for team_id, prog in tp.items():
+                    team_progress.setdefault(team_id, []).append(prog)
+
+            cat_stats["team_0_wins"] = team_0_wins
+            cat_stats["team_1_wins"] = team_1_wins
+            cat_stats["draws"] = draws
+
+            # Avg progress per team
+            cat_stats["avg_team_progress"] = {
+                tid: round(sum(vals) / len(vals), 3)
+                for tid, vals in team_progress.items()
+            }
+
+            # If team_model_map is used, map wins to model names
+            model_wins = {}
+            for r, e in zip(results, evals):
+                winner = e.get("winner")
+                if winner and r.get("team_model_mapping"):
+                    winner_model = r["team_model_mapping"].get(winner, {}).get("model", "unknown")
+                    model_wins[winner_model] = model_wins.get(winner_model, 0) + 1
+            if model_wins:
+                cat_stats["model_wins"] = model_wins
+
+        elif cat == "mixed":
+            main_successes = sum(1 for e in evals if e.get("main_goal_success"))
+            avg_main_progress = sum(e.get("main_goal_progress", 0) for e in evals) / total
+
+            # Per-agent subgoal stats
+            all_agent_results = []
+            for e in evals:
+                agent_status = e.get("agent_subgoal_status", {})
+                all_agent_results.extend(agent_status.values())
+
+            agent_subgoal_rate = (
+                sum(1 for v in all_agent_results if v) / len(all_agent_results)
+                if all_agent_results else 0
+            )
+
+            cat_stats["main_goal_success_rate"] = round(main_successes / total * 100, 1)
+            cat_stats["avg_main_goal_progress"] = round(avg_main_progress, 3)
+            cat_stats["agent_subgoal_success_rate"] = round(agent_subgoal_rate * 100, 1)
+
+        stats[cat] = cat_stats
+
+    return stats
+
+
+def _print_category_stats(category_stats: dict) -> None:
+    """Print category-specific statistics to console."""
+    if not category_stats:
+        return
+
+    for cat, stats in category_stats.items():
+        cprint(f"\n--- {cat.upper()} ---", "cyan")
+        cprint(f"  Tasks: {stats['total']}  |  Passed: {stats['passed']}  |  Pass rate: {stats['pass_rate']:.1f}%", "cyan")
+        cprint(f"  Avg progress: {stats['avg_progress']:.1%}  |  Avg steps: {stats['avg_steps']:.0f}  |  Timed out: {stats['timed_out']}", "cyan")
+
+        if cat == "competitive":
+            cprint(f"  Team 0 wins: {stats['team_0_wins']}  |  Team 1 wins: {stats['team_1_wins']}  |  Draws: {stats['draws']}", "cyan")
+            if stats.get("avg_team_progress"):
+                parts = [f"{tid}: {prog:.1%}" for tid, prog in stats["avg_team_progress"].items()]
+                cprint(f"  Avg team progress: {' | '.join(parts)}", "cyan")
+            if stats.get("model_wins"):
+                parts = [f"{m}: {w}" for m, w in stats["model_wins"].items()]
+                cprint(f"  Wins by model: {' | '.join(parts)}", "cyan")
+
+        elif cat == "mixed":
+            cprint(f"  Main goal success: {stats['main_goal_success_rate']:.1f}%  |  Avg main progress: {stats['avg_main_goal_progress']:.1%}", "cyan")
+            cprint(f"  Agent subgoal success rate: {stats['agent_subgoal_success_rate']:.1f}%", "cyan")
+
+
 @hydra.main(version_base=None, config_path="../../habitat_llm/conf")
 def main(config: DictConfig) -> None:
     """Main entry point with Hydra configuration."""
@@ -667,6 +789,9 @@ def main(config: DictConfig) -> None:
     except Exception:
         pass
 
+    # Build category-specific statistics
+    category_stats = _build_category_stats(all_results)
+
     # Print summary
     cprint("\n" + "=" * 60, "blue")
     cprint("BENCHMARK SUMMARY", "blue")
@@ -685,6 +810,9 @@ def main(config: DictConfig) -> None:
     if total > 0:
         pass_rate = passed / (total - skipped) * 100 if (total - skipped) > 0 else 0
         cprint(f"\nPass rate: {pass_rate:.1f}%", "green" if pass_rate > 50 else "red")
+
+    # Print category-specific stats
+    _print_category_stats(category_stats)
 
     # Print per-task results
     print("\nPer-task results:")
@@ -709,6 +837,7 @@ def main(config: DictConfig) -> None:
             "failed": failed,
             "skipped": skipped,
             "pass_rate": pass_rate if total > 0 else 0,
+            "category_stats": category_stats,
             "results": all_results,
         }, f, indent=2)
 
