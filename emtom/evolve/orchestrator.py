@@ -21,7 +21,12 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from emtom.evolve.config import EvolutionConfig, DEFAULT_MODEL_LADDER
-from emtom.evolve.benchmark_wrapper import run_benchmark, run_benchmark_parallel, BenchmarkResults
+from emtom.evolve.benchmark_wrapper import (
+    run_benchmark,
+    run_benchmark_parallel,
+    BenchmarkResults,
+    TaskResult,
+)
 from emtom.evolve.icl_sampler import prepare_sampled_tasks_dir, build_evolution_query
 from emtom.evolve.report import generate_report
 
@@ -176,17 +181,29 @@ def run_generate_parallel(
     total_spawned = 0
     active: List[tuple] = []  # (Popen, log_file_handle)
 
+    def _count_valid_tasks() -> int:
+        # Ignore partial/corrupt JSON files that may still be in-flight writes.
+        valid = 0
+        for jf in out.glob("*.json"):
+            try:
+                with open(jf) as f:
+                    json.load(f)
+                valid += 1
+            except Exception:
+                continue
+        return valid
+
+    spinner_chars = ["|", "/", "-", "\\"]
+    spinner_idx = 0
+    last_status = None
+
     print(f"[evolve] Parallel generation: target={num_tasks}, max_workers={max_workers}")
+    print(f"[evolve] Output tasks dir: {out.resolve()}")
+    print(f"[evolve] Generation logs: {log_dir.resolve()}")
 
     try:
         while True:
-            # Count completed tasks
-            done_count = len(list(out.glob("*.json")))
-            if done_count >= num_tasks:
-                print(f"[evolve] Generation: {done_count}/{num_tasks} tasks complete — done!")
-                break
-
-            # Reap finished processes
+            # Reap finished processes first.
             still_active = []
             for proc, fh in active:
                 if proc.poll() is not None:
@@ -195,10 +212,37 @@ def run_generate_parallel(
                     still_active.append((proc, fh))
             active = still_active
 
-            # Spawn new processes up to max_workers
-            while len(active) < max_workers and total_spawned < max_spawns:
+            done_count = _count_valid_tasks()
+
+            # Once target is reached, do not kill workers mid-write.
+            # Stop spawning and wait for active workers to finish naturally.
+            if done_count >= num_tasks:
+                if not active:
+                    if sys.stdout.isatty():
+                        print()  # finish the in-place status line
+                    print(f"[evolve] Generation complete: {done_count}/{num_tasks} valid tasks")
+                    print(f"[evolve] Tasks saved to: {out.resolve()}")
+                    break
+                spinner = spinner_chars[spinner_idx % len(spinner_chars)]
+                spinner_idx += 1
+                status = (
+                    f"[evolve] {spinner} target reached ({done_count}/{num_tasks}); "
+                    f"waiting for {len(active)} active workers to finish..."
+                )
+                if sys.stdout.isatty():
+                    print(f"\r{status}", end="", flush=True)
+                elif status != last_status:
+                    print(status)
+                    last_status = status
+                time.sleep(5)
+                continue
+
+            # Spawn new processes — cap concurrency at tasks still needed
+            needed = num_tasks - done_count
+            concurrency_cap = min(max_workers, needed)
+            while len(active) < concurrency_cap and total_spawned < max_spawns:
                 # Re-check in case tasks appeared while spawning
-                if len(list(out.glob("*.json"))) >= num_tasks:
+                if _count_valid_tasks() >= num_tasks:
                     break
                 log_file = log_dir / f"gen_{total_spawned}.log"
                 fh = open(log_file, "w")
@@ -207,20 +251,38 @@ def run_generate_parallel(
                 total_spawned += 1
 
             if not active and total_spawned >= max_spawns:
-                done_count = len(list(out.glob("*.json")))
+                done_count = _count_valid_tasks()
+                if sys.stdout.isatty():
+                    print()  # finish the in-place status line
                 print(f"[evolve] Generation: exhausted {max_spawns} spawns, got {done_count}/{num_tasks} tasks")
                 break
 
-            print(f"[evolve] Generation: {done_count}/{num_tasks} tasks complete "
-                  f"({len(active)} active, {total_spawned} spawned)")
+            spinner = spinner_chars[spinner_idx % len(spinner_chars)]
+            spinner_idx += 1
+            status = (
+                f"[evolve] {spinner} generating: {done_count}/{num_tasks} valid tasks "
+                f"(active={len(active)}, spawned={total_spawned})"
+            )
+            if sys.stdout.isatty():
+                print(f"\r{status}", end="", flush=True)
+            elif status != last_status:
+                print(status)
+                last_status = status
             time.sleep(10)
-    finally:
-        # Terminate remaining processes
+    except Exception:
+        # On hard failures, clean up active workers.
         for proc, fh in active:
             proc.terminate()
         for proc, fh in active:
             proc.wait()
             fh.close()
+        raise
+
+    final_count = _count_valid_tasks()
+    if final_count < num_tasks:
+        raise RuntimeError(
+            f"Generation incomplete: got {final_count}/{num_tasks} valid task files in {out}"
+        )
 
     return out
 
@@ -240,6 +302,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         output_dir = Path(config.output_dir) / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[evolve] Run output directory: {output_dir.resolve()}")
 
     # Save config
     with open(output_dir / "config.json", "w") as f:
@@ -252,12 +315,21 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
 
     # Reconstruct tier_results from state if resuming
     for tier_name, tier_data in state.get("tier_results", {}).items():
+        reconstructed_task_results = []
+        for task_data in tier_data.get("results", []):
+            try:
+                reconstructed_task_results.append(TaskResult(**task_data))
+            except TypeError:
+                # Backward-compatible with older state files that didn't save full fields.
+                continue
+
         tier_results[tier_name] = BenchmarkResults(
             model=tier_data["model"],
             total=tier_data["total"],
             passed=tier_data["passed"],
             failed=tier_data["failed"],
             pass_rate=tier_data["pass_rate"],
+            results=reconstructed_task_results,
         )
 
     # ---- TIER 0: Seed pool ----
@@ -391,6 +463,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
             "passed": results.passed,
             "failed": results.failed,
             "pass_rate": results.pass_rate,
+            "results": [asdict(r) for r in results.results],
         }
         save_state(output_dir, state)
 

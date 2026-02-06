@@ -70,7 +70,9 @@ def run_benchmark(
     print(f"[evolve] Running benchmark: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=False)
     if result.returncode != 0:
-        print(f"[evolve] WARNING: benchmark exited with code {result.returncode}", file=sys.stderr)
+        raise RuntimeError(
+            f"Benchmark command failed (exit={result.returncode}) for model={model}, tasks_dir={tasks_dir}"
+        )
 
     return parse_benchmark_results(output_dir, model)
 
@@ -90,9 +92,16 @@ def parse_benchmark_results(output_dir: str, model: str) -> BenchmarkResults:
         if exact.exists():
             summary_files = [exact]
 
+    if not summary_files:
+        raise FileNotFoundError(
+            f"No benchmark_summary.json found under '{output_dir}'. "
+            "Benchmark likely failed before writing results."
+        )
+
     all_task_results: List[TaskResult] = []
     total_passed = 0
     total_failed = 0
+    total_skipped = 0
 
     for sf in summary_files:
         with open(sf) as f:
@@ -100,6 +109,7 @@ def parse_benchmark_results(output_dir: str, model: str) -> BenchmarkResults:
 
         for r in summary.get("results", []):
             if r.get("skipped", False):
+                total_skipped += 1
                 continue
 
             evaluation = r.get("evaluation", {})
@@ -123,6 +133,12 @@ def parse_benchmark_results(output_dir: str, model: str) -> BenchmarkResults:
                 total_failed += 1
 
     total = total_passed + total_failed
+    if total == 0:
+        raise RuntimeError(
+            f"Benchmark produced zero non-skipped results for '{output_dir}' "
+            f"(skipped={total_skipped}, summaries={len(summary_files)})."
+        )
+
     pass_rate = (total_passed / total * 100) if total > 0 else 0.0
 
     return BenchmarkResults(
@@ -185,8 +201,15 @@ def run_benchmark_parallel(
     job_idx = 0
     active: List[tuple] = []  # (stem, bench_out, Popen, log_file_handle)
     completed_stems: List[str] = []
+    failed_stems: List[str] = []
+
+    spinner_chars = ["|", "/", "-", "\\"]
+    spinner_idx = 0
+    last_status = None
 
     print(f"[evolve] Parallel benchmark: {total_tasks} tasks, max_workers={max_workers}")
+    print(f"[evolve] Benchmark output dir: {out_path.resolve()}")
+    print(f"[evolve] Benchmark logs: {log_dir.resolve()}")
 
     try:
         while True:
@@ -197,8 +220,11 @@ def run_benchmark_parallel(
                     fh.close()
                     completed_stems.append(stem)
                     if proc.returncode != 0:
-                        print(f"[evolve] WARNING: benchmark for {stem} exited with code {proc.returncode}",
-                              file=sys.stderr)
+                        failed_stems.append(stem)
+                        print(
+                            f"[evolve] WARNING: benchmark for {stem} exited with code {proc.returncode}",
+                            file=sys.stderr,
+                        )
                 else:
                     still_active.append((stem, bench_out, proc, fh))
             active = still_active
@@ -225,13 +251,26 @@ def run_benchmark_parallel(
 
             done = len(completed_stems)
             if done >= total_tasks and not active:
+                if sys.stdout.isatty():
+                    print()  # finish in-place status line
                 print(f"[evolve] Benchmark: {done}/{total_tasks} tasks complete — done!")
                 break
 
-            print(f"[evolve] Benchmark: {done}/{total_tasks} tasks complete "
-                  f"({len(active)} active)")
+            spinner = spinner_chars[spinner_idx % len(spinner_chars)]
+            spinner_idx += 1
+            status = (
+                f"[evolve] {spinner} benchmarking: {done}/{total_tasks} tasks complete "
+                f"(active={len(active)})"
+            )
+            if sys.stdout.isatty():
+                print(f"\r{status}", end="", flush=True)
+            elif status != last_status:
+                print(status)
+                last_status = status
 
             if not active and job_idx >= total_tasks:
+                if sys.stdout.isatty():
+                    print()  # finish in-place status line
                 break
 
             time.sleep(10)
@@ -242,13 +281,24 @@ def run_benchmark_parallel(
             proc.wait()
             fh.close()
 
+    if failed_stems:
+        raise RuntimeError(
+            f"Parallel benchmark had {len(failed_stems)} failed subprocesses: "
+            f"{', '.join(sorted(failed_stems)[:10])}. See logs in {log_dir}"
+        )
+
     # Merge results from all per-task benchmark outputs
     all_task_results: List[TaskResult] = []
     total_passed = 0
     total_failed = 0
 
     for stem, task_input, bench_out in jobs:
-        per_task = parse_benchmark_results(bench_out, model)
+        try:
+            per_task = parse_benchmark_results(bench_out, model)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed parsing benchmark output for task '{stem}' at '{bench_out}': {e}"
+            ) from e
         all_task_results.extend(per_task.results)
         total_passed += per_task.passed
         total_failed += per_task.failed

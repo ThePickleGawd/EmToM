@@ -274,6 +274,100 @@ Interactive testing with manual command input.
 
 ---
 
+### 6. Evolutionary Difficulty Pipeline
+
+Automatically generates increasingly difficult tasks by iterating through a ladder of models. Each tier benchmarks the previous tier's tasks against a stronger model, then generates harder tasks informed by what failed and what passed.
+
+```bash
+# Full pipeline with default 6-model ladder
+./emtom/run_evolve.sh
+
+# Custom model ladder, smaller run
+./emtom/run_evolve.sh \
+  --model-ladder "ministral-3-8b,gpt-5-mini,sonnet,gpt-5.2" \
+  --tasks-per-round 10 --seed-pool-size 20
+
+# Resume a previous run
+./emtom/run_evolve.sh --resume outputs/evolve/2025-06-15_14-30-00
+```
+
+**Options:**
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--model-ladder` | Comma-separated models from weakest to strongest | `ministral-3-8b,haiku,gpt-5-mini,sonnet,gpt-5.1,gpt-5.2` |
+| `--generator-model` | Model used to generate tasks | `gpt-5.2` |
+| `--tasks-per-round` | Tasks generated per tier | `20` |
+| `--seed-pool-size` | Number of initial seed tasks (tier 0) | `30` |
+| `--max-workers` | Max parallel generation/benchmark processes | `50` |
+| `--icl-total-examples` | In-context learning examples per generation | `10` |
+| `--icl-failure-ratio` | Fraction of ICL examples that are failures | `0.9` |
+| `--judge-threshold` | Judge threshold (0 = accept all, ramps per tier) | `0.0` |
+| `--seed-query` | Query for seed task generation | Simple cooperative task... |
+| `--output-dir` | Base output directory | `outputs/evolve` |
+| `--resume DIR` | Resume from existing output directory | - |
+
+**How it works:**
+
+```
+Tier 0: Seed Pool
+  Generate N simple tasks (subtasks: 2-4)
+
+Tier 1: ministral-3-8b
+  Benchmark seed tasks → sample failures → generate harder tasks (subtasks: 2-5)
+
+Tier 2: haiku
+  Benchmark tier 1 tasks → sample failures → generate harder tasks (subtasks: 3-7)
+
+  ...progressively harder through the model ladder...
+
+Tier N: gpt-5.2 (final)
+  Benchmark tier N-1 tasks → final evaluation only (no generation)
+```
+
+Each tier:
+1. **Benchmarks** the previous tier's tasks against the current model (parallelized, one process per task)
+2. **Samples** ICL examples: mostly failures (90%) with a few passes (10%), annotated with `_benchmark_result`
+3. **Generates** harder tasks guided by what failed, with subtask complexity ramping per tier (parallelized, one process per task)
+4. **Checkpoints** progress to `state.json` for resumability
+
+If a model's pass rate drops below 10%, the tier reuses the same tasks instead of generating even harder ones.
+
+**Subtask complexity per tier:**
+| Tier | Subtasks Min-Max |
+|------|-----------------|
+| 0 (seed) | 2-4 |
+| 1 | 2-5 |
+| 2 | 3-7 |
+| 3 | 3-10 |
+| 4 | 4-12 |
+| 5 | 5-15 |
+| 6+ | 5-20 |
+
+**Parallelization:** Both generation and benchmarking run in parallel (controlled by `--max-workers`). Each process gets its own log file under `<output_dir>/logs/`. Generation spawns up to `num_tasks` concurrent processes, with retries capped at 3x the target count.
+
+**Output structure:**
+```
+outputs/evolve/<timestamp>/
+├── config.json              # Run configuration
+├── state.json               # Checkpoint for resumption
+├── tier_0_seed/
+│   └── tasks/               # Seed task JSONs
+│       └── logs/            # Per-process generation logs
+├── tier_1_ministral-3-8b/
+│   ├── benchmark/           # Per-task benchmark results
+│   │   └── logs/            # Per-process benchmark logs
+│   ├── sampled_tasks/       # Annotated ICL examples (failed_1_45pct.json, passed_1.json)
+│   ├── tasks/               # Generated harder tasks
+│   ├── tier_metrics.json    # Pass rate summary
+│   └── ...
+├── tier_2_haiku/
+│   └── ...
+├── report.json              # Full results across all tiers
+└── report.md                # Human-readable summary table
+```
+
+---
+
 ## Task Structure
 
 Generated tasks are saved to `data/emtom/tasks/` as JSON:
@@ -368,11 +462,18 @@ Require explicit multi-agent coordination.
 ```
 emtom/
 ├── run_emtom.sh           # Main entry point
+├── run_evolve.sh          # Evolution pipeline entry point
 ├── task_gen/              # Task generation
 │   ├── runner.py          # Generation entry point
 │   ├── agent.py           # ReAct agent with tools
 │   ├── tom_judge.py       # ToM validation
 │   └── judge_cli.py       # Standalone judge CLI
+├── evolve/                # Evolutionary difficulty pipeline
+│   ├── orchestrator.py    # Main loop: seed → tier 1 → ... → tier N
+│   ├── config.py          # EvolutionConfig dataclass
+│   ├── benchmark_wrapper.py  # Parallel benchmark runner + result parser
+│   ├── icl_sampler.py     # Prepare annotated ICL examples from benchmark results
+│   └── report.py          # Generate report.json and report.md
 ├── exploration/           # Environment exploration
 ├── examples/              # Runner scripts
 │   ├── run_habitat_exploration.py
@@ -398,5 +499,6 @@ All outputs are saved to `outputs/emtom/` with timestamps:
 - `YYYY-MM-DD_HH-MM-SS-generate/` - Generation logs
 - `YYYY-MM-DD_HH-MM-SS-benchmark/` - Benchmark results
 - `YYYY-MM-DD_HH-MM-SS-judge/` - ToM verification results
+- `evolve/YYYY-MM-DD_HH-MM-SS/` - Evolution pipeline runs (tiers, reports)
 
 Generated tasks are saved to `data/emtom/tasks/`.
