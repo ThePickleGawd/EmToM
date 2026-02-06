@@ -83,6 +83,7 @@ Assigned!
 - Public `task` should not reveal secret subgoals or targets
 
 ## Core Rules
+- **NEVER reference objects with unknown locations.** Only use objects listed in the scene data with a known furniture parent (shown as "object (on furniture)"). If an object has no location, it does not exist for task purposes.
 - Every agent essential; **no assigned roles**
 - `task` is GLOBAL; keep high-level; do not leak secret targets (competitive/mixed)
 - Secrets must be actionable (room/furniture/key/constraint) and not prescriptive

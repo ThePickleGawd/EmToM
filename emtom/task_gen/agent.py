@@ -2552,8 +2552,8 @@ working_task.json reset. Use new_scene[N, keep] to change agent count without lo
             location = obj_locations.get(obj)
             if location:
                 lines.append(f"  - {obj} (on {location})")
-            else:
-                lines.append(f"  - {obj}")
+            # Skip objects without a known location — they resolve to
+            # "unknown" at runtime and cause agent navigation failures.
 
         return "\n".join(lines)
 
