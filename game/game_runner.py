@@ -43,12 +43,12 @@ class GameDecentralizedEvaluationRunner(DecentralizedEvaluationRunner):
         original_post = self.env_interface.post_agent_message
         orchestrator = self.game_orchestrator
 
-        def wrapped_post(sender_uid: int, message: str) -> None:
+        def wrapped_post(sender_uid: int, message: str, target_uids=None) -> None:
             if orchestrator.state is not None:
                 message = orchestrator.game_spec.preprocess_message(
                     str(sender_uid), message, orchestrator.state
                 )
-            original_post(sender_uid, message)
+            original_post(sender_uid, message, target_uids=target_uids)
 
         self.env_interface.post_agent_message = wrapped_post
 

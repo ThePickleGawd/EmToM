@@ -220,7 +220,13 @@ def main():
 
                 # Skip Communicate (but log the message)
                 if action == "Communicate":
-                    msg_preview = (target or "")[:50]
+                    # Extract just the message text for preview
+                    raw = target or ""
+                    if raw.startswith('"'):
+                        end_q = raw.find('"', 1)
+                        msg_preview = raw[1:end_q][:50] if end_q > 0 else raw[:50]
+                    else:
+                        msg_preview = raw[:50]
                     print(f"    {agent_str}: Communicate[\"{msg_preview}...\"] [SKIP]", file=sys.stderr)
                     skipped_actions.append({
                         "agent": agent_str, "action": action_str,

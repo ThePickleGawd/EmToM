@@ -83,11 +83,13 @@ Assigned!
 - Public `task` should not reveal secret subgoals or targets
 
 ## Core Rules
+- **NEVER reference objects with unknown locations.** Only use objects listed in the scene data with a known furniture parent (shown as "object (on furniture)"). If an object has no location, it does not exist for task purposes.
 - Every agent essential; **no assigned roles**
 - `task` is GLOBAL; keep high-level; do not leak secret targets (competitive/mixed)
 - Secrets must be actionable (room/furniture/key/constraint) and not prescriptive
 - Secrets create asymmetry; agents must communicate to combine clues
 - Natural language only; no object/item IDs in `task` or secrets
+- Each agent's secrets MUST include which other agents are on their team (e.g., "You are on a team with agent_1." for cooperative, or "You are on team_0 with agent_1. The opposing team is agent_2." for competitive)
 
 ## Task JSON Structure
 ```json
@@ -137,6 +139,7 @@ Higher levels are harder and more valuable. Aim for level 2+ when possible. Set 
 ## Golden Trajectory
 Each step has ALL agents. Format: `{{"actions": [{{"agent": "agent_0", "action": "Navigate[room]"}}, ...]}}`
 Actions: Navigate, Pick, Place, Open, Close, UseItem, Communicate, Wait
+Communicate format: Communicate["message", agent_X] or Communicate["message", all]
 
 ## Structural Diversity
 {diversity_section}"""

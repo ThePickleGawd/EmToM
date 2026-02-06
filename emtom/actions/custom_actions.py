@@ -485,15 +485,18 @@ class DynamicItemTool(EMTOMAction):
                     effect=f"tool_blocked_by_room={agent_room}",
                 )
 
-        # Communicate: Send a radio message to other agents
+        # Communicate: Send a targeted message to other agents
         if action == "Communicate":
-            # Actually post the message so other agents receive it
             if self._env_interface:
-                self._env_interface.post_agent_message(self.agent_uid, target)
+                valid_uids = list(self._env_interface.agent_uids) if self._env_interface.agent_uids else list(self._env_interface.world_graph.keys())
+                message, target_uids = self._env_interface.parse_communicate_args(target, valid_uids)
+                self._env_interface.post_agent_message(self.agent_uid, message, target_uids=target_uids)
+            else:
+                message = target
             return ActionResult(
                 success=True,
-                observation=f"You speak into the radio: \"{target}\"",
-                effect=f"communicated={target}",
+                observation=f"You speak into the radio: \"{message}\"",
+                effect=f"communicated={message}",
             )
 
         # Default fallback for unknown tool types

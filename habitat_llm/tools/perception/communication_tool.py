@@ -58,12 +58,25 @@ class CommunicationTool(PerceptionTool):
             )
 
         if normalized == "":
-            return None, "Provide a short message to broadcast."
+            return None, "Provide a message and recipients."
 
-        self.env_interface.post_agent_message(self.agent_uid, normalized)
+        # Parse targeted communication args
+        valid_uids = list(self.env_interface.agent_uids) if self.env_interface.agent_uids else list(self.env_interface.world_graph.keys())
+        message, target_uids = self.env_interface.parse_communicate_args(normalized, valid_uids)
+
+        if not message:
+            return None, "Provide a message to send."
+
+        self.env_interface.post_agent_message(self.agent_uid, message, target_uids=target_uids)
+
+        if target_uids is None:
+            recipient_desc = "all agents"
+        else:
+            recipient_desc = ", ".join(f"Agent_{uid}" for uid in target_uids)
+
         return (
             None,
-            f'Message delivered. Your teammate will see "Agent_{self.agent_uid} said: {normalized}" in their context automatically.',
+            f'Message delivered to {recipient_desc}. They will see "Agent_{self.agent_uid} said: {message}" in their context automatically.',
         )
 
     @property

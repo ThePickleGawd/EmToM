@@ -2,5 +2,5 @@ communication_tool:
   _target_: habitat_llm.tools.perception.communication_tool.CommunicationTool
   _recursive_: False
   skill_config:
-    description: 'Send a message to the other agent. Usage: Communicate[your message]. The other agent will see your message in their context. IMPORTANT: Keep your message on a single line - do not use newlines.'
+    description: 'Send a message to specific agents. Usage: Communicate["your message", agent_0] for a DM, Communicate["your message", agent_0, agent_2] for a group, or Communicate["your message", all] to broadcast. The message MUST be in double quotes. IMPORTANT: Keep your message on a single line - do not use newlines.'
     name: Communicate

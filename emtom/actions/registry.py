@@ -50,7 +50,12 @@ STANDARD_ACTIONS: Dict[str, str] = {
         "Wait[]: Used to make agent stay idle for some time. Takes no arguments. Example: Wait[]"
     ),
     "Communicate": (
-        "Communicate[message]: Send a message to other agents. Example: Communicate[I found the key!]"
+        'Communicate["message", recipients]: Send a message to specific agents. '
+        'The message must be in double quotes, followed by recipients. '
+        'Use agent IDs (agent_0, agent_1, ...) or "all" to broadcast. '
+        'Example DM: Communicate["I found the key!", agent_1] '
+        'Example group: Communicate["Let\'s meet in the kitchen", agent_0, agent_2] '
+        'Example broadcast: Communicate["Hello everyone!", all]'
     ),
     "FindObjectTool": (
         "FindObjectTool[query]: Find the exact name of objects matching a description. "

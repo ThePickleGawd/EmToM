@@ -221,14 +221,20 @@ def extract_scene_data(
 
     for obj in world_graph.get_all_objects():
         obj_name = obj.name if hasattr(obj, 'name') else str(obj)
-        objects.append(obj_name)
 
-        # Track furniture location using world graph mapping
-        if obj in object_furniture_pairs:
-            parent = object_furniture_pairs[obj]
-            parent_name = parent.name if hasattr(parent, 'name') else str(parent)
-            if parent_name in objects_on_furniture:
-                objects_on_furniture[parent_name].append(obj_name)
+        # Only include objects that have a known furniture parent in the world graph.
+        # Objects without a parent resolve to "unknown" at runtime, which causes
+        # agents to fail when navigating (e.g., Navigate[unknown]).
+        if obj not in object_furniture_pairs:
+            continue
+
+        parent = object_furniture_pairs[obj]
+        parent_name = parent.name if hasattr(parent, 'name') else str(parent)
+        if parent_name not in objects_on_furniture:
+            continue
+
+        objects.append(obj_name)
+        objects_on_furniture[parent_name].append(obj_name)
 
     return SceneData(
         episode_id=episode_id,

@@ -68,8 +68,11 @@ def _extract_messages(action_history: List[Dict[str, Any]]) -> Dict[str, List[st
         action = entry.get("action", "")
         agent_id = entry.get("agent", "")
 
-        # Match Communicate[message] pattern
-        match = re.match(r"Communicate\[(.+)\]$", action, re.DOTALL)
+        # Match Communicate["message", recipients] or Communicate[message] pattern
+        match = re.match(r'Communicate\["(.+?)"(?:,\s*[^]]*)?\]$', action, re.DOTALL)
+        if not match:
+            # Fallback for unquoted legacy format
+            match = re.match(r"Communicate\[(.+)\]$", action, re.DOTALL)
         if match:
             message = match.group(1)
             if agent_id not in agent_messages:
