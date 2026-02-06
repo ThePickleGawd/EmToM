@@ -28,7 +28,6 @@
   "items": [
     {
       "item_id": "item_small_key_1|item_radio_1|etc",
-      "hidden_in": "REPLACE_WITH_CONTAINER (for Search)",
       "inside": "REPLACE_WITH_CONTAINER (for Open)"
     }
   ],
@@ -40,8 +39,8 @@
     "agent_1": ["REPLACE_WITH_SECRET_INFO"]
   },
   "agent_actions": {
-    "agent_0": ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"],
-    "agent_1": ["Navigate", "Open", "Search", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
+    "agent_0": ["Navigate", "Open", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"],
+    "agent_1": ["Navigate", "Open", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
   },
   "subtasks": [
     {

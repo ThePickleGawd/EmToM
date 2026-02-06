@@ -439,10 +439,10 @@ class HabitatExplorer:
                 for trigger, target_info in remote.items()
             ]
 
-        if debug_info.get("hidden_items"):
-            hidden = debug_info["hidden_items"]
-            self.logger.log_message(f"Hidden items: {hidden}")
-            bindings["hidden_items"] = hidden
+        if debug_info.get("items_inside"):
+            inside = debug_info["items_inside"]
+            self.logger.log_message(f"Items inside: {inside}")
+            bindings["items_inside"] = inside
 
         if debug_info.get("item_definitions"):
             bindings["item_definitions"] = debug_info["item_definitions"]

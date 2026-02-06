@@ -266,7 +266,7 @@ class ScenarioInstantiator:
         )
         room_clue = next(
             (c["text"] for c in clues if c["type"] == "room"),
-            f"Search the {primary_room}"
+            f"Check the {primary_room}"
         )
 
         # Format suggested locations for display

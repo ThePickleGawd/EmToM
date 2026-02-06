@@ -90,7 +90,7 @@ class GameStateManager:
         Args:
             task_data: Task definition dict containing:
                 - mechanics: List of mechanic bindings
-                - hidden_items: Objects with hidden contents
+                - items: Item definitions with inside/container placements
                 - goals: Task goals
 
         Returns:
@@ -142,19 +142,10 @@ class GameStateManager:
                 if "instance_id" not in enriched_data:
                     enriched_data["instance_id"] = item_id
                 state.item_definitions[item_id] = enriched_data
-                # If item is hidden_in a container, add to hidden_items list
-                # Items are found via Search and go directly to inventory
-                hidden_in = item_data.get("hidden_in")
-                if hidden_in:
-                    current = state.get_object_property(hidden_in, "hidden_items", [])
-                    if not isinstance(current, list):
-                        current = [current] if current else []
-                    if item_id not in current:
-                        current = current + [item_id]
-                    state = state.set_object_property(hidden_in, "hidden_items", current)
-                # If item is inside a container, add to items_inside
+                # If item is inside a container, add to items_inside.
+                # Backward-compat: accept legacy "hidden_in" from older tasks.
                 # Items are found via Open and go directly to inventory
-                inside = item_data.get("inside")
+                inside = item_data.get("inside") or item_data.get("hidden_in")
                 if inside:
                     current = state.get_object_property(inside, "items_inside", [])
                     if not isinstance(current, list):
@@ -444,7 +435,7 @@ class GameStateManager:
                     new_state.object_properties.setdefault(prereq, {})["unlocks"] = target
                     bindings_info["conditional_unlock"] = {"prerequisite": prereq, "target": target}
 
-        # Set up scenario-based items for Search action
+        # Set up scenario-based items for Open action
         if shakeable:
             # Load scenario system
             from emtom.task_gen.scenario_system import get_compatible_scenario, ScenarioInstantiator
@@ -470,7 +461,7 @@ class GameStateManager:
                 if available_containers:
                     # Bind items based on scenario requirements
                     item_locations = {}
-                    hidden_items = {}
+                    items_inside = {}
 
                     for i, item_needed in enumerate(scenario.items_needed):
                         if i >= len(available_containers):
@@ -489,16 +480,16 @@ class GameStateManager:
                         if item:
                             # Register item definition in state
                             new_state.item_definitions[item.instance_id] = item.to_dict()
-                            # Add to hidden_items list on container
-                            current = new_state.get_object_property(container, "hidden_items", [])
+                            # Add to items_inside list on container
+                            current = new_state.get_object_property(container, "items_inside", [])
                             if not isinstance(current, list):
                                 current = [current] if current else []
                             current = current + [item.instance_id]
                             new_state = new_state.set_object_property(
-                                container, "hidden_items", current
+                                container, "items_inside", current
                             )
                             item_locations[item.instance_id] = container
-                            hidden_items[container] = current
+                            items_inside[container] = current
 
                     # Generate clues for item locations
                     clue_gen = ClueGenerator()
@@ -529,7 +520,7 @@ class GameStateManager:
                     locked_containers = {}
                     available_for_locking = [
                         f for f in articulated
-                        if f not in hidden_items  # Don't lock containers with hidden items
+                        if f not in items_inside  # Don't lock containers with items inside
                     ]
                     if available_for_locking and item_locations:
                         # Lock 1-2 containers
@@ -541,7 +532,7 @@ class GameStateManager:
                             locked_containers[container] = "small_key"
 
                     # Store all scenario info in bindings
-                    bindings_info["hidden_items"] = hidden_items
+                    bindings_info["items_inside"] = items_inside
                     bindings_info["item_locations"] = item_locations
                     bindings_info["item_definitions"] = {
                         item_id: new_state.item_definitions[item_id].get("name", item_id)
@@ -585,7 +576,7 @@ class GameStateManager:
         Apply an action, running it through active mechanics.
 
         Args:
-            action_name: Name of the action (e.g., "open", "Search")
+            action_name: Name of the action (e.g., "Open", "Pick")
             agent_id: Agent performing the action
             target: Target of the action
             state: State to apply to. If None, uses self.state.
@@ -967,13 +958,9 @@ class GameStateManager:
         """Get debug information about current state."""
         state = self.state
 
-        # Collect hidden items and items_inside (container -> item mappings)
-        hidden_items = {}
+        # Collect items_inside (container -> item mappings)
         items_inside = {}
         for obj_id, props in state.object_properties.items():
-            h_items = props.get("hidden_items", [])
-            if h_items:
-                hidden_items[obj_id] = h_items
             i_items = props.get("items_inside", [])
             if i_items:
                 items_inside[obj_id] = i_items
@@ -987,7 +974,6 @@ class GameStateManager:
             "unlocked_targets": list(state.unlocked_targets),
             "spawned_items": [s.item_id for s in state.spawned_items],
             "hidden_objects": list(state.hidden_objects),
-            "hidden_items": hidden_items,  # container -> item_id mappings (found via Search)
             "items_inside": items_inside,  # container -> item_id mappings (found via Open)
             "item_definitions": state.item_definitions,  # item definitions from task
             "agent_inventory": state.agent_inventory,  # per-agent inventory
@@ -1375,7 +1361,7 @@ class GameStateManager:
         # Item not in any inventory - check if it was ever granted
         # by looking at action history
         for record in self.state.action_history:
-            # Check if item was obtained via Open, Search, etc.
+            # Check if item was obtained via Open, etc.
             if entity in record.observation:
                 return True  # Item was mentioned in an observation (obtained then used)
 

@@ -47,11 +47,12 @@ def extract_items_used(task: Dict[str, Any]) -> str:
     items = task.get("items", [])
     if not items:
         return "none"
-    # Format: item_id (hidden_in/inside location)
+    # Format: item_id (inside location)
+    # Backward-compat: accept legacy hidden_in field from older tasks.
     item_strs = []
     for item in items:
         item_id = item.get("item_id", "unknown")
-        location = item.get("hidden_in") or item.get("inside") or "unknown"
+        location = item.get("inside") or item.get("hidden_in") or "unknown"
         item_strs.append(f"{item_id} (in {location})")
     return "; ".join(item_strs)
 

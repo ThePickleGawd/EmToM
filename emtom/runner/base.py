@@ -164,12 +164,16 @@ class EMTOMBaseRunner(ABC):
             print(f"\n  Scenario: {s.get('id')} ({s.get('theme')})")
             print(f"  Title: {s.get('title')}")
 
-        # Hidden items
-        if "hidden_items" in bindings:
-            print(f"\n  Hidden items:")
-            for container, item in bindings["hidden_items"].items():
-                item_name = bindings.get("item_definitions", {}).get(item, item)
-                print(f"    • {item_name} in {container}")
+        # Items inside containers
+        if "items_inside" in bindings:
+            print(f"\n  Items inside:")
+            for container, items in bindings["items_inside"].items():
+                # items may be a single item_id or a list of item_ids
+                if not isinstance(items, list):
+                    items = [items]
+                for item in items:
+                    item_name = bindings.get("item_definitions", {}).get(item, item)
+                    print(f"    • {item_name} in {container}")
 
         # Locked containers
         if "locked_containers" in bindings:
@@ -231,7 +235,7 @@ class EMTOMBaseRunner(ABC):
                     return True  # No restrictions
                 return action_name in allowed_actions
 
-            # Add EMTOM tools (UseItem, Search) if allowed
+            # Add EMTOM tools (UseItem) if allowed
             emtom_tools = get_emtom_tools(agent_uid=uid)
             for tool_name, tool in emtom_tools.items():
                 if is_allowed(tool_name):

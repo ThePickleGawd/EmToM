@@ -535,7 +535,7 @@ class Judge:
                 from emtom.actions import ActionRegistry
                 self._available_actions = ActionRegistry.get_all_action_descriptions()
             except Exception:
-                self._available_actions = "Navigate, Open, Close, Pick, Place, Search, UseItem, Communicate, Wait"
+                self._available_actions = "Navigate, Open, Close, Pick, Place, UseItem, Communicate, Wait"
 
         if self._available_mechanics is None:
             try:

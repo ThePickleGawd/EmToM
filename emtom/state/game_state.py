@@ -31,7 +31,7 @@ class SpawnedItem:
     """An item that was spawned/revealed during gameplay."""
     item_id: str
     item_type: str
-    spawned_by_action: str  # e.g., "Search"
+    spawned_by_action: str  # e.g., "Open"
     spawned_from: str  # e.g., "vase_1"
     spawned_at_step: int
     location: Optional[str] = None  # room or position
@@ -82,9 +82,9 @@ class EMTOMGameState:
     entities: List[Dict[str, Any]] = field(default_factory=list)
 
     # === Our overlay (custom properties) ===
-    # Custom properties per object (hidden_items, is_locked, inverse, linked_to, etc.)
+    # Custom properties per object (items_inside, is_locked, inverse, linked_to, etc.)
     object_properties: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    # Items spawned by actions (Search reveals key, etc.)
+    # Items spawned by actions (Open reveals items, etc.)
     spawned_items: List[SpawnedItem] = field(default_factory=list)
     # Objects hidden by Hide action
     hidden_objects: Set[str] = field(default_factory=set)

@@ -136,7 +136,7 @@ class StunGun(BaseItem):
 
     Example task setup:
         items: [
-            {"item_id": "item_stun_gun_1", "base_id": "item_stun_gun", "hidden_in": "drawer_5"}
+            {"item_id": "item_stun_gun_1", "base_id": "item_stun_gun", "inside": "drawer_5"}
         ]
     """
 
@@ -179,7 +179,7 @@ class GoldCoin(BaseItem):
     A collectible gold coin.
 
     Cannot be used directly - purely for collection and scoring.
-    Hidden in containers, found via Search action.
+    Placed inside containers, found via Open action.
 
     Common use case: Competitive tasks where agents/teams race to collect
     the most coins. Use has_most predicate for competitive win conditions,
@@ -187,8 +187,8 @@ class GoldCoin(BaseItem):
 
     Example task setup:
         items: [
-            {"item_id": "item_gold_coin_1", "base_id": "item_gold_coin", "hidden_in": "cabinet_1"},
-            {"item_id": "item_gold_coin_2", "base_id": "item_gold_coin", "hidden_in": "drawer_3"},
+            {"item_id": "item_gold_coin_1", "base_id": "item_gold_coin", "inside": "cabinet_1"},
+            {"item_id": "item_gold_coin_2", "base_id": "item_gold_coin", "inside": "drawer_3"},
         ]
         subtasks: [
             {"success_condition": {"entity": "team_0", "property": "has_most", "target": "item_gold_coin"}}

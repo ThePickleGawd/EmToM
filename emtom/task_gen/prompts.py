@@ -101,7 +101,7 @@ Assigned!
   "team_secrets": {{"team_0": [...], "team_1": [...]}},
   "agent_actions": {{"agent_0": [...], "agent_1": [...]}},
   "subtasks": [{{"id": "...", "required": true/false/"team_X"/"agent_X", "depends_on": [], "success_condition": {{...}}}}],
-  "items": [{{"item_id": "item_X", "hidden_in": "container"}}],
+  "items": [{{"item_id": "item_X", "inside": "container"}}],
   "locked_containers": {{"container": "item_key"}},
   "golden_trajectory": [{{"actions": [{{"agent": "agent_0", "action": "Navigate[room]"}}]}}]
 }}
@@ -122,7 +122,7 @@ Higher levels are harder and more valuable. Aim for level 2+ when possible. Set 
 
 ## Items
 - Use `item_` prefix, inventory-only
-- Find with `Search[container]`, use with `UseItem[item, target]`
+- Find with `Open[container]`, use with `UseItem[item, target]`
 - Do NOT `Pick[item_X]`
 
 ## Available Items
@@ -136,7 +136,7 @@ Higher levels are harder and more valuable. Aim for level 2+ when possible. Set 
 
 ## Golden Trajectory
 Each step has ALL agents. Format: `{{"actions": [{{"agent": "agent_0", "action": "Navigate[room]"}}, ...]}}`
-Actions: Navigate, Pick, Place, Open, Close, Search, UseItem, Communicate, Wait
+Actions: Navigate, Pick, Place, Open, Close, UseItem, Communicate, Wait
 
 ## Structural Diversity
 {diversity_section}"""

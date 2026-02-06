@@ -3,7 +3,7 @@ Clue Generator for EMTOM Scenario System.
 
 Generates three types of clues that point to item locations:
 1. Category hints: "The key is hidden in furniture"
-2. Room hints: "Search the kitchen carefully"
+2. Room hints: "Check the kitchen carefully"
 3. Riddle-style: "Where food stays cold, secrets are told"
 
 Clues are designed to guide without being too obvious.

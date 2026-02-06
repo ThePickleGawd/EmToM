@@ -314,7 +314,7 @@ def handle_conditional_unlock(
         return no_effect(state)
 
     # Actions that should be blocked by locks (interaction actions, not movement)
-    LOCKABLE_ACTIONS = {"Open", "Close", "Search"}
+    LOCKABLE_ACTIONS = {"Open", "Close"}
     action_lower = action_name.lower()
 
     # Check if target is locked by item prerequisite (must have item in inventory)

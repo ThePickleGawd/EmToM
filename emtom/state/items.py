@@ -82,7 +82,6 @@ class BaseItem(ABC):
 
     # Runtime state
     uses_remaining: Optional[int] = None
-    hidden_in: Optional[str] = None
 
     # Task-specific info / clue (set by task generator, shown when acquired)
     # Use this for hints that guide emergent discovery
@@ -167,7 +166,6 @@ class BaseItem(ABC):
             "action_targets": self.action_targets,
             "allowed_rooms": self.allowed_rooms,
             "passive_effects": self.passive_effects,
-            "hidden_in": self.hidden_in,
             "task_info": self.task_info,
         }
 
@@ -197,7 +195,6 @@ class BaseItem(ABC):
         instance.instance_id = instance_id
         instance.base_id = base_id
         instance.uses_remaining = data.get("uses_remaining")
-        instance.hidden_in = data.get("hidden_in")
         instance.task_info = data.get("task_info")
 
         # Override class-level attributes if specified in data

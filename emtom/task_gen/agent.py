@@ -1514,7 +1514,8 @@ SUMMARY:"""
 
         # Validate items inside references are articulated furniture (Open[] only)
         for item in task_data.get("items", []):
-            inside = item.get("inside")
+            # Backward-compat: accept legacy hidden_in from older tasks.
+            inside = item.get("inside") or item.get("hidden_in")
             if inside and self.scene_data:
                 all_articulated = set(self.scene_data.articulated_furniture)
                 if inside not in all_articulated:
