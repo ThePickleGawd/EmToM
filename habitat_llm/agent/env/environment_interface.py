@@ -388,14 +388,76 @@ class EnvironmentInterface:
         """resets _composite_action_response to empty"""
         self._composite_action_response = {}
 
-    def post_agent_message(self, sender_uid: int, message: str) -> None:
-        """Broadcast a message from one agent to all other agents."""
+    @staticmethod
+    def parse_communicate_args(raw_args: str, valid_uids: list) -> tuple:
+        """Parse Communicate arguments: '"message", agent_0, agent_1' or '"message", all'.
+
+        Returns (message_text, target_uids) where target_uids is None for broadcast.
+        """
+        raw_args = raw_args.strip()
+
+        # Extract quoted message
+        if raw_args.startswith('"'):
+            # Find the closing quote (handle escaped quotes)
+            i = 1
+            while i < len(raw_args):
+                if raw_args[i] == '\\' and i + 1 < len(raw_args):
+                    i += 2
+                    continue
+                if raw_args[i] == '"':
+                    break
+                i += 1
+            message = raw_args[1:i]
+            remainder = raw_args[i + 1:].strip()
+        else:
+            # Fallback: treat everything up to the first comma-separated agent token as message
+            # or if no recipients found, entire string is the message
+            message = raw_args
+            remainder = ""
+
+        # Parse recipients from remainder
+        if remainder.startswith(','):
+            remainder = remainder[1:].strip()
+
+        if not remainder:
+            # No recipients specified — broadcast
+            return message, None
+
+        target_uids = []
+        for token in remainder.split(','):
+            token = token.strip().lower()
+            if token == 'all':
+                return message, None
+            # Parse agent_N
+            if token.startswith('agent_'):
+                try:
+                    uid = int(token.split('_', 1)[1])
+                    if uid in valid_uids:
+                        target_uids.append(uid)
+                except (ValueError, IndexError):
+                    pass
+
+        if not target_uids:
+            return message, None
+
+        return message, target_uids
+
+    def post_agent_message(self, sender_uid: int, message: str, target_uids=None) -> None:
+        """Send a message from one agent to specific agents or broadcast to all.
+
+        Args:
+            sender_uid: UID of the sending agent.
+            message: The message text.
+            target_uids: List of recipient UIDs, or None to broadcast to all.
+        """
         if message is None:
             return
         message = message.strip()
         if message == "":
             return
-        if len(self.agent_uids) == 0:
+        if target_uids is not None:
+            targets = [uid for uid in target_uids if uid != sender_uid]
+        elif len(self.agent_uids) == 0:
             targets = [uid for uid in self.world_graph.keys() if uid != sender_uid]
         else:
             targets = [uid for uid in self.agent_uids if uid != sender_uid]

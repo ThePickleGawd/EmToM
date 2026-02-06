@@ -89,17 +89,17 @@ class Radio(BaseItem):
     Grants the Communicate action when obtained.
     Not consumable - can be used unlimited times.
 
-    Usage: Communicate[message] (granted action, not Use)
+    Usage: Communicate["message", agent_X] (granted action, not Use)
     """
 
     name = "Two-Way Radio"
-    description = "A handheld radio. Grants Communicate[message] action when obtained. Useful for agents who DO NOT start with Communicate tool in their actions."
+    description = 'A handheld radio. Grants Communicate["message", recipients] action when obtained. Useful for agents who DO NOT start with Communicate tool in their actions.'
     consumable = False
     use_args = []  # No args needed (uses granted Communicate action instead)
 
     # Grants Communicate action
     grants_action = "Communicate"
-    action_description = "Communicate[message]: Send a message to other agents."
+    action_description = 'Communicate["message", recipients]: Send a message to specific agents. Use agent IDs (agent_0, agent_1) or "all" to broadcast.'
 
     def on_acquire(
         self,
@@ -107,7 +107,7 @@ class Radio(BaseItem):
         agent_id: str,
     ) -> str:
         """Radio enables communication when obtained."""
-        return "Obtained Two-Way Radio! You can now use Communicate[message]."
+        return 'Obtained Two-Way Radio! You can now use Communicate["message", agent_X].'
 
     def on_use(
         self,
@@ -116,7 +116,7 @@ class Radio(BaseItem):
         args: Optional[List[str]] = None,
     ) -> Tuple[bool, str]:
         """Radio is used via the granted Communicate action."""
-        return False, "Use Communicate[message] instead of Use for the radio."
+        return False, 'Use Communicate["message", agent_X] instead of Use for the radio.'
 
 
 @register_item("item_stun_gun")

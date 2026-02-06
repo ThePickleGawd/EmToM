@@ -265,8 +265,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
             message_buffer: List[tuple] = []
             original_post_message = self.env_interface.post_agent_message
 
-            def buffered_post_message(sender_uid: int, message: str) -> None:
-                message_buffer.append((sender_uid, message))
+            def buffered_post_message(sender_uid: int, message: str, target_uids=None) -> None:
+                message_buffer.append((sender_uid, message, target_uids))
 
             self.env_interface.post_agent_message = buffered_post_message
 
@@ -389,8 +389,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
             # Restore original post_message and flush buffered messages to queues
             # These messages will be consumed at the start of NEXT turn
             self.env_interface.post_agent_message = original_post_message
-            for sender_uid, message in message_buffer:
-                original_post_message(sender_uid, message)
+            for sender_uid, message, target_uids in message_buffer:
+                original_post_message(sender_uid, message, target_uids=target_uids)
 
             if self._episode_done:
                 break

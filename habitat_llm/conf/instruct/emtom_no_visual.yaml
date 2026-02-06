@@ -55,7 +55,7 @@ prompt: |-
     {eot_tag}
     {assistant_tag}
     Thought: Cabinet is unlocked. I should tell my teammate and then open it.
-    Agent_{id}_Action: Communicate[I unlocked cabinet_45! Opening it now.]
+    Agent_{id}_Action: Communicate["I unlocked cabinet_45! Opening it now.", agent_1]
     Assigned!
     {eot_tag}
     {user_tag}
@@ -80,7 +80,7 @@ prompt: |-
     Example 2 - Coordinating with teammate:
     Task: One agent has the key location, the other is near the locked fridge. Coordinate to unlock it.
     Thought: I don't know where the key is, but my teammate might. I should ask them.
-    Agent_{id}_Action: Communicate[Do you know where the key is? I'm at the locked fridge.]
+    Agent_{id}_Action: Communicate["Do you know where the key is? I'm at the locked fridge.", agent_1]
     Assigned!
     {eot_tag}
     {user_tag}

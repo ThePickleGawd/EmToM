@@ -243,7 +243,7 @@ class EMTOMBaseRunner(ABC):
             if is_allowed("Communicate"):
                 comm_config = OmegaConf.create({
                     "name": "Communicate",
-                    "description": "Send a message to the other agent. Usage: Communicate[your message]. Keep messages on a single line."
+                    "description": 'Send a message to specific agents. Usage: Communicate["your message", agent_0] for a DM or Communicate["your message", all] to broadcast. The message MUST be in double quotes. Keep messages on a single line.'
                 })
                 comm_tool = CommunicationTool(comm_config)
                 comm_tool.agent_uid = uid

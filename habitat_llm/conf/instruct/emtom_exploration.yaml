@@ -52,7 +52,7 @@ prompt: |-
         Assigned!
         Agent_{id}_Observation: Successful execution! Also, drawer_3 in bedroom_0 opened by itself!
         Thought: Surprise: Opening the fridge caused a drawer in the bedroom to open! This is a remote control mechanic - the fridge and drawer_3 are linked. I should tell my teammate.
-        Agent_{id}_Action: Communicate[Discovery: Opening fridge_0 also opens drawer_3 in bedroom - they are linked!]
+        Agent_{id}_Action: Communicate["Discovery: Opening fridge_0 also opens drawer_3 in bedroom - they are linked!", agent_1]
         Assigned!
         Agent_{id}_Observation: Message delivered. Your teammate will see your message in their context.
         Thought: I found a mechanic. Let me continue exploring other areas.
@@ -72,7 +72,7 @@ prompt: |-
         Assigned!
         Agent_{id}_Observation: You use apple_0. The cup_1 starts glowing!
         Thought: Surprise: Using the apple caused cup_1 to start glowing! This is an unexpected behavior - using one object affects another. I should share this discovery.
-        Agent_{id}_Action: Communicate[Discovery: Using apple_0 makes cup_1 glow - linked objects!]
+        Agent_{id}_Action: Communicate["Discovery: Using apple_0 makes cup_1 glow - linked objects!", agent_1]
         Assigned!
         Agent_{id}_Observation: Message delivered. Your teammate will see your message in their context.
         Thought: I discovered a mechanic. Let me explore more areas.
@@ -100,7 +100,7 @@ prompt: |-
         Assigned!
         Agent_{id}_Observation: Successful execution! chest_0 is now open.
         Thought: Surprise: The chest required exactly 3 attempts to open! This is a counting mechanic - some objects need multiple interactions. I should tell my teammate.
-        Agent_{id}_Action: Communicate[Discovery: chest_0 requires 3 open attempts - counting mechanic!]
+        Agent_{id}_Action: Communicate["Discovery: chest_0 requires 3 open attempts - counting mechanic!", agent_1]
         Assigned!
         Agent_{id}_Observation: Message delivered. Your teammate will see your message in their context.
         Thought: I have discovered and shared the mechanic. Let me explore other rooms.

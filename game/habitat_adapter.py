@@ -95,7 +95,7 @@ class HabitatEnvironmentAdapter(EnvironmentAdapter):
 
     def send_message(self, sender_id: str, receiver_id: str, message: str) -> None:
         try:
-            self.env.post_agent_message(int(sender_id), message)
+            self.env.post_agent_message(int(sender_id), message, target_uids=[int(receiver_id)])
         except Exception:
             # Fallback to no-op if types mismatch; game layer can still track messages if desired.
             pass
