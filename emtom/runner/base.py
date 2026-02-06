@@ -547,6 +547,9 @@ class EMTOMBaseRunner(ABC):
             tool = agent.tools[actual_action]
             skill_steps = 0
             max_skill_steps = 1500  # ~50 seconds at 30Hz, matches benchmark runner
+            action_completed = False
+            action_failed = False
+            obs_text = ""
 
             while skill_steps < max_skill_steps:
                 try:
@@ -571,21 +574,58 @@ class EMTOMBaseRunner(ABC):
                         raw_obs, None, None, torch.ones(1, 1), 0
                     )
                     if is_done:
+                        action_completed = True
+                        if not obs_text:
+                            obs_text = "Successful execution!"
                         break
 
                 low_level_action, response = agent.process_high_level_action(
                     actual_action, actual_target, raw_obs
                 )
-                if low_level_action is None:
+                response_text = (response or "").strip()
+                if response_text:
+                    obs_text = response_text
+                    if self._is_action_failure_text(response_text):
+                        action_failed = True
+                    elif self._is_action_success_text(response_text):
+                        action_completed = True
+                    else:
+                        action_failed = True
                     break
 
-            obs_text = response or f"Executed {actual_action}[{actual_target}]"
+                if low_level_action is None:
+                    action_failed = True
+                    obs_text = "Action ended without explicit success signal."
+                    break
+
+            if not action_completed and not action_failed:
+                if self._episode_done:
+                    action_failed = True
+                    obs_text = "Action interrupted because the episode ended."
+                elif skill_steps >= max_skill_steps:
+                    action_failed = True
+                    obs_text = f"Action timed out after {max_skill_steps} simulator steps."
+
+            if action_failed:
+                # Log failed action
+                self.event_log.log_action(
+                    step=self.get_sim_steps(),
+                    agent_id=agent_id,
+                    action=action_name,
+                    target=target,
+                    result=obs_text,
+                    success=False,
+                )
+                return {
+                    "success": False,
+                    "observation": obs_text,
+                }
+
+            if not obs_text:
+                obs_text = "Successful execution!"
 
         # 4. Check if Habitat action failed (e.g., "too far", "occluded")
-        habitat_failed = any(
-            fail_phrase in obs_text.lower()
-            for fail_phrase in ["too far", "occluded", "failed to", "unexpected failure", "cannot"]
-        )
+        habitat_failed = self._is_action_failure_text(obs_text)
 
         if habitat_failed:
             # Log failed action
@@ -638,6 +678,21 @@ class EMTOMBaseRunner(ABC):
             "observation": obs_text,
             "surprise": surprise_trigger,
         }
+
+    @staticmethod
+    def _is_action_failure_text(text: str) -> bool:
+        """Heuristic detection of action failures from skill/tool responses."""
+        lower = (text or "").lower()
+        return any(
+            fail_phrase in lower
+            for fail_phrase in ["too far", "occluded", "failed to", "unexpected failure", "cannot"]
+        )
+
+    @staticmethod
+    def _is_action_success_text(text: str) -> bool:
+        """Detect explicit success signals from skill/tool responses."""
+        lower = (text or "").lower()
+        return "successful execution" in lower or "was a success" in lower
 
     def execute_parsed_action(self, uid: int, action_str: str) -> Dict[str, Any]:
         """
@@ -743,11 +798,7 @@ class EMTOMBaseRunner(ABC):
             if low_level_action is None:
                 # Instant action (no motor skill needed)
                 obs_text = response or f"Executed {actual_action}[{actual_target}]"
-                habitat_failed = any(
-                    fail_phrase in obs_text.lower()
-                    for fail_phrase in ["too far", "occluded", "failed to", "unexpected failure", "cannot"]
-                )
-                if habitat_failed:
+                if self._is_action_failure_text(obs_text):
                     results[uid] = {"success": False, "observation": obs_text}
                 else:
                     if mech_result.applies:
@@ -762,26 +813,42 @@ class EMTOMBaseRunner(ABC):
                         "observation": obs_text,
                         "skill_steps": 0,
                     }
-            else:
-                # Skill-based action - track state for concurrent execution
-                agent_states[uid] = {
-                    "agent": agent,
-                    "tool": agent.tools[actual_action],
-                    "action_name": actual_action,
-                    "target": actual_target,
-                    "low_level_action": low_level_action,
-                    "mech_result": mech_result,
-                    "done": False,
-                    "response": response,
-                    "skill_steps": 0,
-                }
+                continue
+
+            # Skill-based action - track explicit terminal status
+            state = {
+                "agent": agent,
+                "tool": agent.tools[actual_action],
+                "action_name": actual_action,
+                "target": actual_target,
+                "low_level_action": low_level_action,
+                "mech_result": mech_result,
+                "done": False,
+                "completed": False,
+                "failed": False,
+                "response": "",
+                "skill_steps": 0,
+            }
+
+            initial_response = (response or "").strip()
+            if initial_response:
+                state["done"] = True
+                state["response"] = initial_response
+                if self._is_action_failure_text(initial_response):
+                    state["failed"] = True
+                elif self._is_action_success_text(initial_response):
+                    state["completed"] = True
+                else:
+                    state["failed"] = True
+                state["low_level_action"] = None
+
+            agent_states[uid] = state
 
         # Phase 2: Execute all skills concurrently
         max_skill_steps = 1500  # ~50 seconds at 30Hz, matches benchmark runner
         total_steps = 0
 
         while agent_states and total_steps < max_skill_steps:
-            # Check if all agents are done
             if all(state["done"] for state in agent_states.values()):
                 break
 
@@ -804,14 +871,11 @@ class EMTOMBaseRunner(ABC):
                 raise
 
             parsed_obs = self.env_interface.parse_observations(raw_obs)
-
-            # Record frame with all agents' actions
             action_tuples = {
                 uid: (state["action_name"], state["target"])
                 for uid, state in agent_states.items()
             }
             self.record_frame(parsed_obs, action_tuples)
-
             total_steps += 1
 
             if done:
@@ -833,48 +897,73 @@ class EMTOMBaseRunner(ABC):
                     )
                     if is_done:
                         state["done"] = True
+                        state["completed"] = True
+                        if not state["response"]:
+                            state["response"] = "Successful execution!"
                         continue
 
-                # Get next low-level action
                 low_level_action, response = state["agent"].process_high_level_action(
                     state["action_name"], state["target"], raw_obs
                 )
 
+                response_text = (response or "").strip()
+                if response_text:
+                    state["done"] = True
+                    state["response"] = response_text
+                    if self._is_action_failure_text(response_text):
+                        state["failed"] = True
+                    elif self._is_action_success_text(response_text):
+                        state["completed"] = True
+                    else:
+                        state["failed"] = True
+                    state["low_level_action"] = None
+                    continue
+
                 if low_level_action is None:
                     state["done"] = True
-                    state["response"] = response
+                    state["failed"] = True
+                    state["response"] = "Action ended without explicit success signal."
+                    state["low_level_action"] = None
                 else:
                     state["low_level_action"] = low_level_action
 
         # Phase 3: Collect results and apply mechanics
         for uid, state in agent_states.items():
-            obs_text = state["response"] or f"Executed {state['action_name']}[{state['target']}]"
+            obs_text = (state["response"] or "").strip()
             mech_result = state["mech_result"]
 
-            # Check if action failed
-            habitat_failed = any(
-                fail_phrase in obs_text.lower()
-                for fail_phrase in ["too far", "occluded", "failed to", "unexpected failure", "cannot"]
-            )
+            # Handle non-terminated actions as explicit failures.
+            if not state["done"]:
+                state["failed"] = True
+                if self._episode_done:
+                    obs_text = "Action interrupted because the episode ended."
+                else:
+                    obs_text = f"Action timed out after {max_skill_steps} simulator steps."
 
-            if habitat_failed:
+            if state["failed"] or not state["completed"]:
+                if not obs_text:
+                    obs_text = "Action failed without an explicit error message."
                 results[uid] = {"success": False, "observation": obs_text}
-            else:
-                # Apply mechanic state changes
-                action_name = state["action_name"]
-                if mech_result.applies:
-                    agent_id = f"agent_{uid}"
-                    target = state["target"]
-                    _, mechanic_result = self.game_manager.apply_action(action_name, agent_id, target)
-                    self._sync_remote_effects_to_simulator(mechanic_result.effects)
-                    if mech_result.observation:
-                        obs_text = f"{obs_text} {mech_result.observation}"
+                continue
 
-                results[uid] = {
-                    "success": True,
-                    "observation": obs_text,
-                    "skill_steps": state["skill_steps"],
-                }
+            # Apply mechanic state changes
+            action_name = state["action_name"]
+            if mech_result.applies:
+                agent_id = f"agent_{uid}"
+                target = state["target"]
+                _, mechanic_result = self.game_manager.apply_action(action_name, agent_id, target)
+                self._sync_remote_effects_to_simulator(mechanic_result.effects)
+                if mech_result.observation:
+                    obs_text = f"{obs_text} {mech_result.observation}"
+
+            if not obs_text:
+                obs_text = "Successful execution!"
+
+            results[uid] = {
+                "success": True,
+                "observation": obs_text,
+                "skill_steps": state["skill_steps"],
+            }
 
         return results
 
