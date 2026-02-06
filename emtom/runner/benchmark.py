@@ -375,6 +375,17 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     if responses_dict.get(uid):
                         llm_agent_state[uid]['response'] = responses_dict[uid]
                         llm_agent_state[uid]['action_done'] = True
+                    elif not low_level_actions or uid not in low_level_actions:
+                        # Perception tool (Communicate, Find*, etc.) completed
+                        # instantly — no simulation steps needed. The planner may
+                        # have cleared the response string (e.g. Communicate
+                        # responses are set to "" to prevent replans), so
+                        # reconstruct a sensible fallback.
+                        response = responses_dict.get(uid, "")
+                        if not response and orig_action_name == "Communicate":
+                            response = "Message delivered."
+                        llm_agent_state[uid]['response'] = response or "Executed."
+                        llm_agent_state[uid]['action_done'] = True
 
                 except AssertionError as e:
                     if "Episode over" in str(e) or "call reset before calling step" in str(e):
@@ -673,7 +684,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 mode = "human" if agent_id in self.human_agents else "LLM"
                 print(f"  {agent_id} ({mode}): {', '.join(actions)}")
         else:
-            print("Actions: Navigate, Open, Close, Pick, Place, Search, UseItem, Communicate")
+            print("Actions: Navigate, Open, Close, Pick, Place, UseItem, Communicate")
 
         print(f"\nCommands: status, world, prompt, subtasks, mechanics, history, skip, quit, help")
         print(f"{'='*60}\n")
