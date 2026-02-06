@@ -65,6 +65,7 @@ class TaskGeneratorAgent:
         calibration_stats: Optional[Dict[str, Any]] = None,
         category: Optional[str] = None,
         seed_task: Optional[str] = None,
+        judge_threshold: Optional[float] = None,
     ):
         """
         Initialize the agent.
@@ -171,11 +172,15 @@ class TaskGeneratorAgent:
         self.task_memories: List[str] = []  # Learnings from completed tasks
         self.consecutive_tom_failures = 0  # Track failures to suggest new_scene
         self.diversity_tracker = DiversityTracker(llm=self.llm)  # Track task patterns for diversity
-        self.judge = Judge(
+        judge_kwargs = dict(
             verbose=verbose,
             user_query=query,
             diversity_tracker=self.diversity_tracker,
-        )  # Unified judge (council) with diversity checking
+        )
+        if judge_threshold is not None:
+            judge_kwargs["overall_threshold"] = judge_threshold
+            judge_kwargs["min_criterion_threshold"] = 0.0
+        self.judge = Judge(**judge_kwargs)
 
         # Setup logging to file
         # Prefer log_dir (Hydra output), fallback to output_dir/logs
@@ -1396,7 +1401,8 @@ SUMMARY:"""
                     # Parse PARTNR-style action: "Navigate[table_22]" -> args = "table_22"
                     action_str = action_entry.get("action", "")
                     import re
-                    match = re.match(r'(\w+)(?:\[(.+)\])?$', action_str)
+                    # Allow empty bracket args for commands like Wait[]
+                    match = re.match(r'(\w+)(?:\[(.*)\])?$', action_str)
                     if not match:
                         continue
                     action_name, args = match.group(1), match.group(2)
@@ -1721,7 +1727,8 @@ SUMMARY:"""
                 agents_in_step.add(agent)
 
                 # Parse action
-                match = re.match(r'(\w+)(?:\[(.+)\])?$', action_str)
+                # Allow empty bracket args for commands like Wait[]
+                match = re.match(r'(\w+)(?:\[(.*)\])?$', action_str)
                 if not match:
                     errors.append(f"Step {step_idx}: Malformed action '{action_str}'")
                     continue

@@ -109,6 +109,8 @@ SEED_TASK=""  # Path to existing task to use as seed
 NO_VIDEO=false  # Disable video saving
 TASKS_DIR=""  # Custom tasks directory for benchmark
 TEAM_MODEL_MAP=""  # Optional team -> model mapping for benchmark competitive tasks
+SAMPLED_TASKS_DIR=""  # Pre-built sampled_tasks directory (skips random sampling)
+OUTPUT_DIR=""  # Override output directory for generate/benchmark
 
 print_usage() {
     echo -e "${BOLD}EMTOM Benchmark Pipeline${NC}"
@@ -169,6 +171,8 @@ print_usage() {
     echo "  --retry-verification FILE  Retry generation using suggestions from failed ToM verification"
     echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
     echo "  --seed-task FILE     Use existing task JSON as seed instead of blank template"
+    echo "  --sampled-tasks-dir DIR  Pre-built sampled_tasks directory (skips random sampling)"
+    echo "  --output-dir DIR     Override output directory (used by generate and benchmark)"
     echo ""
     echo -e "${BOLD}Benchmark Options:${NC}"
     echo "  --model MODEL        LLM model name (default: gpt-5.2, provider auto-detected)"
@@ -335,6 +339,12 @@ run_generate() {
     if [ -n "$SEED_TASK" ]; then
         EXTRA_ARGS+=(--seed-task "$SEED_TASK")
     fi
+    if [ -n "$SAMPLED_TASKS_DIR" ]; then
+        EXTRA_ARGS+=(--sampled-tasks-dir "$SAMPLED_TASKS_DIR")
+    fi
+    if [ "$THRESHOLD" != "0.7" ]; then
+        EXTRA_ARGS+=(--judge-threshold "$THRESHOLD")
+    fi
 
     # Use Hydra config system with custom overrides
     # Scene is loaded live from PARTNR dataset - no trajectories needed
@@ -349,7 +359,7 @@ run_generate() {
         +subtasks_min=$SUBTASKS_MIN \
         +subtasks_max=$SUBTASKS_MAX \
         +iterations_per_task=$ITERATIONS_PER_TASK \
-        +output_dir=data/emtom/tasks \
+        +output_dir=${OUTPUT_DIR:-data/emtom/tasks} \
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-generate"
 }
 
@@ -480,7 +490,7 @@ print(' '.join(map(str, sorted(counts))))
 
     # Create timestamp for this benchmark run
     TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
-    OUTPUT_BASE="./outputs/emtom/${TIMESTAMP}-benchmark"
+    OUTPUT_BASE="${OUTPUT_DIR:-./outputs/emtom/${TIMESTAMP}-benchmark}"
 
     # Run benchmark for each agent count
     for NUM_AGENTS in $AGENT_COUNTS; do
@@ -741,6 +751,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --seed-task)
             SEED_TASK=$2
+            shift 2
+            ;;
+        --sampled-tasks-dir)
+            SAMPLED_TASKS_DIR=$2
+            shift 2
+            ;;
+        --output-dir)
+            OUTPUT_DIR=$2
             shift 2
             ;;
         -h|--help)

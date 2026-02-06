@@ -29,9 +29,13 @@ def parse_action_string(action_str: str) -> tuple:
     Returns:
         Tuple of (action_name, args_string or None)
     """
-    match = re.match(r'(\w+)(?:\[(.+)\])?$', action_str)
+    # Allow empty bracket args for actions like Wait[]
+    match = re.match(r'(\w+)(?:\[(.*)\])?$', action_str)
     if match:
-        return match.group(1), match.group(2)
+        action_name, args = match.group(1), match.group(2)
+        if args == "":
+            args = None
+        return action_name, args
     return action_str, None
 
 # Add project root to path

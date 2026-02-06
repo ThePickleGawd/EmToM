@@ -51,6 +51,10 @@ def parse_extra_args():
                         help="Task category to generate (default: random)")
     parser.add_argument("--seed-task", type=str, default=None,
                         help="Path to existing task JSON to use as seed (instead of blank template)")
+    parser.add_argument("--sampled-tasks-dir", type=str, default=None,
+                        help="Pre-built sampled_tasks directory (skips random sampling)")
+    parser.add_argument("--judge-threshold", type=float, default=None,
+                        help="Override judge overall_threshold (default: judge's built-in default)")
 
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
@@ -127,6 +131,7 @@ def main(config: DictConfig) -> None:
     target_pass_rate = extra_args.target_pass_rate if extra_args else 0.10
     category = extra_args.category if extra_args else None
     seed_task = extra_args.seed_task if extra_args else None
+    judge_threshold = extra_args.judge_threshold if extra_args else None
 
     # Validate seed task path
     if seed_task:
@@ -173,15 +178,29 @@ def main(config: DictConfig) -> None:
     import random
     sampled_tasks_dir = working_dir / "sampled_tasks"
     sampled_tasks_dir.mkdir(parents=True, exist_ok=True)
-    tasks_source = Path(output_dir)
-    if tasks_source.exists():
-        existing_tasks = list(tasks_source.glob("*.json"))
-        if existing_tasks:
-            sample_count = min(10, len(existing_tasks))
-            sampled = random.sample(existing_tasks, sample_count)
-            for i, task_path in enumerate(sampled, 1):
-                dest = sampled_tasks_dir / f"task_{i}.json"
-                shutil.copy(task_path, dest)
+
+    sampled_tasks_override = extra_args.sampled_tasks_dir if extra_args else None
+
+    if sampled_tasks_override:
+        override_path = Path(sampled_tasks_override)
+        if override_path.exists():
+            for f in override_path.glob("*.json"):
+                shutil.copy(f, sampled_tasks_dir / f.name)
+            cprint(f"Using pre-built sampled_tasks: {override_path} ({len(list(override_path.glob('*.json')))} files)", "green")
+        else:
+            cprint(f"WARNING: --sampled-tasks-dir not found: {override_path}, falling back to random", "yellow")
+            sampled_tasks_override = None
+
+    if not sampled_tasks_override:
+        tasks_source = Path(output_dir)
+        if tasks_source.exists():
+            existing_tasks = list(tasks_source.glob("*.json"))
+            if existing_tasks:
+                sample_count = min(10, len(existing_tasks))
+                sampled = random.sample(existing_tasks, sample_count)
+                for i, task_path in enumerate(sampled, 1):
+                    dest = sampled_tasks_dir / f"task_{i}.json"
+                    shutil.copy(task_path, dest)
 
     # Sample exploration trajectories for agent inspiration
     sampled_trajectories_dir = working_dir / "sampled_trajectories"
@@ -263,6 +282,7 @@ def main(config: DictConfig) -> None:
         calibration_stats=calibration_stats,  # Dataset calibration stats for difficulty guidance
         category=category,  # Task category: cooperative, competitive, or mixed
         seed_task=seed_task,  # Existing task to use as seed instead of blank template
+        judge_threshold=judge_threshold,  # Override judge threshold (None = use default)
     )
 
     # Run agent
