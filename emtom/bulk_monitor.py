@@ -5,7 +5,7 @@ Parses log files from bulk_generate.sh and displays a live dashboard.
 
 Usage:
     ./emtom/bulk_monitor.sh                           # Auto-detect latest run
-    ./emtom/bulk_monitor.sh outputs/emtom/2026-02-03_19-22-36-bulk-generate
+    ./emtom/bulk_monitor.sh outputs/bulk_gen_logs/2026-02-03_19-22-36-bulk-generate
 """
 
 import argparse
@@ -117,7 +117,7 @@ def parse_log(log_path: Path) -> dict:
 
 def find_latest_bulk_dir(project_root: Path):
     """Find the most recent bulk-generate output directory."""
-    outputs_dir = project_root / "outputs" / "emtom"
+    outputs_dir = project_root / "outputs" / "bulk_gen_logs"
     if not outputs_dir.exists():
         return None
     bulk_dirs = sorted(outputs_dir.glob("*-bulk-generate"), reverse=True)
@@ -258,7 +258,7 @@ def main():
     else:
         log_dir = find_latest_bulk_dir(project_root)
         if log_dir is None:
-            print(f"{RED}No bulk-generate output found in outputs/emtom/{NC}")
+            print(f"{RED}No bulk-generate output found in outputs/bulk_gen_logs/{NC}")
             sys.exit(1)
 
     if not log_dir.exists():
