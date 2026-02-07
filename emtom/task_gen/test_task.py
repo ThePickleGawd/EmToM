@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--trajectory-dir", default=None, help="Directory to save agent trajectory files")
     parser.add_argument("--config-name", default="examples/emtom_2_robots")
     parser.add_argument("--max-turns", type=int, default=None, help="Max LLM turns (default: 3x golden trajectory)")
+    parser.add_argument("--test-model", type=str, default=None, help="Override model for LLM agents (e.g. gpt-5-mini)")
     args = parser.parse_args()
 
     def write_result(result: dict):
@@ -89,6 +90,25 @@ def main():
 
         fix_config(config)
         config = setup_config(config, seed=47668090)
+
+        # Override agent models if --test-model is specified
+        if args.test_model:
+            from emtom.examples.run_habitat_benchmark import (
+                expand_model_name,
+                detect_llm_provider,
+                apply_agent_llm_configs,
+            )
+            test_model = expand_model_name(args.test_model)
+            test_provider = detect_llm_provider(test_model)
+            if not test_provider:
+                write_result({"success": False, "error": f"Unknown provider for test model: {args.test_model}"})
+                sys.exit(1)
+            # Build agent_model_mapping for all agents in config
+            agent_model_mapping = {}
+            if hasattr(config, "evaluation") and hasattr(config.evaluation, "agents"):
+                for agent_id in config.evaluation.agents:
+                    agent_model_mapping[agent_id] = {"model": test_model, "llm_provider": test_provider}
+            apply_agent_llm_configs(config, agent_model_mapping)
     except Exception as e:
         write_result({"success": False, "error": f"Config error: {e}"})
         sys.exit(1)

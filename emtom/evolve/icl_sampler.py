@@ -5,26 +5,25 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
-from typing import List, Optional
-
-from emtom.evolve.benchmark_wrapper import BenchmarkResults, TaskResult
+from typing import Dict, List, Optional, Tuple
 
 
-def prepare_sampled_tasks_dir(
-    benchmark_results: BenchmarkResults,
+def prepare_sampled_tasks_dir_from_calibration(
     tasks_dir: str,
+    model: str,
     output_dir: str,
     fail_count: int = 9,
     pass_count: int = 1,
 ) -> Path:
-    """Create an annotated sampled_tasks directory from benchmark results.
+    """Create annotated sampled_tasks directory from calibration data in task JSONs.
 
-    Selects a mix of failed and passed tasks, annotates each with
-    a _benchmark_result field, and writes them with descriptive filenames.
+    Reads calibration[model] from each task JSON to determine pass/fail status.
+    Selects a mix of failed and passed tasks, annotates each with a
+    _benchmark_result field, and writes them with descriptive filenames.
 
     Args:
-        benchmark_results: Parsed benchmark results.
-        tasks_dir: Directory containing the original task JSONs.
+        tasks_dir: Directory containing task JSONs with calibration data.
+        model: Model name to read calibration results for.
         output_dir: Where to write the sampled_tasks directory.
         fail_count: Number of failed tasks to include.
         pass_count: Number of passed tasks to include.
@@ -35,87 +34,116 @@ def prepare_sampled_tasks_dir(
     sampled_dir = Path(output_dir)
     sampled_dir.mkdir(parents=True, exist_ok=True)
 
-    failed = [r for r in benchmark_results.results if not r.success]
-    passed = [r for r in benchmark_results.results if r.success]
+    tasks_path = Path(tasks_dir)
+    failed: List[Tuple[Path, dict, float]] = []  # (path, task_data, percent_complete)
+    passed: List[Tuple[Path, dict, float]] = []
+
+    for task_file in tasks_path.glob("*.json"):
+        try:
+            with open(task_file) as f:
+                task_data = json.load(f)
+            cal = task_data.get("calibration", {}).get(model)
+            if cal is None:
+                continue
+            pct = cal.get("percent_complete", 0.0)
+            if cal.get("passed"):
+                passed.append((task_file, task_data, pct))
+            else:
+                failed.append((task_file, task_data, pct))
+        except Exception:
+            continue
 
     # Prioritize partial completions — they reveal *why* the agent got stuck
-    failed.sort(key=lambda r: r.percent_complete, reverse=True)
+    failed.sort(key=lambda x: x[2], reverse=True)
 
     selected_failed = failed[:fail_count]
     selected_passed = random.sample(passed, min(pass_count, len(passed))) if passed else []
 
-    tasks_path = Path(tasks_dir)
-
-    for i, result in enumerate(selected_failed, 1):
-        task_data = _load_and_annotate(result, benchmark_results.model, tasks_path)
-        if task_data is None:
-            continue
-        pct = int(result.percent_complete * 100)
-        filename = f"failed_{i}_{pct}pct.json"
+    for i, (_, task_data, pct) in enumerate(selected_failed, 1):
+        annotated = dict(task_data)
+        cal = task_data["calibration"][model]
+        annotated["_benchmark_result"] = {
+            "model": model,
+            "outcome": "FAILED",
+            "percent_complete": pct,
+        }
+        pct_int = int(pct * 100)
+        filename = f"failed_{i}_{pct_int}pct.json"
         with open(sampled_dir / filename, "w") as f:
-            json.dump(task_data, f, indent=2)
+            json.dump(annotated, f, indent=2)
 
-    for i, result in enumerate(selected_passed, 1):
-        task_data = _load_and_annotate(result, benchmark_results.model, tasks_path)
-        if task_data is None:
-            continue
+    for i, (_, task_data, pct) in enumerate(selected_passed, 1):
+        annotated = dict(task_data)
+        annotated["_benchmark_result"] = {
+            "model": model,
+            "outcome": "PASSED",
+            "percent_complete": pct,
+        }
         filename = f"passed_{i}.json"
         with open(sampled_dir / filename, "w") as f:
-            json.dump(task_data, f, indent=2)
+            json.dump(annotated, f, indent=2)
 
     total = len(list(sampled_dir.glob("*.json")))
     print(f"[evolve] Prepared sampled_tasks: {total} files ({len(selected_failed)} failed, {len(selected_passed)} passed)")
     return sampled_dir
 
 
-def _load_and_annotate(
-    result: TaskResult,
-    model: str,
-    tasks_dir: Path,
-) -> Optional[dict]:
-    """Load task JSON and add _benchmark_result annotation."""
-    # Try to find the task file by task_id
-    task_file = _find_task_file(result.task_id, tasks_dir)
-    if task_file is None:
-        print(f"[evolve] WARNING: Could not find task file for {result.task_id}")
-        return None
+def compute_pass_rate_from_calibration(tasks_dir: str, model: str) -> Dict[str, float]:
+    """Compute pass rate for a model from calibration data in task JSONs.
 
-    with open(task_file) as f:
-        task_data = json.load(f)
+    Returns:
+        Dict with keys: passed, failed, untested, total, pass_rate (as percentage 0-100).
+    """
+    tasks_path = Path(tasks_dir)
+    passed = 0
+    failed = 0
+    untested = 0
 
-    task_data["_benchmark_result"] = {
-        "model": model,
-        "outcome": "PASSED" if result.success else "FAILED",
-        "percent_complete": result.percent_complete,
-        "completed_subtasks": result.evaluation.get("completed_subtasks", []),
-        "total_subtasks": result.evaluation.get("total_subtasks", 0),
-    }
-
-    return task_data
-
-
-def _find_task_file(task_id: str, tasks_dir: Path) -> Optional[Path]:
-    """Find a task JSON file by task_id in the tasks directory."""
-    # Direct filename match
-    direct = tasks_dir / f"{task_id}.json"
-    if direct.exists():
-        return direct
-
-    # Search all JSON files for matching task_id
-    for f in tasks_dir.glob("*.json"):
+    for task_file in tasks_path.glob("*.json"):
         try:
-            with open(f) as fh:
-                data = json.load(fh)
-            if data.get("task_id") == task_id:
-                return f
+            with open(task_file) as f:
+                task_data = json.load(f)
+            cal = task_data.get("calibration", {}).get(model)
+            if cal is None:
+                untested += 1
+            elif cal.get("passed"):
+                passed += 1
+            else:
+                failed += 1
         except Exception:
             continue
 
-    return None
+    total = passed + failed
+    pass_rate = (passed / total * 100) if total > 0 else 0.0
+    return {
+        "passed": passed,
+        "failed": failed,
+        "untested": untested,
+        "total": total,
+        "pass_rate": pass_rate,
+    }
+
+
+def find_tasks_without_calibration(tasks_dir: str, model: str) -> List[Path]:
+    """Find task JSONs that are missing calibration data for a given model."""
+    tasks_path = Path(tasks_dir)
+    missing = []
+
+    for task_file in tasks_path.glob("*.json"):
+        try:
+            with open(task_file) as f:
+                task_data = json.load(f)
+            cal = task_data.get("calibration", {}).get(model)
+            if cal is None:
+                missing.append(task_file)
+        except Exception:
+            continue
+
+    return missing
 
 
 def build_evolution_query(
-    benchmark_results: BenchmarkResults,
+    pass_rate: float,
     tier_model: str,
     generation_idx: int,
 ) -> str:
@@ -123,8 +151,13 @@ def build_evolution_query(
 
     Tells the agent what the _benchmark_result annotations mean and
     guides it to produce harder tasks.
+
+    Args:
+        pass_rate: Current pass rate as a percentage (0-100).
+        tier_model: Name of the model being benchmarked.
+        generation_idx: Which generation tier (1-based).
     """
-    rate = benchmark_results.pass_rate
+    rate = pass_rate
 
     # Directional guidance only — concrete constraints (tom_level, mechanics,
     # agent count) come from the --difficulty parameter to avoid conflicts.

@@ -67,6 +67,7 @@ class TaskGeneratorAgent:
         seed_task: Optional[str] = None,
         judge_threshold: Optional[float] = None,
         difficulty: Optional[str] = None,
+        test_model: Optional[str] = None,
     ):
         """
         Initialize the agent.
@@ -109,6 +110,7 @@ class TaskGeneratorAgent:
         self.category = category  # None means random selection
         self.seed_task = seed_task  # Path to existing task to use as seed
         self.difficulty = difficulty  # Difficulty level for evolve pipeline
+        self.test_model = test_model  # Override model for test_task calibration
 
         # Task file paths
         self.task_file = self.working_dir / "working_task.json"
@@ -1336,13 +1338,16 @@ SUMMARY:"""
         """Save calibration results to task JSON for dataset pass rate tracking."""
         from datetime import datetime
 
-        # Get model name from LLM config
-        model_name = "unknown"
-        if hasattr(self.llm, 'llm_conf'):
-            params = self.llm.llm_conf.get('generation_params', {})
-            model_name = params.get('model', 'unknown')
-        elif hasattr(self.llm, 'generation_params'):
-            model_name = getattr(self.llm.generation_params, 'model', 'unknown')
+        # Use test_model as calibration key if set (evolve pipeline), otherwise use generator model
+        if self.test_model:
+            model_name = self.test_model
+        else:
+            model_name = "unknown"
+            if hasattr(self.llm, 'llm_conf'):
+                params = self.llm.llm_conf.get('generation_params', {})
+                model_name = params.get('model', 'unknown')
+            elif hasattr(self.llm, 'generation_params'):
+                model_name = getattr(self.llm.generation_params, 'model', 'unknown')
 
         # Build trajectory from action history
         action_history = results.get("action_history", [])
@@ -1883,6 +1888,8 @@ SUMMARY:"""
             "--trajectory-dir", str(run_dir),
             "--config-name", config_name,
         ]
+        if self.test_model:
+            cmd.extend(["--test-model", self.test_model])
 
         try:
             subprocess.run(

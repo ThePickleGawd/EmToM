@@ -44,8 +44,8 @@ def parse_extra_args():
                         help="Path to failed ToM verification JSON to retry with suggestions")
     parser.add_argument("--calibration-model", type=str, default="gpt-5.2",
                         help="Model to calibrate dataset difficulty against (default: gpt-5.2)")
-    parser.add_argument("--target-pass-rate", type=float, default=0.10,
-                        help="Target pass rate for calibration model (default: 0.10 = 10%%)")
+    parser.add_argument("--target-pass-rate", type=float, default=0.20,
+                        help="Target pass rate for calibration model (default: 0.20 = 20%%)")
     parser.add_argument("--category", type=str, default=None,
                         choices=["cooperative", "competitive", "mixed"],
                         help="Task category to generate (default: random)")
@@ -58,6 +58,8 @@ def parse_extra_args():
     parser.add_argument("--difficulty", type=str, default=None,
                         choices=["easy", "medium", "hard"],
                         help="Difficulty level for judge context (easy/medium/hard)")
+    parser.add_argument("--test-model", type=str, default=None,
+                        help="Override model used for test_task calibration (e.g. gpt-5-mini)")
 
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
@@ -136,6 +138,7 @@ def main(config: DictConfig) -> None:
     seed_task = extra_args.seed_task if extra_args else None
     judge_threshold = extra_args.judge_threshold if extra_args else None
     difficulty = extra_args.difficulty if extra_args else None
+    test_model = extra_args.test_model if extra_args else None
 
     # Validate seed task path
     if seed_task:
@@ -288,6 +291,7 @@ def main(config: DictConfig) -> None:
         seed_task=seed_task,  # Existing task to use as seed instead of blank template
         judge_threshold=judge_threshold,  # Override judge threshold (None = use default)
         difficulty=difficulty,  # Difficulty context for judge: easy/medium/hard
+        test_model=test_model,  # Override model for test_task calibration
     )
 
     # Run agent

@@ -117,6 +117,7 @@ SAMPLED_TASKS_DIR=""  # Pre-built sampled_tasks directory (skips random sampling
 OUTPUT_DIR=""  # Override output directory for generate/benchmark
 SCENE_DATA_FILE=""  # Optional scene data JSON for static verification
 DIFFICULTY=""  # Difficulty level for judge context: easy, medium, hard
+TEST_MODEL=""  # Override model used for test_task calibration (evolve pipeline)
 STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
 REPORT_FILE=""  # Optional JSON report output path for static verification
 
@@ -219,7 +220,7 @@ print_usage() {
     echo "  --tasks-per-round N      Tasks to generate per tier (default: 20)"
     echo "  --seed-pool-size N       Seed pool size for tier 0 (default: 30)"
     echo "  --seed-query TEXT        Optional query for seed generation (default: none)"
-    echo "  --target-pass-rate N     Reuse tasks when pass rate <= N (default: 30.0)"
+    echo "  --target-pass-rate N     Generate until pass rate drops to N% (default: 20.0)"
     echo "  --judge-threshold N      Judge quality threshold (default: 0.7)"
     echo "  --max-workers N          Max parallel processes (default: 50)"
     echo "  --output-dir DIR         Output directory (default: outputs/evolve)"
@@ -360,6 +361,9 @@ run_generate() {
     if [ -n "$RETRY_VERIFICATION" ]; then
         echo "Retry from: $RETRY_VERIFICATION"
     fi
+    if [ -n "$TEST_MODEL" ]; then
+        echo "Test model: $TEST_MODEL (calibration)"
+    fi
     echo "(Loads random scene from PARTNR dataset)"
     echo "=============================================="
     echo ""
@@ -386,6 +390,9 @@ run_generate() {
     fi
     if [ -n "$DIFFICULTY" ]; then
         EXTRA_ARGS+=(--difficulty "$DIFFICULTY")
+    fi
+    if [ -n "$TEST_MODEL" ]; then
+        EXTRA_ARGS+=(--test-model "$TEST_MODEL")
     fi
 
     # Use Hydra config system with custom overrides
@@ -913,6 +920,10 @@ while [[ $# -gt 0 ]]; do
                 echo "Error: --difficulty must be 'easy', 'medium', or 'hard'"
                 exit 1
             fi
+            shift 2
+            ;;
+        --test-model)
+            TEST_MODEL=$2
             shift 2
             ;;
         --no-video)

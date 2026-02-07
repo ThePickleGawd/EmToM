@@ -22,13 +22,15 @@ from typing import Dict, List, Optional
 
 from emtom.evolve.config import EvolutionConfig, DEFAULT_MODEL_LADDER
 from emtom.evolve.benchmark_wrapper import (
-    run_benchmark,
     run_benchmark_parallel,
     BenchmarkResults,
-    TaskResult,
 )
-from emtom.evolve.icl_sampler import prepare_sampled_tasks_dir, build_evolution_query
-from emtom.evolve.report import generate_report
+from emtom.evolve.icl_sampler import (
+    prepare_sampled_tasks_dir_from_calibration,
+    compute_pass_rate_from_calibration,
+    find_tasks_without_calibration,
+    build_evolution_query,
+)
 
 
 # Subtask complexity ranges per tier position.
@@ -87,8 +89,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target-pass-rate",
         type=float,
-        default=30.0,
-        help="Reuse tasks (skip generation) when pass rate is at/below this percent (default: 30.0)",
+        default=20.0,
+        help="Target pass rate percent — generate until pass rate drops to this (default: 20.0)",
     )
     parser.add_argument("--output-dir", type=str, default="outputs/evolve")
     parser.add_argument("--max-workers", type=int, default=50,
@@ -103,7 +105,7 @@ def load_state(output_dir: Path) -> dict:
     if state_file.exists():
         with open(state_file) as f:
             return json.load(f)
-    return {"completed_tiers": [], "tier_results": {}}
+    return {"completed_tiers": [], "current_tier_idx": 0}
 
 
 def save_state(output_dir: Path, state: dict) -> None:
@@ -116,6 +118,7 @@ def run_generate(
     model: str,
     num_tasks: int,
     output_dir: str,
+    test_model: Optional[str] = None,
     query: Optional[str] = None,
     category: str = "cooperative",
     sampled_tasks_dir: Optional[str] = None,
@@ -136,6 +139,8 @@ def run_generate(
         "--category", category,
         "--output-dir", output_dir,
     ]
+    if test_model:
+        cmd.extend(["--test-model", test_model])
     if query:
         cmd.extend(["--query", query])
     if sampled_tasks_dir:
@@ -162,6 +167,7 @@ def run_generate_parallel(
     num_tasks: int,
     output_dir: str,
     max_workers: int = 50,
+    test_model: Optional[str] = None,
     query: Optional[str] = None,
     category: str = "cooperative",
     sampled_tasks_dir: Optional[str] = None,
@@ -192,6 +198,8 @@ def run_generate_parallel(
         "--category", category,
         "--output-dir", output_dir,
     ]
+    if test_model:
+        base_cmd.extend(["--test-model", test_model])
     if query:
         base_cmd.extend(["--query", query])
     if sampled_tasks_dir:
@@ -321,13 +329,62 @@ def run_generate_parallel(
     return out
 
 
-def collect_tasks(tasks_dir: Path) -> List[Path]:
-    """Collect all task JSON files from a directory."""
-    return sorted(tasks_dir.glob("*.json"))
+def update_calibration_from_benchmark(
+    benchmark_results: BenchmarkResults,
+    tasks_dir: str,
+) -> None:
+    """Write benchmark results back into task JSONs as calibration entries.
+
+    After running a separate benchmark (e.g. on model upgrade), this merges
+    the results into each task's calibration dict so subsequent logic can
+    read pass/fail from the task JSON itself.
+    """
+    from datetime import datetime
+
+    tasks_path = Path(tasks_dir)
+    model = benchmark_results.model
+
+    # Build lookup: task_id -> TaskResult
+    result_map = {r.task_id: r for r in benchmark_results.results}
+
+    for task_file in tasks_path.glob("*.json"):
+        try:
+            with open(task_file) as f:
+                task_data = json.load(f)
+        except Exception:
+            continue
+
+        task_id = task_data.get("task_id", "")
+        # Try matching by task_id or by filename stem
+        result = result_map.get(task_id) or result_map.get(task_file.stem)
+        if result is None:
+            continue
+
+        if "calibration" not in task_data:
+            task_data["calibration"] = {}
+
+        task_data["calibration"][model] = {
+            "passed": result.success,
+            "tested_at": datetime.now().isoformat(),
+            "steps": result.steps,
+            "percent_complete": result.percent_complete,
+        }
+
+        with open(task_file, "w") as f:
+            json.dump(task_data, f, indent=2)
+
+    print(f"[evolve] Updated calibration in {tasks_dir} for model {model}")
 
 
 def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> None:
-    """Main evolutionary loop."""
+    """Main evolutionary loop.
+
+    Design: Stay-in-tier with accumulated task pool.
+    - Single tasks/ directory accumulates all tasks across tiers.
+    - test_task calibration data IS the benchmark (no separate benchmark for new tasks).
+    - On model upgrade: benchmark only tasks missing calibration for the new model.
+    - Stay in tier generating until pass rate drops to target, then advance.
+    """
     # Setup output directory
     if resume_dir:
         output_dir = Path(resume_dir)
@@ -338,6 +395,10 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"[evolve] Run output directory: {output_dir.resolve()}")
 
+    # Single accumulated task pool
+    all_tasks_dir = output_dir / "tasks"
+    all_tasks_dir.mkdir(parents=True, exist_ok=True)
+
     # Save config
     with open(output_dir / "config.json", "w") as f:
         json.dump(asdict(config), f, indent=2)
@@ -345,42 +406,23 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
     # Load state for resumption
     state = load_state(output_dir)
     completed_tiers = set(state.get("completed_tiers", []))
-    tier_results: Dict[str, BenchmarkResults] = {}
+    start_tier_idx = state.get("current_tier_idx", 0)
 
-    # Reconstruct tier_results from state if resuming
-    for tier_name, tier_data in state.get("tier_results", {}).items():
-        reconstructed_task_results = []
-        for task_data in tier_data.get("results", []):
-            try:
-                reconstructed_task_results.append(TaskResult(**task_data))
-            except TypeError:
-                # Backward-compatible with older state files that didn't save full fields.
-                continue
-
-        tier_results[tier_name] = BenchmarkResults(
-            model=tier_data["model"],
-            total=tier_data["total"],
-            passed=tier_data["passed"],
-            failed=tier_data["failed"],
-            pass_rate=tier_data["pass_rate"],
-            results=reconstructed_task_results,
-        )
-
-    # ---- TIER 0: Seed pool ----
-    seed_tier = "tier_0_seed"
-    seed_tasks_dir = output_dir / seed_tier / "tasks"
-
+    # ---- PHASE 1: Seed generation ----
+    seed_tier = "seed"
     if seed_tier not in completed_tiers:
         print(f"\n{'='*60}")
-        print(f"TIER 0: Generating seed pool ({config.seed_pool_size} tasks)")
+        print(f"SEED: Generating {config.seed_pool_size} easy tasks")
+        print(f"  test_model: {config.model_ladder[0]}")
         print(f"{'='*60}\n")
 
         seed_sub_min, seed_sub_max = get_subtask_range(0)
         run_generate_parallel(
             model=config.generator_model,
             num_tasks=config.seed_pool_size,
-            output_dir=str(seed_tasks_dir),
+            output_dir=str(all_tasks_dir),
             max_workers=config.max_workers,
+            test_model=config.model_ladder[0],  # Test against weakest model
             query=config.seed_query,
             category="cooperative",
             judge_threshold=config.judge_threshold,
@@ -391,144 +433,172 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
 
         completed_tiers.add(seed_tier)
         state["completed_tiers"] = list(completed_tiers)
+        state["current_tier_idx"] = 0
         save_state(output_dir, state)
     else:
-        print(f"[evolve] Skipping {seed_tier} (already completed)")
+        print(f"[evolve] Skipping seed generation (already completed)")
 
-    # ---- Tiers 1..N: Benchmark + Generate ----
-    prev_tasks_dir = seed_tasks_dir
-
+    # ---- PHASE 2: Tier loop ----
     for tier_idx, model in enumerate(config.model_ladder):
         tier_name = f"tier_{tier_idx + 1}_{model}"
-        tier_dir = output_dir / tier_name
 
         if tier_name in completed_tiers:
             print(f"[evolve] Skipping {tier_name} (already completed)")
-            # Restore prev_tasks_dir for next tier
-            tier_tasks = tier_dir / "tasks"
-            if tier_tasks.exists() and list(tier_tasks.glob("*.json")):
-                prev_tasks_dir = tier_tasks
             continue
 
+        tier_dir = output_dir / tier_name
         tier_dir.mkdir(parents=True, exist_ok=True)
-        is_last_tier = (tier_idx == len(config.model_ladder) - 1)
 
         print(f"\n{'='*60}")
         print(f"TIER {tier_idx + 1}: {model}")
         print(f"{'='*60}\n")
 
-        # a. BENCHMARK previous tier's tasks against this model
-        print(f"[evolve] Benchmarking {prev_tasks_dir} with {model}...")
-        benchmark_output = str(tier_dir / "benchmark")
-        results = run_benchmark_parallel(
-            tasks_dir=str(prev_tasks_dir),
-            model=model,
-            output_dir=benchmark_output,
-            max_workers=config.max_workers,
-            no_video=True,
-        )
-        tier_results[tier_name] = results
+        # a. Benchmark tasks missing calibration for this model
+        missing = find_tasks_without_calibration(str(all_tasks_dir), model)
+        if missing:
+            print(f"[evolve] {len(missing)} tasks missing calibration for {model} — benchmarking...")
+            # Create temp dir with just the missing tasks for benchmarking
+            missing_dir = tier_dir / "missing_tasks"
+            missing_dir.mkdir(parents=True, exist_ok=True)
+            for task_path in missing:
+                shutil.copy2(task_path, missing_dir / task_path.name)
+
+            benchmark_output = str(tier_dir / "benchmark")
+            results = run_benchmark_parallel(
+                tasks_dir=str(missing_dir),
+                model=model,
+                output_dir=benchmark_output,
+                max_workers=config.max_workers,
+                no_video=True,
+            )
+
+            # Write benchmark results back into the task JSONs in all_tasks_dir
+            update_calibration_from_benchmark(results, str(all_tasks_dir))
+
+            # Cleanup temp dir
+            shutil.rmtree(missing_dir, ignore_errors=True)
+
+        # b. Compute pass rate across ALL tasks
+        stats = compute_pass_rate_from_calibration(str(all_tasks_dir), model)
+        pass_rate = stats["pass_rate"]
+        print(f"[evolve] {model}: {stats['passed']}/{stats['total']} passed ({pass_rate:.1f}%)")
+        print(f"[evolve]   untested: {stats['untested']}")
 
         # Save tier metrics
         with open(tier_dir / "tier_metrics.json", "w") as f:
             json.dump({
                 "model": model,
-                "total": results.total,
-                "passed": results.passed,
-                "failed": results.failed,
-                "pass_rate": results.pass_rate,
+                "phase": "initial",
+                **stats,
             }, f, indent=2)
 
-        print(f"[evolve] {model}: {results.passed}/{results.total} passed ({results.pass_rate:.1f}%)")
+        # c. Generate until pass rate drops to target
+        tier_sub_min, tier_sub_max = get_subtask_range(tier_idx + 1)
+        tier_difficulty = get_difficulty_for_tier(tier_idx + 1, len(config.model_ladder) + 1)
+        generated_this_tier = 0
 
-        # b. CHECK pass rate threshold and generation size
-        skip_generation = False
-        tasks_to_generate = config.tasks_per_round
-        if results.pass_rate <= config.target_pass_rate and not is_last_tier:
-            print(
-                f"[evolve] Pass rate ({results.pass_rate:.1f}%) <= target "
-                f"({config.target_pass_rate:.1f}%) — reusing same tasks for next tier"
-            )
-            skip_generation = True
-        elif not is_last_tier:
-            # Only generate as many harder tasks as needed to push difficulty back down.
-            numerator = max(0.0, results.pass_rate - config.target_pass_rate)
-            denominator = max(1e-9, 100.0 - config.target_pass_rate)
-            difficulty_pressure = min(1.0, numerator / denominator)
-            tasks_to_generate = max(1, int(round(config.tasks_per_round * difficulty_pressure)))
-            print(
-                f"[evolve] Pass rate ({results.pass_rate:.1f}%) > target "
-                f"({config.target_pass_rate:.1f}%) — generating {tasks_to_generate}/"
-                f"{config.tasks_per_round} harder tasks"
-            )
+        if pass_rate > config.target_pass_rate:
+            print(f"[evolve] Pass rate ({pass_rate:.1f}%) > target ({config.target_pass_rate:.1f}%)")
+            print(f"[evolve] Generating harder tasks tested against {model}...")
+            print(f"[evolve] Subtask range: {tier_sub_min}-{tier_sub_max}, difficulty: {tier_difficulty}")
 
-        # c-e. PREPARE sampled tasks, BUILD query, GENERATE harder tasks
-        if not is_last_tier and not skip_generation:
-            # c. Prepare sampled_tasks dir
+            # Prepare ICL sampled tasks from calibration data
             fail_count = int(config.icl_total_examples * config.icl_failure_ratio)
             pass_count = config.icl_total_examples - fail_count
             sampled_dir = str(tier_dir / "sampled_tasks")
-            prepare_sampled_tasks_dir(
-                benchmark_results=results,
-                tasks_dir=str(prev_tasks_dir),
+            prepare_sampled_tasks_dir_from_calibration(
+                tasks_dir=str(all_tasks_dir),
+                model=model,
                 output_dir=sampled_dir,
                 fail_count=fail_count,
                 pass_count=pass_count,
             )
 
-            # d. Build evolution query
-            evolution_query = build_evolution_query(results, model, tier_idx + 1)
+            # Build evolution query
+            evolution_query = build_evolution_query(pass_rate, model, tier_idx + 1)
 
-            # e. Generate harder tasks while keeping a fixed quality bar.
-            tier_threshold = config.judge_threshold
-            print(f"[evolve] Judge threshold for tier {tier_idx + 1}: {tier_threshold:.2f}")
+            # Generate tasks one-by-one (or in small parallel batches),
+            # re-checking pass rate after each batch
+            batch_size = min(config.max_workers, 5)  # Small batches for tighter feedback
+            while pass_rate > config.target_pass_rate and generated_this_tier < config.tasks_per_round:
+                remaining = min(batch_size, config.tasks_per_round - generated_this_tier)
 
-            tier_tasks_dir = tier_dir / "tasks"
-            tier_sub_min, tier_sub_max = get_subtask_range(tier_idx + 1)
-            # tier_idx+1 because tier 0 is the seed
-            tier_difficulty = get_difficulty_for_tier(
-                tier_idx + 1, len(config.model_ladder) + 1
+                run_generate_parallel(
+                    model=config.generator_model,
+                    num_tasks=remaining,
+                    output_dir=str(all_tasks_dir),
+                    max_workers=config.max_workers,
+                    test_model=model,  # Test against current tier's model
+                    query=evolution_query,
+                    category="cooperative",
+                    sampled_tasks_dir=sampled_dir,
+                    judge_threshold=config.judge_threshold,
+                    subtasks_min=tier_sub_min,
+                    subtasks_max=tier_sub_max,
+                    difficulty=tier_difficulty,
+                )
+
+                generated_this_tier += remaining
+
+                # Recompute pass rate
+                stats = compute_pass_rate_from_calibration(str(all_tasks_dir), model)
+                pass_rate = stats["pass_rate"]
+                print(
+                    f"[evolve] After generating {generated_this_tier} tasks: "
+                    f"{stats['passed']}/{stats['total']} passed ({pass_rate:.1f}%)"
+                )
+        else:
+            print(
+                f"[evolve] Pass rate ({pass_rate:.1f}%) <= target ({config.target_pass_rate:.1f}%) "
+                f"— advancing to next model"
             )
-            print(f"[evolve] Subtask range for tier {tier_idx + 1}: {tier_sub_min}-{tier_sub_max}")
-            print(f"[evolve] Difficulty for tier {tier_idx + 1}: {tier_difficulty}")
-            run_generate_parallel(
-                model=config.generator_model,
-                num_tasks=tasks_to_generate,
-                output_dir=str(tier_tasks_dir),
-                max_workers=config.max_workers,
-                query=evolution_query,
-                category="cooperative",
-                sampled_tasks_dir=sampled_dir,
-                judge_threshold=tier_threshold,
-                subtasks_min=tier_sub_min,
-                subtasks_max=tier_sub_max,
-                difficulty=tier_difficulty,
-            )
-            prev_tasks_dir = tier_tasks_dir
-        elif not is_last_tier and skip_generation:
-            # Reuse same tasks — prev_tasks_dir stays the same
-            pass
 
-        # f. Save checkpoint
+        # Save final tier metrics
+        final_stats = compute_pass_rate_from_calibration(str(all_tasks_dir), model)
+        with open(tier_dir / "tier_metrics_final.json", "w") as f:
+            json.dump({
+                "model": model,
+                "phase": "final",
+                "generated_this_tier": generated_this_tier,
+                "difficulty": tier_difficulty,
+                **final_stats,
+            }, f, indent=2)
+
+        # Checkpoint
         completed_tiers.add(tier_name)
         state["completed_tiers"] = list(completed_tiers)
-        state["tier_results"][tier_name] = {
-            "model": results.model,
-            "total": results.total,
-            "passed": results.passed,
-            "failed": results.failed,
-            "pass_rate": results.pass_rate,
-            "results": [asdict(r) for r in results.results],
-        }
+        state["current_tier_idx"] = tier_idx + 1
         save_state(output_dir, state)
 
-    # ---- Final report ----
+    # ---- Final summary ----
     print(f"\n{'='*60}")
-    print("Generating final report...")
+    print("Evolution Complete!")
     print(f"{'='*60}\n")
-    generate_report(config, tier_results, str(output_dir))
 
-    print(f"\n[evolve] Evolution complete! Results in {output_dir}")
+    total_tasks = len(list(all_tasks_dir.glob("*.json")))
+    print(f"Total tasks in pool: {total_tasks}")
+    print(f"Tasks directory: {all_tasks_dir.resolve()}")
+
+    for model in config.model_ladder:
+        stats = compute_pass_rate_from_calibration(str(all_tasks_dir), model)
+        print(
+            f"  {model}: {stats['passed']}/{stats['total']} passed "
+            f"({stats['pass_rate']:.1f}%), untested: {stats['untested']}"
+        )
+
+    # Write final summary
+    summary = {
+        "total_tasks": total_tasks,
+        "tasks_dir": str(all_tasks_dir.resolve()),
+        "model_stats": {},
+    }
+    for model in config.model_ladder:
+        summary["model_stats"][model] = compute_pass_rate_from_calibration(str(all_tasks_dir), model)
+
+    with open(output_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"\n[evolve] Results in {output_dir}")
 
 
 def main():
