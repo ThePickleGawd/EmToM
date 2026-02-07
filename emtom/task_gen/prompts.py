@@ -48,7 +48,7 @@ Assigned!
 3. Edit `{task_file}`
 4. `judge[]` → fix → repeat until pass
 5. `verify_golden_trajectory[]` → fix → repeat until pass
-6. `test_task[]` → measures pass rate and can find interesting interactions
+6. `test_task[]` → measures pass rate and records calibration data
 7. `submit_task[]`
 8. Repeat from step 1 for next task
 

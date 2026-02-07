@@ -1617,7 +1617,7 @@ SUMMARY:"""
             defined_items = {item.get("item_id") for item in task_data.get("items", []) if item.get("item_id")}
             valid_scene_ids.update(defined_items)
 
-            invalid_task_refs = [ref for ref in object_refs if ref not in valid_scene_ids and not ref.startswith("item_")]
+            invalid_task_refs = [ref for ref in object_refs if ref not in valid_scene_ids and not ref.startswith(("item_", "agent_", "team_"))]
             if invalid_task_refs:
                 return {
                     "valid": False,
@@ -1629,7 +1629,7 @@ SUMMARY:"""
             for agent_id, secrets in task_data.get("agent_secrets", {}).items():
                 for secret in secrets:
                     secret_refs = re.findall(object_pattern, secret)
-                    invalid_secret_refs = [ref for ref in secret_refs if ref not in valid_scene_ids and not ref.startswith("item_")]
+                    invalid_secret_refs = [ref for ref in secret_refs if ref not in valid_scene_ids and not ref.startswith(("item_", "agent_", "team_"))]
                     if invalid_secret_refs:
                         return {
                             "valid": False,
@@ -1927,6 +1927,11 @@ SUMMARY:"""
                 "error": f"Invalid JSON in working_task.json: {e}"
             })
 
+        # Validate task structure before expensive simulation
+        validation = self._validate_task_structure(task_data)
+        if "error" in validation:
+            return json.dumps(validation, indent=2)
+
         golden = task_data.get("golden_trajectory", [])
         if not golden:
             return json.dumps({
@@ -2042,6 +2047,11 @@ SUMMARY:"""
                 "valid": False,
                 "error": f"Invalid JSON: {e}"
             })
+
+        # Validate task structure before expensive LLM calls
+        validation = self._validate_task_structure(task_data)
+        if "error" in validation:
+            return json.dumps(validation, indent=2)
 
         self._log("[Judge] Evaluating task with council...")
 
@@ -2178,6 +2188,11 @@ SUMMARY:"""
                 task_data = json.load(f)
         except json.JSONDecodeError as e:
             return f"Error: Invalid JSON: {e}"
+
+        # Run structure validation (catches invented object IDs, bad mechanics, etc.)
+        validation_result = self._validate_task_structure(task_data)
+        if "error" in validation_result:
+            return json.dumps(validation_result, indent=2)
 
         # Validate subtask count
         subtasks = task_data.get("subtasks", [])
