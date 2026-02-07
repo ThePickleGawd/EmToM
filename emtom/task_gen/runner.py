@@ -55,6 +55,9 @@ def parse_extra_args():
                         help="Pre-built sampled_tasks directory (skips random sampling)")
     parser.add_argument("--judge-threshold", type=float, default=None,
                         help="Override judge overall_threshold (default: judge's built-in default)")
+    parser.add_argument("--difficulty", type=str, default=None,
+                        choices=["easy", "medium", "hard"],
+                        help="Difficulty level for judge context (easy/medium/hard)")
 
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
@@ -132,6 +135,7 @@ def main(config: DictConfig) -> None:
     category = extra_args.category if extra_args else None
     seed_task = extra_args.seed_task if extra_args else None
     judge_threshold = extra_args.judge_threshold if extra_args else None
+    difficulty = extra_args.difficulty if extra_args else None
 
     # Validate seed task path
     if seed_task:
@@ -283,6 +287,7 @@ def main(config: DictConfig) -> None:
         category=category,  # Task category: cooperative, competitive, or mixed
         seed_task=seed_task,  # Existing task to use as seed instead of blank template
         judge_threshold=judge_threshold,  # Override judge threshold (None = use default)
+        difficulty=difficulty,  # Difficulty context for judge: easy/medium/hard
     )
 
     # Run agent

@@ -44,6 +44,19 @@ TIER_SUBTASK_RANGES = [
 ]
 
 
+def get_difficulty_for_tier(tier_idx: int, total_tiers: int) -> str:
+    """Map tier index to difficulty label for the judge."""
+    if total_tiers <= 1:
+        return "medium"
+    ratio = tier_idx / total_tiers  # 0.0 = seed, 1.0 = hardest
+    if ratio <= 0.25:
+        return "easy"
+    elif ratio <= 0.6:
+        return "medium"
+    else:
+        return "hard"
+
+
 def get_subtask_range(tier_idx: int) -> tuple:
     """Return (subtasks_min, subtasks_max) for a given tier index."""
     idx = min(tier_idx, len(TIER_SUBTASK_RANGES) - 1)
@@ -107,6 +120,7 @@ def run_generate(
     judge_threshold: Optional[float] = None,
     subtasks_min: Optional[int] = None,
     subtasks_max: Optional[int] = None,
+    difficulty: Optional[str] = None,
 ) -> Path:
     """Run task generation via run_emtom.sh generate.
 
@@ -130,6 +144,8 @@ def run_generate(
         cmd.extend(["--subtasks-min", str(subtasks_min)])
     if subtasks_max is not None:
         cmd.extend(["--subtasks-max", str(subtasks_max)])
+    if difficulty:
+        cmd.extend(["--difficulty", difficulty])
 
     print(f"[evolve] Running generation: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=False)
@@ -150,6 +166,7 @@ def run_generate_parallel(
     judge_threshold: Optional[float] = None,
     subtasks_min: Optional[int] = None,
     subtasks_max: Optional[int] = None,
+    difficulty: Optional[str] = None,
 ) -> Path:
     """Run task generation in parallel via N independent processes.
 
@@ -183,8 +200,10 @@ def run_generate_parallel(
         base_cmd.extend(["--subtasks-min", str(subtasks_min)])
     if subtasks_max is not None:
         base_cmd.extend(["--subtasks-max", str(subtasks_max)])
+    if difficulty:
+        base_cmd.extend(["--difficulty", difficulty])
 
-    max_spawns = num_tasks * 3
+    max_spawns = num_tasks * 5
     total_spawned = 0
     active: List[tuple] = []  # (Popen, log_file_handle)
 
@@ -287,8 +306,14 @@ def run_generate_parallel(
 
     final_count = _count_valid_tasks()
     if final_count < num_tasks:
-        raise RuntimeError(
-            f"Generation incomplete: got {final_count}/{num_tasks} valid task files in {out}"
+        if final_count == 0:
+            raise RuntimeError(
+                f"Generation failed: got 0/{num_tasks} valid task files in {out}"
+            )
+        print(
+            f"[evolve] WARNING: got {final_count}/{num_tasks} tasks "
+            f"(accepting partial result)",
+            file=sys.stderr,
         )
 
     return out
@@ -359,6 +384,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
             judge_threshold=config.judge_threshold,
             subtasks_min=seed_sub_min,
             subtasks_max=seed_sub_max,
+            difficulty="easy",
         )
 
         completed_tiers.add(seed_tier)
@@ -457,7 +483,12 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
 
             tier_tasks_dir = tier_dir / "tasks"
             tier_sub_min, tier_sub_max = get_subtask_range(tier_idx + 1)
+            # tier_idx+1 because tier 0 is the seed
+            tier_difficulty = get_difficulty_for_tier(
+                tier_idx + 1, len(config.model_ladder) + 1
+            )
             print(f"[evolve] Subtask range for tier {tier_idx + 1}: {tier_sub_min}-{tier_sub_max}")
+            print(f"[evolve] Difficulty for tier {tier_idx + 1}: {tier_difficulty}")
             run_generate_parallel(
                 model=config.generator_model,
                 num_tasks=tasks_to_generate,
@@ -469,6 +500,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
                 judge_threshold=tier_threshold,
                 subtasks_min=tier_sub_min,
                 subtasks_max=tier_sub_max,
+                difficulty=tier_difficulty,
             )
             prev_tasks_dir = tier_tasks_dir
         elif not is_last_tier and skip_generation:

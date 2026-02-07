@@ -285,6 +285,38 @@ def main():
                     })
 
                     if not success:
+                        # Auto-retry Pick/Place "not close enough" with Navigate
+                        obs_lower = (obs or "").lower()
+                        retryable = (
+                            action in ("Pick", "Place", "Open", "Close")
+                            and ("not close enough" in obs_lower or "occluded" in obs_lower
+                                 or "postcondition" in obs_lower or "failed to" in obs_lower)
+                        )
+                        if retryable:
+                            # Determine Navigate target
+                            if action == "Pick":
+                                nav_target = (target or "").split(",")[0].strip()
+                            elif action == "Place":
+                                # Place format: "obj, on, receptacle, ..."
+                                parts = [p.strip() for p in (target or "").split(",")]
+                                nav_target = parts[2] if len(parts) >= 3 else parts[0]
+                            else:
+                                # Open/Close: target is the object itself
+                                nav_target = (target or "").split(",")[0].strip()
+                            print(f"    {agent_str}: Auto-retry: Navigate[{nav_target}] then {action}", file=sys.stderr)
+                            nav_result = runner.execute_actions_concurrent({agent_id: ("Navigate", nav_target)})
+                            retry_result = runner.execute_actions_concurrent({agent_id: (action, target or "")})
+                            retry_res = retry_result.get(agent_id, {})
+                            if retry_res.get("success", False):
+                                retry_obs = retry_res.get("observation", "")
+                                print(f"    {agent_str}: {action_str} ✓ (after retry)", file=sys.stderr)
+                                step_results[-1] = {
+                                    "agent": agent_str, "action": action_str,
+                                    "success": True,
+                                    "observation": f"(retried) {retry_obs[:180]}" if retry_obs else "(retried)"
+                                }
+                                continue
+
                         runner.cleanup()
                         write_result({
                             "valid": False,

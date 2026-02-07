@@ -116,6 +116,7 @@ TEAM_MODEL_MAP=""  # Optional team -> model mapping for benchmark competitive ta
 SAMPLED_TASKS_DIR=""  # Pre-built sampled_tasks directory (skips random sampling)
 OUTPUT_DIR=""  # Override output directory for generate/benchmark
 SCENE_DATA_FILE=""  # Optional scene data JSON for static verification
+DIFFICULTY=""  # Difficulty level for judge context: easy, medium, hard
 STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
 REPORT_FILE=""  # Optional JSON report output path for static verification
 
@@ -382,6 +383,9 @@ run_generate() {
     fi
     if [ "$THRESHOLD" != "0.7" ]; then
         EXTRA_ARGS+=(--judge-threshold "$THRESHOLD")
+    fi
+    if [ -n "$DIFFICULTY" ]; then
+        EXTRA_ARGS+=(--difficulty "$DIFFICULTY")
     fi
 
     # Use Hydra config system with custom overrides
@@ -899,6 +903,14 @@ while [[ $# -gt 0 ]]; do
             TEAM_MODEL_MAP=$2
             if [[ "$TEAM_MODEL_MAP" != *"="* ]]; then
                 echo "Error: --team-model-map must include '=' entries, e.g. team_0=sonnet,team_1=gpt-5"
+                exit 1
+            fi
+            shift 2
+            ;;
+        --difficulty)
+            DIFFICULTY=$2
+            if [[ "$DIFFICULTY" != "easy" && "$DIFFICULTY" != "medium" && "$DIFFICULTY" != "hard" ]]; then
+                echo "Error: --difficulty must be 'easy', 'medium', or 'hard'"
                 exit 1
             fi
             shift 2

@@ -101,7 +101,14 @@ class GameStateManager:
         # Set active mechanics from bindings
         # Support both "mechanics" (old) and "mechanic_bindings" (new) field names
         mechanics = task_data.get("mechanic_bindings", task_data.get("mechanics", []))
-        state.active_mechanics = task_data.get("active_mechanics", []).copy()
+        # Normalize active_mechanics to List[str] — some tasks store full
+        # binding dicts here instead of just mechanic type strings.
+        raw_mechanics = task_data.get("active_mechanics", [])
+        state.active_mechanics = [
+            m if isinstance(m, str) else m.get("mechanic_type", m.get("type"))
+            for m in raw_mechanics
+            if isinstance(m, str) or isinstance(m, dict)
+        ]
         state.mechanic_bindings = mechanics
 
         for binding in mechanics:
