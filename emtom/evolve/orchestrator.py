@@ -4,7 +4,7 @@ Usage:
     python -m emtom.evolve.orchestrator [options]
 
 Or via shell script:
-    ./emtom/run_evolve.sh [options]
+    ./emtom/run_emtom.sh evolve [options]
 """
 
 from __future__ import annotations
@@ -64,10 +64,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--icl-failure-ratio", type=float, default=0.9)
     parser.add_argument(
         "--seed-query", type=str,
-        default="Simple 2-agent cooperative task. No mechanics. Basic object rearrangement with minimal information asymmetry.",
+        default=None,
+        help="Optional seed query for tier-0 generation (default: none)",
     )
     parser.add_argument("--judge-threshold", type=float, default=0.7,
                         help="Judge threshold for generation quality gate (default: 0.7)")
+    parser.add_argument(
+        "--target-pass-rate",
+        type=float,
+        default=30.0,
+        help="Reuse tasks (skip generation) when pass rate is at/below this percent (default: 30.0)",
+    )
     parser.add_argument("--output-dir", type=str, default="outputs/evolve")
     parser.add_argument("--max-workers", type=int, default=50,
                         help="Max parallel generation/benchmark processes (default: 50)")
@@ -406,11 +413,26 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
 
         print(f"[evolve] {model}: {results.passed}/{results.total} passed ({results.pass_rate:.1f}%)")
 
-        # b. CHECK pass rate thresholds
+        # b. CHECK pass rate threshold and generation size
         skip_generation = False
-        if results.pass_rate < 10 and not is_last_tier:
-            print(f"[evolve] Pass rate < 10% — reusing same tasks for next tier")
+        tasks_to_generate = config.tasks_per_round
+        if results.pass_rate <= config.target_pass_rate and not is_last_tier:
+            print(
+                f"[evolve] Pass rate ({results.pass_rate:.1f}%) <= target "
+                f"({config.target_pass_rate:.1f}%) — reusing same tasks for next tier"
+            )
             skip_generation = True
+        elif not is_last_tier:
+            # Only generate as many harder tasks as needed to push difficulty back down.
+            numerator = max(0.0, results.pass_rate - config.target_pass_rate)
+            denominator = max(1e-9, 100.0 - config.target_pass_rate)
+            difficulty_pressure = min(1.0, numerator / denominator)
+            tasks_to_generate = max(1, int(round(config.tasks_per_round * difficulty_pressure)))
+            print(
+                f"[evolve] Pass rate ({results.pass_rate:.1f}%) > target "
+                f"({config.target_pass_rate:.1f}%) — generating {tasks_to_generate}/"
+                f"{config.tasks_per_round} harder tasks"
+            )
 
         # c-e. PREPARE sampled tasks, BUILD query, GENERATE harder tasks
         if not is_last_tier and not skip_generation:
@@ -438,7 +460,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
             print(f"[evolve] Subtask range for tier {tier_idx + 1}: {tier_sub_min}-{tier_sub_max}")
             run_generate_parallel(
                 model=config.generator_model,
-                num_tasks=config.tasks_per_round,
+                num_tasks=tasks_to_generate,
                 output_dir=str(tier_tasks_dir),
                 max_workers=config.max_workers,
                 query=evolution_query,
@@ -486,6 +508,7 @@ def main():
         icl_total_examples=args.icl_total_examples,
         icl_failure_ratio=args.icl_failure_ratio,
         judge_threshold=args.judge_threshold,
+        target_pass_rate=args.target_pass_rate,
         seed_query=args.seed_query,
         output_dir=args.output_dir,
         max_workers=args.max_workers,

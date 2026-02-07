@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 
 DEFAULT_MODEL_LADDER = [
@@ -28,7 +28,7 @@ class EvolutionConfig:
     max_workers: int = 50
     # Match run_emtom.sh default judge threshold.
     judge_threshold: float = 0.7
-    seed_query: str = (
-        "Simple 2-agent cooperative task. No mechanics. "
-        "Basic object rearrangement with minimal information asymmetry."
-    )
+    # If pass rate is already at/below this target, reuse tasks (no harder generation).
+    target_pass_rate: float = 30.0
+    # Optional seed query. When None, generator uses its own default prompting.
+    seed_query: Optional[str] = None

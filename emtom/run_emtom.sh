@@ -128,6 +128,7 @@ print_usage() {
     echo "  judge       Evaluate task quality + ToM with multi-model council (Claude Opus + GPT-5)"
     echo "  verify      Verify a task by executing its golden trajectory in simulator"
     echo "  verify-static  Static task verification (no Habitat/GPU required)"
+    echo "  evolve      Run evolutionary difficulty generation (model ladder)"
     echo "  all         Run full pipeline: explore -> generate -> benchmark"
     echo ""
     echo -e "${BOLD}Agent Options:${NC}"
@@ -207,6 +208,18 @@ print_usage() {
     echo "  --strict-object-ids  Fail on unknown object IDs in trajectory actions"
     echo "  --report-file FILE   Write JSON verification report to this path"
     echo ""
+    echo -e "${BOLD}Evolve Options:${NC}"
+    echo "  --model-ladder M1,M2,M3  Comma-separated model ladder (weakest to strongest)"
+    echo "  --generator-model MODEL  Model used to generate tasks (default: gpt-5.2)"
+    echo "  --tasks-per-round N      Tasks to generate per tier (default: 20)"
+    echo "  --seed-pool-size N       Seed pool size for tier 0 (default: 30)"
+    echo "  --seed-query TEXT        Optional query for seed generation (default: none)"
+    echo "  --target-pass-rate N     Reuse tasks when pass rate <= N (default: 30.0)"
+    echo "  --judge-threshold N      Judge quality threshold (default: 0.7)"
+    echo "  --max-workers N          Max parallel processes (default: 50)"
+    echo "  --output-dir DIR         Output directory (default: outputs/evolve)"
+    echo "  --resume DIR             Resume from existing output directory"
+    echo ""
     echo -e "${BOLD}Golden Verify Options:${NC}"
     echo "  --task FILE          Task JSON file to verify by executing golden trajectory (required)"
     echo "  --report-file FILE   Write JSON verification report to this path"
@@ -229,6 +242,7 @@ print_usage() {
     echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_emtom.sh verify --task data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_emtom.sh verify-static --task data/emtom/tasks/my_task.json"
+    echo -e "  ./emtom/run_emtom.sh evolve --model-ladder gpt-5-mini,sonnet,gpt-5.2 --tasks-per-round 10"
 }
 
 # Get config name based on number of agents and type
@@ -597,6 +611,17 @@ run_test() {
         "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-human_test"
 }
 
+run_evolve() {
+    echo "=============================================="
+    echo "Running EMTOM Evolutionary Difficulty Generation"
+    echo "=============================================="
+    echo "Args: ${EVOLVE_ARGS[*]}"
+    echo "=============================================="
+    echo ""
+
+    python -m emtom.evolve.orchestrator "${EVOLVE_ARGS[@]}"
+}
+
 run_all() {
     echo "=============================================="
     echo "Running Full EMTOM Pipeline"
@@ -752,8 +777,15 @@ run_verify_static() {
 
 # Parse command line arguments
 COMMAND=""
+EVOLVE_ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
+        evolve)
+            COMMAND=evolve
+            shift
+            EVOLVE_ARGS=("$@")
+            break
+            ;;
         explore|generate|benchmark|test|judge|verify|verify-static|all)
             COMMAND=$1
             shift
@@ -950,6 +982,9 @@ case $COMMAND in
         ;;
     verify-static)
         run_verify_static
+        ;;
+    evolve)
+        run_evolve
         ;;
     all)
         run_all

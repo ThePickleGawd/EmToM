@@ -344,15 +344,15 @@ Automatically generates increasingly difficult tasks by iterating through a ladd
 
 ```bash
 # Full pipeline with default 6-model ladder
-./emtom/run_evolve.sh
+./emtom/run_emtom.sh evolve
 
 # Custom model ladder, smaller run
-./emtom/run_evolve.sh \
+./emtom/run_emtom.sh evolve \
   --model-ladder "ministral-3-8b,gpt-5-mini,sonnet,gpt-5.2" \
   --tasks-per-round 10 --seed-pool-size 20
 
 # Resume a previous run
-./emtom/run_evolve.sh --resume outputs/evolve/2025-06-15_14-30-00
+./emtom/run_emtom.sh evolve --resume outputs/evolve/2025-06-15_14-30-00
 ```
 
 **Options:**
@@ -366,7 +366,8 @@ Automatically generates increasingly difficult tasks by iterating through a ladd
 | `--icl-total-examples` | In-context learning examples per generation | `10` |
 | `--icl-failure-ratio` | Fraction of ICL examples that are failures | `0.9` |
 | `--judge-threshold` | Judge quality threshold for generation (fixed across tiers) | `0.7` |
-| `--seed-query` | Query for seed task generation | Simple cooperative task... |
+| `--target-pass-rate` | Skip harder generation when pass rate is at/below this % | `30.0` |
+| `--seed-query` | Optional query for seed task generation | none |
 | `--output-dir` | Base output directory | `outputs/evolve` |
 | `--resume DIR` | Resume from existing output directory | - |
 
@@ -394,7 +395,8 @@ Each tier:
 3. **Generates** harder tasks guided by what failed, with subtask complexity ramping per tier (parallelized, one process per task)
 4. **Checkpoints** progress to `state.json` for resumability
 
-If a model's pass rate drops below 10%, the tier reuses the same tasks instead of generating even harder ones.
+If a model's pass rate is already at/below the target (default 30%), the tier reuses the same tasks instead of generating harder ones.
+When pass rate is above target, generation size is scaled (instead of always full `--tasks-per-round`) so evolution only generates as many harder tasks as needed.
 
 **Subtask complexity per tier:**
 | Tier | Subtasks Min-Max |
@@ -526,7 +528,7 @@ Require explicit multi-agent coordination.
 ```
 emtom/
 ├── run_emtom.sh           # Main entry point
-├── run_evolve.sh          # Evolution pipeline entry point
+├── evolve/                # Evolution pipeline (run via: run_emtom.sh evolve)
 ├── task_gen/              # Task generation
 │   ├── runner.py          # Generation entry point
 │   ├── agent.py           # ReAct agent with tools
