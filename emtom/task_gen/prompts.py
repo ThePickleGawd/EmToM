@@ -86,7 +86,8 @@ Assigned!
 - **NEVER reference objects with unknown locations.** Only use objects listed in the scene data with a known furniture parent (shown as "object (on furniture)"). If an object has no location, it does not exist for task purposes.
 - Every agent essential; **no assigned roles**
 - `task` is GLOBAL; keep high-level; do not leak secret targets (competitive/mixed)
-- Secrets must be actionable (room/furniture/key/constraint) and not prescriptive
+- Secrets must be actionable (room/furniture/key/constraint) and not prescriptive (no step-by-step instructions)
+- Secrets MUST include hints about active mechanics that affect an agent's area. If a cabinet has `inverse_state`, at least one agent's secret must mention "the handle is reversed — opening closes it and closing opens it." If `remote_control` links two objects, a secret should hint "operating the cabinet in the office seems to affect something in the kitchen." Without these hints, agents cannot discover mechanics through trial-and-error.
 - Secrets create asymmetry; agents must communicate to combine clues
 - Natural language only; no object/item IDs in `task` or secrets
 - Each agent's secrets MUST include which other agents are on their team (e.g., "You are on a team with agent_1." for cooperative, or "You are on team_0 with agent_1. The opposing team is agent_2." for competitive)

@@ -409,9 +409,9 @@ DIFFICULTY_DESCRIPTIONS = {
 This task is designed for WEAKER models. Calibrate your evaluation accordingly:
 - **Agent necessity**: 2-3 agents with clear, distinct roles is sufficient. Simple role division (e.g., one agent fetches, another places) counts as high agent necessity.
 - **Task interdependence / goal opposition / subgoal tension**: Simple dependencies are fine. One clear handoff or information exchange between agents is enough.
-- **Secret quality**: Secrets should be straightforward and actionable (e.g., "the cup is in the kitchen"). They don't need to be elaborate.
-- **Mechanic utilization**: Using 1-2 mechanics well is sufficient. Not every mechanic needs to be leveraged.
-- **Overall**: A well-structured simple task with clear agent roles and basic ToM should score HIGH. Do NOT penalize simplicity.""",
+- **Secret quality**: Secrets should be straightforward and actionable. Crucially, secrets MUST include hints about active mechanics (e.g., "the cabinet handle is reversed — opening closes it" for inverse_state, "operating the office cabinet seems to affect the kitchen fridge" for remote_control). Without mechanic hints, agents cannot discover mechanics through trial-and-error. Score HIGH when mechanic hints are present.
+- **Mechanic utilization**: Using 0-1 mechanics is sufficient. Prefer simple, observable mechanics. Avoid stacking multiple mechanics.
+- **Overall**: A well-structured simple task with clear agent roles, mechanic hints in secrets, and basic ToM should score HIGH. Do NOT penalize simplicity.""",
     "medium": """## Intended Difficulty: MEDIUM
 This task targets mid-tier models. Standard evaluation applies:
 - Agents should have meaningful distinct roles with some interdependence.
@@ -720,10 +720,15 @@ class Judge:
                 # Recalculate overall score to include novelty
                 all_scores = [c.score for c in judgment.criteria_scores.values()]
                 judgment.overall_score = sum(all_scores) / len(all_scores)
-                # Recalculate validity
+                # Recalculate validity — novelty is a soft criterion (affects
+                # the average but cannot single-handedly veto a task)
+                hard_scores = [
+                    c.score for k, c in judgment.criteria_scores.items()
+                    if k != "task_novelty"
+                ]
                 judgment.is_valid = (
                     judgment.overall_score >= self.overall_threshold
-                    and all(c.score >= self.min_criterion_threshold for c in judgment.criteria_scores.values())
+                    and all(s >= self.min_criterion_threshold for s in hard_scores)
                 )
 
         # Aggregate results

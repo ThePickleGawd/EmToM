@@ -45,13 +45,15 @@ TIER_SUBTASK_RANGES = [
 
 
 def get_difficulty_for_tier(tier_idx: int, total_tiers: int) -> str:
-    """Map tier index to difficulty label for the judge."""
+    """Map tier index to difficulty label for the judge.
+
+    Tier 0 (seed) is hardcoded as "easy" by the caller.
+    Post-benchmark tiers (1+) escalate: medium → hard.
+    """
     if total_tiers <= 1:
         return "medium"
     ratio = tier_idx / total_tiers  # 0.0 = seed, 1.0 = hardest
-    if ratio <= 0.25:
-        return "easy"
-    elif ratio <= 0.6:
+    if ratio < 0.5:
         return "medium"
     else:
         return "hard"

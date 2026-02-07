@@ -134,12 +134,12 @@ def main():
         # Get max_steps from config (same as run_habitat_benchmark.py)
         max_steps = config.habitat.environment.get("max_episode_steps", 20000)
 
-        # Calculate max_turns: use CLI arg if provided, otherwise 3x golden trajectory
+        # Calculate max_turns: use CLI arg if provided, otherwise 5x golden trajectory
         if args.max_turns is not None:
             max_turns = args.max_turns
         else:
             golden_trajectory = task_data.get("golden_trajectory", [])
-            max_turns = len(golden_trajectory) * 3
+            max_turns = max(len(golden_trajectory) * 5, 20)  # Match benchmark default
 
         results = runner.run(instruction=instruction, max_steps=max_steps, max_turns=max_turns)
 

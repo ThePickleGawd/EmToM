@@ -108,6 +108,7 @@ class TaskGeneratorAgent:
         self.calibration_stats = calibration_stats or {}
         self.category = category  # None means random selection
         self.seed_task = seed_task  # Path to existing task to use as seed
+        self.difficulty = difficulty  # Difficulty level for evolve pipeline
 
         # Task file paths
         self.task_file = self.working_dir / "working_task.json"
@@ -173,9 +174,14 @@ class TaskGeneratorAgent:
         self.task_memories: List[str] = []  # Learnings from completed tasks
         self.consecutive_tom_failures = 0  # Track failures to suggest new_scene
         self.diversity_tracker = DiversityTracker(llm=self.llm)  # Track task patterns for diversity
+        # When difficulty is set (evolution mode), the query describes the
+        # generation *process* (e.g. "study benchmark results"), not a task
+        # design requirement. Don't pass it to the judge as user_query —
+        # the difficulty parameter already constrains quality expectations.
+        judge_query = query if not difficulty else None
         judge_kwargs = dict(
             verbose=verbose,
-            user_query=query,
+            user_query=judge_query,
             diversity_tracker=self.diversity_tracker,
             difficulty=difficulty,
         )
@@ -374,9 +380,42 @@ Your previous task did not pass the ToM verification. You MUST address these iss
 
             verification_section += "\nCreate a NEW task that specifically addresses these issues.\n"
 
-        # Build calibration guidance section based on dataset stats
+        # Build calibration/difficulty guidance section
         calibration_section = ""
-        if self.calibration_stats:
+        if self.difficulty:
+            # When difficulty is explicitly set (evolve pipeline), use it directly
+            # and skip calibration stats to avoid conflicting guidance
+            difficulty_guidance = {
+                "easy": (
+                    "## Difficulty: EASY\n"
+                    "Generate SIMPLE tasks that weaker models can solve:\n"
+                    "- Use 0-1 mechanics (prefer none, or a single simple one like room_restriction)\n"
+                    "- Avoid inverse_state and chained conditional_unlock — models cannot discover these\n"
+                    "- 2-3 agents with clear roles\n"
+                    "- 2-3 subtasks maximum\n"
+                    "- Secrets MUST explain any active mechanic in plain language\n"
+                    "- All effects should be observable (no remote effects in unseen rooms)\n"
+                    "- tom_level 1 only\n"
+                ),
+                "medium": (
+                    "## Difficulty: MEDIUM\n"
+                    "Generate moderately complex tasks:\n"
+                    "- 1-2 mechanics with hints in secrets\n"
+                    "- 2-4 agents, meaningful coordination required\n"
+                    "- 3-4 subtasks with some dependencies\n"
+                    "- tom_level 1-2\n"
+                ),
+                "hard": (
+                    "## Difficulty: HARD\n"
+                    "Generate challenging tasks for top-tier models:\n"
+                    "- 2+ mechanics, complex interactions\n"
+                    "- 3-4+ agents with deep interdependencies\n"
+                    "- 4+ subtasks with chained dependencies\n"
+                    "- tom_level 2-3, multi-step reasoning required\n"
+                ),
+            }
+            calibration_section = difficulty_guidance.get(self.difficulty, "")
+        elif self.calibration_stats:
             model = self.calibration_stats.get("model", "unknown")
             target_rate = self.calibration_stats.get("target_rate", 0.10)
             current_rate = self.calibration_stats.get("rate")
@@ -418,8 +457,9 @@ After calling `new_scene[N]`, view it with: `bash[cat {self.task_file}]`
 The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adapt it to the new scene and any requested changes.
 """
 
-        # Build extra sections string
+        # Build extra sections string and persist for context resets
         extra_sections = query_section + seed_section + verification_section + calibration_section
+        self._extra_sections = extra_sections
 
         # Initial user message - use template from prompts.py
         user_msg = USER_PROMPT_TEMPLATE.format(
@@ -1061,11 +1101,13 @@ SUMMARY:"""
         self._log(f"Executing: {tool}[{args[:100]}...]")
 
         if tool == "bash":
-            # Reset verification on any bash edit to task file
+            # Reset verification on any bash edit to task file.
+            # Judge evaluates task *design* quality (not trajectory), so
+            # don't reset judge pass — the agent can still submit after
+            # adding/fixing a golden trajectory without re-judging.
             if "working_task.json" in args and (">" in args or "cat" in args):
                 self.last_verify_passed = False
-                self.last_judge_passed = False  # Also reset judgment
-                self.last_test_passed = False  # Also reset test
+                self.last_test_passed = False
             return self._bash(args)
         elif tool == "test_task":
             return self._test_task()
@@ -1582,6 +1624,8 @@ SUMMARY:"""
             if not isinstance(sc, dict):
                 continue
             entity = sc.get("entity", "")
+            if not isinstance(entity, str):
+                entity = str(entity)
             if entity.startswith("agent_") and entity not in valid_agent_ids:
                 return {
                     "valid": False,
@@ -2095,7 +2139,15 @@ SUMMARY:"""
                 result["disagreements"] = verdict.disagreements
 
             if verdict.passed:
+                # On PASS: remove suggestions to prevent agent from editing the task
+                # and invalidating the judge pass. Direct to next step instead.
+                result.pop("suggestions", None)
                 result["summary"] = f"PASS - All models agree task is valid (score: {verdict.overall_score:.2f})"
+                result["next_step"] = (
+                    "Task passed judge. Do NOT change the task design. "
+                    "If golden_trajectory is missing, add it now, then run "
+                    "verify_golden_trajectory[] → test_task[] → submit_task[]."
+                )
                 self.consecutive_tom_failures = 0  # Reset on success
             else:
                 self.consecutive_tom_failures += 1
@@ -2356,10 +2408,14 @@ Use these learnings to improve your next task. Avoid repeating mistakes."""
             self.messages.append({"role": "user", "content": memories_msg})
             self.messages.append({"role": "assistant", "content": "I'll apply these learnings to create better tasks. What's next?"})
 
+        # Re-inject extra sections (difficulty guidance, query, calibration) that
+        # were in the original USER_PROMPT_TEMPLATE but would be lost on context reset
+        extra = getattr(self, "_extra_sections", "")
+
         # Add current scene context with task number
         next_task_num = len(self.submitted_tasks) + 1
         scene_msg = f"""## Task {next_task_num} - Current Scene
-{scene_info}
+{extra}{scene_info}
 
 working_task.json is ready. Trajectories will be saved to agent_trajectories/task_{next_task_num}/run_N/.
 Use new_scene[] if you want a different scene, or start creating your next task."""

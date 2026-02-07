@@ -126,36 +126,35 @@ def build_evolution_query(
     """
     rate = benchmark_results.pass_rate
 
+    # Directional guidance only — concrete constraints (tom_level, mechanics,
+    # agent count) come from the --difficulty parameter to avoid conflicts.
     guidance = ""
     if rate < 10:
         guidance = (
-            "The model barely solved any tasks. Focus on a DIFFERENT type of difficulty — "
-            "more complex information asymmetry, deeper Theory of Mind reasoning chains, "
-            "or multi-step deception/coordination requirements."
+            "The model barely solved any tasks. Try a DIFFERENT type of difficulty — "
+            "vary the information asymmetry patterns, coordination structures, "
+            "or deception/cooperation dynamics."
         )
     elif rate < 30:
         guidance = (
             "The model struggled significantly. Study what made the failed tasks hard "
-            "and amplify those patterns. Add more agents, deeper ToM chains, or "
-            "conflicting goals that require sophisticated reasoning."
+            "and amplify those patterns in new scenarios."
         )
     elif rate < 60:
         guidance = (
             "The model had moderate success. Generate tasks that combine multiple "
-            "sources of difficulty: information asymmetry + temporal dependencies + "
-            "multi-agent coordination with hidden goals."
+            "sources of difficulty from the failed examples."
         )
     elif rate < 95:
         guidance = (
-            "The model solved most tasks. Generate MUCH harder tasks with deeper "
-            "Theory of Mind (level 3+), more agents, mechanics, and scenarios "
-            "requiring multi-step reasoning about other agents' beliefs and intentions."
+            "The model solved most tasks. Generate harder tasks that exploit the "
+            "weaknesses shown in the failed examples. Follow the difficulty constraints "
+            "from the Difficulty section — they define the specific complexity level."
         )
     else:
         guidance = (
-            "The model solved nearly everything. Generate EXTREMELY challenging tasks: "
-            "4+ agents, level 3+ ToM, complex mechanics (inverse_state, remote_control), "
-            "hidden information that changes over time, and nested belief reasoning."
+            "The model solved nearly everything. Generate the hardest tasks you can "
+            "within the difficulty constraints. Focus on novel challenge patterns."
         )
 
     return (
