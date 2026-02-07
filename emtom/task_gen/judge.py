@@ -337,6 +337,7 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 
 ## Task Category: {category}
 {category_description}
+{difficulty_section}
 {user_requirements_section}
 
 ## System Capabilities (use these in suggestions)
@@ -403,6 +404,30 @@ CATEGORY_PROMPT_DESCRIPTIONS = {
 }
 
 
+DIFFICULTY_DESCRIPTIONS = {
+    "easy": """## Intended Difficulty: EASY
+This task is designed for WEAKER models. Calibrate your evaluation accordingly:
+- **Agent necessity**: 2-3 agents with clear, distinct roles is sufficient. Simple role division (e.g., one agent fetches, another places) counts as high agent necessity.
+- **Task interdependence / goal opposition / subgoal tension**: Simple dependencies are fine. One clear handoff or information exchange between agents is enough.
+- **Secret quality**: Secrets should be straightforward and actionable (e.g., "the cup is in the kitchen"). They don't need to be elaborate.
+- **Mechanic utilization**: Using 1-2 mechanics well is sufficient. Not every mechanic needs to be leveraged.
+- **Overall**: A well-structured simple task with clear agent roles and basic ToM should score HIGH. Do NOT penalize simplicity.""",
+    "medium": """## Intended Difficulty: MEDIUM
+This task targets mid-tier models. Standard evaluation applies:
+- Agents should have meaningful distinct roles with some interdependence.
+- Secrets should require reasoning to use effectively.
+- Tasks should use 2-3 mechanics appropriately.
+- Moderate complexity in coordination is expected.""",
+    "hard": """## Intended Difficulty: HARD
+This task is designed for the STRONGEST models. Expect high complexity:
+- **Agent necessity**: Each agent should be truly indispensable with unique capabilities or knowledge.
+- **Task interdependence / goal opposition / subgoal tension**: Complex multi-step dependencies, cascading information needs, or deep strategic considerations.
+- **Secret quality**: Secrets should create genuine reasoning challenges — layered information, indirect clues, or strategic deception opportunities.
+- **Mechanic utilization**: Creative use of multiple mechanics that interact with each other.
+- **Overall**: Reward tasks that would genuinely challenge top-tier AI models. Simple tasks should score LOW on complexity-related criteria.""",
+}
+
+
 def _get_criteria_for_category(category: str, user_query: Optional[str] = None) -> List[str]:
     """Get the list of criteria for a category, optionally including user_requirements_alignment."""
     criteria = list(CATEGORY_CRITERIA.get(category, SHARED_CRITERIA))
@@ -449,6 +474,9 @@ class Judge:
     Both models must agree for a task to pass.
     """
 
+    # Priority criteria - suggestions for these appear first
+    PRIORITY_CRITERIA = ["agent_necessity", "secret_quality"]
+
     # Thresholds (lowered for faster generation)
     OVERALL_THRESHOLD = 0.6
     MIN_CRITERION_THRESHOLD = 0.4
@@ -464,6 +492,7 @@ class Judge:
         verbose: bool = False,
         user_query: Optional[str] = None,
         diversity_tracker: Optional["DiversityTracker"] = None,
+        difficulty: Optional[str] = None,
     ):
         """
         Initialize the judge.
@@ -475,6 +504,7 @@ class Judge:
             verbose: Print debug information
             user_query: Optional user query that the task should align with
             diversity_tracker: Optional tracker to check task novelty against existing tasks
+            difficulty: Intended difficulty level ("easy", "medium", "hard") for calibrated evaluation
         """
         self.models = models or self.DEFAULT_MODELS
         self.overall_threshold = overall_threshold
@@ -482,6 +512,7 @@ class Judge:
         self.verbose = verbose
         self.user_query = user_query
         self.diversity_tracker = diversity_tracker
+        self.difficulty = difficulty
 
         # LLM clients (created lazily)
         self._llm_clients: Dict[str, "BaseLLM"] = {}
@@ -725,6 +756,11 @@ The user specifically requested:
 **IMPORTANT**: The task MUST align with this request. Evaluate whether the task incorporates the requested elements (items, mechanics, themes, etc.).
 """
 
+        # Build difficulty section
+        difficulty_section = ""
+        if self.difficulty and self.difficulty in DIFFICULTY_DESCRIPTIONS:
+            difficulty_section = DIFFICULTY_DESCRIPTIONS[self.difficulty]
+
         # Build category-aware prompt
         grounding = self._get_grounding_info()
         scene_objects = self._format_scene_objects(scene_data)
@@ -733,6 +769,7 @@ The user specifically requested:
         prompt = EVALUATION_PROMPT.format(
             category=category.upper(),
             category_description=CATEGORY_PROMPT_DESCRIPTIONS.get(category, ""),
+            difficulty_section=difficulty_section,
             user_requirements_section=user_requirements_section,
             criteria_section=_build_criteria_section(category, self.user_query),
             response_format=_build_response_format(category, self.user_query),
@@ -792,10 +829,10 @@ The user specifically requested:
         # Calculate overall score
         overall_score = sum(scores) / len(scores) if scores else 0.0
 
-        # Check if passes (no AUTO-FAIL triggers in new system)
-        passes_overall = overall_score >= self.overall_threshold
-        passes_all_criteria = all(s >= self.min_criterion_threshold for s in scores)
-        is_valid = passes_overall and passes_all_criteria
+        is_valid = (
+            overall_score >= self.overall_threshold
+            and all(s >= self.min_criterion_threshold for s in scores)
+        )
 
         # Extract suggestions
         suggestions = data.get("suggestions", [])
@@ -831,9 +868,6 @@ The user specifically requested:
             overall_reasoning=reason,
             suggestions=["Re-run evaluation"],
         )
-
-    # Priority criteria - suggestions for these appear first
-    PRIORITY_CRITERIA = ["agent_necessity", "secret_quality"]
 
     def _aggregate(self, judgments: Dict[str, Judgment]) -> CouncilVerdict:
         """Aggregate judgments from multiple models."""

@@ -18,6 +18,20 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from emtom.task_gen.trajectory_analyzer import TrajectoryAnalysis
 
 
+def _ensure_list(value: Any, default: Optional[list] = None) -> list:
+    """Coerce value to a list. Returns default (or []) if value is a string or missing."""
+    if isinstance(value, list):
+        return value
+    return default if default is not None else []
+
+
+def _ensure_dict(value: Any, default: Optional[dict] = None) -> dict:
+    """Coerce value to a dict. Returns default (or {}) if value is a string or missing."""
+    if isinstance(value, dict):
+        return value
+    return default if default is not None else {}
+
+
 def load_scenario_inspirations(
     directory: str = "data/emtom/scenarios/scraped",
     max_scenarios: int = 10,
@@ -43,13 +57,6 @@ def load_scenario_inspirations(
             continue
 
     return scenarios
-
-
-class TaskType(Enum):
-    """Type of task to generate (deprecated - use TaskCategory instead)."""
-
-    THEORY_OF_MIND = "theory_of_mind"  # Legacy: Tasks requiring theory of mind reasoning
-    REGULAR = "regular"  # Legacy: Simple everyday tasks without ToM requirements
 
 
 class TaskCategory(Enum):
@@ -251,10 +258,7 @@ class GeneratedTask:
         """Create task from dictionary."""
         # Parse mechanic bindings if present
         bindings = []
-        raw_bindings = data.get("mechanic_bindings", [])
-        # Handle case where LLM copied placeholder string instead of actual bindings
-        if isinstance(raw_bindings, str):
-            raw_bindings = []  # Ignore string placeholders
+        raw_bindings = _ensure_list(data.get("mechanic_bindings", []))
         for b in raw_bindings:
             if isinstance(b, dict):
                 bindings.append(MechanicBinding.from_dict(b))
@@ -262,9 +266,7 @@ class GeneratedTask:
 
         # Parse subtasks - handle both string and dict formats
         subtasks = []
-        raw_subtasks = data.get("subtasks", [])
-        if isinstance(raw_subtasks, str):
-            raw_subtasks = []  # Ignore string placeholders
+        raw_subtasks = _ensure_list(data.get("subtasks", []))
         for i, s in enumerate(raw_subtasks):
             if isinstance(s, str):
                 # Convert simple string to Subtask
@@ -283,19 +285,13 @@ class GeneratedTask:
             success_condition = SuccessCondition.from_dict(raw_success)
 
         # Parse items - keep as list of dicts
-        items = data.get("items", [])
-        if isinstance(items, str):
-            items = []
+        items = _ensure_list(data.get("items", []))
 
         # Parse locked_containers
-        locked_containers = data.get("locked_containers", {})
-        if isinstance(locked_containers, str):
-            locked_containers = {}
+        locked_containers = _ensure_dict(data.get("locked_containers", {}))
 
         # Parse initial_states (object -> {property: value})
-        initial_states = data.get("initial_states", {})
-        if isinstance(initial_states, str):
-            initial_states = {}
+        initial_states = _ensure_dict(data.get("initial_states", {}))
         # Filter out placeholder examples
         initial_states = {
             k: v for k, v in initial_states.items()
@@ -307,13 +303,9 @@ class GeneratedTask:
         if category not in ("cooperative", "competitive", "mixed"):
             category = "cooperative"
 
-        # Parse competitive-specific fields
-        teams = data.get("teams")
-        if isinstance(teams, str):
-            teams = None
-        team_secrets = data.get("team_secrets")
-        if isinstance(team_secrets, str):
-            team_secrets = None
+        # Parse competitive-specific fields (None if not a dict)
+        teams = data.get("teams") if isinstance(data.get("teams"), dict) else None
+        team_secrets = data.get("team_secrets") if isinstance(data.get("team_secrets"), dict) else None
         # NOTE: team_goals and agent_subgoals are now unified into subtasks
 
         return cls(
@@ -322,11 +314,11 @@ class GeneratedTask:
             category=category,
             scene_id=data.get("scene_id", "unknown"),
             episode_id=data.get("episode_id", "unknown"),
-            active_mechanics=data.get("active_mechanics", []) if isinstance(data.get("active_mechanics"), list) else [],
+            active_mechanics=_ensure_list(data.get("active_mechanics", [])),
             mechanic_bindings=bindings,
             task=data.get("task"),
-            agent_secrets=data.get("agent_secrets", {}) if isinstance(data.get("agent_secrets"), dict) else {},
-            agent_actions=data.get("agent_actions", {}) if isinstance(data.get("agent_actions"), dict) else {},
+            agent_secrets=_ensure_dict(data.get("agent_secrets", {})),
+            agent_actions=_ensure_dict(data.get("agent_actions", {})),
             success_condition=success_condition,
             num_agents=data.get("num_agents", 2),
             subtasks=subtasks,

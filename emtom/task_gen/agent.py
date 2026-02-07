@@ -66,6 +66,7 @@ class TaskGeneratorAgent:
         category: Optional[str] = None,
         seed_task: Optional[str] = None,
         judge_threshold: Optional[float] = None,
+        difficulty: Optional[str] = None,
     ):
         """
         Initialize the agent.
@@ -176,6 +177,7 @@ class TaskGeneratorAgent:
             verbose=verbose,
             user_query=query,
             diversity_tracker=self.diversity_tracker,
+            difficulty=difficulty,
         )
         if judge_threshold is not None:
             judge_kwargs["overall_threshold"] = judge_threshold
@@ -320,40 +322,18 @@ class TaskGeneratorAgent:
         task_category = self.category or random.choice(["cooperative", "competitive", "mixed"])
 
         # Initialize conversation with action descriptions and paths injected
-        system_prompt = SYSTEM_PROMPT.replace(
-            "{action_descriptions}",
-            ActionRegistry.get_all_action_descriptions()
-        ).replace(
-            "{template_file}",
-            str(self.template_file)
-        ).replace(
-            "{task_file}",
-            str(self.task_file)
-        ).replace(
-            "{output_dir}",
-            str(self.output_dir)
-        ).replace(
-            "{working_dir}",
-            str(self.working_dir)
-        ).replace(
-            "{available_items}",
-            available_items
-        ).replace(
-            "{available_mechanics}",
-            available_mechanics
-        ).replace(
-            "{num_agents}",
-            str(self.agents_max)  # Template uses max agents; LLM can choose fewer
-        ).replace(
-            "{max_agent_id}",
-            str(self.agents_max - 1)
-        ).replace(
-            "{category}",
-            task_category.upper()
-        ).replace(
-            "{diversity_section}",
-            self._wrap_diversity_section(self._build_diversity_section())
-        )
+        replacements = {
+            "{action_descriptions}": ActionRegistry.get_all_action_descriptions(),
+            "{task_file}": str(self.task_file),
+            "{working_dir}": str(self.working_dir),
+            "{available_items}": available_items,
+            "{available_mechanics}": available_mechanics,
+            "{category}": task_category.upper(),
+            "{diversity_section}": self._wrap_diversity_section(self._build_diversity_section()),
+        }
+        system_prompt = SYSTEM_PROMPT
+        for key, value in replacements.items():
+            system_prompt = system_prompt.replace(key, value)
         self.messages = [
             {"role": "system", "content": system_prompt}
         ]
@@ -1881,12 +1861,7 @@ SUMMARY:"""
                     "summary": "Result file error"
                 }
 
-            # Clean up temp files
-            for temp_file in [temp_task_file, temp_result_file]:
-                try:
-                    os.unlink(temp_file)
-                except Exception:
-                    pass
+            self._cleanup_temp_files(temp_task_file, temp_result_file)
 
             # Add trajectory directory path to result
             result["trajectory_dir"] = str(run_dir)
@@ -1907,11 +1882,7 @@ SUMMARY:"""
             return result
 
         except subprocess.TimeoutExpired:
-            for temp_file in [temp_task_file, temp_result_file]:
-                try:
-                    os.unlink(temp_file)
-                except Exception:
-                    pass
+            self._cleanup_temp_files(temp_task_file, temp_result_file)
             return {
                 "steps": 0,
                 "done": False,
@@ -1920,11 +1891,7 @@ SUMMARY:"""
                 "trajectory_dir": str(run_dir)
             }
         except Exception as e:
-            for temp_file in [temp_task_file, temp_result_file]:
-                try:
-                    os.unlink(temp_file)
-                except Exception:
-                    pass
+            self._cleanup_temp_files(temp_task_file, temp_result_file)
             return {
                 "steps": 0,
                 "done": False,
@@ -2028,19 +1995,12 @@ SUMMARY:"""
                     "summary": "Result file error"
                 }
 
-            # Clean up temp file
-            try:
-                os.unlink(temp_result_file)
-            except Exception:
-                pass
+            self._cleanup_temp_files(temp_result_file)
 
             return json.dumps(result_data, indent=2)
 
         except subprocess.TimeoutExpired:
-            try:
-                os.unlink(temp_result_file)
-            except Exception:
-                pass
+            self._cleanup_temp_files(temp_result_file)
             return json.dumps({
                 "valid": False,
                 "error": f"Verification timed out after {timeout} seconds. This often indicates navmesh/PathFinder issues with the scene.",
@@ -2048,10 +2008,7 @@ SUMMARY:"""
                 "summary": "Timeout - possible navmesh issue"
             })
         except Exception as e:
-            try:
-                os.unlink(temp_result_file)
-            except Exception:
-                pass
+            self._cleanup_temp_files(temp_result_file)
             return json.dumps({
                 "valid": False,
                 "error": f"Verification subprocess error: {e}",
@@ -2704,6 +2661,15 @@ Think of entirely new gameplay patterns, win conditions, and mechanics combinati
         end += len(_DIVERSITY_END_MARKER)
         self.messages[0]["content"] = system_content[:start] + new_section + system_content[end:]
         self._log("Refreshed diversity section in system prompt")
+
+    @staticmethod
+    def _cleanup_temp_files(*paths: str) -> None:
+        """Remove temp files, ignoring errors."""
+        for path in paths:
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
 
     def _log(self, message: str, truncate_terminal: int = 0) -> None:
         """Print log message and write to log file.

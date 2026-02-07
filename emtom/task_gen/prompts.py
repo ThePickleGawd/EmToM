@@ -141,7 +141,6 @@ Set `tom_reasoning` to a very simple explanation of WHY this task requires this 
 
 ## Golden Trajectory
 Each step has ALL agents. Format: `{{"actions": [{{"agent": "agent_0", "action": "Navigate[room]"}}, ...]}}`
-Actions: Navigate, Pick, Place, Open, Close, UseItem, Communicate, Wait
 Communicate format: Communicate["message", agent_X] or Communicate["message", all]
 
 ## Structural Diversity

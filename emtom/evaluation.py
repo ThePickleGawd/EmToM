@@ -109,6 +109,15 @@ EMTOM_PREDICATES = {"is_open", "is_closed", "is_held_by", "has_at_least", "has_m
 # Predicates that require GameStateManager instead of simulator
 GAME_STATE_PREDICATES = {"has_at_least", "has_most"}
 
+ALL_PREDICATES = PARTNR_PREDICATES | EMTOM_PREDICATES
+
+# Predicate function lookup for EMTOM-specific predicates
+_EMTOM_PREDICATE_MAP = {
+    "is_open": None,  # Populated lazily after function definitions
+    "is_closed": None,
+    "is_held_by": None,
+}
+
 
 def _build_room_name_map(sim: "CollaborationSim") -> Dict[str, Any]:
     """Build mapping from room names (and unique base names) to region IDs."""
@@ -308,10 +317,177 @@ def has_most(
     )
 
 
+# Now that predicate functions are defined, populate the lookup map.
+_EMTOM_PREDICATE_MAP.update({
+    "is_open": is_open,
+    "is_closed": is_closed,
+    "is_held_by": is_held_by,
+})
+
+
+# ---------------------------------------------------------------------------
+# Shared evaluation helpers (used by both TaskEvaluator and CategoryTaskEvaluator)
+# ---------------------------------------------------------------------------
+
+def _resolve_handle(
+    name: str,
+    sim: "CollaborationSim",
+    world_graph: Optional["Graph"] = None,
+) -> str:
+    """Resolve task entity name to simulator handle with robust fallbacks."""
+    if not name:
+        return name
+
+    # Handle agent entities (agent_0, agent_1, etc.) — these aren't in
+    # the object managers but we can get their articulated object handle.
+    agent_match = re.match(r"^agent_(\d+)$", name)
+    if agent_match:
+        agent_idx = int(agent_match.group(1))
+        try:
+            agent_obj = sim.agents_mgr[agent_idx].articulated_agent.sim_obj
+            return agent_obj.handle
+        except Exception:
+            return name
+
+    if world_graph:
+        try:
+            return world_graph.get_node_from_name(name).sim_handle
+        except ValueError:
+            pass
+
+    candidate_handles: List[str] = []
+    try:
+        candidate_handles.extend(sim.get_rigid_object_manager().get_object_handles())
+    except Exception:
+        pass
+    try:
+        candidate_handles.extend(sim.get_articulated_object_manager().get_object_handles())
+    except Exception:
+        pass
+
+    if not candidate_handles:
+        return name
+
+    # Remove duplicates while preserving order.
+    candidate_handles = list(dict.fromkeys(candidate_handles))
+    name_norm = str(name).strip().rstrip("_")
+
+    def _norm_base(handle: str) -> str:
+        return str(handle).split(":")[0].strip().rstrip("_")
+
+    exact = [h for h in candidate_handles if h == name]
+    if len(exact) == 1:
+        return exact[0]
+
+    base_exact = [h for h in candidate_handles if h.split(":")[0] == name]
+    if len(base_exact) == 1:
+        return base_exact[0]
+
+    normalized = [h for h in candidate_handles if _norm_base(h) == name_norm]
+    if len(normalized) == 1:
+        return normalized[0]
+
+    prefixed = [h for h in candidate_handles if _norm_base(h).startswith(f"{name_norm}_")]
+    if len(prefixed) == 1:
+        return prefixed[0]
+
+    suffix = [h for h in candidate_handles if h.endswith(name)]
+    if len(suffix) == 1:
+        return suffix[0]
+
+    return name
+
+
+def _resolve_room_id(
+    target: Optional[str],
+    region_ids: set,
+    room_name_map: Dict[str, Any],
+) -> Optional[Any]:
+    """Resolve a room name to a region ID."""
+    if not target:
+        return None
+    if target in region_ids:
+        return target
+    return room_name_map.get(target)
+
+
+def _get_predicate_fn(name: str):
+    """Get predicate function by name."""
+    if name in _EMTOM_PREDICATE_MAP:
+        fn = _EMTOM_PREDICATE_MAP[name]
+        if fn is not None:
+            return fn
+        raise ValueError(f"Predicate '{name}' requires GameStateManager")
+
+    from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
+    return getattr(SimBasedPredicates, name)
+
+
+def _check_proposition(
+    prop: Dict[str, Any],
+    sim: "CollaborationSim",
+    ao_link_map: Dict,
+    region_ids: set,
+    room_name_map: Dict[str, Any],
+    world_graph: Optional["Graph"] = None,
+) -> PropositionResult:
+    """Check a single proposition against simulator state."""
+    entity = prop.get("entity")
+    property_name = prop.get("property")
+    target = prop.get("target")
+    value = prop.get("value")
+
+    if property_name not in ALL_PREDICATES:
+        return PropositionResult(False, {"error": f"Unknown predicate: {property_name}"})
+
+    if property_name in GAME_STATE_PREDICATES:
+        return PropositionResult(False, {"error": f"{property_name} requires GameStateManager"})
+
+    predicate_fn = _get_predicate_fn(property_name)
+    entity_handle = _resolve_handle(entity, sim, world_graph) if entity else None
+    target_handle = _resolve_handle(target, sim, world_graph) if target else None
+
+    # Relational predicates
+    if property_name in ("is_on_top", "is_inside"):
+        if not target_handle:
+            return PropositionResult(False, {"error": f"{property_name} requires 'target'"})
+        result = predicate_fn(sim, [entity_handle], [target_handle], ao_link_map=ao_link_map)
+
+    elif property_name == "is_in_room":
+        if not target:
+            return PropositionResult(False, {"error": "is_in_room requires 'target'"})
+        room_id = _resolve_room_id(target, region_ids, room_name_map)
+        if room_id is None:
+            return PropositionResult(False, {"error": f"Unknown room: {target}"})
+        result = predicate_fn(sim, [entity_handle], [room_id], ao_link_map=ao_link_map)
+
+    elif property_name == "is_next_to":
+        if not target_handle:
+            return PropositionResult(False, {"error": "is_next_to requires 'target'"})
+        result = predicate_fn(sim, [entity_handle], [target_handle], ao_link_map=ao_link_map)
+
+    elif property_name == "is_held_by":
+        if not target:
+            return PropositionResult(False, {"error": "is_held_by requires 'target' (agent_id)"})
+        result = predicate_fn(sim, [entity_handle], [target])
+
+    # Unary predicates
+    else:
+        result = predicate_fn(sim, [entity_handle], ao_link_map=ao_link_map)
+
+    # Convert PARTNR result to our format if needed
+    if not isinstance(result, PropositionResult):
+        result = PropositionResult(result.is_satisfied, result.info)
+
+    # Handle explicit False value
+    if value is False:
+        return PropositionResult(not result.is_satisfied, result.info)
+
+    return result
+
+
 class TaskEvaluator:
     """Evaluates task completion using PARTNR + EMTOM predicates."""
-
-    PREDICATES = PARTNR_PREDICATES | EMTOM_PREDICATES
 
     def __init__(
         self,
@@ -324,8 +500,6 @@ class TaskEvaluator:
         self.world_graph = world_graph
         self.required_states = success_condition.get("required_states", [])
 
-        # Build ao_link_map for proper articulated object handling
-        # This maps link object IDs to their parent articulated object IDs
         from habitat.sims.habitat_simulator import sim_utilities
         self.ao_link_map = sim_utilities.get_ao_link_id_map(sim)
         self._room_name_map = _build_room_name_map(sim)
@@ -334,146 +508,11 @@ class TaskEvaluator:
         except Exception:
             self._region_ids = set()
 
-    def _resolve_handle(self, name: str) -> str:
-        """Resolve task entity name to simulator handle with robust fallbacks."""
-        if not name:
-            return name
-
-        # Handle agent entities (agent_0, agent_1, etc.) — these aren't in
-        # the object managers but we can get their articulated object handle.
-        agent_match = re.match(r"^agent_(\d+)$", name)
-        if agent_match:
-            agent_idx = int(agent_match.group(1))
-            try:
-                agent_obj = self.sim.agents_mgr[agent_idx].articulated_agent.sim_obj
-                return agent_obj.handle
-            except Exception:
-                return name
-
-        if self.world_graph:
-            try:
-                return self.world_graph.get_node_from_name(name).sim_handle
-            except ValueError:
-                pass
-
-        # Fallback: some runs expose names that are base tokens of full sim handles.
-        # Try object-manager matching to reduce false negatives in evaluation.
-        candidate_handles: List[str] = []
-        try:
-            candidate_handles.extend(self.sim.get_rigid_object_manager().get_object_handles())
-        except Exception:
-            pass
-        try:
-            candidate_handles.extend(self.sim.get_articulated_object_manager().get_object_handles())
-        except Exception:
-            pass
-
-        if not candidate_handles:
-            return name
-
-        # Remove duplicates while preserving order.
-        candidate_handles = list(dict.fromkeys(candidate_handles))
-
-        name_norm = str(name).strip().rstrip("_")
-
-        def _norm_base(handle: str) -> str:
-            return str(handle).split(":")[0].strip().rstrip("_")
-
-        exact = [h for h in candidate_handles if h == name]
-        if len(exact) == 1:
-            return exact[0]
-
-        base_exact = [h for h in candidate_handles if h.split(":")[0] == name]
-        if len(base_exact) == 1:
-            return base_exact[0]
-
-        normalized = [h for h in candidate_handles if _norm_base(h) == name_norm]
-        if len(normalized) == 1:
-            return normalized[0]
-
-        prefixed = [h for h in candidate_handles if _norm_base(h).startswith(f"{name_norm}_")]
-        if len(prefixed) == 1:
-            return prefixed[0]
-
-        suffix = [h for h in candidate_handles if h.endswith(name)]
-        if len(suffix) == 1:
-            return suffix[0]
-
-        return name
-
-    def _resolve_room_id(self, target: Optional[str]) -> Optional[Any]:
-        if not target:
-            return None
-        if target in self._region_ids:
-            return target
-        return self._room_name_map.get(target)
-
-    def _get_predicate_fn(self, name: str):
-        """Get predicate function by name."""
-        if name in EMTOM_PREDICATES:
-            predicate_map = {"is_open": is_open, "is_closed": is_closed, "is_held_by": is_held_by}
-            if name in predicate_map:
-                return predicate_map[name]
-            raise ValueError(f"Predicate '{name}' requires GameStateManager")
-
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        return getattr(SimBasedPredicates, name)
-
     def _check_proposition(self, prop: Dict[str, Any]) -> PropositionResult:
-        """Check a single proposition."""
-        entity = prop.get("entity")
-        property_name = prop.get("property")
-        target = prop.get("target")
-        value = prop.get("value")
-
-        if property_name not in self.PREDICATES:
-            return PropositionResult(False, {"error": f"Unknown predicate: {property_name}"})
-
-        if property_name in GAME_STATE_PREDICATES:
-            return PropositionResult(False, {"error": f"{property_name} requires GameStateManager"})
-
-        predicate_fn = self._get_predicate_fn(property_name)
-        entity_handle = self._resolve_handle(entity) if entity else None
-        target_handle = self._resolve_handle(target) if target else None
-
-        # Relational predicates - pass ao_link_map for proper articulated object handling
-        if property_name in ("is_on_top", "is_inside"):
-            if not target_handle:
-                return PropositionResult(False, {"error": f"{property_name} requires 'target'"})
-            result = predicate_fn(self.sim, [entity_handle], [target_handle], ao_link_map=self.ao_link_map)
-
-        elif property_name == "is_in_room":
-            if not target:
-                return PropositionResult(False, {"error": "is_in_room requires 'target'"})
-            room_id = self._resolve_room_id(target)
-            if room_id is None:
-                return PropositionResult(False, {"error": f"Unknown room: {target}"})
-            result = predicate_fn(self.sim, [entity_handle], [room_id], ao_link_map=self.ao_link_map)
-
-        elif property_name == "is_next_to":
-            if not target_handle:
-                return PropositionResult(False, {"error": "is_next_to requires 'target'"})
-            result = predicate_fn(self.sim, [entity_handle], [target_handle], ao_link_map=self.ao_link_map)
-
-        elif property_name == "is_held_by":
-            if not target:
-                return PropositionResult(False, {"error": "is_held_by requires 'target' (agent_id)"})
-            # target is the agent ID, entity is the object
-            result = predicate_fn(self.sim, [entity_handle], [target])
-
-        # Unary predicates
-        else:
-            result = predicate_fn(self.sim, [entity_handle], ao_link_map=self.ao_link_map)
-
-        # Convert PARTNR result to our format if needed
-        if not isinstance(result, PropositionResult):
-            result = PropositionResult(result.is_satisfied, result.info)
-
-        # Handle explicit False value
-        if value is False:
-            return PropositionResult(not result.is_satisfied, result.info)
-
-        return result
+        return _check_proposition(
+            prop, self.sim, self.ao_link_map,
+            self._region_ids, self._room_name_map, self.world_graph,
+        )
 
     def evaluate(self) -> EvaluationResult:
         """Evaluate task completion."""
@@ -543,8 +582,6 @@ class CategoryTaskEvaluator:
     - Mixed: Check required=True for main goal, required="agent_X" for subgoals
     """
 
-    PREDICATES = PARTNR_PREDICATES | EMTOM_PREDICATES
-
     def __init__(
         self,
         task: "GeneratedTask",
@@ -557,7 +594,6 @@ class CategoryTaskEvaluator:
         self.world_graph = world_graph
         self.game_manager = game_manager
 
-        # Build ao_link_map for proper articulated object handling
         from habitat.sims.habitat_simulator import sim_utilities
         self.ao_link_map = sim_utilities.get_ao_link_id_map(sim)
         self._room_name_map = _build_room_name_map(sim)
@@ -566,142 +602,15 @@ class CategoryTaskEvaluator:
         except Exception:
             self._region_ids = set()
 
-    def _resolve_handle(self, name: str) -> str:
-        """Resolve task entity name to simulator handle with robust fallbacks."""
-        if not name:
-            return name
-
-        # Handle agent entities (agent_0, agent_1, etc.) — these aren't in
-        # the object managers but we can get their articulated object handle.
-        agent_match = re.match(r"^agent_(\d+)$", name)
-        if agent_match:
-            agent_idx = int(agent_match.group(1))
-            try:
-                agent_obj = self.sim.agents_mgr[agent_idx].articulated_agent.sim_obj
-                return agent_obj.handle
-            except Exception:
-                return name
-
-        if self.world_graph:
-            try:
-                return self.world_graph.get_node_from_name(name).sim_handle
-            except ValueError:
-                pass
-
-        candidate_handles: List[str] = []
-        try:
-            candidate_handles.extend(self.sim.get_rigid_object_manager().get_object_handles())
-        except Exception:
-            pass
-        try:
-            candidate_handles.extend(self.sim.get_articulated_object_manager().get_object_handles())
-        except Exception:
-            pass
-
-        if not candidate_handles:
-            return name
-
-        candidate_handles = list(dict.fromkeys(candidate_handles))
-        name_norm = str(name).strip().rstrip("_")
-
-        def _norm_base(handle: str) -> str:
-            return str(handle).split(":")[0].strip().rstrip("_")
-
-        exact = [h for h in candidate_handles if h == name]
-        if len(exact) == 1:
-            return exact[0]
-
-        base_exact = [h for h in candidate_handles if h.split(":")[0] == name]
-        if len(base_exact) == 1:
-            return base_exact[0]
-
-        normalized = [h for h in candidate_handles if _norm_base(h) == name_norm]
-        if len(normalized) == 1:
-            return normalized[0]
-
-        prefixed = [h for h in candidate_handles if _norm_base(h).startswith(f"{name_norm}_")]
-        if len(prefixed) == 1:
-            return prefixed[0]
-
-        suffix = [h for h in candidate_handles if h.endswith(name)]
-        if len(suffix) == 1:
-            return suffix[0]
-
-        return name
-
-    def _resolve_room_id(self, target: Optional[str]) -> Optional[Any]:
-        if not target:
-            return None
-        if target in self._region_ids:
-            return target
-        return self._room_name_map.get(target)
-
-    def _get_predicate_fn(self, name: str):
-        """Get predicate function by name."""
-        if name in EMTOM_PREDICATES:
-            predicate_map = {"is_open": is_open, "is_closed": is_closed, "is_held_by": is_held_by}
-            if name in predicate_map:
-                return predicate_map[name]
-            raise ValueError(f"Predicate '{name}' requires GameStateManager")
-
-        from habitat_llm.agent.env.evaluation.predicate_wrappers import SimBasedPredicates
-        return getattr(SimBasedPredicates, name)
-
     def _check_proposition(self, prop: Dict[str, Any]) -> PropositionResult:
-        """Check a single proposition (success_condition)."""
-        entity = prop.get("entity")
+        """Check a single proposition, with game-state predicate support."""
         property_name = prop.get("property")
-        target = prop.get("target")
-        value = prop.get("value")
-
-        if property_name not in self.PREDICATES:
-            return PropositionResult(False, {"error": f"Unknown predicate: {property_name}"})
-
-        # Handle game state predicates (require GameStateManager, not simulator)
         if property_name in GAME_STATE_PREDICATES:
             return self._check_game_state_predicate(prop)
-
-        predicate_fn = self._get_predicate_fn(property_name)
-        entity_handle = self._resolve_handle(entity) if entity else None
-        target_handle = self._resolve_handle(target) if target else None
-
-        # Relational predicates - pass ao_link_map for proper articulated object handling
-        if property_name in ("is_on_top", "is_inside"):
-            if not target_handle:
-                return PropositionResult(False, {"error": f"{property_name} requires 'target'"})
-            result = predicate_fn(self.sim, [entity_handle], [target_handle], ao_link_map=self.ao_link_map)
-
-        elif property_name == "is_in_room":
-            if not target:
-                return PropositionResult(False, {"error": "is_in_room requires 'target'"})
-            room_id = self._resolve_room_id(target)
-            if room_id is None:
-                return PropositionResult(False, {"error": f"Unknown room: {target}"})
-            result = predicate_fn(self.sim, [entity_handle], [room_id], ao_link_map=self.ao_link_map)
-
-        elif property_name == "is_next_to":
-            if not target_handle:
-                return PropositionResult(False, {"error": "is_next_to requires 'target'"})
-            result = predicate_fn(self.sim, [entity_handle], [target_handle], ao_link_map=self.ao_link_map)
-
-        elif property_name == "is_held_by":
-            if not target:
-                return PropositionResult(False, {"error": "is_held_by requires 'target' (agent_id)"})
-            result = predicate_fn(self.sim, [entity_handle], [target])
-
-        # Unary predicates
-        else:
-            result = predicate_fn(self.sim, [entity_handle], ao_link_map=self.ao_link_map)
-
-        # Convert PARTNR result to our format if needed
-        if not isinstance(result, PropositionResult):
-            result = PropositionResult(result.is_satisfied, result.info)
-
-        # Handle explicit False value
-        if value is False:
-            return PropositionResult(not result.is_satisfied, result.info)
-
-        return result
+        return _check_proposition(
+            prop, self.sim, self.ao_link_map,
+            self._region_ids, self._room_name_map, self.world_graph,
+        )
 
     def _check_game_state_predicate(self, prop: Dict[str, Any]) -> PropositionResult:
         """Check a game state predicate (requires GameStateManager)."""
