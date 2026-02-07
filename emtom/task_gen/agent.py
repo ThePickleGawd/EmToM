@@ -1171,6 +1171,7 @@ SUMMARY:"""
             result = subprocess.run(
                 command,
                 shell=True,
+                executable="/bin/bash",  # Use bash (not /bin/sh/dash) for heredoc support
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -2561,6 +2562,15 @@ working_task.json reset. Use new_scene[N, keep] to change agent count without lo
 
         This should only be used for truly unrecoverable errors.
         """
+        # Prevent premature give-up: require at least 25% of iteration budget
+        min_iterations = max(30, self.iterations_per_task // 4)
+        if self.iteration_count < min_iterations:
+            return (
+                f"Cannot abort yet — only {self.iteration_count}/{min_iterations} "
+                f"minimum iterations used. Keep trying: load a new_scene[], "
+                f"simplify the task design, or try a different approach. "
+                f"Your reason was: {reason}"
+            )
         self.failed = True
         self.fail_reason = reason
         self._log(f"FAIL: {reason}")

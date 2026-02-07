@@ -12,6 +12,7 @@ Supports three task categories:
 Based on: https://arxiv.org/abs/2411.00081
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -338,6 +339,17 @@ class TaskEvaluator:
         if not name:
             return name
 
+        # Handle agent entities (agent_0, agent_1, etc.) — these aren't in
+        # the object managers but we can get their articulated object handle.
+        agent_match = re.match(r"^agent_(\d+)$", name)
+        if agent_match:
+            agent_idx = int(agent_match.group(1))
+            try:
+                agent_obj = self.sim.agents_mgr[agent_idx].articulated_agent.sim_obj
+                return agent_obj.handle
+            except Exception:
+                return name
+
         if self.world_graph:
             try:
                 return self.world_graph.get_node_from_name(name).sim_handle
@@ -558,6 +570,17 @@ class CategoryTaskEvaluator:
         """Resolve task entity name to simulator handle with robust fallbacks."""
         if not name:
             return name
+
+        # Handle agent entities (agent_0, agent_1, etc.) — these aren't in
+        # the object managers but we can get their articulated object handle.
+        agent_match = re.match(r"^agent_(\d+)$", name)
+        if agent_match:
+            agent_idx = int(agent_match.group(1))
+            try:
+                agent_obj = self.sim.agents_mgr[agent_idx].articulated_agent.sim_obj
+                return agent_obj.handle
+            except Exception:
+                return name
 
         if self.world_graph:
             try:
