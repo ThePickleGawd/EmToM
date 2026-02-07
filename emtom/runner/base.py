@@ -659,7 +659,17 @@ class EMTOMBaseRunner(ABC):
                 "observation": obs_text,
             }
 
-        # 5. Habitat action succeeded - now apply mechanic state changes
+        # 5. Habitat action succeeded — ensure Open post-hooks fired.
+        # The _did_action_succeed heuristic inside the wrapped tool may not
+        # have triggered the reveal_items_inside post-hook during the motor
+        # skill loop.  We run it here as a safety net; it is idempotent
+        # (items_inside is cleared after the first successful call).
+        if actual_action == "Open" and actual_target and self.game_manager:
+            from emtom.actions.tool_wrapper import reveal_items_inside
+            _, obs_text = reveal_items_inside(
+                actual_target, (None, obs_text), self.game_manager, agent_id
+            )
+
         # Log the successful action
         action_event = self.event_log.log_action(
             step=self.get_sim_steps(),
@@ -708,7 +718,11 @@ class EMTOMBaseRunner(ABC):
     def _is_action_success_text(text: str) -> bool:
         """Detect explicit success signals from skill/tool responses."""
         lower = (text or "").lower()
-        return "successful execution" in lower or "was a success" in lower
+        return (
+            "successful execution" in lower
+            or "was a success" in lower
+            or "inside you find" in lower  # Open revealing hidden items
+        )
 
     @staticmethod
     def _parse_place_target(target: Optional[str]) -> Optional[Dict[str, str]]:
@@ -1046,8 +1060,15 @@ class EMTOMBaseRunner(ABC):
                 results[uid] = {"success": False, "observation": obs_text}
                 continue
 
-            # Apply mechanic state changes
+            # Ensure Open post-hooks fired (idempotent safety net)
             action_name = state["action_name"]
+            if action_name == "Open" and state["target"] and self.game_manager:
+                from emtom.actions.tool_wrapper import reveal_items_inside
+                _, obs_text = reveal_items_inside(
+                    state["target"], (None, obs_text), self.game_manager, f"agent_{uid}"
+                )
+
+            # Apply mechanic state changes
             if mech_result.applies:
                 agent_id = f"agent_{uid}"
                 target = state["target"]

@@ -9,6 +9,10 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_ROOT"
 
+# Activate the habitat-llm conda environment (required for hydra, habitat, etc.)
+eval "$(conda shell.bash hook 2>/dev/null)"
+conda activate habitat-llm 2>/dev/null || true
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'

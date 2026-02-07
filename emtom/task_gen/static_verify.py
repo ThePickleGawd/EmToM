@@ -283,6 +283,50 @@ def _validate_golden_trajectory(
     return errors, warnings
 
 
+def _validate_success_condition_ids(
+    task: Dict[str, Any],
+    scene_data: Optional[Dict[str, Any]],
+) -> List[str]:
+    """Validate that success condition entity/target IDs exist in the scene."""
+    if not scene_data:
+        return []
+
+    errors: List[str] = []
+
+    # Build set of valid scene IDs
+    scene_ids: Set[str] = set()
+    for key in ("rooms", "furniture", "objects"):
+        for value in scene_data.get(key, []):
+            if isinstance(value, str):
+                scene_ids.add(value)
+    # Also allow defined items
+    scene_ids.update(_extract_defined_items(task))
+    # Allow agent IDs
+    num_agents = task.get("num_agents", 2)
+    scene_ids.update(f"agent_{i}" for i in range(num_agents))
+
+    for idx, subtask in enumerate(task.get("subtasks", [])):
+        if not isinstance(subtask, dict):
+            continue
+        sc = subtask.get("success_condition", {})
+        if not isinstance(sc, dict):
+            continue
+        for field in ("entity", "target"):
+            val = sc.get(field)
+            if not isinstance(val, str) or not val:
+                continue
+            # Check concrete object IDs (pattern: word_number)
+            refs = ID_PATTERN.findall(val)
+            for ref in refs:
+                if ref not in scene_ids and not ref.startswith("item_"):
+                    errors.append(
+                        f"subtasks[{idx}].success_condition.{field} references "
+                        f"'{ref}' which is not in the scene"
+                    )
+
+    return errors
+
+
 def verify_task(
     task_path_label: str,
     task: Dict[str, Any],
@@ -296,6 +340,7 @@ def verify_task(
     valid_ids = _build_valid_ids(task, scene_data)
 
     errors.extend(_validate_supported_predicates(task))
+    errors.extend(_validate_success_condition_ids(task, scene_data))
     golden_errors, golden_warnings = _validate_golden_trajectory(task, valid_ids, strict_object_ids)
     errors.extend(golden_errors)
     warnings.extend(golden_warnings)

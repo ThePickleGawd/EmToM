@@ -1500,7 +1500,7 @@ SUMMARY:"""
                 }
 
             # Validate at least one required subtask exists
-            required_subtasks = [s for s in subtasks if getattr(s, 'required', True)]
+            required_subtasks = [s for s in subtasks if getattr(s, 'required', True) is True]
             if not required_subtasks:
                 return {
                     "valid": False,
@@ -1595,7 +1595,11 @@ SUMMARY:"""
 
         # Check subtask success_condition entity references valid agents
         for subtask in task_data.get("subtasks", []):
+            if not isinstance(subtask, dict):
+                continue
             sc = subtask.get("success_condition", {})
+            if not isinstance(sc, dict):
+                continue
             entity = sc.get("entity", "")
             if entity.startswith("agent_") and entity not in valid_agent_ids:
                 return {
@@ -1654,7 +1658,11 @@ SUMMARY:"""
 
             # Check subtask success_conditions for invented object IDs
             for subtask in task_data.get("subtasks", []):
+                if not isinstance(subtask, dict):
+                    continue
                 sc = subtask.get("success_condition", {})
+                if not isinstance(sc, dict):
+                    continue
                 for field in ["entity", "target"]:
                     val = sc.get(field, "")
                     if val and isinstance(val, str) and not val.startswith("agent_"):

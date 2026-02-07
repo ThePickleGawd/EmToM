@@ -863,10 +863,10 @@ class BenchmarkRunner(EMTOMBaseRunner):
         if category == "mixed":
             return self._check_mixed_completion()
 
-        # Get all required subtasks
+        # Get all required subtasks (identity check: only True, not truthy strings like "team_0")
         required_subtasks = [
             s for s in self.task.subtasks
-            if getattr(s, 'required', True)
+            if getattr(s, 'required', True) is True
         ]
 
         if not required_subtasks:
@@ -961,8 +961,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
             if team_status[team_id] and winner is None:
                 winner = team_id
 
-        # Aggregate counts for summaries
-        required_subtasks = [s for s in subtasks if getattr(s, "required", True)]
+        # Aggregate counts for summaries (identity check: only True, not truthy strings)
+        required_subtasks = [s for s in subtasks if getattr(s, "required", True) is True]
         required_count = len(required_subtasks)
         completed_required = len([s for s in self._completed_subtasks if s in {st.id for st in required_subtasks}])
 

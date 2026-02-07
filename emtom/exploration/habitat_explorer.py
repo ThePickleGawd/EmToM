@@ -965,14 +965,6 @@ class HabitatExplorer:
                 "targets": nav_targets,
             })
 
-        # Explore
-        if rooms_shuffled:
-            actions.append({
-                "name": "Explore",
-                "description": "Search a room by visiting receptacles",
-                "targets": rooms_shuffled[:5],
-            })
-
         # Open/Close
         open_targets = [f["name"] for f in articulated_shuffled[:10]]
         if open_targets:

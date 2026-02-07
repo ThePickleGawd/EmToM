@@ -244,9 +244,16 @@ def wrap_habitat_tools(
 
     # If allowed_actions specified, remove tools not in the list
     if allowed_actions is not None:
+        # Ensure Open and Close are symmetric: if one is allowed, allow the other.
+        # The is_closed predicate requires the Close action, and vice versa.
+        effective_allowed = set(allowed_actions)
+        if "Open" in effective_allowed or "Close" in effective_allowed:
+            effective_allowed.add("Open")
+            effective_allowed.add("Close")
+
         tools_to_remove = [
             name for name in agent.tools.keys()
-            if name not in allowed_actions
+            if name not in effective_allowed
         ]
         for name in tools_to_remove:
             del agent.tools[name]

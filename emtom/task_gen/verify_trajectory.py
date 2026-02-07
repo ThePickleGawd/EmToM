@@ -254,6 +254,24 @@ def main():
                     success = result.get("success", False)
                     obs = result.get("observation", "")
 
+                    # Retry Place after re-navigating if it failed due to distance/occlusion
+                    if not success and action == "Place" and target:
+                        obs_lower = (obs or "").lower()
+                        if "too far" in obs_lower or "occluded" in obs_lower or "not close enough" in obs_lower:
+                            parts = [p.strip() for p in target.split(",")]
+                            nav_target = parts[2] if len(parts) >= 3 else None
+                            if nav_target and nav_target not in ("None", "none", ""):
+                                print(f"    {agent_str}: Place failed (distance/occlusion), retrying with Navigate[{nav_target}]...", file=sys.stderr)
+                                nav_result = runner.execute_actions_concurrent({agent_id: ("Navigate", nav_target)})
+                                nav_ok = nav_result.get(agent_id, {}).get("success", False)
+                                print(f"    {agent_str}: Navigate[{nav_target}] {'✓' if nav_ok else '✗'}", file=sys.stderr)
+                                if nav_ok:
+                                    retry_result = runner.execute_actions_concurrent({agent_id: (action, target)})
+                                    result = retry_result.get(agent_id, result)
+                                    success = result.get("success", False)
+                                    obs = result.get("observation", "")
+                                    print(f"    {agent_str}: {action_str} retry {'✓' if success else '✗'}", file=sys.stderr)
+
                     # Print action + observation
                     status = "✓" if success else "✗"
                     print(f"    {agent_str}: {action_str} {status}", file=sys.stderr)
