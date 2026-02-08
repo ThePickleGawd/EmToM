@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -314,3 +315,48 @@ def run_benchmark_parallel(
         pass_rate=pass_rate,
         results=all_task_results,
     )
+
+
+def update_calibration_from_benchmark(
+    benchmark_results: BenchmarkResults,
+    tasks_dir: str,
+) -> None:
+    """Write benchmark results back into task JSONs as calibration entries.
+
+    After running a separate benchmark (e.g. on model upgrade), this merges
+    the results into each task's calibration dict so subsequent logic can
+    read pass/fail from the task JSON itself.
+    """
+    tasks_path = Path(tasks_dir)
+    model = benchmark_results.model
+
+    # Build lookup: task_id -> TaskResult
+    result_map = {r.task_id: r for r in benchmark_results.results}
+
+    for task_file in tasks_path.glob("*.json"):
+        try:
+            with open(task_file) as f:
+                task_data = json.load(f)
+        except Exception:
+            continue
+
+        task_id = task_data.get("task_id", "")
+        # Try matching by task_id or by filename stem
+        result = result_map.get(task_id) or result_map.get(task_file.stem)
+        if result is None:
+            continue
+
+        if "calibration" not in task_data:
+            task_data["calibration"] = {}
+
+        task_data["calibration"][model] = {
+            "passed": result.success,
+            "tested_at": datetime.now().isoformat(),
+            "steps": result.steps,
+            "percent_complete": result.percent_complete,
+        }
+
+        with open(task_file, "w") as f:
+            json.dump(task_data, f, indent=2)
+
+    print(f"[calibration] Updated calibration in {tasks_dir} for model {model}")

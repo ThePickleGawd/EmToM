@@ -120,6 +120,7 @@ DIFFICULTY=""  # Difficulty level for judge context: easy, medium, hard
 TEST_MODEL=""  # Override model used for test_task calibration (evolve pipeline)
 STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
 REPORT_FILE=""  # Optional JSON report output path for static verification
+NO_CALIBRATION=false  # Don't write benchmark results back into source task JSONs
 
 print_usage() {
     echo -e "${BOLD}EMTOM Benchmark Pipeline${NC}"
@@ -195,6 +196,7 @@ print_usage() {
     echo "  --team-model-map MAP Team->model mapping for competitive tasks"
     echo "                       Format: team_0=sonnet,team_1=gpt-5"
     echo "  --no-video           Disable video recording (faster)"
+    echo "  --no-calibration     Don't write results back into source task JSONs"
     echo ""
     echo -e "${BOLD}Test Options:${NC}"
     echo "  --mechanics M1 M2    Mechanics to enable (e.g., inverse_state remote_control)"
@@ -413,6 +415,9 @@ run_generate() {
 }
 
 run_benchmark() {
+    # Save short model name before expansion (used for calibration)
+    MODEL_SHORT="$MODEL"
+
     # Auto-detect LLM provider if not specified
     if [ -z "$LLM_PROVIDER" ]; then
         LLM_PROVIDER=$(detect_llm_provider "$MODEL")
@@ -579,6 +584,16 @@ print(' '.join(map(str, sorted(counts))))
     echo "All benchmark runs complete!"
     echo "Results in: $OUTPUT_BASE-*"
     echo -e "==============================================${NC}"
+
+    # Write calibration data back into source task files
+    if [ "$NO_CALIBRATION" != true ]; then
+        echo ""
+        echo "Writing calibration data back to task files..."
+        python -m emtom.scripts.update_calibration \
+            --tasks-dir "$TASK_DIR" \
+            --benchmark-output-base "$OUTPUT_BASE" \
+            --model "$MODEL_SHORT"
+    fi
 }
 
 run_test() {
@@ -928,6 +943,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-video)
             NO_VIDEO=true
+            shift
+            ;;
+        --no-calibration)
+            NO_CALIBRATION=true
             shift
             ;;
         --llm-agents)

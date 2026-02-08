@@ -24,6 +24,7 @@ from emtom.evolve.config import EvolutionConfig, DEFAULT_MODEL_LADDER
 from emtom.evolve.benchmark_wrapper import (
     run_benchmark_parallel,
     BenchmarkResults,
+    update_calibration_from_benchmark,
 )
 from emtom.evolve.icl_sampler import (
     prepare_sampled_tasks_dir_from_calibration,
@@ -229,11 +230,18 @@ def run_generate_parallel(
                 continue
         return valid
 
+    # Count existing tasks so we generate num_tasks NEW ones (not total)
+    baseline_count = _count_valid_tasks()
+    target_count = baseline_count + num_tasks
+
+    # Use unique log prefix to avoid overwriting logs from previous phases
+    existing_logs = len(list(log_dir.glob("gen_*.log")))
+
     spinner_chars = ["|", "/", "-", "\\"]
     spinner_idx = 0
     last_status = None
 
-    print(f"[evolve] Parallel generation: target={num_tasks}, max_workers={max_workers}")
+    print(f"[evolve] Parallel generation: target={num_tasks} new tasks (baseline={baseline_count}), max_workers={max_workers}")
     print(f"[evolve] Output tasks dir: {out.resolve()}")
     print(f"[evolve] Generation logs: {log_dir.resolve()}")
 
@@ -249,20 +257,21 @@ def run_generate_parallel(
             active = still_active
 
             done_count = _count_valid_tasks()
+            new_count = done_count - baseline_count
 
             # Once target is reached, do not kill workers mid-write.
             # Stop spawning and wait for active workers to finish naturally.
-            if done_count >= num_tasks:
+            if done_count >= target_count:
                 if not active:
                     if sys.stdout.isatty():
                         print()  # finish the in-place status line
-                    print(f"[evolve] Generation complete: {done_count}/{num_tasks} valid tasks")
+                    print(f"[evolve] Generation complete: {new_count}/{num_tasks} new tasks (total: {done_count})")
                     print(f"[evolve] Tasks saved to: {out.resolve()}")
                     break
                 spinner = spinner_chars[spinner_idx % len(spinner_chars)]
                 spinner_idx += 1
                 status = (
-                    f"[evolve] {spinner} target reached ({done_count}/{num_tasks}); "
+                    f"[evolve] {spinner} target reached ({new_count}/{num_tasks}); "
                     f"waiting for {len(active)} active workers to finish..."
                 )
                 if sys.stdout.isatty():
@@ -274,13 +283,13 @@ def run_generate_parallel(
                 continue
 
             # Spawn new processes — cap concurrency at tasks still needed
-            needed = num_tasks - done_count
+            needed = target_count - done_count
             concurrency_cap = min(max_workers, needed)
             while len(active) < concurrency_cap and total_spawned < max_spawns:
                 # Re-check in case tasks appeared while spawning
-                if _count_valid_tasks() >= num_tasks:
+                if _count_valid_tasks() >= target_count:
                     break
-                log_file = log_dir / f"gen_{total_spawned}.log"
+                log_file = log_dir / f"gen_{existing_logs + total_spawned}.log"
                 fh = open(log_file, "w")
                 proc = subprocess.Popen(base_cmd, stdout=fh, stderr=fh)
                 active.append((proc, fh))
@@ -288,15 +297,16 @@ def run_generate_parallel(
 
             if not active and total_spawned >= max_spawns:
                 done_count = _count_valid_tasks()
+                new_count = done_count - baseline_count
                 if sys.stdout.isatty():
                     print()  # finish the in-place status line
-                print(f"[evolve] Generation: exhausted {max_spawns} spawns, got {done_count}/{num_tasks} tasks")
+                print(f"[evolve] Generation: exhausted {max_spawns} spawns, got {new_count}/{num_tasks} new tasks")
                 break
 
             spinner = spinner_chars[spinner_idx % len(spinner_chars)]
             spinner_idx += 1
             status = (
-                f"[evolve] {spinner} generating: {done_count}/{num_tasks} valid tasks "
+                f"[evolve] {spinner} generating: {new_count}/{num_tasks} new tasks "
                 f"(active={len(active)}, spawned={total_spawned})"
             )
             if sys.stdout.isatty():
@@ -315,65 +325,19 @@ def run_generate_parallel(
         raise
 
     final_count = _count_valid_tasks()
-    if final_count < num_tasks:
-        if final_count == 0:
+    final_new = final_count - baseline_count
+    if final_new < num_tasks:
+        if final_new == 0:
             raise RuntimeError(
-                f"Generation failed: got 0/{num_tasks} valid task files in {out}"
+                f"Generation failed: got 0/{num_tasks} new task files in {out}"
             )
         print(
-            f"[evolve] WARNING: got {final_count}/{num_tasks} tasks "
+            f"[evolve] WARNING: got {final_new}/{num_tasks} new tasks "
             f"(accepting partial result)",
             file=sys.stderr,
         )
 
     return out
-
-
-def update_calibration_from_benchmark(
-    benchmark_results: BenchmarkResults,
-    tasks_dir: str,
-) -> None:
-    """Write benchmark results back into task JSONs as calibration entries.
-
-    After running a separate benchmark (e.g. on model upgrade), this merges
-    the results into each task's calibration dict so subsequent logic can
-    read pass/fail from the task JSON itself.
-    """
-    from datetime import datetime
-
-    tasks_path = Path(tasks_dir)
-    model = benchmark_results.model
-
-    # Build lookup: task_id -> TaskResult
-    result_map = {r.task_id: r for r in benchmark_results.results}
-
-    for task_file in tasks_path.glob("*.json"):
-        try:
-            with open(task_file) as f:
-                task_data = json.load(f)
-        except Exception:
-            continue
-
-        task_id = task_data.get("task_id", "")
-        # Try matching by task_id or by filename stem
-        result = result_map.get(task_id) or result_map.get(task_file.stem)
-        if result is None:
-            continue
-
-        if "calibration" not in task_data:
-            task_data["calibration"] = {}
-
-        task_data["calibration"][model] = {
-            "passed": result.success,
-            "tested_at": datetime.now().isoformat(),
-            "steps": result.steps,
-            "percent_complete": result.percent_complete,
-        }
-
-        with open(task_file, "w") as f:
-            json.dump(task_data, f, indent=2)
-
-    print(f"[evolve] Updated calibration in {tasks_dir} for model {model}")
 
 
 def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> None:
