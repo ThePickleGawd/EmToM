@@ -1830,8 +1830,8 @@ SUMMARY:"""
                 if action_name not in valid_actions:
                     errors.append(f"Step {step_idx}: Unknown action '{action_name}'")
 
-                # Skip ID validation for actions without targets
-                if action_name in ("Wait", "Communicate") or not args:
+                # Skip ID validation for actions without targets or free-text args
+                if action_name in ("Wait", "Communicate", "FindObjectTool", "FindReceptacleTool", "FindRoomTool") or not args:
                     continue
 
                 # Check object IDs in args (skip None, relation keywords)
