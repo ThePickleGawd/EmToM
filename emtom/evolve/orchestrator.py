@@ -77,14 +77,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--generator-model", type=str, default="gpt-5.2")
     parser.add_argument("--tasks-per-round", type=int, default=20)
-    parser.add_argument("--seed-pool-size", type=int, default=30)
+    parser.add_argument("--seed-pool-size", type=int, default=30,
+                        help="Minimum seed pool size — generate extra if copied tasks < this (default: 30)")
+    parser.add_argument("--seed-tasks-dir", type=str, default="data/emtom/tasks",
+                        help="Source directory for seed tasks (default: data/emtom/tasks)")
     parser.add_argument("--icl-total-examples", type=int, default=10)
     parser.add_argument("--icl-failure-ratio", type=float, default=0.9)
-    parser.add_argument(
-        "--seed-query", type=str,
-        default=None,
-        help="Optional seed query for tier-0 generation (default: none)",
-    )
     parser.add_argument("--judge-threshold", type=float, default=0.7,
                         help="Judge threshold for generation quality gate (default: 0.7)")
     parser.add_argument(
@@ -372,35 +370,54 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
     completed_tiers = set(state.get("completed_tiers", []))
     start_tier_idx = state.get("current_tier_idx", 0)
 
-    # ---- PHASE 1: Seed generation ----
+    # ---- PHASE 1: Seed from existing tasks ----
     seed_tier = "seed"
     if seed_tier not in completed_tiers:
-        print(f"\n{'='*60}")
-        print(f"SEED: Generating {config.seed_pool_size} easy tasks")
-        print(f"  test_model: {config.model_ladder[0]}")
-        print(f"{'='*60}\n")
+        # Copy existing tasks from seed directory
+        copied = 0
+        if config.seed_tasks_dir:
+            source = Path(config.seed_tasks_dir)
+            if source.exists():
+                for task_file in source.glob("*.json"):
+                    dest = all_tasks_dir / task_file.name
+                    if not dest.exists():
+                        shutil.copy2(task_file, dest)
+                        copied += 1
+                print(f"[evolve] Seeded {copied} tasks from {source}")
+            else:
+                print(f"[evolve] Seed tasks dir does not exist: {source}")
 
-        seed_sub_min, seed_sub_max = get_subtask_range(0)
-        run_generate_parallel(
-            model=config.generator_model,
-            num_tasks=config.seed_pool_size,
-            output_dir=str(all_tasks_dir),
-            max_workers=config.max_workers,
-            test_model=config.model_ladder[0],  # Test against weakest model
-            query=config.seed_query,
-            category="cooperative",
-            judge_threshold=config.judge_threshold,
-            subtasks_min=seed_sub_min,
-            subtasks_max=seed_sub_max,
-            difficulty="easy",
-        )
+        # Generate more if we don't have enough
+        existing = len(list(all_tasks_dir.glob("*.json")))
+        shortfall = config.seed_pool_size - existing
+        if shortfall > 0:
+            print(f"\n{'='*60}")
+            print(f"SEED: Generating {shortfall} easy tasks (have {existing}, need {config.seed_pool_size})")
+            print(f"  test_model: {config.model_ladder[0]}")
+            print(f"{'='*60}\n")
+
+            seed_sub_min, seed_sub_max = get_subtask_range(0)
+            run_generate_parallel(
+                model=config.generator_model,
+                num_tasks=shortfall,
+                output_dir=str(all_tasks_dir),
+                max_workers=config.max_workers,
+                test_model=config.model_ladder[0],
+                category="cooperative",
+                judge_threshold=config.judge_threshold,
+                subtasks_min=seed_sub_min,
+                subtasks_max=seed_sub_max,
+                difficulty="easy",
+            )
+        else:
+            print(f"[evolve] Seed pool sufficient ({existing} tasks >= {config.seed_pool_size})")
 
         completed_tiers.add(seed_tier)
         state["completed_tiers"] = list(completed_tiers)
         state["current_tier_idx"] = 0
         save_state(output_dir, state)
     else:
-        print(f"[evolve] Skipping seed generation (already completed)")
+        print(f"[evolve] Skipping seed phase (already completed)")
 
     # ---- PHASE 2: Tier loop ----
     for tier_idx, model in enumerate(config.model_ladder):
@@ -572,12 +589,12 @@ def main():
         model_ladder=args.model_ladder.split(","),
         generator_model=args.generator_model,
         tasks_per_round=args.tasks_per_round,
-        seed_pool_size=args.seed_pool_size,
         icl_total_examples=args.icl_total_examples,
         icl_failure_ratio=args.icl_failure_ratio,
         judge_threshold=args.judge_threshold,
         target_pass_rate=args.target_pass_rate,
-        seed_query=args.seed_query,
+        seed_tasks_dir=args.seed_tasks_dir,
+        seed_pool_size=args.seed_pool_size,
         output_dir=args.output_dir,
         max_workers=args.max_workers,
     )

@@ -18,7 +18,6 @@ class EvolutionConfig:
     model_ladder: List[str] = field(default_factory=lambda: list(DEFAULT_MODEL_LADDER))
     generator_model: str = "gpt-5.2"
     tasks_per_round: int = 20
-    seed_pool_size: int = 30
     icl_failure_ratio: float = 0.9
     icl_total_examples: int = 10
     output_dir: str = "outputs/evolve"
@@ -27,5 +26,7 @@ class EvolutionConfig:
     judge_threshold: float = 0.7
     # Generate until pass rate drops to this percent, then advance to next model.
     target_pass_rate: float = 20.0
-    # Optional seed query. When None, generator uses its own default prompting.
-    seed_query: Optional[str] = None
+    # Source directory for seed tasks (None = generate from scratch).
+    seed_tasks_dir: Optional[str] = "data/emtom/tasks"
+    # Minimum seed pool size — generate extra if copied tasks < this.
+    seed_pool_size: int = 30

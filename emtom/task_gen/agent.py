@@ -24,6 +24,10 @@ from omegaconf import DictConfig
 from .prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
 from .judge import Judge, Judgment, CouncilVerdict, Colors
 from .diversity import DiversityTracker
+from .spec_validator import (
+    validate_blocking_spec,
+    validate_room_restriction_trajectory,
+)
 from emtom.actions import ActionRegistry
 
 if TYPE_CHECKING:
@@ -1403,6 +1407,16 @@ SUMMARY:"""
                     "summary": "Task validation failed - wrong episode"
                 }
 
+        # Shared deterministic spec checks (also used by static verifier).
+        spec_errors = validate_blocking_spec(task_data, self.scene_data)
+        if spec_errors:
+            return {
+                "valid": False,
+                "error": spec_errors[0],
+                "errors": spec_errors,
+                "summary": f"Task has {len(spec_errors)} validation error(s)",
+            }
+
         # Collect defined item IDs from task
         defined_items = set()
         for item in task_data.get("items", []):
@@ -1836,6 +1850,9 @@ SUMMARY:"""
             missing_agents = valid_agents - agents_in_step
             if missing_agents:
                 errors.append(f"Step {step_idx}: Missing actions for {sorted(missing_agents)} (add Wait if idle)")
+
+        # Check room-restriction consistency before expensive simulation.
+        errors.extend(validate_room_restriction_trajectory(task_data, self.scene_data, golden))
 
         return errors[:10]  # Limit to first 10 errors
 

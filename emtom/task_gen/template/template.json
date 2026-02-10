@@ -12,10 +12,7 @@
     "agent_0": {"position": [0, 0, 0], "rotation": 0.0},
     "agent_1": {"position": [0, 0, 0], "rotation": 0.0}
   },
-  "initial_states": {
-    "EXAMPLE_cabinet_20": {"is_open": true},
-    "EXAMPLE_table_22": {"is_clean": false}
-  },
+  "initial_states": {},
   "active_mechanics": [],
   "mechanic_bindings": [
     {
@@ -90,12 +87,6 @@
   ],
 
   "_COMPETITIVE_ONLY_FIELDS": "Include teams and team_secrets for competitive tasks",
-  "teams": {
-    "team_0": ["agent_0"],
-    "team_1": ["agent_1"]
-  },
-  "team_secrets": {
-    "team_0": ["Your cabinet is cabinet_10"],
-    "team_1": ["Your cabinet is cabinet_20"]
-  }
+  "teams": {},
+  "team_secrets": {}
 }

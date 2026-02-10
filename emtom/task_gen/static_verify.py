@@ -16,6 +16,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from emtom.task_gen.spec_validator import validate_blocking_spec
+
 
 VALID_ACTIONS = {
     "Navigate", "Open", "Close", "Pick", "Place",
@@ -338,6 +340,23 @@ def verify_task(
 
     task_id = task.get("task_id", "unknown")
     valid_ids = _build_valid_ids(task, scene_data)
+
+    # Shared deterministic checks used in generation path.
+    errors.extend(validate_blocking_spec(task, scene_data))
+
+    # DAG checks were previously generation-only; include them here for parity.
+    if isinstance(task.get("subtasks"), list) and task.get("subtasks"):
+        try:
+            from emtom.task_gen import Subtask
+            from emtom.task_gen.dag import validate_dag
+
+            subtasks = [Subtask.from_dict(s) for s in task["subtasks"] if isinstance(s, dict)]
+            is_valid_dag, dag_errors = validate_dag(subtasks)
+            if not is_valid_dag:
+                for err in dag_errors:
+                    errors.append(f"Invalid subtask DAG: {err}")
+        except Exception as e:
+            errors.append(f"DAG validation failed: {e}")
 
     errors.extend(_validate_supported_predicates(task))
     errors.extend(_validate_success_condition_ids(task, scene_data))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -152,6 +153,20 @@ def parse_benchmark_results(output_dir: str, model: str) -> BenchmarkResults:
     )
 
 
+def _detect_gpu_ids() -> List[int]:
+    """Detect available CUDA GPU IDs via nvidia-smi."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return [int(x.strip()) for x in result.stdout.strip().split("\n")]
+    except Exception:
+        pass
+    return [0]
+
+
 def run_benchmark_parallel(
     tasks_dir: str,
     model: str,
@@ -165,6 +180,9 @@ def run_benchmark_parallel(
     For each task file, creates a temp single-task directory and spawns
     a separate benchmark process. Manages a pool of up to max_workers
     concurrent processes. Merges all results into a single BenchmarkResults.
+
+    Each process is assigned a GPU via round-robin over all available CUDA
+    devices (set through CUDA_VISIBLE_DEVICES).
 
     Args:
         tasks_dir: Directory containing task JSONs.
@@ -188,6 +206,9 @@ def run_benchmark_parallel(
         print(f"[evolve] WARNING: no task files in {tasks_dir}", file=sys.stderr)
         return BenchmarkResults(model=model, total=0, passed=0, failed=0, pass_rate=0.0)
 
+    # Detect GPUs for round-robin distribution
+    gpu_ids = _detect_gpu_ids()
+
     # Prepare per-task jobs: (task_stem, task_input_dir, benchmark_output_dir)
     jobs = []
     for tf in task_files:
@@ -209,6 +230,7 @@ def run_benchmark_parallel(
     last_status = None
 
     print(f"[evolve] Parallel benchmark: {total_tasks} tasks, max_workers={max_workers}")
+    print(f"[evolve] GPUs detected: {gpu_ids} ({len(gpu_ids)} devices)")
     print(f"[evolve] Benchmark output dir: {out_path.resolve()}")
     print(f"[evolve] Benchmark logs: {log_dir.resolve()}")
 
@@ -244,9 +266,13 @@ def run_benchmark_parallel(
                 if category:
                     cmd.extend(["--category", category])
 
+                # Round-robin GPU assignment
+                gpu_id = gpu_ids[job_idx % len(gpu_ids)]
+                env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu_id)}
+
                 log_file = log_dir / f"bench_{stem}.log"
                 fh = open(log_file, "w")
-                proc = subprocess.Popen(cmd, stdout=fh, stderr=fh)
+                proc = subprocess.Popen(cmd, stdout=fh, stderr=fh, env=env)
                 active.append((stem, bench_out, proc, fh))
                 job_idx += 1
 
