@@ -528,6 +528,7 @@ Require explicit multi-agent coordination.
 ```
 emtom/
 ├── run_emtom.sh           # Main entry point
+├── rl/                    # RL training module (see [emtom/rl/README.md](emtom/rl/README.md))
 ├── evolve/                # Evolution pipeline (run via: run_emtom.sh evolve)
 ├── task_gen/              # Task generation
 │   ├── runner.py          # Generation entry point
