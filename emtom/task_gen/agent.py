@@ -395,18 +395,20 @@ Your previous task did not pass the ToM verification. You MUST address these iss
                 "easy": (
                     "## Difficulty: EASY\n"
                     "Generate SIMPLE tasks that weaker models can solve:\n"
-                    "- Use 0-1 mechanics (prefer none, or a single simple one like room_restriction)\n"
+                    "- Use 0-1 mechanics (prefer limited_bandwidth or room_restriction)\n"
                     "- Avoid inverse_state and chained conditional_unlock — models cannot discover these\n"
                     "- 2-3 agents with clear roles\n"
                     "- 2-3 subtasks maximum\n"
                     "- Secrets MUST explain any active mechanic in plain language\n"
                     "- All effects should be observable (no remote effects in unseen rooms)\n"
                     "- tom_level 1 only\n"
+                    "- limited_bandwidth with generous limits (4-5 messages) works well at this level\n"
                 ),
                 "medium": (
                     "## Difficulty: MEDIUM\n"
                     "Generate moderately complex tasks:\n"
                     "- 1-2 mechanics with hints in secrets\n"
+                    "- STRONGLY prefer including limited_bandwidth (2-3 messages per agent)\n"
                     "- 2-4 agents, meaningful coordination required\n"
                     "- 3-4 subtasks with some dependencies\n"
                     "- tom_level 1-2\n"
@@ -415,6 +417,7 @@ Your previous task did not pass the ToM verification. You MUST address these iss
                     "## Difficulty: HARD\n"
                     "Generate challenging tasks for top-tier models:\n"
                     "- 2+ mechanics, complex interactions\n"
+                    "- MUST include limited_bandwidth with tight limits (1-2 messages per agent)\n"
                     "- 3-4+ agents with deep interdependencies\n"
                     "- 4+ subtasks with chained dependencies\n"
                     "- tom_level 2-3, multi-step reasoning required\n"
@@ -1735,6 +1738,12 @@ SUMMARY:"""
                 return {
                     "valid": False,
                     "error": f"mechanic_bindings[{i}] ({mechanic_type}) missing trigger_object",
+                    "summary": "Task validation failed"
+                }
+            if mechanic_type == "limited_bandwidth" and not isinstance(binding.get("message_limits"), dict):
+                return {
+                    "valid": False,
+                    "error": f"mechanic_bindings[{i}] (limited_bandwidth) missing message_limits dict",
                     "summary": "Task validation failed"
                 }
 

@@ -1,14 +1,13 @@
 
 
 .env
-recursive_taskgen_data
+.DS_Store
 
 .vscode/**
 **.ipynb
 **/.hydra
 **/data/**
 **/deprecated.txt
-**/rlm/**
 **/videos/**
 data
 dataset_generation/benchmark_generation/logs/
@@ -123,5 +122,3 @@ dmypy.json
 # ignore cached navmeshes
 */navmeshes/*.navmesh
 
-# ignore rlm logs
-rlm/

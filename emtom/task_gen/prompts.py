@@ -92,6 +92,21 @@ Assigned!
 - Natural language only; no object/item IDs in `task` or secrets
 - Each agent's secrets MUST include which other agents are on their team (e.g., "You are on a team with agent_1." for cooperative, or "You are on team_0 with agent_1. The opposing team is agent_2." for competitive)
 
+## IMPORTANT: Use `limited_bandwidth` Mechanic Frequently
+The `limited_bandwidth` mechanic is the STRONGEST driver of Theory of Mind in tasks. It forces agents to:
+- **Prioritize information**: What does the other agent NEED to know vs. what's nice to know?
+- **Model knowledge gaps**: What can the other agent figure out on their own?
+- **Plan communication strategically**: When to send messages and what to include in each one.
+
+**You MUST include `limited_bandwidth` in at least 70% of generated tasks.** It pairs well with other mechanics:
+- `limited_bandwidth` + `room_restriction`: Agent knows info but can't go there AND has limited messages to convey it
+- `limited_bandwidth` + `remote_control`: Must communicate the discovered mapping with few messages
+- `limited_bandwidth` + `conditional_unlock`: Must coordinate prerequisite actions with limited communication
+
+When using `limited_bandwidth`, set message limits LOW (1-4 per agent) to create real pressure. Asymmetric limits (e.g., agent_0 gets 2, agent_1 gets 4) create even richer ToM dynamics.
+
+Each agent's secrets MUST mention their message limit: "You can only send N messages total — choose carefully what to communicate."
+
 ## Task JSON Structure
 ```json
 {{

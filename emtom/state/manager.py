@@ -230,6 +230,13 @@ class GameStateManager:
                     state.restricted_rooms[agent_id] = set()
                 state.restricted_rooms[agent_id].update(restricted_rooms)
 
+        elif mech_type == "limited_bandwidth":
+            message_limits = binding.get("message_limits", {})
+            for agent_id, limit in message_limits.items():
+                state.message_limits[agent_id] = int(limit)
+                if agent_id not in state.messages_sent:
+                    state.messages_sent[agent_id] = 0
+
     def sync_from_habitat(self, state: Optional[EMTOMGameState] = None) -> EMTOMGameState:
         """
         Sync state from Habitat simulator.

@@ -151,6 +151,12 @@ class EMTOMGameState:
     # Used to force collaboration (agent with info can't access location)
     restricted_rooms: Dict[str, Set[str]] = field(default_factory=dict)
 
+    # === Limited bandwidth mechanic ===
+    # Maps agent_id -> max number of Communicate actions allowed
+    message_limits: Dict[str, int] = field(default_factory=dict)
+    # Maps agent_id -> number of Communicate actions used so far
+    messages_sent: Dict[str, int] = field(default_factory=dict)
+
     def get_object_property(self, obj_id: str, prop: str, default: Any = None) -> Any:
         """Get a custom property for an object."""
         return self.object_properties.get(obj_id, {}).get(prop, default)
@@ -260,6 +266,9 @@ class EMTOMGameState:
                 agent_id: list(rooms)
                 for agent_id, rooms in self.restricted_rooms.items()
             },
+            # Limited bandwidth
+            "message_limits": self.message_limits,
+            "messages_sent": self.messages_sent,
         }
 
     @classmethod
@@ -314,6 +323,9 @@ class EMTOMGameState:
             agent_id: set(rooms)
             for agent_id, rooms in data.get("restricted_rooms", {}).items()
         }
+        # Limited bandwidth
+        state.message_limits = data.get("message_limits", {})
+        state.messages_sent = data.get("messages_sent", {})
         return state
 
     def to_json(self) -> str:

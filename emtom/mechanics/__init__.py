@@ -35,6 +35,7 @@ from emtom.mechanics.handlers import (
     handle_remote_control,
     handle_conditional_unlock,
     handle_state_mirroring,
+    handle_limited_bandwidth,
 )
 
 __all__ = [
@@ -55,4 +56,5 @@ __all__ = [
     "handle_remote_control",
     "handle_conditional_unlock",
     "handle_state_mirroring",
+    "handle_limited_bandwidth",
 ]

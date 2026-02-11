@@ -89,6 +89,16 @@ MECHANIC_INFO = {
         "example_binding": {"mechanic_type": "room_restriction", "restricted_rooms": ["bathroom_1"], "for_agents": ["agent_0"]},
         "recommended_for_tom": True,
     },
+    "limited_bandwidth": {
+        "description": "Agents have a maximum number of messages they can send, forcing strategic communication",
+        "category": "communication_constraint",
+        "setup_keys": ["message_limits"],
+        "agent_observation": "You have used {used}/{max} messages. Choose your words carefully.",
+        "tom_use": "Agents must reason about what the other agent needs to know most, prioritize information, and model what the other agent can infer without being told",
+        "example_binding": {"mechanic_type": "limited_bandwidth", "message_limits": {"agent_0": 3, "agent_1": 3}},
+        "alt_example": {"mechanic_type": "limited_bandwidth", "message_limits": {"agent_0": 2, "agent_1": 5}},
+        "recommended_for_tom": True,
+    },
 }
 
 
@@ -516,6 +526,69 @@ def handle_room_restriction(
     return no_effect(state)
 
 
+def handle_limited_bandwidth(
+    action_name: str,
+    agent_id: str,
+    target: Optional[str],
+    state: EMTOMGameState,
+) -> HandlerResult:
+    """
+    Limited Bandwidth: Agents have a maximum number of Communicate actions.
+
+    Forces agents to think carefully about what information to share and when.
+    Creates ToM pressure: agents must model what the other agent needs to know
+    most and prioritize critical information over nice-to-have details.
+
+    Setup in task.json:
+        mechanic_bindings: [
+            {
+                "mechanic_type": "limited_bandwidth",
+                "message_limits": {"agent_0": 3, "agent_1": 3}
+            }
+        ]
+
+    Result: Each agent can only send the specified number of messages.
+    """
+    # Only applies to Communicate actions
+    if action_name.lower() != "communicate":
+        return no_effect(state)
+
+    # Check if this agent has a message limit
+    limit = state.message_limits.get(agent_id)
+    if limit is None:
+        return no_effect(state)
+
+    sent = state.messages_sent.get(agent_id, 0)
+
+    if sent >= limit:
+        return HandlerResult(
+            applies=True,
+            state=state,
+            observation=f"You have used all {limit} of your allowed messages. You cannot send any more.",
+            success=False,
+            effects=[f"blocked_communicate={agent_id}_limit_reached"],
+            surprise_trigger=f"{agent_id} has exhausted message budget",
+            blocked=True,
+            mechanic_type="limited_bandwidth",
+        )
+
+    # Message allowed — increment counter
+    new_state = copy.copy(state)
+    new_sent = dict(state.messages_sent)
+    new_sent[agent_id] = sent + 1
+    new_state.messages_sent = new_sent
+
+    remaining = limit - (sent + 1)
+    return HandlerResult(
+        applies=True,
+        state=new_state,
+        observation=f"Message sent. You have {remaining} message{'s' if remaining != 1 else ''} remaining.",
+        success=True,
+        effects=[f"message_sent={agent_id}_{sent + 1}_of_{limit}"],
+        mechanic_type="limited_bandwidth",
+    )
+
+
 # =============================================================================
 # Handler Registry
 # =============================================================================
@@ -526,6 +599,7 @@ MECHANIC_HANDLERS: Dict[str, MechanicHandler] = {
     "conditional_unlock": handle_conditional_unlock,
     "state_mirroring": handle_state_mirroring,
     "room_restriction": handle_room_restriction,
+    "limited_bandwidth": handle_limited_bandwidth,
 }
 
 

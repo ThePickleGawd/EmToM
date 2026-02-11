@@ -368,6 +368,24 @@ def validate_blocking_spec(
                         f"mechanic_bindings[{i}] (room_restriction) unknown for_agents: {unknown_agents}"
                     )
 
+        # Validate limited_bandwidth structure.
+        if mechanic_type == "limited_bandwidth":
+            ml = binding.get("message_limits")
+            if not isinstance(ml, dict) or not ml:
+                errors.append(
+                    f"mechanic_bindings[{i}] (limited_bandwidth) requires non-empty message_limits dict"
+                )
+            elif isinstance(ml, dict):
+                for agent_id, limit in ml.items():
+                    if agent_id not in valid_agent_ids:
+                        errors.append(
+                            f"mechanic_bindings[{i}] (limited_bandwidth) unknown agent '{agent_id}' in message_limits"
+                        )
+                    if not isinstance(limit, (int, float)) or limit < 1:
+                        errors.append(
+                            f"mechanic_bindings[{i}] (limited_bandwidth) message_limits[{agent_id}] must be a positive integer, got {limit}"
+                        )
+
         # Validate binding object references against scene (when available).
         if scene_known_ids:
             for key in ("trigger_object", "target_object", "prerequisite_object"):
