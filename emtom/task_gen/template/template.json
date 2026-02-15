@@ -39,6 +39,8 @@
     "agent_0": ["Navigate", "Open", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"],
     "agent_1": ["Navigate", "Open", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
   },
+  "_COMMENT_MESSAGE_TARGETS": "Optional: restrict which agents each agent can message. Omit for no restrictions.",
+  "message_targets": {},
   "subtasks": [
     {
       "_COMMENT": "required field is polymorphic: true=task success, false=optional, 'team_X'=team wins, 'agent_X'=agent subgoal",

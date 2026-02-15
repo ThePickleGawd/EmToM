@@ -279,6 +279,34 @@ def validate_blocking_spec(
                 )
 
     # ------------------------------------------------------------------
+    # Message targets validation
+    # ------------------------------------------------------------------
+    raw_mt = task_data.get("message_targets")
+    if raw_mt is not None:
+        if not isinstance(raw_mt, dict):
+            errors.append("message_targets must be a dict")
+        else:
+            for mt_agent, mt_targets in raw_mt.items():
+                if mt_agent not in valid_agent_ids:
+                    errors.append(
+                        f"message_targets key '{mt_agent}' is not a valid agent ID. "
+                        f"Valid: {sorted(valid_agent_ids)}"
+                    )
+                if not isinstance(mt_targets, list):
+                    errors.append(f"message_targets['{mt_agent}'] must be a list of agent IDs")
+                    continue
+                for target_id in mt_targets:
+                    if not isinstance(target_id, str) or target_id not in valid_agent_ids:
+                        errors.append(
+                            f"message_targets['{mt_agent}'] contains invalid agent ID '{target_id}'. "
+                            f"Valid: {sorted(valid_agent_ids)}"
+                        )
+                    elif target_id == mt_agent:
+                        errors.append(
+                            f"message_targets['{mt_agent}'] contains self-reference"
+                        )
+
+    # ------------------------------------------------------------------
     # Scene inventory
     # ------------------------------------------------------------------
     rooms = set(_get_scene_list(scene_data, "rooms"))

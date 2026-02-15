@@ -68,8 +68,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
             task_data = self._task_to_mechanics_dict(task)
 
         agent_actions = task.agent_actions if task else None
+        message_targets = task.message_targets if task else None
 
-        super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions, save_video=save_video)
+        super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions, save_video=save_video, message_targets=message_targets)
 
         # Set human agents
         if human_agents:

@@ -54,11 +54,12 @@ class VerificationRunner(EMTOMBaseRunner):
         if task and not task_data:
             task_data = self._task_to_mechanics_dict(task)
 
-        # Get agent_actions from task if available
+        # Get agent_actions and message_targets from task if available
         agent_actions = task.agent_actions if task else None
+        message_targets = task.message_targets if task else None
 
         # Call parent setup (no planners created)
-        super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions, save_video=save_video)
+        super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions, save_video=save_video, message_targets=message_targets)
 
         # Setup LLM for perception tools (FindObjectTool, etc.)
         self._setup_llm_for_tools()

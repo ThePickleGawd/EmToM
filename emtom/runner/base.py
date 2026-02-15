@@ -70,6 +70,7 @@ class EMTOMBaseRunner(ABC):
         output_dir: Optional[str] = None,
         agent_actions: Optional[Dict[str, List[str]]] = None,
         save_video: Optional[bool] = None,
+        message_targets: Optional[Dict[str, List[str]]] = None,
     ) -> None:
         """
         Full setup sequence. Call before run().
@@ -82,6 +83,9 @@ class EMTOMBaseRunner(ABC):
                            If None, all actions are available to all agents.
                            Example: {"agent_0": ["Navigate", "Open", "Communicate"], "agent_1": ["Navigate"]}
             save_video: Whether to save video. If None, uses config.evaluation.save_video
+            message_targets: Optional dict mapping agent_id to list of allowed recipient agent_ids.
+                             If None, all agents can message anyone.
+                             Example: {"agent_0": ["agent_1"]} — agent_0 can only message agent_1
         """
         self.env_interface = env_interface
         self.output_dir = output_dir or getattr(
@@ -89,8 +93,9 @@ class EMTOMBaseRunner(ABC):
         )
         os.makedirs(self.output_dir, exist_ok=True)
 
-        # Store agent actions for tool setup
+        # Store agent actions and message targets for tool setup
         self._agent_actions = agent_actions
+        self._message_targets = message_targets
         self._save_video_override = save_video  # Override for video saving
 
         self._setup_game_manager(task_data)
@@ -245,12 +250,29 @@ class EMTOMBaseRunner(ABC):
 
             # Add Communicate tool if allowed
             if is_allowed("Communicate"):
+                # Build description and allowed_targets based on message_targets
+                agent_allowed_targets = None
+                if self._message_targets and agent_id in self._message_targets:
+                    target_agent_ids = self._message_targets[agent_id]
+                    # Convert agent_id strings ("agent_1") to UIDs (1)
+                    agent_allowed_targets = [int(aid.split("_")[-1]) for aid in target_agent_ids]
+                    target_names = ", ".join(target_agent_ids)
+                    comm_desc = (
+                        f'Send a message to specific agents. You can ONLY message: {target_names}. '
+                        f'Usage: Communicate["your message", {target_agent_ids[0]}] for a DM'
+                        + (f' or Communicate["your message", all] to message all allowed recipients' if len(target_agent_ids) > 1 else '')
+                        + '. The message MUST be in double quotes. Keep messages on a single line.'
+                    )
+                else:
+                    comm_desc = 'Send a message to specific agents. Usage: Communicate["your message", agent_0] for a DM or Communicate["your message", all] to broadcast. The message MUST be in double quotes. Keep messages on a single line.'
+
                 comm_config = OmegaConf.create({
                     "name": "Communicate",
-                    "description": 'Send a message to specific agents. Usage: Communicate["your message", agent_0] for a DM or Communicate["your message", all] to broadcast. The message MUST be in double quotes. Keep messages on a single line.'
+                    "description": comm_desc,
                 })
                 comm_tool = CommunicationTool(comm_config)
                 comm_tool.agent_uid = uid
+                comm_tool.allowed_targets = agent_allowed_targets
                 comm_tool.set_environment(self.env_interface)
                 agent.tools["Communicate"] = comm_tool
 

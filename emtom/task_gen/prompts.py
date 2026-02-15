@@ -82,6 +82,14 @@ Assigned!
 - Subgoals should create interesting dilemmas, not make main goal impossible
 - Public `task` should not reveal secret subgoals or targets
 
+## Message Targeting
+`message_targets` is an optional field that restricts which agents each agent can message.
+- Omit entirely for no restrictions (all agents can message anyone)
+- Maps agent_id to a list of allowed recipient agent_ids
+- Agents NOT listed in message_targets have no restrictions
+- Pairs well with competitive tasks to prevent cross-team communication
+- Example: `"message_targets": {{"agent_0": ["agent_1"], "agent_2": ["agent_3"]}}` — team members can only message their own team
+
 ## Core Rules
 - **NEVER reference objects with unknown locations.** Only use objects listed in the scene data with a known furniture parent (shown as "object (on furniture)"). If an object has no location, it does not exist for task purposes.
 - Every agent essential; **no assigned roles**
@@ -118,6 +126,7 @@ Each agent's secrets MUST mention their message limit: "You can only send N mess
   "agent_secrets": {{"agent_0": [...], "agent_1": [...]}},
   "team_secrets": {{"team_0": [...], "team_1": [...]}},
   "agent_actions": {{"agent_0": [...], "agent_1": [...]}},
+  "message_targets": {{"agent_0": ["agent_1"], "agent_1": ["agent_0"]}},
   "subtasks": [{{"id": "...", "required": true/false/"team_X"/"agent_X", "depends_on": [], "success_condition": {{...}}}}],
   "items": [{{"item_id": "item_X", "inside": "container"}}],
   "locked_containers": {{"container": "item_key"}},

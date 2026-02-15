@@ -239,6 +239,9 @@ class GeneratedTask:
     tom_level: int = 1  # 1=beliefs about others, 2=beliefs about beliefs, 3=3rd-order nesting
     tom_reasoning: Optional[str] = None  # Why this task requires this ToM level
 
+    # MESSAGE TARGETING (optional, restricts who each agent can message)
+    message_targets: Optional[Dict[str, List[str]]] = None  # agent_id -> [allowed recipient agent_ids]
+
     # COMPETITIVE-SPECIFIC (optional, for category="competitive")
     teams: Optional[Dict[str, List[str]]] = None  # team_id -> [agent_ids], e.g. {"team_0": ["agent_0"], "team_1": ["agent_1"]}
     team_secrets: Optional[Dict[str, List[str]]] = None  # team_id -> [secrets]
@@ -303,6 +306,9 @@ class GeneratedTask:
         if category not in ("cooperative", "competitive", "mixed"):
             category = "cooperative"
 
+        # Parse message_targets (None if not a dict)
+        message_targets = data.get("message_targets") if isinstance(data.get("message_targets"), dict) else None
+
         # Parse competitive-specific fields (None if not a dict)
         teams = data.get("teams") if isinstance(data.get("teams"), dict) else None
         team_secrets = data.get("team_secrets") if isinstance(data.get("team_secrets"), dict) else None
@@ -327,6 +333,7 @@ class GeneratedTask:
             initial_states=initial_states,
             tom_level=data.get("tom_level", 1),
             tom_reasoning=data.get("tom_reasoning"),
+            message_targets=message_targets,
             teams=teams,
             team_secrets=team_secrets,
         )

@@ -23,6 +23,7 @@ class CommunicationTool(PerceptionTool):
         super().__init__(skill_config.name)
         self.skill_config = skill_config
         self._read_synonyms = {"", "read", "listen", "check", "receive"}
+        self.allowed_targets = None  # None = unrestricted, List[int] = allowed recipient UIDs
 
     def set_environment(self, env_interface):
         self.env_interface = env_interface
@@ -66,6 +67,19 @@ class CommunicationTool(PerceptionTool):
 
         if not message:
             return None, "Provide a message to send."
+
+        # Enforce message_targets restrictions
+        if self.allowed_targets is not None:
+            if target_uids is None:
+                # Broadcast — narrow to only allowed targets
+                target_uids = [uid for uid in self.allowed_targets if uid != self.agent_uid]
+            else:
+                # DM — filter to only allowed targets
+                target_uids = [uid for uid in target_uids if uid in self.allowed_targets]
+
+            if not target_uids:
+                allowed_names = ", ".join(f"Agent_{uid}" for uid in self.allowed_targets)
+                return None, f"You can only message: {allowed_names}. None of your specified recipients are allowed."
 
         self.env_interface.post_agent_message(self.agent_uid, message, target_uids=target_uids)
 

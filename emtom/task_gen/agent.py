@@ -1755,6 +1755,42 @@ SUMMARY:"""
                 "summary": "Task validation failed"
             }
 
+        # Validate message_targets if present
+        raw_mt = task_data.get("message_targets")
+        if raw_mt is not None:
+            if not isinstance(raw_mt, dict):
+                return {
+                    "valid": False,
+                    "error": "message_targets must be a dict mapping agent_id to list of allowed recipient agent_ids",
+                    "summary": "Task validation failed"
+                }
+            for mt_agent, mt_targets in raw_mt.items():
+                if mt_agent not in valid_agent_ids:
+                    return {
+                        "valid": False,
+                        "error": f"message_targets key '{mt_agent}' is not a valid agent ID. Valid: {sorted(valid_agent_ids)}",
+                        "summary": "Task validation failed"
+                    }
+                if not isinstance(mt_targets, list):
+                    return {
+                        "valid": False,
+                        "error": f"message_targets['{mt_agent}'] must be a list of agent IDs",
+                        "summary": "Task validation failed"
+                    }
+                for target_id in mt_targets:
+                    if target_id not in valid_agent_ids:
+                        return {
+                            "valid": False,
+                            "error": f"message_targets['{mt_agent}'] contains invalid agent ID '{target_id}'. Valid: {sorted(valid_agent_ids)}",
+                            "summary": "Task validation failed"
+                        }
+                    if target_id == mt_agent:
+                        return {
+                            "valid": False,
+                            "error": f"message_targets['{mt_agent}'] contains self-reference. Agents cannot target themselves.",
+                            "summary": "Task validation failed"
+                        }
+
         # Try to parse as GeneratedTask
         try:
             from emtom.task_gen import GeneratedTask
