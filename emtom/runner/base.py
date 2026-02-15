@@ -572,6 +572,8 @@ class EMTOMBaseRunner(ABC):
             action_completed = False
             action_failed = False
             obs_text = ""
+            surroundings_snapshots: List[str] = []
+            agents_passed: Dict[str, tuple] = {}  # agent_name -> (room, first_step)
 
             while skill_steps < max_skill_steps:
                 try:
@@ -585,6 +587,16 @@ class EMTOMBaseRunner(ABC):
                 parsed_obs = self.env_interface.parse_observations(raw_obs)
                 self.record_frame(parsed_obs, {uid: (actual_action, actual_target)})
                 skill_steps += 1
+
+                # Capture surroundings every 30 frames
+                if skill_steps % 30 == 0:
+                    snapshot = self._get_surroundings_description(uid, skill_steps)
+                    surroundings_snapshots.append(snapshot)
+                    surroundings_snapshots = surroundings_snapshots[-3:]
+                    # Track agents encountered in same room (first sighting only)
+                    for agent_name, room in self._get_nearby_agents(uid):
+                        if agent_name not in agents_passed:
+                            agents_passed[agent_name] = (room, skill_steps)
 
                 if done:
                     self._episode_done = True
@@ -627,6 +639,9 @@ class EMTOMBaseRunner(ABC):
                 elif skill_steps >= max_skill_steps:
                     action_failed = True
                     obs_text = f"Action timed out after {max_skill_steps} simulator steps."
+
+            # Append surroundings observations collected during motor skill
+            obs_text += self._format_surroundings(surroundings_snapshots, agents_passed)
 
             if action_failed:
                 # Log failed action
@@ -973,6 +988,8 @@ class EMTOMBaseRunner(ABC):
         # Phase 2: Execute all skills concurrently
         max_skill_steps = 1500  # ~50 seconds at 30Hz, matches benchmark runner
         total_steps = 0
+        surroundings: Dict[int, List[str]] = {}
+        agents_passed: Dict[int, Dict[str, tuple]] = {}  # uid -> {agent_name -> (room, step)}
 
         while agent_states and total_steps < max_skill_steps:
             if all(state["done"] for state in agent_states.values()):
@@ -1014,6 +1031,18 @@ class EMTOMBaseRunner(ABC):
                     continue
 
                 state["skill_steps"] += 1
+
+                # Capture surroundings every 30 frames
+                if state["skill_steps"] % 30 == 0:
+                    snapshot = self._get_surroundings_description(uid, state["skill_steps"])
+                    surroundings.setdefault(uid, []).append(snapshot)
+                    surroundings[uid] = surroundings[uid][-3:]
+                    # Track agents encountered in same room (first sighting only)
+                    ap = agents_passed.setdefault(uid, {})
+                    for agent_name, room in self._get_nearby_agents(uid):
+                        if agent_name not in ap:
+                            ap[agent_name] = (room, state["skill_steps"])
+
                 tool = state["tool"]
 
                 # Check if skill is done
@@ -1056,6 +1085,7 @@ class EMTOMBaseRunner(ABC):
         # Phase 3: Collect results and apply mechanics
         for uid, state in agent_states.items():
             obs_text = (state["response"] or "").strip()
+            obs_text += self._format_surroundings(surroundings.get(uid, []), agents_passed.get(uid))
             mech_result = state["mech_result"]
 
             # Handle non-terminated actions as explicit failures.
@@ -1263,6 +1293,138 @@ class EMTOMBaseRunner(ABC):
             except Exception:
                 world_graph[uid] = None
         return world_graph
+
+    def _get_surroundings_description(self, uid: int, skill_step: int) -> str:
+        """
+        Build a concise one-line surroundings description from the agent's world graph.
+
+        Args:
+            uid: Agent UID
+            skill_step: Current motor skill step number
+
+        Returns:
+            Formatted string like "[Step 30] kitchen_0: apple_1 (on counter_3). Agent_1 in bedroom_0."
+        """
+        from habitat_llm.world_model.entity import Room, Object, Human, SpotRobot
+
+        try:
+            wg = self.env_interface.world_graph[uid]
+        except (KeyError, AttributeError, TypeError):
+            return f"[Step {skill_step}] (surroundings unavailable)"
+
+        # Find agent's current room
+        agent_name = f"agent_{uid}"
+        try:
+            agent_node = wg.get_node_from_name(agent_name)
+            room_neighbors = wg.get_neighbors_of_type(agent_node, Room)
+            current_room = room_neighbors[0].name if room_neighbors else "unknown"
+        except (ValueError, IndexError, AttributeError):
+            current_room = "unknown"
+
+        # Find objects in the current room (on furniture)
+        object_parts = []
+        try:
+            for obj in wg.get_all_objects():
+                obj_room = wg.get_room_for_entity(obj)
+                if obj_room and obj_room.name == current_room:
+                    furniture = wg.find_furniture_for_object(obj)
+                    if furniture:
+                        object_parts.append(f"{obj.name} (on {furniture.name})")
+                    else:
+                        object_parts.append(obj.name)
+        except (AttributeError, TypeError):
+            pass
+
+        objects_str = ", ".join(object_parts[:5]) if object_parts else "no objects nearby"
+
+        # Find other agents and their rooms
+        other_agents_parts = []
+        try:
+            for node in wg.get_all_nodes_of_type(Human) + wg.get_all_nodes_of_type(SpotRobot):
+                if node.name == agent_name:
+                    continue
+                other_rooms = wg.get_neighbors_of_type(node, Room)
+                other_room = other_rooms[0].name if other_rooms else "unknown"
+                if other_room == current_room:
+                    other_agents_parts.append(f"{node.name} nearby")
+                else:
+                    other_agents_parts.append(f"{node.name} in {other_room}")
+        except (AttributeError, TypeError):
+            pass
+
+        other_agents_str = ". ".join(other_agents_parts)
+
+        line = f"[Step {skill_step}] {current_room}: {objects_str}."
+        if other_agents_str:
+            line += f" {other_agents_str}."
+        return line
+
+    def _get_nearby_agents(self, uid: int) -> List[tuple]:
+        """
+        Return other agents that are in the same room as the given agent.
+
+        Returns:
+            List of (agent_name, room_name) tuples for co-located agents.
+        """
+        from habitat_llm.world_model.entity import Room, Human, SpotRobot
+
+        try:
+            wg = self.env_interface.world_graph[uid]
+        except (KeyError, AttributeError, TypeError):
+            return []
+
+        agent_name = f"agent_{uid}"
+        try:
+            agent_node = wg.get_node_from_name(agent_name)
+            room_neighbors = wg.get_neighbors_of_type(agent_node, Room)
+            current_room = room_neighbors[0].name if room_neighbors else None
+        except (ValueError, IndexError, AttributeError):
+            return []
+
+        if not current_room:
+            return []
+
+        nearby = []
+        try:
+            for node in wg.get_all_nodes_of_type(Human) + wg.get_all_nodes_of_type(SpotRobot):
+                if node.name == agent_name:
+                    continue
+                other_rooms = wg.get_neighbors_of_type(node, Room)
+                if other_rooms and other_rooms[0].name == current_room:
+                    nearby.append((node.name, current_room))
+        except (AttributeError, TypeError):
+            pass
+
+        return nearby
+
+    @staticmethod
+    def _format_surroundings(
+        snapshots: List[str],
+        agents_passed: Optional[Dict[str, tuple]] = None,
+    ) -> str:
+        """
+        Format accumulated surroundings snapshots and agent encounters.
+
+        Args:
+            snapshots: List of surroundings snapshot strings (last 3 kept).
+            agents_passed: Optional dict mapping agent_name -> (room, step)
+                           for agents encountered in the same room during execution.
+
+        Returns empty string if no snapshots and no encounters.
+        """
+        parts = []
+        if snapshots:
+            lines = "\n".join(f"- {s}" for s in snapshots)
+            parts.append(f"Surroundings observed while acting:\n{lines}")
+        if agents_passed:
+            encounter_strs = [
+                f"{name} (in {room} at step {step})"
+                for name, (room, step) in agents_passed.items()
+            ]
+            parts.append(f"Agents passed while acting: {', '.join(encounter_strs)}")
+        if not parts:
+            return ""
+        return "\n\n" + "\n\n".join(parts)
 
     def evaluate_task(
         self,

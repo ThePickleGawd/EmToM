@@ -411,6 +411,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
             # Phase 3: Execute all LLM agents concurrently
             # =====================================================================
             total_skill_steps = 0
+            surroundings: Dict[int, List[str]] = {}
+            agents_passed: Dict[int, Dict[str, tuple]] = {}  # uid -> {agent_name -> (room, step)}
 
             while llm_agent_state and total_skill_steps < max_skill_steps:
                 # Check if all agents are done
@@ -452,6 +454,17 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
                     state['skill_steps'] += 1
 
+                    # Capture surroundings every 30 frames
+                    if state['skill_steps'] % 30 == 0:
+                        snapshot = self._get_surroundings_description(uid, state['skill_steps'])
+                        surroundings.setdefault(uid, []).append(snapshot)
+                        surroundings[uid] = surroundings[uid][-3:]
+                        # Track agents encountered in same room (first sighting only)
+                        ap = agents_passed.setdefault(uid, {})
+                        for agent_name, room in self._get_nearby_agents(uid):
+                            if agent_name not in ap:
+                                ap[agent_name] = (room, state['skill_steps'])
+
                     try:
                         low_level_actions, planner_info, planner_done = state['planner'].get_next_action(
                             state['instruction'], observations, world_graph
@@ -481,6 +494,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 high_level_action = state['high_level_action']
                 response = state['response']
                 skill_steps = state['skill_steps']
+
+                # Append surroundings observations collected during motor skill
+                response += self._format_surroundings(surroundings.get(uid, []), agents_passed.get(uid))
 
                 # Apply mechanic state changes after successful execution
                 mech_result = state.get('mech_result')
