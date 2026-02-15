@@ -237,6 +237,12 @@ class GameStateManager:
                 if agent_id not in state.messages_sent:
                     state.messages_sent[agent_id] = 0
 
+        elif mech_type == "irreversible_action":
+            # No per-binding setup needed — the mechanic applies globally
+            # to all interaction actions when active. locked_objects starts empty
+            # and gets populated as actions succeed.
+            pass
+
     def sync_from_habitat(self, state: Optional[EMTOMGameState] = None) -> EMTOMGameState:
         """
         Sync state from Habitat simulator.

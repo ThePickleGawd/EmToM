@@ -36,6 +36,7 @@ from emtom.mechanics.handlers import (
     handle_conditional_unlock,
     handle_state_mirroring,
     handle_limited_bandwidth,
+    handle_irreversible_action,
 )
 
 __all__ = [
@@ -57,4 +58,5 @@ __all__ = [
     "handle_conditional_unlock",
     "handle_state_mirroring",
     "handle_limited_bandwidth",
+    "handle_irreversible_action",
 ]

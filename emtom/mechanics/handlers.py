@@ -99,6 +99,15 @@ MECHANIC_INFO = {
         "alt_example": {"mechanic_type": "limited_bandwidth", "message_limits": {"agent_0": 2, "agent_1": 5}},
         "recommended_for_tom": True,
     },
+    "irreversible_action": {
+        "description": "Once an action is performed on an object, that object is permanently locked and no further actions can be taken on it by anyone",
+        "category": "state_constraint",
+        "setup_keys": [],
+        "agent_observation": "That action is permanent — {target} is now locked and cannot be interacted with again.",
+        "tom_use": "Agents must plan carefully and communicate before acting, since mistakes cannot be undone. Creates high-stakes coordination pressure.",
+        "example_binding": {"mechanic_type": "irreversible_action"},
+        "recommended_for_tom": True,
+    },
 }
 
 
@@ -589,6 +598,65 @@ def handle_limited_bandwidth(
     )
 
 
+def handle_irreversible_action(
+    action_name: str,
+    agent_id: str,
+    target: Optional[str],
+    state: EMTOMGameState,
+) -> HandlerResult:
+    """
+    Irreversible Action: Once an action succeeds on an object, it is permanently locked.
+
+    Any subsequent action targeting a locked object is blocked.
+    Only physical interaction actions trigger/are affected by the lock
+    (Open, Close, Pick, Place, UseItem). Navigate and Communicate are unaffected.
+
+    Setup: No per-object configuration needed. When this mechanic is active,
+    ALL successful interaction actions lock their target object.
+
+    State:
+        state.locked_objects = {"cabinet_1": "Open by agent_0", ...}
+    """
+    if not target:
+        return no_effect(state)
+
+    # Only applies to physical interaction actions
+    INTERACTION_ACTIONS = {"Open", "Close", "Pick", "Place", "UseItem"}
+    if action_name not in INTERACTION_ACTIONS:
+        return no_effect(state)
+
+    # For Place targets like "apple_1, on, table_1", extract the primary object
+    primary_target = target.split(",")[0].strip() if "," in target else target
+
+    # Check if object is already locked → block
+    if primary_target in state.locked_objects:
+        locked_by = state.locked_objects[primary_target]
+        return HandlerResult(
+            applies=True,
+            state=state,
+            observation=f"You cannot {action_name.lower()} {primary_target} — it was permanently locked after a previous action ({locked_by}).",
+            success=False,
+            effects=[],
+            blocked=True,
+            mechanic_type="irreversible_action",
+        )
+
+    # Object is not locked yet — allow the action but mark it for locking
+    new_state = copy.copy(state)
+    new_locked = dict(state.locked_objects)
+    new_locked[primary_target] = f"{action_name} by {agent_id}"
+    new_state.locked_objects = new_locked
+
+    return HandlerResult(
+        applies=True,
+        state=new_state,
+        observation=f"Action performed. {primary_target} is now permanently locked — no further actions can be taken on it.",
+        success=True,
+        effects=[f"locked={primary_target}_by_{agent_id}"],
+        mechanic_type="irreversible_action",
+    )
+
+
 # =============================================================================
 # Handler Registry
 # =============================================================================
@@ -600,6 +668,7 @@ MECHANIC_HANDLERS: Dict[str, MechanicHandler] = {
     "state_mirroring": handle_state_mirroring,
     "room_restriction": handle_room_restriction,
     "limited_bandwidth": handle_limited_bandwidth,
+    "irreversible_action": handle_irreversible_action,
 }
 
 

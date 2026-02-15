@@ -1201,6 +1201,15 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
             for s in secrets:
                 parts.append(f"- {s}")
 
+        # Active mechanic constraints — warn agents about mechanics that
+        # affect how they should plan (e.g., irreversible actions)
+        mechanic_warnings = _build_mechanic_warnings(task)
+        if mechanic_warnings:
+            parts.append("")
+            parts.append("[Important Constraints]:")
+            for w in mechanic_warnings:
+                parts.append(f"- {w}")
+
         instructions[agent_id] = "\n".join(parts)
 
     return instructions
@@ -1233,3 +1242,26 @@ def _build_teammate_info(agent_id: str, all_agents: list, teams: dict = None) ->
         if others:
             return f"Your teammates are: {', '.join(others)}."
     return ""
+
+
+def _build_mechanic_warnings(task: "GeneratedTask") -> List[str]:
+    """Build warning strings for active mechanics that agents should know about upfront."""
+    warnings = []
+    active = getattr(task, "active_mechanics", []) or []
+
+    if "irreversible_action" in active:
+        warnings.append(
+            "IRREVERSIBLE ACTIONS: Actions on objects are permanent. "
+            "Once you perform an action on an object (Open, Close, Pick, Place), "
+            "that object becomes permanently locked and no further actions can be "
+            "taken on it by anyone for the rest of the task. Think carefully and "
+            "coordinate with your partner before acting."
+        )
+
+    if "limited_bandwidth" in active:
+        warnings.append(
+            "LIMITED COMMUNICATION: You have a limited number of messages you can send. "
+            "Choose your words carefully and prioritize the most important information."
+        )
+
+    return warnings

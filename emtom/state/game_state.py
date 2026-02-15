@@ -157,6 +157,11 @@ class EMTOMGameState:
     # Maps agent_id -> number of Communicate actions used so far
     messages_sent: Dict[str, int] = field(default_factory=dict)
 
+    # === Irreversible action mechanic ===
+    # Maps object_id -> description of what locked it (e.g., "Open by agent_0")
+    # Once an object is in here, no further actions can target it
+    locked_objects: Dict[str, str] = field(default_factory=dict)
+
     def get_object_property(self, obj_id: str, prop: str, default: Any = None) -> Any:
         """Get a custom property for an object."""
         return self.object_properties.get(obj_id, {}).get(prop, default)
@@ -269,6 +274,8 @@ class EMTOMGameState:
             # Limited bandwidth
             "message_limits": self.message_limits,
             "messages_sent": self.messages_sent,
+            # Irreversible action
+            "locked_objects": self.locked_objects,
         }
 
     @classmethod
@@ -326,6 +333,8 @@ class EMTOMGameState:
         # Limited bandwidth
         state.message_limits = data.get("message_limits", {})
         state.messages_sent = data.get("messages_sent", {})
+        # Irreversible action
+        state.locked_objects = data.get("locked_objects", {})
         return state
 
     def to_json(self) -> str:
