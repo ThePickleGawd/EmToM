@@ -104,27 +104,52 @@ class PDKBSolver:
                         error=f"Goal references unknown object '{arg}'",
                     )
 
-        # Check 3: For each goal literal, verify an action can achieve it
-        achievable_predicates = set()
+        # Check 3: For each goal literal, verify it is reachable.
+        # Dynamic predicates (with positive effects) are considered potentially
+        # achievable. Static predicates must already hold exactly in init.
+        positive_effect_predicates = set()
         for action in domain.actions:
             for effect in action.effects:
                 if not effect.literal.negated:
-                    achievable_predicates.add(effect.literal.predicate)
+                    positive_effect_predicates.add(effect.literal.predicate)
 
-        # Init predicates are also "achievable" (already true)
-        init_predicates = {l.predicate for l in problem.init if not l.negated}
-        achievable_predicates |= init_predicates
+        init_positive_literals = {
+            (l.predicate, l.args)
+            for l in problem.init
+            if not l.negated
+        }
 
         for literal in goal_literals:
-            if literal.negated:
-                # Negated goals are achievable if the positive form isn't forced
+            lit_key = (literal.predicate, literal.args)
+            if literal.predicate in positive_effect_predicates:
+                # Dynamic predicate; conservative structural check only.
                 continue
-            if literal.predicate not in achievable_predicates:
+
+            if literal.negated:
+                # Static negated literal is impossible only if opposite literal
+                # is fixed true in init.
+                if lit_key in init_positive_literals:
+                    return SolverResult(
+                        solvable=False,
+                        belief_depth=0,
+                        solve_time=time.time() - start,
+                        error=(
+                            "Static goal literal is unsatisfiable: "
+                            f"not {literal.predicate}{literal.args} but "
+                            "the positive literal is fixed in init"
+                        ),
+                    )
+                continue
+
+            if lit_key not in init_positive_literals:
                 return SolverResult(
                     solvable=False,
                     belief_depth=0,
                     solve_time=time.time() - start,
-                    error=f"No action can achieve '{literal.predicate}'",
+                    error=(
+                        f"No action can achieve literal "
+                        f"'{literal.predicate}{literal.args}'"
+                    ),
                 )
 
         # Check 4: Epistemic requirements

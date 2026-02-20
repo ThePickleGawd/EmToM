@@ -38,7 +38,7 @@ Assigned!
 - `bash[cmd]` - Run shell commands.
 - `verify_pddl[]` - Check PDDL goal solvability and compute ToM depth.
 - `judge[]` - Evaluate task quality. Must pass before verify.
-- `verify_golden_trajectory[]` - Test trajectory in simulator. Run after judge passes.
+- `verify_golden_trajectory[]` - Deterministically regenerate trajectory from spec and test it in simulator. Run after judge passes.
 - `test_task[]` - Difficulty calibration. Measures LLM agent pass rate (target: ~10%).
 - `submit_task[]` - Save task. Requires judge + verify + test_task.
 - `fail[reason]` - **STOPS ALL GENERATION.** Only for simulator bugs or critical errors. Use `new_scene[N]` for task issues.
@@ -49,7 +49,7 @@ Assigned!
 3. Edit `{task_file}` — use `pddl_goal` for goals
 4. `verify_pddl[]` → check solvability + ToM depth
 5. `judge[]` → fix → repeat until pass
-6. `verify_golden_trajectory[]` → fix → repeat until pass
+6. `verify_golden_trajectory[]` → deterministic regeneration + simulator check → fix spec → repeat until pass
 7. `test_task[]` → measures pass rate and records calibration data
 8. `submit_task[]`
 9. Repeat from step 1 for next task
@@ -132,7 +132,8 @@ Each agent's secrets MUST mention their message limit: "You can only send N mess
   "pddl_owners": {{}},
   "items": [{{"item_id": "item_X", "inside": "container"}}],
   "locked_containers": {{"container": "item_key"}},
-  "golden_trajectory": [{{"actions": [{{"agent": "agent_0", "action": "Navigate[room]"}}]}}]
+  "golden_trajectory": [{{"actions": [{{"agent": "agent_0", "action": "Wait[]"}}]}}],
+  "golden_trajectory_metadata": {{}}
 }}
 ```
 
@@ -212,8 +213,9 @@ Use `verify_pddl[]` to see the computed ToM depth. Design information asymmetry 
 {action_descriptions}
 
 ## Golden Trajectory
-Each step has ALL agents. Format: `{{"actions": [{{"agent": "agent_0", "action": "Navigate[room]"}}, ...]}}`
-Communicate format: Communicate["message", agent_X] or Communicate["message", all]
+`golden_trajectory` is a derived artifact. Do NOT hand-author it as source-of-truth.
+`verify_golden_trajectory[]` and `submit_task[]` regenerate it deterministically from the task spec.
+You should focus on editing spec fields (`pddl_goal`, mechanics, constraints, secrets).
 
 ## Structural Diversity
 {diversity_section}"""

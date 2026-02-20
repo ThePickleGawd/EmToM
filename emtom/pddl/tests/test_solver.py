@@ -72,6 +72,36 @@ class TestSolver:
         assert result.solvable
         assert result.belief_depth >= 1
 
+    def test_static_literal_requires_exact_init_match(self):
+        goal = Literal("is_inside", ("item_key_1", "cabinet_27"))
+        problem = self._make_problem(
+            goal,
+            objects={
+                "agent_0": "agent",
+                "item_key_1": "item",
+                "cabinet_27": "furniture",
+                "cabinet_30": "furniture",
+            },
+            init=[Literal("is_inside", ("item_key_1", "cabinet_30"))],
+        )
+        result = PDKBSolver().solve(EMTOM_DOMAIN, problem)
+        assert not result.solvable
+        assert "No action can achieve literal" in result.error
+
+    def test_static_literal_satisfied_from_exact_init(self):
+        goal = Literal("is_inside", ("item_key_1", "cabinet_27"))
+        problem = self._make_problem(
+            goal,
+            objects={
+                "agent_0": "agent",
+                "item_key_1": "item",
+                "cabinet_27": "furniture",
+            },
+            init=[Literal("is_inside", ("item_key_1", "cabinet_27"))],
+        )
+        result = PDKBSolver().solve(EMTOM_DOMAIN, problem)
+        assert result.solvable
+
 
 class TestEpistemicDepth:
     def test_literal_depth_0(self):

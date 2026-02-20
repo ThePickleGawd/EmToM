@@ -9,6 +9,7 @@ A ReAct-style agent with 3 tools:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -159,7 +160,7 @@ class TaskGeneratorAgent:
             template["golden_trajectory"] = [
                 {
                     "actions": [
-                        {"agent": f"agent_{i}", "action": "ACTION_NAME[TARGET]" if i == 0 else "Wait"}
+                        {"agent": f"agent_{i}", "action": "Wait[]"}
                         for i in range(self.agents_max)
                     ]
                 }
@@ -172,6 +173,8 @@ class TaskGeneratorAgent:
         self.messages: List[Dict[str, str]] = []
         self.iteration_count = 0
         self.last_verify_passed = False  # Track if golden trajectory verified
+        self.last_verified_spec_hash: Optional[str] = None
+        self.last_verified_trajectory_hash: Optional[str] = None
         self.last_judge_passed = False  # Track if Judge passed
         self.last_test_passed = False  # Track if test_task was run (for calibration)
         self.last_judgment: Optional[CouncilVerdict] = None  # Last judgment result
@@ -650,7 +653,7 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
             task["golden_trajectory"] = [
                 {
                     "actions": [
-                        {"agent": f"agent_{i}", "action": "ACTION_NAME[TARGET]" if i == 0 else "Wait"}
+                        {"agent": f"agent_{i}", "action": "Wait[]"}
                         for i in range(num_agents)
                     ]
                 }
@@ -1116,6 +1119,8 @@ SUMMARY:"""
             # adding/fixing a golden trajectory without re-judging.
             if "working_task.json" in args and (">" in args or "cat" in args):
                 self.last_verify_passed = False
+                self.last_verified_spec_hash = None
+                self.last_verified_trajectory_hash = None
                 self.last_test_passed = False
             return self._bash(args)
         elif tool == "test_task":
@@ -1386,622 +1391,63 @@ SUMMARY:"""
 
     def _validate_task_structure(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """Validate task JSON structure without running benchmark."""
-        # Core required fields (success_condition is optional if subtasks have valid DAG)
-        required_fields = [
-            "task_id", "title", "task", "episode_id",
-            "mechanic_bindings", "agent_secrets",
-            "agent_actions"
-        ]
-
-        missing = [f for f in required_fields if f not in task_data]
-        if missing:
-            return {
-                "valid": False,
-                "error": f"Missing required fields: {missing}",
-                "summary": "Task validation failed"
-            }
-
-        # Validate episode_id matches the loaded scene
-        if self.scene_data:
-            expected_episode = self.scene_data.episode_id
-            task_episode = task_data.get("episode_id", "")
-            if task_episode != expected_episode:
-                return {
-                    "valid": False,
-                    "error": f"episode_id must be '{expected_episode}' (from loaded scene), got '{task_episode}'",
-                    "summary": "Task validation failed - wrong episode"
-                }
-
-        # Shared deterministic spec checks (also used by static verifier).
-        spec_errors = validate_blocking_spec(task_data, self.scene_data)
-        if spec_errors:
-            return {
-                "valid": False,
-                "error": spec_errors[0],
-                "errors": spec_errors,
-                "summary": f"Task has {len(spec_errors)} validation error(s)",
-            }
-
-        # Collect defined item IDs from task
-        defined_items = set()
-        for item in task_data.get("items", []):
-            item_id = item.get("item_id")
-            if item_id:
-                defined_items.add(item_id)
-
-        # Validate object IDs in golden_trajectory exist in scene or are custom items
-        if self.scene_data and task_data.get("golden_trajectory"):
-            all_valid_ids = set(
-                self.scene_data.rooms +
-                self.scene_data.furniture +
-                self.scene_data.objects
-            )
-            # Also include custom items from task definition
-            all_valid_ids.update(defined_items)
-
-            invalid_ids = []
-            invalid_items = []
-            for step in task_data["golden_trajectory"]:
-                actions = step.get("actions", [])
-                for action_entry in actions:
-                    # Parse PARTNR-style action: "Navigate[table_22]" -> args = "table_22"
-                    action_str = action_entry.get("action", "")
-                    import re
-                    # Allow empty bracket args for commands like Wait[]
-                    match = re.match(r'(\w+)(?:\[(.*)\])?$', action_str)
-                    if not match:
-                        continue
-                    action_name, args = match.group(1), match.group(2)
-
-                    # Skip actions without args or communication/wait
-                    if not args or action_name in ["Communicate", "Wait"]:
-                        continue
-
-                    # For Place/UseItem, args is comma-separated - check all parts
-                    # Place format: Place[obj, relation, target, constraint, ref]
-                    # Skip relation/constraint keywords (from habitat_llm/world_model/entities/furniture.py)
-                    place_keywords = {"on", "within", "next_to"}
-                    parts = [p.strip() for p in args.split(",")]
-                    for target_id in parts:
-                        if not target_id or target_id == "None" or target_id in place_keywords:
-                            continue
-                        # Check item_ prefixed IDs against defined items
-                        if target_id.startswith("item_"):
-                            if target_id not in defined_items:
-                                invalid_items.append(target_id)
-                        elif target_id not in all_valid_ids:
-                            invalid_ids.append(target_id)
-
-            if invalid_ids:
-                return {
-                    "valid": False,
-                    "error": f"golden_trajectory contains invalid object IDs not in scene: {list(set(invalid_ids))}",
-                    "summary": "Task validation failed - invalid object IDs"
-                }
-            if invalid_items:
-                return {
-                    "valid": False,
-                    "error": f"golden_trajectory references undefined items: {list(set(invalid_items))}. Defined items: {list(defined_items)}",
-                    "summary": "Task validation failed - item ID mismatch"
-                }
-
-        # Validate success condition OR subtasks DAG OR pddl_goal
-        has_success_condition = "success_condition" in task_data and task_data["success_condition"]
-        has_subtasks = "subtasks" in task_data and task_data["subtasks"]
-        has_pddl_goal = "pddl_goal" in task_data and task_data["pddl_goal"]
-
-        if not has_success_condition and not has_subtasks and not has_pddl_goal:
-            return {
-                "valid": False,
-                "error": "Task must have 'pddl_goal', 'success_condition', or 'subtasks' with valid DAG",
-                "summary": "Task validation failed"
-            }
-
-        # Validate PDDL goal if present
-        if has_pddl_goal:
-            try:
-                from emtom.pddl.dsl import parse_goal_string
-                goal = parse_goal_string(task_data["pddl_goal"])
-                conjuncts = goal.flatten()
-                if not conjuncts:
-                    return {
-                        "valid": False,
-                        "error": "pddl_goal parsed but contains no goal conjuncts",
-                        "summary": "Task validation failed"
-                    }
-            except Exception as e:
-                return {
-                    "valid": False,
-                    "error": f"Invalid pddl_goal syntax: {e}",
-                    "summary": "Task validation failed"
-                }
-
-        # Validate success-condition predicates use supported schema.
-        from emtom.evaluation import PARTNR_PREDICATES, EMTOM_PREDICATES
-        from emtom.state.manager import GameStateManager
-        supported_predicates = PARTNR_PREDICATES | EMTOM_PREDICATES | GameStateManager.GAME_STATE_PREDICATES
-
-        def _check_supported_predicate(condition: Dict[str, Any], scope: str) -> Optional[Dict[str, Any]]:
-            prop = condition.get("property")
-            if not prop:
-                return {
-                    "valid": False,
-                    "error": f"{scope} missing 'property' field in success_condition",
-                    "summary": "Task validation failed - invalid success_condition schema",
-                }
-            if prop not in supported_predicates:
-                return {
-                    "valid": False,
-                    "error": (
-                        f"{scope} uses unsupported predicate '{prop}'. "
-                        f"Supported predicates: {sorted(supported_predicates)}"
-                    ),
-                    "summary": "Task validation failed - unsupported predicate",
-                }
-            return None
-
-        top_level_condition = task_data.get("success_condition")
-        if isinstance(top_level_condition, dict):
-            for idx, cond in enumerate(top_level_condition.get("required_states", [])):
-                if isinstance(cond, dict):
-                    error = _check_supported_predicate(cond, f"success_condition.required_states[{idx}]")
-                    if error:
-                        return error
-
-        # If using subtasks, validate DAG structure
-        if has_subtasks:
-            from emtom.task_gen.dag import validate_dag
-            from emtom.task_gen import Subtask
-
-            subtasks = []
-            for s in task_data["subtasks"]:
-                if isinstance(s, dict):
-                    subtasks.append(Subtask.from_dict(s))
-
-            is_valid, errors = validate_dag(subtasks)
-            if not is_valid:
-                return {
-                    "valid": False,
-                    "error": f"Invalid subtask DAG: {'; '.join(errors)}",
-                    "summary": "Task validation failed"
-                }
-
-            # Validate at least one required subtask exists
-            required_subtasks = [s for s in subtasks if getattr(s, 'required', True) is True]
-            if not required_subtasks:
-                return {
-                    "valid": False,
-                    "error": "At least one subtask must have 'required: true' for task success",
-                    "summary": "Task validation failed - no required subtasks"
-                }
-
-            # Validate item IDs in subtask success conditions
-            invalid_items_in_subtasks = []
-            for s in task_data["subtasks"]:
-                if isinstance(s, dict):
-                    condition = s.get("success_condition", {})
-                    if isinstance(condition, dict):
-                        # Check has_item conditions
-                        if condition.get("property") == "has_item":
-                            target_item = condition.get("target") or condition.get("value")
-                            if target_item and target_item.startswith("item_"):
-                                if target_item not in defined_items:
-                                    invalid_items_in_subtasks.append(target_item)
-
-            if invalid_items_in_subtasks:
-                return {
-                    "valid": False,
-                    "error": f"subtasks reference undefined items: {list(set(invalid_items_in_subtasks))}. Defined items: {list(defined_items)}",
-                    "summary": "Task validation failed - item ID mismatch in subtasks"
-                }
-
-            for i, s in enumerate(task_data["subtasks"]):
-                if isinstance(s, dict):
-                    condition = s.get("success_condition", {})
-                    if isinstance(condition, dict):
-                        error = _check_supported_predicate(condition, f"subtasks[{i}]")
-                        if error:
-                            return error
-
-        # Validate locked_containers references
-        locked_containers = task_data.get("locked_containers", {})
-        if locked_containers and isinstance(locked_containers, dict):
-            # Keys should be valid articulated furniture (must be openable)
-            if self.scene_data:
-                all_articulated = set(self.scene_data.articulated_furniture)
-                invalid_containers = [c for c in locked_containers.keys() if c not in all_articulated]
-                if invalid_containers:
-                    return {
-                        "valid": False,
-                        "error": f"locked_containers must reference articulated furniture (openable containers). Invalid: {invalid_containers}",
-                        "summary": "Task validation failed - invalid locked container"
-                    }
-            # Values should be defined items
-            invalid_key_items = [v for v in locked_containers.values() if v not in defined_items]
-            if invalid_key_items:
-                return {
-                    "valid": False,
-                    "error": f"locked_containers references undefined key items: {invalid_key_items}. Defined items: {list(defined_items)}",
-                    "summary": "Task validation failed - invalid key item"
-                }
-
-        # Validate items inside references are articulated furniture (Open[] only)
-        for item in task_data.get("items", []):
-            # Backward-compat: accept legacy hidden_in from older tasks.
-            inside = item.get("inside") or item.get("hidden_in")
-            if inside and self.scene_data:
-                all_articulated = set(self.scene_data.articulated_furniture)
-                if inside not in all_articulated:
-                    return {
-                        "valid": False,
-                        "error": f"item '{item.get('item_id')}' has inside='{inside}' which is not articulated/openable furniture",
-                        "summary": "Task validation failed - invalid inside container"
-                    }
-
-        # Validate agent IDs are consistent with num_agents
-        num_agents = task_data.get("num_agents", 2)
-        valid_agent_ids = {f"agent_{i}" for i in range(num_agents)}
-
-        # Check agent_actions keys
-        for agent_id in task_data.get("agent_actions", {}).keys():
-            if agent_id not in valid_agent_ids:
-                return {
-                    "valid": False,
-                    "error": f"agent_actions contains invalid agent ID '{agent_id}'. Valid: {sorted(valid_agent_ids)} (num_agents={num_agents})",
-                    "summary": "Task validation failed - invalid agent ID"
-                }
-
-        # Check agent_secrets keys
-        for agent_id in task_data.get("agent_secrets", {}).keys():
-            if agent_id not in valid_agent_ids:
-                return {
-                    "valid": False,
-                    "error": f"agent_secrets contains invalid agent ID '{agent_id}'. Valid: {sorted(valid_agent_ids)} (num_agents={num_agents})",
-                    "summary": "Task validation failed - invalid agent ID"
-                }
-
-        # Check subtask success_condition entity references valid agents
-        for subtask in task_data.get("subtasks", []):
-            if not isinstance(subtask, dict):
-                continue
-            sc = subtask.get("success_condition", {})
-            if not isinstance(sc, dict):
-                continue
-            entity = sc.get("entity", "")
-            if not isinstance(entity, str):
-                entity = str(entity)
-            if entity.startswith("agent_") and entity not in valid_agent_ids:
-                return {
-                    "valid": False,
-                    "error": f"subtask '{subtask.get('id')}' references invalid agent '{entity}'. Valid: {sorted(valid_agent_ids)}",
-                    "summary": "Task validation failed - invalid agent in subtask"
-                }
-
-        # Check task description is not empty
-        if not task_data.get("task") or len(task_data.get("task", "")) < 20:
-            return {
-                "valid": False,
-                "error": "task field must be at least 20 characters",
-                "summary": "Task validation failed"
-            }
-
-        # Validate object IDs in task description (if any) exist in scene
-        # Note: Task descriptions should use natural language (e.g., "the microwave in the kitchen")
-        # and agents use FindObjectTool to resolve to actual IDs at runtime.
-        # We only validate that any IDs mentioned actually exist (to catch typos).
-        task_desc = task_data.get("task", "")
-        import re
-        object_pattern = r'\b[a-z_]+_\d+\b'
-        object_refs = re.findall(object_pattern, task_desc)
-
-        # Check that any object IDs in task actually exist in scene
-        if self.scene_data:
-            valid_scene_ids = set(
-                self.scene_data.rooms +
-                self.scene_data.furniture +
-                self.scene_data.objects
-            )
-            # Also allow item_ prefixed IDs (custom items defined in task)
-            defined_items = {item.get("item_id") for item in task_data.get("items", []) if item.get("item_id")}
-            valid_scene_ids.update(defined_items)
-
-            invalid_task_refs = [ref for ref in object_refs if ref not in valid_scene_ids and not ref.startswith(("item_", "agent_", "team_"))]
-            if invalid_task_refs:
-                return {
-                    "valid": False,
-                    "error": f"task references objects that don't exist in scene: {invalid_task_refs}. Use only: {list(self.scene_data.objects)[:10]}...",
-                    "summary": "Task validation failed - invented object IDs"
-                }
-
-            # Also check agent_secrets for invented object IDs
-            for agent_id, secrets in task_data.get("agent_secrets", {}).items():
-                for secret in secrets:
-                    secret_refs = re.findall(object_pattern, secret)
-                    invalid_secret_refs = [ref for ref in secret_refs if ref not in valid_scene_ids and not ref.startswith(("item_", "agent_", "team_"))]
-                    if invalid_secret_refs:
-                        return {
-                            "valid": False,
-                            "error": f"agent_secrets[{agent_id}] references objects that don't exist in scene: {invalid_secret_refs}",
-                            "summary": "Task validation failed - invented object IDs in secrets"
-                        }
-
-            # Check subtask success_conditions for invented object IDs
-            for subtask in task_data.get("subtasks", []):
-                if not isinstance(subtask, dict):
-                    continue
-                sc = subtask.get("success_condition", {})
-                if not isinstance(sc, dict):
-                    continue
-                for field in ["entity", "target"]:
-                    val = sc.get(field, "")
-                    if val and isinstance(val, str) and not val.startswith("agent_"):
-                        val_refs = re.findall(object_pattern, val)
-                        invalid_sc_refs = [ref for ref in val_refs if ref not in valid_scene_ids and not ref.startswith("item_")]
-                        if invalid_sc_refs:
-                            return {
-                                "valid": False,
-                                "error": f"subtask '{subtask.get('id')}' success_condition references objects that don't exist: {invalid_sc_refs}",
-                                "summary": "Task validation failed - invented object IDs in subtasks"
-                            }
-
-        # Check mechanic_bindings structure
-        # Mechanics that require trigger_object vs those that use other keys
-        TRIGGER_OBJECT_MECHANICS = {"inverse_state", "remote_control", "conditional_unlock", "state_mirroring"}
-        for i, binding in enumerate(task_data.get("mechanic_bindings", [])):
-            if "mechanic_type" not in binding:
-                return {
-                    "valid": False,
-                    "error": f"mechanic_bindings[{i}] missing mechanic_type",
-                    "summary": "Task validation failed"
-                }
-            # Only require trigger_object for mechanics that use it
-            mechanic_type = binding.get("mechanic_type", "")
-            if mechanic_type in TRIGGER_OBJECT_MECHANICS and "trigger_object" not in binding:
-                return {
-                    "valid": False,
-                    "error": f"mechanic_bindings[{i}] ({mechanic_type}) missing trigger_object",
-                    "summary": "Task validation failed"
-                }
-            if mechanic_type == "limited_bandwidth" and not isinstance(binding.get("message_limits"), dict):
-                return {
-                    "valid": False,
-                    "error": f"mechanic_bindings[{i}] (limited_bandwidth) missing message_limits dict",
-                    "summary": "Task validation failed"
-                }
-
-        # Check agent_secrets has proper structure
-        if not isinstance(task_data.get("agent_secrets"), dict):
-            return {
-                "valid": False,
-                "error": "agent_secrets must be a dict",
-                "summary": "Task validation failed"
-            }
-
-        # Validate message_targets if present
-        raw_mt = task_data.get("message_targets")
-        if raw_mt is not None:
-            if not isinstance(raw_mt, dict):
-                return {
-                    "valid": False,
-                    "error": "message_targets must be a dict mapping agent_id to list of allowed recipient agent_ids",
-                    "summary": "Task validation failed"
-                }
-            for mt_agent, mt_targets in raw_mt.items():
-                if mt_agent not in valid_agent_ids:
-                    return {
-                        "valid": False,
-                        "error": f"message_targets key '{mt_agent}' is not a valid agent ID. Valid: {sorted(valid_agent_ids)}",
-                        "summary": "Task validation failed"
-                    }
-                if not isinstance(mt_targets, list):
-                    return {
-                        "valid": False,
-                        "error": f"message_targets['{mt_agent}'] must be a list of agent IDs",
-                        "summary": "Task validation failed"
-                    }
-                for target_id in mt_targets:
-                    if target_id not in valid_agent_ids:
-                        return {
-                            "valid": False,
-                            "error": f"message_targets['{mt_agent}'] contains invalid agent ID '{target_id}'. Valid: {sorted(valid_agent_ids)}",
-                            "summary": "Task validation failed"
-                        }
-                    if target_id == mt_agent:
-                        return {
-                            "valid": False,
-                            "error": f"message_targets['{mt_agent}'] contains self-reference. Agents cannot target themselves.",
-                            "summary": "Task validation failed"
-                        }
-
-        # Try to parse as GeneratedTask
-        try:
-            from emtom.task_gen import GeneratedTask
-            task = GeneratedTask.from_dict(task_data)
-        except Exception as e:
-            return {
-                "valid": False,
-                "error": f"Failed to parse as GeneratedTask: {e}",
-                "summary": "Task validation failed"
-            }
-
-        return {
-            "valid": True,
-            "task_id": task_data.get("task_id"),
-            "title": task_data.get("title"),
-            "mechanics": [b.get("mechanic_type") for b in task_data.get("mechanic_bindings", [])],
-            "tom_required": task_data.get("theory_of_mind_required", False),
-            "summary": "Task structure is valid"
-        }
+        from emtom.cli.validate_task import validate
+        result = validate(task_data, self.scene_data)
+        if result["success"]:
+            return result["data"]
+        return {"valid": False, "error": result["error"], "summary": "Task validation failed"}
 
     def _static_validate_trajectory(self, task_data: Dict[str, Any], golden: List[Dict]) -> List[str]:
-        """
-        Fast static validation of golden trajectory before running simulation.
-
-        Catches common errors without expensive Habitat initialization:
-        - Invalid object/furniture IDs
-        - Invalid action names
-        - Missing agents in trajectory steps
-        - Malformed action syntax
-
-        Returns list of error messages (empty if valid).
-        """
-        errors = []
-        num_agents = task_data.get("num_agents", 2)
-        valid_agents = {f"agent_{i}" for i in range(num_agents)}
-
-        # Valid action names
-        valid_actions = {
-            "Navigate", "Open", "Close", "Pick", "Place",
-            "UseItem", "Communicate", "Wait", "Clean", "Pour", "PowerOn", "PowerOff",
-            "Fill", "FindObjectTool", "FindReceptacleTool", "FindRoomTool"
-        }
-
-        # Build set of valid scene IDs
-        valid_ids = set()
-        if self.scene_data:
-            valid_ids.update(self.scene_data.rooms)
-            valid_ids.update(self.scene_data.furniture)
-            valid_ids.update(self.scene_data.objects)
-
-        # Add defined items
-        defined_items = {item.get("item_id") for item in task_data.get("items", []) if item.get("item_id")}
-        valid_ids.update(defined_items)
-
-        # Check each step
-        for step_idx, step in enumerate(golden):
-            actions = step.get("actions", [])
-            if not actions:
-                errors.append(f"Step {step_idx}: No actions array")
-                continue
-
-            agents_in_step = set()
-            for action_entry in actions:
-                agent = action_entry.get("agent", "")
-                action_str = action_entry.get("action", "")
-
-                # Check agent ID
-                if agent not in valid_agents:
-                    errors.append(f"Step {step_idx}: Invalid agent '{agent}' (valid: {sorted(valid_agents)})")
-                agents_in_step.add(agent)
-
-                # Parse action
-                # Allow empty bracket args for commands like Wait[]
-                match = re.match(r'(\w+)(?:\[(.*)\])?$', action_str)
-                if not match:
-                    errors.append(f"Step {step_idx}: Malformed action '{action_str}'")
-                    continue
-
-                action_name, args = match.group(1), match.group(2)
-
-                # Check action name
-                if action_name not in valid_actions:
-                    errors.append(f"Step {step_idx}: Unknown action '{action_name}'")
-
-                # Skip ID validation for actions without targets or free-text args
-                if action_name in ("Wait", "Communicate", "FindObjectTool", "FindReceptacleTool", "FindRoomTool") or not args:
-                    continue
-
-                # Check object IDs in args (skip None, relation keywords)
-                skip_words = {"on", "within", "next_to", "None", ""}
-                parts = [p.strip() for p in args.split(",")]
-                for part in parts:
-                    if part in skip_words:
-                        continue
-                    # Check if it's a valid ID
-                    if valid_ids and part not in valid_ids:
-                        # Only error for non-item IDs (items might be dynamically created)
-                        if not part.startswith("item_"):
-                            errors.append(f"Step {step_idx}: Unknown object '{part}' in {action_str}")
-
-            # Check all agents have an action (warn only, not error)
-            missing_agents = valid_agents - agents_in_step
-            if missing_agents:
-                errors.append(f"Step {step_idx}: Missing actions for {sorted(missing_agents)} (add Wait if idle)")
-
-        # Check room-restriction consistency before expensive simulation.
-        errors.extend(validate_room_restriction_trajectory(task_data, self.scene_data, golden))
-
-        return errors[:10]  # Limit to first 10 errors
+        """Fast static validation of golden trajectory (no simulator required)."""
+        from emtom.cli.validate_task import static_validate_trajectory
+        return static_validate_trajectory(task_data, golden, self.scene_data)
 
     def _run_benchmark(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Run the actual benchmark test in a subprocess.
-
-        Uses subprocess to get a fresh GL context (avoids context corruption
-        when running multiple tests in the same process).
-
-        Saves agent trajectories to agent_trajectories/run_N/ directory.
-        Returns result with trajectory_dir path and result.txt content included.
-        """
+        """Run benchmark test in a subprocess (fresh GL context)."""
         import tempfile
 
-        # Current task number (1-indexed: task being worked on, not yet submitted)
         current_task_num = len(self.submitted_tasks) + 1
-
-        # Increment run counter and create task-scoped trajectory directory
         self._test_run_count += 1
         run_dir = self.trajectories_dir / f"task_{current_task_num}" / f"run_{self._test_run_count}"
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write task to temp file for subprocess
         try:
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
                 json.dump(task_data, f)
                 temp_task_file = f.name
-            # Also create a temp file for results
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                temp_result_file = f.name
         except Exception as e:
-            return {
-                "steps": 0,
-                "done": False,
-                "error": f"Failed to write temp task file: {e}",
-                "summary": f"Setup error: {e}"
-            }
+            return {"steps": 0, "done": False, "error": f"Failed to write temp task file: {e}"}
 
-        # Run test in subprocess with trajectory output directory
         num_agents = task_data.get("num_agents", 2)
-        config_name = f"examples/emtom_{num_agents}_robots"
-        script_path = Path(__file__).parent / "test_task.py"
-
         cmd = [
-            sys.executable,
-            str(script_path),
-            "--task-file", temp_task_file,
-            "--result-file", temp_result_file,
+            sys.executable, "-m", "emtom.cli.test_task",
+            temp_task_file,
+            "--working-dir", str(self.working_dir),
             "--trajectory-dir", str(run_dir),
-            "--config-name", config_name,
+            "--config-name", f"examples/emtom_{num_agents}_robots",
         ]
         if self.test_model:
             cmd.extend(["--test-model", self.test_model])
 
         try:
-            subprocess.run(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,  # Suppress C++ simulator spam (navmesh errors etc.)
-                text=True,
-                timeout=1200,  # 20 minute timeout for LLM agents
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=1200,
             )
+            self._cleanup_temp_files(temp_task_file)
 
-            # Read result from file (cleaner than parsing stdout)
             try:
-                with open(temp_result_file) as f:
-                    result = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError) as e:
-                result = {
-                    "steps": 0,
-                    "done": False,
-                    "error": f"Failed to read result file: {e}",
-                    "summary": "Result file error"
-                }
+                result_data = json.loads(proc.stdout)
+            except (json.JSONDecodeError, ValueError):
+                return {"steps": 0, "done": False, "error": f"Failed to parse output: {proc.stderr[:500]}"}
 
-            self._cleanup_temp_files(temp_task_file, temp_result_file)
+            if result_data.get("success"):
+                result = result_data["data"]
+            else:
+                result = {"steps": 0, "done": False, "error": result_data.get("error", "Unknown error")}
 
-            # Add trajectory directory path to result
             result["trajectory_dir"] = str(run_dir)
 
-            # Read result.txt content and include in observation (saves agent a turn)
+            # Read result.txt if available
             result_txt_path = run_dir / "result.txt"
             if result_txt_path.exists():
                 try:
@@ -2010,391 +1456,171 @@ SUMMARY:"""
                 except Exception:
                     pass
 
-            # Remove full planner traces from result (agent reads files instead via bash)
-            # Keep action_history for calibration tracking - it will be removed after saving
             result.pop("planner_traces", None)
-
             return result
 
         except subprocess.TimeoutExpired:
-            self._cleanup_temp_files(temp_task_file, temp_result_file)
-            return {
-                "steps": 0,
-                "done": False,
-                "error": "Test timed out after 10 minutes",
-                "summary": "Timeout",
-                "trajectory_dir": str(run_dir)
-            }
+            self._cleanup_temp_files(temp_task_file)
+            return {"steps": 0, "done": False, "error": "Test timed out", "trajectory_dir": str(run_dir)}
         except Exception as e:
-            self._cleanup_temp_files(temp_task_file, temp_result_file)
-            return {
-                "steps": 0,
-                "done": False,
-                "error": f"Subprocess error: {e}",
-                "summary": f"Subprocess error: {e}",
-                "trajectory_dir": str(run_dir)
-            }
+            self._cleanup_temp_files(temp_task_file)
+            return {"steps": 0, "done": False, "error": f"Subprocess error: {e}", "trajectory_dir": str(run_dir)}
+    def _regenerate_golden_trajectory(
+        self,
+        task_data: Dict[str, Any],
+        source: str,
+        persist: bool = True,
+    ) -> Dict[str, Any]:
+        """Regenerate golden trajectory deterministically via emtom.pddl.planner."""
+        from emtom.pddl.planner import regenerate_golden_trajectory
+
+        return regenerate_golden_trajectory(
+            task_data,
+            scene_data=self.scene_data,
+            source=source,
+            task_file=str(self.task_file) if persist else None,
+        )
 
     def _verify_pddl(self) -> str:
-        """
-        Verify PDDL goal solvability and compute ToM depth.
+        """Verify PDDL goal solvability and compute ToM depth."""
+        from emtom.cli.verify_pddl import run
 
-        Checks:
-        1. pddl_goal syntax is valid
-        2. All referenced objects exist in the scene
-        3. Goal predicates are achievable by domain actions
-        4. Computes ToM depth from epistemic structure
-        """
-        if not self.task_file.exists():
-            return "Error: working_task.json does not exist."
-
-        try:
-            with open(self.task_file) as f:
-                task_data = json.load(f)
-        except json.JSONDecodeError as e:
-            return f"Error: Invalid JSON: {e}"
-
-        pddl_goal = task_data.get("pddl_goal")
-        if not pddl_goal:
-            return json.dumps({
-                "valid": False,
-                "error": "No pddl_goal field in task. Add a pddl_goal string.",
-            })
-
-        # Parse goal
-        try:
-            from emtom.pddl.dsl import parse_goal_string
-            goal = parse_goal_string(pddl_goal)
-        except Exception as e:
-            return json.dumps({
-                "valid": False,
-                "error": f"Invalid PDDL goal syntax: {e}",
-            })
-
-        # Build task object and verify solvability
-        from emtom.task_gen.task_generator import GeneratedTask
-        task = GeneratedTask.from_dict(task_data)
-
-        scene_data = getattr(self, '_scene_data', None)
-
-        # Load scene data from current_scene.json if not already set
-        if scene_data is None:
-            scene_file = self.working_dir / "current_scene.json"
-            if scene_file.exists():
-                try:
-                    with open(scene_file) as sf:
-                        scene_data = json.load(sf)
-                except (json.JSONDecodeError, IOError):
-                    pass
-
-        from emtom.pddl.solver import PDKBSolver
-        from emtom.pddl.domain import EMTOM_DOMAIN
-        from emtom.pddl.compiler import compile_task
-        from emtom.pddl.epistemic import ObservabilityModel
-
-        problem = compile_task(task, scene_data)
-        observability = ObservabilityModel.from_task(task)
-        result = PDKBSolver().solve(EMTOM_DOMAIN, problem, observability)
-
-        if not result.solvable:
-            return json.dumps({
-                "valid": False,
-                "error": f"PDDL goal is not solvable: {result.error}",
-                "pddl_goal": pddl_goal,
-            })
-
-        # Compute ToM depth
-        from emtom.pddl.tom_verifier import explain_tom_depth
-        tom_info = explain_tom_depth(task, scene_data)
-
-        # Goal description
-        from emtom.pddl.describe import goal_to_natural_language
-        description = goal_to_natural_language(goal)
-
-        return json.dumps({
-            "valid": True,
-            "pddl_goal": pddl_goal,
-            "solvable": True,
-            "tom_level": tom_info["tom_level"],
-            "tom_reasoning": tom_info["tom_reasoning"],
-            "goal_description": description,
-            "num_conjuncts": len(goal.flatten()),
-            "solve_time": result.solve_time,
-        }, indent=2)
+        result = run(str(self.task_file), working_dir=str(self.working_dir))
+        if result["success"]:
+            return json.dumps(result["data"], indent=2)
+        return json.dumps({"valid": False, "error": result["error"]}, indent=2)
 
     def _verify_golden_trajectory(self) -> str:
-        """
-        Execute golden_trajectory step-by-step to prove task is completable.
-
-        Runs verification in a subprocess to get a fresh GL context
-        (avoids OpenGL context issues when reusing the main process).
-        """
-        import subprocess
-        import tempfile
-
-        # Check task file exists
+        """Regenerate trajectory from PDDL, then execute in subprocess (fresh GL context)."""
         if not self.task_file.exists():
-            return json.dumps({
-                "valid": False,
-                "error": "working_task.json does not exist. Create it first with bash."
-            })
+            return json.dumps({"valid": False, "error": "working_task.json does not exist."})
 
-        # Load task to check golden_trajectory exists
         try:
             with open(self.task_file) as f:
                 task_data = json.load(f)
         except json.JSONDecodeError as e:
-            return json.dumps({
-                "valid": False,
-                "error": f"Invalid JSON in working_task.json: {e}"
-            })
+            return json.dumps({"valid": False, "error": f"Invalid JSON: {e}"})
 
-        # Validate task structure before expensive simulation
+        # Validate structure
         validation = self._validate_task_structure(task_data)
         if "error" in validation:
             return json.dumps(validation, indent=2)
 
-        golden = task_data.get("golden_trajectory", [])
-        if not golden:
+        # Deterministically regenerate golden trajectory from PDDL spec
+        try:
+            regen = self._regenerate_golden_trajectory(task_data, source="verify")
+            self._log(
+                f"Regenerated trajectory: {regen['num_steps']} steps "
+                f"(spec_hash={regen['spec_hash'][:8]})"
+            )
+        except Exception as e:
             return json.dumps({
                 "valid": False,
-                "error": "No golden_trajectory found in task. Add a golden_trajectory field with the expected action sequence."
+                "error": f"Failed to regenerate trajectory from PDDL: {e}",
             })
+
+        golden = task_data.get("golden_trajectory", [])
+        if not golden:
+            return json.dumps({"valid": False, "error": "Deterministic planner produced empty trajectory."})
 
         self._log(f"Verifying golden trajectory: {len(golden)} steps")
 
-        # Fast static pre-validation (catches errors before expensive simulation)
+        # Static pre-validation
         static_errors = self._static_validate_trajectory(task_data, golden)
         if static_errors:
             return json.dumps({
                 "valid": False,
                 "error": f"Static validation failed: {static_errors[0]}",
                 "all_errors": static_errors,
-                "hint": "Fix these errors before running simulation."
             })
 
-        # Create temp file for results
-        try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                temp_result_file = f.name
-        except Exception as e:
-            return json.dumps({
-                "valid": False,
-                "error": f"Failed to create temp result file: {e}"
-            })
-
-        # Run verification in subprocess (fresh GL context)
         num_agents = task_data.get("num_agents", 2)
-        config_name = f"examples/emtom_{num_agents}_robots"
-        script_path = Path(__file__).parent / "verify_trajectory.py"
         cmd = [
-            sys.executable,
-            str(script_path),
-            "--task-file", str(self.task_file),
-            "--result-file", temp_result_file,
+            sys.executable, "-m", "emtom.cli.verify_trajectory",
+            str(self.task_file),
             "--working-dir", str(self.working_dir),
-            "--config-name", config_name,
+            "--config-name", f"examples/emtom_{num_agents}_robots",
         ]
 
         try:
-            timeout = 1200  # 20 minutes - golden trajectory verification
-            subprocess.run(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,  # Suppress C++ simulator spam (navmesh errors etc.)
-                text=True,
-                timeout=timeout,
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=1200,
             )
-
-            # Read result from file (cleaner than parsing stdout)
             try:
-                with open(temp_result_file) as f:
-                    result_data = json.load(f)
-                if result_data.get("valid", False):
-                    self.last_verify_passed = True
-                # Add hint for navmesh issues
-                if result_data.get("navmesh_issue", False):
-                    result_data["recommendation"] = "This scene has navigation issues. Use new_scene[] to get a different scene."
-            except (FileNotFoundError, json.JSONDecodeError) as e:
-                result_data = {
+                result = json.loads(proc.stdout)
+            except (json.JSONDecodeError, ValueError):
+                return json.dumps({
                     "valid": False,
-                    "error": f"Failed to read result file: {e}",
-                    "summary": "Result file error"
-                }
+                    "error": f"Failed to parse verify output: {proc.stderr[:500]}",
+                })
 
-            self._cleanup_temp_files(temp_result_file)
+            if result.get("success") and result.get("data", {}).get("valid"):
+                self.last_verify_passed = True
+            if result.get("data", {}).get("navmesh_issue"):
+                result["data"]["recommendation"] = "This scene has navigation issues. Use new_scene[]."
 
-            return json.dumps(result_data, indent=2)
+            # Return data portion as JSON for the agent
+            if result.get("success"):
+                return json.dumps(result["data"], indent=2)
+            return json.dumps({"valid": False, "error": result.get("error", "Unknown error")}, indent=2)
 
         except subprocess.TimeoutExpired:
-            self._cleanup_temp_files(temp_result_file)
             return json.dumps({
                 "valid": False,
-                "error": f"Verification timed out after {timeout} seconds. This often indicates navmesh/PathFinder issues with the scene.",
-                "hint": "The scene may have navigation problems. Consider using new_scene[] to get a different scene.",
-                "summary": "Timeout - possible navmesh issue"
+                "error": "Verification timed out (20 min). Possible navmesh issue.",
+                "hint": "Consider new_scene[].",
             })
         except Exception as e:
-            self._cleanup_temp_files(temp_result_file)
-            return json.dumps({
-                "valid": False,
-                "error": f"Verification subprocess error: {e}",
-                "summary": f"Subprocess error: {e}"
-            })
+            return json.dumps({"valid": False, "error": f"Subprocess error: {e}"})
 
     def _judge(self) -> str:
-        """
-        Evaluate task quality using multi-model council (Claude Opus + GPT-5).
+        """Evaluate task quality using multi-model council."""
+        from emtom.cli.judge_task import run
 
-        Scores task on 8 criteria:
-        - ToM: information asymmetry, interdependence, mental state reasoning, coordination
-        - Quality: narrative consistency, subtask relevance, mechanic utilization, trajectory efficiency
+        result = run(
+            str(self.task_file),
+            working_dir=str(self.working_dir),
+            threshold=self.judge.overall_threshold,
+            difficulty=self.difficulty if self.difficulty else None,
+        )
 
-        Both models must agree for task to pass.
-        Returns detailed feedback and suggestions for improvement.
-        Saves JSON output to log_dir/judgments/ directory.
-        """
-        if not self.task_file.exists():
-            return json.dumps({
-                "valid": False,
-                "error": "working_task.json does not exist. Create and test it first."
-            })
+        if not result["success"]:
+            return json.dumps({"valid": False, "error": result["error"]}, indent=2)
 
-        # Load task
-        try:
-            with open(self.task_file) as f:
-                task_data = json.load(f)
-        except json.JSONDecodeError as e:
-            return json.dumps({
-                "valid": False,
-                "error": f"Invalid JSON: {e}"
-            })
+        data = result["data"]
+        self.last_judge_passed = data["passed"]
 
-        # Validate task structure before expensive LLM calls
-        validation = self._validate_task_structure(task_data)
-        if "error" in validation:
-            return json.dumps(validation, indent=2)
-
-        self._log("[Judge] Evaluating task with council...")
-
-        # Find latest trajectory dir for this task if available
-        trajectory_dir = None
-        task_dirs = sorted(self.trajectories_dir.glob("task_*"), key=lambda p: p.name)
-        if task_dirs:
-            latest_task = task_dirs[-1]
-            run_dirs = sorted(latest_task.glob("run_*"), key=lambda p: p.name)
-            if run_dirs:
-                trajectory_dir = run_dirs[-1]
-                self._log(f"[Judge] Including rollout data from: {trajectory_dir}")
-
-        # Run evaluation with council
-        try:
-            verdict = self.judge.evaluate(
-                task_data,
-                scene_data=self.scene_data,
-                trajectory_dir=trajectory_dir,
+        # Reconstruct CouncilVerdict for state tracking
+        if data["passed"]:
+            self.consecutive_tom_failures = 0
+            data.pop("suggestions", None)
+            data["next_step"] = (
+                "Task passed judge. Do NOT change the task design. "
+                "If golden_trajectory is missing, add it now, then run "
+                "verify_golden_trajectory[] -> test_task[] -> submit_task[]."
             )
-            self.last_judgment = verdict
-            self.last_judge_passed = verdict.passed
-
-            # Format result for agent feedback
-            result = {
-                "valid": verdict.passed,
-                "overall_score": verdict.overall_score,
-                "threshold": self.judge.overall_threshold,
-                "models": list(verdict.judgments.keys()),
-                "model_results": {
-                    model: {
-                        "passed": j.is_valid,
-                        "score": j.overall_score,
-                    }
-                    for model, j in verdict.judgments.items()
-                },
-                "suggestions": verdict.suggestions,
-            }
-
-            if verdict.disagreements:
-                result["disagreements"] = verdict.disagreements
-
-            if verdict.passed:
-                # On PASS: remove suggestions to prevent agent from editing the task
-                # and invalidating the judge pass. Direct to next step instead.
-                result.pop("suggestions", None)
-                result["summary"] = f"PASS - All models agree task is valid (score: {verdict.overall_score:.2f})"
-                result["next_step"] = (
-                    "Task passed judge. Do NOT change the task design. "
-                    "If golden_trajectory is missing, add it now, then run "
-                    "verify_golden_trajectory[] → test_task[] → submit_task[]."
+        else:
+            self.consecutive_tom_failures += 1
+            data["action_required"] = "Modify the task based on suggestions and run judge[] again."
+            data["failure_count"] = self.consecutive_tom_failures
+            if self.consecutive_tom_failures >= 3:
+                data["recommendation"] = (
+                    f"You've failed judge {self.consecutive_tom_failures} times. "
+                    "Consider new_scene[] for a fresh start."
                 )
-                self.consecutive_tom_failures = 0  # Reset on success
-            else:
-                self.consecutive_tom_failures += 1
-                result["summary"] = f"FAIL - Task did not pass council (score: {verdict.overall_score:.2f})"
-                result["action_required"] = "Modify the task based on suggestions and run judge[] again."
-                result["failure_count"] = self.consecutive_tom_failures
 
-                # After 3+ failures, suggest considering new_scene
-                if self.consecutive_tom_failures >= 3:
-                    result["recommendation"] = (
-                        f"You've failed judge {self.consecutive_tom_failures} times on this task. "
-                        "Consider whether the core design can actually work, or if a fresh start would be faster. "
-                        "Otherwise, new_scene[] gives you a fresh scene to try a different approach."
-                    )
+        self._log(f"[Judge] Result: {'PASS' if data['passed'] else 'FAIL'} "
+                   f"(score: {data['overall_score']:.2f}) [failures: {self.consecutive_tom_failures}]")
 
-            # Save JSON to judgments directory
-            judgments_dir = self.log_dir / "judgments"
-            judgments_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            attempt_num = self.consecutive_tom_failures if not verdict.passed else self.consecutive_tom_failures + 1
-            judgment_file = judgments_dir / f"judgment_{timestamp}_attempt{attempt_num}.json"
-            with open(judgment_file, "w") as f:
-                json.dump(verdict.to_dict(), f, indent=2)
-
-            # Print colored output to stderr
-            status = "PASS" if verdict.passed else "FAIL"
-            color = Colors.GREEN if verdict.passed else Colors.RED
-            print(f"\n{Colors.BOLD}{Colors.CYAN}=== Task Evaluation (Council) - attempt {attempt_num} ==={Colors.RESET}", file=sys.stderr)
-            print(f"{Colors.BOLD}{color}{status}{Colors.RESET} - Score: {verdict.overall_score:.2f} (threshold: {self.judge.overall_threshold})", file=sys.stderr)
-            print(f"Models: {', '.join(verdict.judgments.keys())}", file=sys.stderr)
-            print(f"Saved to: {Colors.CYAN}{judgment_file}{Colors.RESET}", file=sys.stderr)
-
-            if verdict.disagreements:
-                print(f"\n{Colors.YELLOW}Model disagreements:{Colors.RESET}", file=sys.stderr)
-                for d in verdict.disagreements:
-                    print(f"  - {d}", file=sys.stderr)
-
-            if not verdict.passed and verdict.suggestions:
-                print(f"\n{Colors.YELLOW}Suggestions for improvement:{Colors.RESET}", file=sys.stderr)
-                for i, suggestion in enumerate(verdict.suggestions, 1):
-                    print(f"  {i}. {suggestion}", file=sys.stderr)
-
-            self._log(f"[Judge] Result: {status} (score: {verdict.overall_score:.2f}) [failures: {self.consecutive_tom_failures}]")
-
-            return json.dumps(result, indent=2)
-
-        except Exception as e:
-            self._log(f"[Judge] Error: {e}")
-            import traceback
-            traceback.print_exc()
-            return json.dumps({
-                "valid": False,
-                "error": f"Evaluation failed: {e}",
-                "summary": "Evaluation error - try again"
-            })
+        return json.dumps(data, indent=2)
 
     def _submit_task(self) -> str:
-        """
-        Copy working task to output directory AND submitted_tasks/.
-
-        Called when the agent determines task quality is good.
-        Requires verify_golden_trajectory[], judge[], and test_task[] to pass first.
-        """
+        """Copy working task to output directory (requires verify/judge/test gates)."""
         if not self.last_verify_passed:
             return json.dumps({
                 "error": "Must run verify_golden_trajectory[] first and pass before submitting.",
                 "hint": "Run verify_golden_trajectory[] to prove the golden trajectory works."
             })
-
         if not self.last_judge_passed:
             return json.dumps({
                 "error": "Must run judge[] first and pass before submitting.",
@@ -2402,131 +1628,63 @@ SUMMARY:"""
                 "last_score": self.last_judgment.overall_score if self.last_judgment else None,
                 "suggestions": self.last_judgment.suggestions if self.last_judgment else []
             })
-
         if not self.last_test_passed:
             return json.dumps({
                 "error": "Must run test_task[] before submitting (required for calibration data).",
-                "hint": "Run test_task[] to benchmark LLM agent performance and record pass/fail for dataset calibration."
+                "hint": "Run test_task[] to benchmark LLM agent performance."
             })
 
-        if not self.task_file.exists():
-            return "Error: working_task.json does not exist. Create and test it first."
+        from emtom.cli.submit_task import run
+        result = run(
+            str(self.task_file),
+            output_dir=str(self.output_dir),
+            working_dir=str(self.working_dir),
+            submitted_dir=str(self.submitted_tasks_dir),
+            subtasks_min=self.subtasks_min,
+            subtasks_max=self.subtasks_max,
+            agents_min=self.agents_min,
+            agents_max=self.agents_max,
+        )
+        if not result["success"]:
+            return json.dumps({"error": result["error"]}, indent=2)
 
-        # Load task to validate
-        try:
-            with open(self.task_file) as f:
-                task_data = json.load(f)
-        except json.JSONDecodeError as e:
-            return f"Error: Invalid JSON: {e}"
-
-        # Run structure validation (catches invented object IDs, bad mechanics, etc.)
-        validation_result = self._validate_task_structure(task_data)
-        if "error" in validation_result:
-            return json.dumps(validation_result, indent=2)
-
-        # Validate goal count (PDDL conjuncts or legacy subtasks)
-        if task_data.get("pddl_goal"):
-            from emtom.pddl.dsl import parse_goal_string
-            try:
-                goal = parse_goal_string(task_data["pddl_goal"])
-                num_goals = len(goal.flatten())
-            except Exception:
-                num_goals = 0
-            if num_goals < self.subtasks_min:
-                return json.dumps({
-                    "error": f"Task has {num_goals} PDDL goal conjuncts, minimum is {self.subtasks_min}.",
-                    "hint": f"Add more goal conjuncts to reach at least {self.subtasks_min}.",
-                    "current": num_goals,
-                    "required_min": self.subtasks_min,
-                })
-            if num_goals > self.subtasks_max:
-                return json.dumps({
-                    "error": f"Task has {num_goals} PDDL goal conjuncts, maximum is {self.subtasks_max}.",
-                    "hint": f"Reduce goal conjuncts to at most {self.subtasks_max}.",
-                    "current": num_goals,
-                    "required_max": self.subtasks_max,
-                })
-        else:
-            subtasks = task_data.get("subtasks", [])
-            num_subtasks = len(subtasks)
-            if num_subtasks < self.subtasks_min:
-                return json.dumps({
-                    "error": f"Task has {num_subtasks} subtasks, minimum is {self.subtasks_min}.",
-                    "hint": f"Add more subtasks to reach at least {self.subtasks_min}.",
-                    "current": num_subtasks,
-                    "required_min": self.subtasks_min,
-                })
-            if num_subtasks > self.subtasks_max:
-                return json.dumps({
-                    "error": f"Task has {num_subtasks} subtasks, maximum is {self.subtasks_max}.",
-                    "hint": f"Reduce subtasks to at most {self.subtasks_max}, or consolidate steps.",
-                    "current": num_subtasks,
-                    "required_max": self.subtasks_max,
-                })
-
-        # Validate agent count
-        num_agents = task_data.get("num_agents", 2)
-        if num_agents < self.agents_min:
-            return json.dumps({
-                "error": f"Task has {num_agents} agents, minimum is {self.agents_min}.",
-                "hint": f"Increase num_agents to at least {self.agents_min}.",
-                "current": num_agents,
-                "required_min": self.agents_min,
-            })
-        if num_agents > self.agents_max:
-            return json.dumps({
-                "error": f"Task has {num_agents} agents, maximum is {self.agents_max}.",
-                "hint": f"Reduce num_agents to at most {self.agents_max}.",
-                "current": num_agents,
-                "required_max": self.agents_max,
-            })
-
-        # Generate filename: {datetime}_{title_slug}.json
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-        title = task_data.get("title", "untitled")
-        # Slugify title: lowercase, replace spaces with underscores, keep only alphanumeric and underscores
-        title_slug = re.sub(r'[^a-z0-9]+', '_', title.lower()).strip('_')[:50]
-        output_filename = f"{timestamp}_{title_slug}.json"
-        output_path = self.output_dir / output_filename
-
-        # Copy to main output directory (permanent storage)
-        shutil.copy(self.task_file, output_path)
-
-        # Also copy to submitted_tasks/ for this session's tracking
-        submitted_path = self.submitted_tasks_dir / output_filename
-        shutil.copy(self.task_file, submitted_path)
-
-        self.submitted_tasks.append(str(output_path))
+        data = result["data"]
+        self.submitted_tasks.append(data["output_path"])
 
         # Reset verification state for next task
         self.last_verify_passed = False
         self.last_judge_passed = False
         self.last_test_passed = False
         self.last_judgment = None
-        self.consecutive_tom_failures = 0  # Reset failure counter for new task
+        self.consecutive_tom_failures = 0
 
-        # Extract what to remember from this task and reset context
-        task_title = task_data.get("title", "untitled")
+        # Extract memory and track diversity
+        task_title = data.get("title", "untitled")
         memory = self._extract_task_memory(task_title)
         self.task_memories.append(memory)
 
-        # Track task pattern for diversity (persists across runs)
-        pattern = self.diversity_tracker.add_pattern(output_filename, task_data)
+        with open(self.task_file) as f:
+            task_data = json.load(f)
+        pattern = self.diversity_tracker.add_pattern(data["filename"], task_data)
         self._log(f"Diversity pattern added: {pattern}")
 
-        # Re-categorize all tasks and refresh diversity in prompt
         try:
             from emtom.scripts.categorize_tasks import categorize_tasks
             categories_file = Path("data/emtom/task_categories.json")
             categorize_tasks(self.llm, self.output_dir, categories_file)
             self._refresh_diversity_in_prompt()
-            self._log("Task categories updated and diversity prompt refreshed")
         except Exception as e:
             self._log(f"Warning: Failed to re-categorize tasks: {e}")
 
         self._reset_context_for_next_task()
 
-        return f"Task '{task_title}' saved!\n  - {output_path} (permanent)\n  - {submitted_path} (session)\nTotal submitted: {len(self.submitted_tasks)}\n\n[Context reset for next task. Your learnings have been preserved.]\n\nFor next task: Use new_scene[] for a fresh scene, or modify working_task.json to build on a previous task from submitted_tasks/."
+        return (
+            f"Task '{task_title}' saved!\n"
+            f"  - {data['output_path']} (permanent)\n"
+            f"  - {data.get('submitted_path', 'N/A')} (session)\n"
+            f"Total submitted: {len(self.submitted_tasks)}\n\n"
+            "[Context reset for next task.]"
+        )
 
     def _extract_task_memory(self, task_title: str) -> str:
         """
@@ -2625,20 +1783,11 @@ Use new_scene[] if you want a different scene, or start creating your next task.
         self._log(f"Context reset. New size: {new_size} chars. Memories preserved: {len(self.task_memories)}")
 
     def _new_scene(self, args: str = "") -> str:
-        """
-        Load a scene for task generation.
-
-        Usage:
-            new_scene[N] - Load random scene with N agents, reset task
-            new_scene[N, keep] - Same scene with N agents, preserve task edits
-
-        Uses subprocess to get a fresh GL context (avoids sensor registry conflicts).
-        """
+        """Load a scene for task generation (subprocess for GL context)."""
         import tempfile
         from emtom.task_gen.scene_loader import SceneData
         from habitat_llm.utils import get_random_seed
 
-        # Parse arguments
         args = args.strip()
         if not args:
             return "Error: new_scene requires num_agents. Usage: new_scene[N] or new_scene[N, keep]"
@@ -2652,7 +1801,6 @@ Use new_scene[] if you want a different scene, or start creating your next task.
         if num_agents < 2 or num_agents > 10:
             return f"Error: num_agents must be 2-10, got {num_agents}"
 
-        # Check for 'keep' mode
         keep_mode = len(parts) > 1 and parts[1].lower() == "keep"
         scene_id = None
         if keep_mode:
@@ -2667,42 +1815,30 @@ Use new_scene[] if you want a different scene, or start creating your next task.
 
         for attempt in range(1, max_scene_retries + 1):
             try:
-                # Use subprocess to load scene (fresh GL context)
-                config_name = f"examples/emtom_{num_agents}_robots"
                 new_seed = get_random_seed()
-                script_path = Path(__file__).parent / "load_scene.py"
-
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                    result_file = f.name
-
                 cmd = [
-                    sys.executable,
-                    str(script_path),
-                    "--result-file", result_file,
+                    sys.executable, "-m", "emtom.cli.new_scene",
+                    str(num_agents),
                     "--working-dir", str(self.working_dir),
-                    "--config-name", config_name,
                     "--seed", str(new_seed),
                 ]
                 if scene_id:
                     cmd.extend(["--scene-id", scene_id])
 
                 self._log(f"Running (attempt {attempt}/{max_scene_retries}): {' '.join(cmd)}")
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=600,  # 10 minutes for scene loading
-                )
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
-                # Read result
                 try:
-                    with open(result_file) as f:
-                        result_data = json.load(f)
-                finally:
-                    Path(result_file).unlink(missing_ok=True)
+                    result = json.loads(proc.stdout)
+                except (json.JSONDecodeError, ValueError):
+                    last_error = proc.stderr or "No output from subprocess"
+                    self._log(f"Scene loading failed (attempt {attempt}): {last_error}")
+                    if attempt < max_scene_retries:
+                        continue
+                    return f"Error loading new scene after {max_scene_retries} attempts. Last error: {last_error}"
 
-                if not result_data.get("success"):
-                    last_error = result_data.get("error", "Unknown error")
+                if not result.get("success"):
+                    last_error = result.get("error", "Unknown error")
                     self._log(f"Scene loading failed (attempt {attempt}): {last_error}")
                     if attempt < max_scene_retries:
                         continue
@@ -2715,7 +1851,7 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                 return f"Error loading new scene after {max_scene_retries} attempts. Last error: {last_error}"
 
             # Convert dict back to SceneData
-            scene_dict = result_data["scene_data"]
+            scene_dict = result["data"]["scene_data"]
             self.scene_data = SceneData(
                 episode_id=scene_dict["episode_id"],
                 scene_id=scene_dict["scene_id"],
@@ -2729,14 +1865,8 @@ Use new_scene[] if you want a different scene, or start creating your next task.
             )
 
             self._log(f"Loaded scene {self.scene_data.scene_id} (episode {self.scene_data.episode_id})")
-            self._log(f"  Rooms: {len(self.scene_data.rooms)}, Furniture: {len(self.scene_data.furniture)}, Objects: {len(self.scene_data.objects)}")
 
-            # Save new scene data to working directory
-            scene_file = self.working_dir / "current_scene.json"
-            with open(scene_file, "w") as f:
-                json.dump(self.scene_data.to_dict(), f, indent=2)
-
-            # Reset verification state (task structure changed)
+            # Reset verification state
             self.last_verify_passed = False
             self.last_judge_passed = False
             self.last_test_passed = False
@@ -2744,45 +1874,32 @@ Use new_scene[] if you want a different scene, or start creating your next task.
             self.consecutive_tom_failures = 0
 
             if keep_mode:
-                # Keep mode: preserve working_task.json, update num_agents and spawns
                 task_file = self.working_dir / "working_task.json"
                 if task_file.exists():
                     with open(task_file) as f:
                         task_data = json.load(f)
                     task_data["num_agents"] = num_agents
-                    # Update spawn positions (recalculated for new agent count)
                     if self.scene_data.agent_spawns:
                         task_data["agent_spawns"] = self.scene_data.agent_spawns
                     with open(task_file, "w") as f:
                         json.dump(task_data, f, indent=2)
-                    self._log(f"Updated num_agents to {num_agents} and spawns in working_task.json")
                 else:
-                    # No task file exists, create from template
                     self._create_working_task_from_template(num_agents=num_agents)
-
                 return f"""Scene reloaded with {num_agents} agents. Task preserved.
-
 Scene ID: {self.scene_data.scene_id}
-Agents: {num_agents}
 Rooms: {', '.join(self.scene_data.rooms)}
-
-working_task.json preserved (num_agents updated to {num_agents}).
-Context preserved. Verification flags reset - run judge[] again."""
+working_task.json preserved. Verification flags reset."""
             else:
-                # Fresh start: reset working_task.json and context
                 self._create_working_task_from_template(num_agents=num_agents)
                 self._reset_context_for_next_task()
-
                 return f"""New scene loaded! Context refreshed.
-
 Scene ID: {self.scene_data.scene_id}
 Episode ID: {self.scene_data.episode_id}
 Agents: {num_agents}
 Rooms: {', '.join(self.scene_data.rooms)}
 Furniture: {len(self.scene_data.furniture)} items
 Objects: {len(self.scene_data.objects)} items
-
-working_task.json reset. Use new_scene[N, keep] to change agent count without losing work."""
+working_task.json reset."""
 
     def _fail(self, reason: str) -> str:
         """

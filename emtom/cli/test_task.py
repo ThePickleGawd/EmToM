@@ -1,0 +1,265 @@
+"""
+Test a task by running LLM agents against it in the Habitat simulator.
+
+Validates task structure, then runs a full benchmark episode with LLM planners.
+Saves agent trajectories, planner traces, and evaluation results.
+
+Requires GL context — always runs as a subprocess.
+
+Usage:
+    # CLI
+    python -m emtom.cli.test_task task.json --working-dir DIR [--trajectory-dir DIR]
+
+    # Agent spawns subprocess:
+    subprocess.run([sys.executable, "-m", "emtom.cli.test_task", ...])
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Test task with LLM agents")
+    parser.add_argument("task_file", help="Path to task JSON")
+    parser.add_argument("--working-dir", default=None, help="Working directory")
+    parser.add_argument("--trajectory-dir", default=None, help="Directory to save agent trajectory files")
+    parser.add_argument("--config-name", default=None, help="Hydra config name (auto-detected from task)")
+    parser.add_argument("--max-turns", type=int, default=None, help="Max LLM turns (default: 5x golden trajectory)")
+    parser.add_argument("--test-model", type=str, default=None, help="Override model for LLM agents")
+    args = parser.parse_args()
+
+    # Add project root to path
+    project_root = Path(__file__).parent.parent.parent
+    sys.path.insert(0, str(project_root))
+
+    from emtom.cli import failure, print_result, success
+
+    # Load task
+    try:
+        with open(args.task_file) as f:
+            task_data = json.load(f)
+    except Exception as e:
+        print_result(failure(f"Failed to load task: {e}"))
+        sys.exit(1)
+
+    # Validate task structure first
+    from emtom.cli.validate_task import validate
+
+    scene_data_obj = None
+    if args.working_dir:
+        scene_path = Path(args.working_dir) / "current_scene.json"
+        if scene_path.exists():
+            try:
+                from emtom.task_gen.scene_loader import SceneData
+
+                with open(scene_path) as sf:
+                    sd = json.load(sf)
+                scene_data_obj = SceneData(
+                    episode_id=sd["episode_id"],
+                    scene_id=sd["scene_id"],
+                    rooms=sd.get("rooms", []),
+                    furniture=sd.get("furniture", []),
+                    objects=sd.get("objects", []),
+                    articulated_furniture=sd.get("articulated_furniture", []),
+                    furniture_in_rooms=sd.get("furniture_in_rooms", {}),
+                    objects_on_furniture=sd.get("objects_on_furniture", {}),
+                    agent_spawns=sd.get("agent_spawns", {}),
+                )
+            except Exception:
+                pass
+
+    validation = validate(task_data, scene_data_obj)
+    if not validation["success"]:
+        print_result(validation)
+        sys.exit(1)
+
+    # Auto-detect config
+    num_agents = task_data.get("num_agents", 2)
+    config_name = args.config_name or f"examples/emtom_{num_agents}_robots"
+
+    # Import and setup Habitat
+    try:
+        from hydra import compose, initialize_config_dir
+        from hydra.core.global_hydra import GlobalHydra
+        from omegaconf import open_dict
+
+        from habitat_llm.agent.env import (
+            register_actions,
+            register_measures,
+            register_sensors,
+            remove_visual_sensors,
+        )
+        from habitat_llm.agent.env.dataset import CollaborationDatasetV0
+        from habitat_llm.agent.env.environment_interface import EnvironmentInterface
+        from habitat_llm.utils import fix_config, setup_config
+
+        from emtom.runner import BenchmarkRunner
+        from emtom.runner.benchmark import task_to_instruction
+        from emtom.task_gen import GeneratedTask
+        from emtom.task_gen.scene_loader import apply_agent_spawns
+    except ImportError as e:
+        print_result(failure(f"Import error: {e}"))
+        sys.exit(1)
+
+    # Initialize Hydra config
+    try:
+        GlobalHydra.instance().clear()
+        config_dir = str(project_root / "habitat_llm" / "conf")
+        initialize_config_dir(config_dir=config_dir, version_base=None)
+        config = compose(config_name=config_name)
+
+        if args.trajectory_dir:
+            output_dir = str(Path(args.trajectory_dir).parent / f"hydra_test_{os.getpid()}")
+        else:
+            output_dir = f"/tmp/emtom_test_{os.getpid()}"
+        with open_dict(config):
+            if "evaluation" in config:
+                config.evaluation.output_dir = output_dir
+            if "paths" in config:
+                config.paths.results_dir = f"{output_dir}/results"
+                config.paths.epi_result_file_path = f"{output_dir}/results/episode_result_log.csv"
+                config.paths.run_result_file_path = f"{output_dir}/results/run_result_log.csv"
+                config.paths.end_result_file_path = f"{output_dir}/results/end_result_log.csv"
+
+        fix_config(config)
+        config = setup_config(config, seed=47668090)
+
+        # Override agent models if --test-model is specified
+        if args.test_model:
+            from emtom.examples.run_habitat_benchmark import (
+                apply_agent_llm_configs,
+                detect_llm_provider,
+                expand_model_name,
+            )
+
+            test_model = expand_model_name(args.test_model)
+            test_provider = detect_llm_provider(test_model)
+            if not test_provider:
+                print_result(failure(f"Unknown provider for test model: {args.test_model}"))
+                sys.exit(1)
+            agent_model_mapping = {}
+            if hasattr(config, "evaluation") and hasattr(config.evaluation, "agents"):
+                for agent_id in config.evaluation.agents:
+                    agent_model_mapping[agent_id] = {"model": test_model, "llm_provider": test_provider}
+            apply_agent_llm_configs(config, agent_model_mapping)
+    except Exception as e:
+        print_result(failure(f"Config error: {e}"))
+        sys.exit(1)
+
+    # Convert to GeneratedTask
+    try:
+        task = GeneratedTask.from_dict(task_data)
+    except Exception as e:
+        print_result(failure(f"Invalid task format: {e}"))
+        sys.exit(1)
+
+    # Setup environment and run
+    try:
+        remove_visual_sensors(config)
+        register_sensors(config)
+        register_actions(config)
+        register_measures(config)
+
+        dataset = CollaborationDatasetV0(config.habitat.dataset)
+        env_interface = EnvironmentInterface(config, dataset=dataset, init_wg=False)
+
+        print(f"Loading episode: {task.episode_id} (scene: {task.scene_id})", file=sys.stderr)
+        env_interface.reset_environment(episode_id=task.episode_id)
+
+        apply_agent_spawns(env_interface, task_data.get("agent_spawns", {}))
+
+        runner = BenchmarkRunner(config)
+        runner.setup(
+            env_interface=env_interface,
+            output_dir=output_dir,
+            task=task,
+            save_video=False,
+        )
+
+        instruction = task_to_instruction(task)
+
+        max_steps = config.habitat.environment.get("max_episode_steps", 20000)
+
+        if args.max_turns is not None:
+            max_turns = args.max_turns
+        else:
+            golden_trajectory = task_data.get("golden_trajectory", [])
+            max_turns = max(len(golden_trajectory) * 5, 20)
+
+        results = runner.run(instruction=instruction, max_steps=max_steps, max_turns=max_turns)
+
+        planner_traces = runner.get_planner_traces()
+        runner.cleanup()
+
+        action_history = results.get("action_history", [])
+        evaluation = results.get("evaluation", {})
+
+        # Save trajectory files if directory specified
+        if args.trajectory_dir:
+            trajectory_dir = Path(args.trajectory_dir)
+            trajectory_dir.mkdir(parents=True, exist_ok=True)
+
+            for agent_id, trace in planner_traces.items():
+                trace_file = trajectory_dir / f"{agent_id}.txt"
+                with open(trace_file, 'w') as f:
+                    f.write(trace)
+
+            result_file = trajectory_dir / "result.txt"
+            with open(result_file, 'w') as f:
+                f.write("=== BENCHMARK RESULT ===\n\n")
+                f.write(f"Success: {results.get('done', False)}\n")
+                f.write(f"Steps: {results.get('steps', 0)}\n")
+                f.write(f"Turns: {results.get('turns', 0)}\n")
+                f.write(f"\n=== EVALUATION ===\n")
+                f.write(f"Percent Complete: {evaluation.get('percent_complete', 0):.1%}\n")
+                f.write(f"Success: {evaluation.get('success', False)}\n")
+
+                if evaluation.get('failure_explanations'):
+                    f.write(f"\nFailure Reasons:\n")
+                    for reason in evaluation['failure_explanations']:
+                        f.write(f"  - {reason}\n")
+
+                if evaluation.get('proposition_status'):
+                    f.write(f"\n=== SUBTASK PROGRESS ===\n")
+                    for prop_id, status in evaluation['proposition_status'].items():
+                        status_str = "COMPLETE" if status else "INCOMPLETE"
+                        f.write(f"  {prop_id}: {status_str}\n")
+
+                f.write(f"\n=== ACTION HISTORY ===\n")
+                for record in action_history:
+                    f.write(f"[T{record.get('turn', '?')}] {record.get('agent', '?')}: {record.get('action', '?')}\n")
+
+        print_result(success({
+            "steps": results.get("steps", 0),
+            "turns": results.get("turns", 0),
+            "done": results.get("done", False),
+            "episode_over": results.get("episode_over", False),
+            "summary": (
+                f"Task {'completed' if results.get('done') else 'not completed'} "
+                f"in {results.get('turns', 0)} turns ({results.get('steps', 0)} steps)"
+            ),
+            "action_history": action_history,
+            "evaluation": evaluation,
+            "trajectory_dir": args.trajectory_dir,
+        }))
+
+    except Exception as e:
+        print_result(failure(
+            str(e),
+            data={
+                "steps": 0,
+                "turns": 0,
+                "done": False,
+                "summary": f"Benchmark error: {e}",
+            },
+        ))
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

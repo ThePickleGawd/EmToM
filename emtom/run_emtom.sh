@@ -128,15 +128,20 @@ print_usage() {
     echo -e "Usage: ./emtom/run_emtom.sh ${YELLOW}<command>${NC} [options]"
     echo ""
     echo -e "${BOLD}Commands:${NC}"
-    echo "  explore     Run LLM-guided exploration in Habitat"
-    echo "  generate    Generate tasks iteratively with testing loop"
-    echo "  benchmark   Run benchmark with generated tasks"
-    echo "  test        Human-in-the-loop testing mode (manual command input)"
-    echo "  judge       Evaluate task quality + ToM with multi-model council (Claude Opus + GPT-5)"
-    echo "  verify      Verify a task by executing its golden trajectory in simulator"
+    echo "  explore        Run LLM-guided exploration in Habitat"
+    echo "  generate       Generate tasks iteratively with testing loop"
+    echo "  benchmark      Run benchmark with generated tasks"
+    echo "  test           Human-in-the-loop testing mode (manual command input)"
+    echo "  judge          Evaluate task quality + ToM with multi-model council"
+    echo "  verify         Verify a task by executing its golden trajectory in simulator"
     echo "  verify-static  Static task verification (no Habitat/GPU required)"
-    echo "  evolve      Run evolutionary difficulty generation (model ladder)"
-    echo "  all         Run full pipeline: explore -> generate -> benchmark"
+    echo "  verify-pddl    Verify PDDL goal solvability and compute ToM depth"
+    echo "  validate-task  Validate task JSON structure (no simulator)"
+    echo "  test-task      Run LLM agents on a task (requires GPU)"
+    echo "  new-scene      Load a new Habitat scene (requires GPU)"
+    echo "  submit-task    Submit a validated task to output directory"
+    echo "  evolve         Run evolutionary difficulty generation (model ladder)"
+    echo "  all            Run full pipeline: explore -> generate -> benchmark"
     echo ""
     echo -e "${BOLD}Agent Options:${NC}"
     echo "  --agents N           Exact number of agents (sets both min and max, 2-10 for robots, 2-5 for humans)"
@@ -672,18 +677,16 @@ run_judge() {
     echo "Running EMTOM Task Judge (Council)"
     echo "=============================================="
     echo "Task: $TASK_FILE"
-    echo "Models: opus, gpt-5 (multi-model council)"
     echo "Threshold: $THRESHOLD"
     echo "=============================================="
     echo ""
 
-    # Build command arguments
-    CMD_ARGS="--task $TASK_FILE --models opus,gpt-5 --threshold $THRESHOLD"
-    if [ "$VERBOSE" = true ]; then
-        CMD_ARGS="$CMD_ARGS --verbose"
+    JUDGE_ARGS=("$TASK_FILE" --threshold "$THRESHOLD")
+    if [ -n "$DIFFICULTY" ]; then
+        JUDGE_ARGS+=(--difficulty "$DIFFICULTY")
     fi
 
-    python -m emtom.task_gen.judge $CMD_ARGS
+    python -m emtom.cli.judge_task "${JUDGE_ARGS[@]}"
 }
 
 run_verify() {
@@ -723,12 +726,11 @@ run_verify() {
     echo ""
 
     set +e
-    python emtom/task_gen/verify_trajectory.py \
-        --task-file "$TASK_FILE" \
-        --result-file "$VERIFY_RESULT_FILE" \
+    python -m emtom.cli.verify_trajectory \
+        "$TASK_FILE" \
         --working-dir "$VERIFY_WORKDIR" \
         --config-name "$CONFIG_NAME" \
-        >"$VERIFY_LOG_FILE" 2>&1
+        >"$VERIFY_RESULT_FILE" 2>"$VERIFY_LOG_FILE"
     VERIFY_CMD_EXIT=$?
     set -e
 
@@ -805,6 +807,67 @@ run_verify_static() {
     python -m emtom.task_gen.static_verify "${VERIFY_ARGS[@]}"
 }
 
+# --- CLI subcommands (shared with agent.py) ---
+
+run_verify_pddl() {
+    if [ -z "$TASK_FILE" ]; then
+        echo "Error: --task is required for verify-pddl command"
+        echo "Usage: ./emtom/run_emtom.sh verify-pddl --task <path_to_task.json>"
+        exit 1
+    fi
+    PDDL_ARGS=("$TASK_FILE")
+    if [ -n "$OUTPUT_DIR" ]; then
+        PDDL_ARGS+=(--working-dir "$OUTPUT_DIR")
+    fi
+    python -m emtom.cli.verify_pddl "${PDDL_ARGS[@]}"
+}
+
+run_validate_task() {
+    if [ -z "$TASK_FILE" ]; then
+        echo "Error: --task is required for validate-task command"
+        echo "Usage: ./emtom/run_emtom.sh validate-task --task <path_to_task.json>"
+        exit 1
+    fi
+    VALIDATE_ARGS=("$TASK_FILE")
+    if [ -n "$SCENE_DATA_FILE" ]; then
+        VALIDATE_ARGS+=(--scene-file "$SCENE_DATA_FILE")
+    fi
+    python -m emtom.cli.validate_task "${VALIDATE_ARGS[@]}"
+}
+
+run_test_task() {
+    if [ -z "$TASK_FILE" ]; then
+        echo "Error: --task is required for test-task command"
+        echo "Usage: ./emtom/run_emtom.sh test-task --task <path_to_task.json>"
+        exit 1
+    fi
+    TEST_ARGS=("$TASK_FILE")
+    if [ -n "$OUTPUT_DIR" ]; then
+        TEST_ARGS+=(--working-dir "$OUTPUT_DIR" --trajectory-dir "$OUTPUT_DIR/trajectories")
+    fi
+    if [ -n "$TEST_MODEL" ]; then
+        TEST_ARGS+=(--test-model "$TEST_MODEL")
+    fi
+    python -m emtom.cli.test_task "${TEST_ARGS[@]}"
+}
+
+run_new_scene() {
+    # Default to 2 agents if --agents not specified
+    local num=${AGENTS_MAX:-2}
+    SCENE_ARGS=("$num" --working-dir "${OUTPUT_DIR:-/tmp/emtom_scene}")
+    python -m emtom.cli.new_scene "${SCENE_ARGS[@]}"
+}
+
+run_submit_task() {
+    if [ -z "$TASK_FILE" ]; then
+        echo "Error: --task is required for submit-task command"
+        echo "Usage: ./emtom/run_emtom.sh submit-task --task <path_to_task.json>"
+        exit 1
+    fi
+    SUBMIT_ARGS=("$TASK_FILE" --output-dir "${OUTPUT_DIR:-data/emtom/tasks}")
+    python -m emtom.cli.submit_task "${SUBMIT_ARGS[@]}"
+}
+
 # Parse command line arguments
 COMMAND=""
 EVOLVE_ARGS=()
@@ -816,7 +879,7 @@ while [[ $# -gt 0 ]]; do
             EVOLVE_ARGS=("$@")
             break
             ;;
-        explore|generate|benchmark|test|judge|verify|verify-static|all)
+        explore|generate|benchmark|test|judge|verify|verify-static|verify-pddl|validate-task|test-task|new-scene|submit-task|all)
             COMMAND=$1
             shift
             ;;
@@ -1028,6 +1091,21 @@ case $COMMAND in
         ;;
     verify-static)
         run_verify_static
+        ;;
+    verify-pddl)
+        run_verify_pddl
+        ;;
+    validate-task)
+        run_validate_task
+        ;;
+    test-task)
+        run_test_task
+        ;;
+    new-scene)
+        run_new_scene
+        ;;
+    submit-task)
+        run_submit_task
         ;;
     evolve)
         run_evolve
