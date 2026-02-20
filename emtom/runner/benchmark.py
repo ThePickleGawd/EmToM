@@ -529,6 +529,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     "skill_steps": skill_steps,
                 })
 
+                # Update belief tracker with action results
+                self._update_beliefs_for_action(agent_id, high_level_action, response)
+
                 self.check_and_inject_item_tools(uid)
 
                 if state['planner_done']:
@@ -1169,12 +1172,117 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
         return newly_completed
 
+    def _get_belief_tracker(self):
+        """Get or create the belief state tracker for epistemic goal evaluation."""
+        if hasattr(self, '_belief_tracker'):
+            return self._belief_tracker
+
+        self._belief_tracker = None
+        try:
+            from emtom.pddl.belief_tracker import BeliefStateTracker
+            from emtom.pddl.epistemic import ObservabilityModel
+
+            # Build object-room mapping from world graph
+            object_rooms = {}
+            world_graph = self.get_world_graph()
+            if world_graph:
+                try:
+                    room_map = world_graph.get_furniture_to_room_map()
+                    for furn, room in room_map.items():
+                        object_rooms[furn] = room
+                    for room in world_graph.get_all_rooms():
+                        room_name = getattr(room, 'name', str(room))
+                        object_rooms[room_name] = room_name
+                except Exception:
+                    pass
+
+            observability = None
+            if self.task:
+                observability = ObservabilityModel.from_task(self.task)
+
+            self._belief_tracker = BeliefStateTracker.from_scene_and_observability(
+                object_rooms=object_rooms,
+                observability=observability,
+                num_agents=getattr(self.task, 'num_agents', 2),
+            )
+        except Exception as e:
+            print(f"[Benchmark] Could not create belief tracker: {e}", flush=True)
+
+        return self._belief_tracker
+
+    def _update_beliefs_for_action(
+        self, agent_id: str, action: str, result: str
+    ) -> None:
+        """Update belief tracker after an action completes."""
+        tracker = self._get_belief_tracker()
+        if tracker is None:
+            return
+
+        # Parse action name and target
+        action_name, target = self._parse_action_to_tuple(action)
+        if not action_name:
+            return
+
+        # Skip failed actions
+        if any(phrase in (result or "").lower() for phrase in [
+            "too far", "occluded", "failed to", "unexpected failure",
+            "cannot", "blocked",
+        ]):
+            return
+
+        def check_fn(pred, args):
+            prop = {"property": pred}
+            if args:
+                prop["entity"] = args[0]
+            if len(args) > 1:
+                prop["target"] = args[1]
+            res = self.evaluate_task({"required_states": [prop]})
+            return res and res.get("success", False)
+
+        if action_name == "Navigate" and target:
+            # Agent entered a room — observe everything there
+            room = target
+            tracker.record_room_entry(agent_id, room, check_fn)
+
+        elif action_name == "Communicate" and target:
+            # Parse Communicate["message", recipient]
+            import re
+            comm_match = re.match(r'Communicate\[(["\'])(.*?)\1,\s*(.*?)\]', action)
+            if comm_match:
+                message = comm_match.group(2)
+                recipient = comm_match.group(3).strip()
+                if recipient == "all":
+                    for i in range(getattr(self.task, 'num_agents', 2)):
+                        other = f"agent_{i}"
+                        if other != agent_id:
+                            tracker.record_communication(
+                                agent_id, other, message, check_fn
+                            )
+                else:
+                    tracker.record_communication(
+                        agent_id, recipient, message, check_fn
+                    )
+
+        elif action_name in ("Open", "Close", "Pick", "Place", "Clean", "Fill",
+                             "PowerOn", "PowerOff", "UseItem"):
+            # State-changing action — agents in same room observe it
+            if target:
+                change_room = tracker.object_rooms.get(target)
+                # Record for all agents in the same room
+                for pred in ("is_open", "is_closed", "is_on_top", "is_inside",
+                             "is_clean", "is_dirty", "is_unlocked"):
+                    if check_fn(pred, (target,)):
+                        tracker.record_state_change(pred, (target,), change_room)
+
     def _check_pddl_goals(self) -> List[str]:
         """Check PDDL goal conjuncts and return newly completed ones."""
         if not hasattr(self, '_pddl_checker') or self._pddl_checker is None:
+            belief_tracker = self._get_belief_tracker()
             self._pddl_checker = self.task.get_pddl_goal_checker()
             if self._pddl_checker is None:
                 return []
+            # Inject belief tracker into checker
+            self._pddl_checker._belief_tracker = belief_tracker
 
         def check_predicate(pred_name, args):
             prop = {"property": pred_name}

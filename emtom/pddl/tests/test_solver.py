@@ -145,3 +145,134 @@ class TestTomVerifier:
         scene = {"rooms": [], "furniture": ["cabinet_27"], "objects": []}
         depth = compute_tom_depth(task, scene)
         assert depth == -1
+
+
+class TestTrivialKGoals:
+    """Test that K() goals are checked against observability."""
+
+    def _make_problem(self, goal_str, objects=None):
+        from emtom.pddl.dsl import parse_goal_string
+        goal = parse_goal_string(goal_str)
+        return Problem(
+            name="test",
+            domain_name="emtom",
+            objects=objects or {
+                "agent_0": "agent", "agent_1": "agent",
+                "cabinet_27": "furniture", "drawer_5": "furniture",
+            },
+            init=[],
+            goal=goal,
+        )
+
+    def test_trivial_k_when_agent_can_observe(self):
+        """K(agent_0, is_open(cabinet_27)) is trivial if agent_0 has no restrictions."""
+        problem = self._make_problem("(K agent_0 (is_open cabinet_27))")
+        obs = ObservabilityModel(
+            restricted_rooms={"agent_1": {"kitchen_1"}},  # Only agent_1 restricted
+            object_rooms={"cabinet_27": "kitchen_1"},
+        )
+        result = PDKBSolver().solve(EMTOM_DOMAIN, problem, obs)
+        assert result.solvable
+        assert len(result.trivial_k_goals) == 1
+        assert "(K agent_0 (is_open cabinet_27))" in result.trivial_k_goals
+
+    def test_non_trivial_k_when_agent_restricted(self):
+        """K(agent_0, is_open(cabinet_27)) is non-trivial if agent_0 can't see kitchen."""
+        problem = self._make_problem("(K agent_0 (is_open cabinet_27))")
+        obs = ObservabilityModel(
+            restricted_rooms={"agent_0": {"kitchen_1"}},  # agent_0 restricted
+            object_rooms={"cabinet_27": "kitchen_1"},
+        )
+        result = PDKBSolver().solve(EMTOM_DOMAIN, problem, obs)
+        assert result.solvable
+        assert result.trivial_k_goals == []
+        assert result.belief_depth >= 1
+
+    def test_mixed_trivial_and_non_trivial(self):
+        """Goal with both trivial and non-trivial K() goals."""
+        goal_str = "(and (K agent_0 (is_open cabinet_27)) (K agent_0 (is_open drawer_5)))"
+        problem = self._make_problem(goal_str)
+        obs = ObservabilityModel(
+            restricted_rooms={"agent_0": {"bedroom_1"}},  # agent_0 can't see bedroom
+            object_rooms={
+                "cabinet_27": "kitchen_1",   # agent_0 CAN see
+                "drawer_5": "bedroom_1",     # agent_0 can't see
+            },
+        )
+        result = PDKBSolver().solve(EMTOM_DOMAIN, problem, obs)
+        assert result.solvable
+        # cabinet_27 K() is trivial, drawer_5 K() is not
+        assert len(result.trivial_k_goals) == 1
+        assert "(K agent_0 (is_open cabinet_27))" in result.trivial_k_goals
+
+    def test_no_scene_data_falls_back(self):
+        """Without object_rooms, no triviality checking (falls back to syntactic)."""
+        problem = self._make_problem("(K agent_0 (is_open cabinet_27))")
+        obs = ObservabilityModel(
+            restricted_rooms={"agent_0": {"kitchen_1"}},
+            # No object_rooms
+        )
+        result = PDKBSolver().solve(EMTOM_DOMAIN, problem, obs)
+        assert result.solvable
+        assert result.trivial_k_goals == []  # Can't determine triviality without scene data
+
+
+class TestCommunicationBudget:
+    """Test communication budget validation."""
+
+    def _make_problem(self, goal_str, objects=None):
+        from emtom.pddl.dsl import parse_goal_string
+        goal = parse_goal_string(goal_str)
+        return Problem(
+            name="test",
+            domain_name="emtom",
+            objects=objects or {
+                "agent_0": "agent", "agent_1": "agent",
+                "cabinet_27": "furniture", "drawer_5": "furniture",
+            },
+            init=[],
+            goal=goal,
+        )
+
+    def test_no_limits_no_warning(self):
+        problem = self._make_problem("(K agent_0 (is_open cabinet_27))")
+        obs = ObservabilityModel(
+            restricted_rooms={"agent_0": {"kitchen_1"}},
+            object_rooms={"cabinet_27": "kitchen_1"},
+        )
+        warning = PDKBSolver().check_communication_budget(problem, obs)
+        assert warning is None
+
+    def test_sufficient_budget(self):
+        problem = self._make_problem("(K agent_0 (is_open cabinet_27))")
+        obs = ObservabilityModel(
+            restricted_rooms={"agent_0": {"kitchen_1"}},
+            object_rooms={"cabinet_27": "kitchen_1"},
+            message_limits={"agent_0": 3, "agent_1": 3},  # Plenty of budget
+        )
+        warning = PDKBSolver().check_communication_budget(problem, obs)
+        assert warning is None
+
+    def test_insufficient_budget(self):
+        """Multiple K() goals for agent_0 but only 1 message allowed from informer."""
+        goal_str = "(and (K agent_0 (is_open cabinet_27)) (K agent_0 (is_open drawer_5)))"
+        problem = self._make_problem(goal_str)
+        obs = ObservabilityModel(
+            restricted_rooms={"agent_0": {"kitchen_1", "bedroom_1"}},
+            object_rooms={"cabinet_27": "kitchen_1", "drawer_5": "bedroom_1"},
+            message_limits={"agent_0": 0, "agent_1": 1},  # agent_1 can only send 1
+        )
+        warning = PDKBSolver().check_communication_budget(problem, obs)
+        assert warning is not None
+        assert "insufficient" in warning.lower()
+
+    def test_trivial_k_goals_dont_need_budget(self):
+        """Trivially observable K() goals don't count toward communication budget."""
+        problem = self._make_problem("(K agent_0 (is_open cabinet_27))")
+        obs = ObservabilityModel(
+            restricted_rooms={},  # No restrictions — K() goal is trivial
+            object_rooms={"cabinet_27": "kitchen_1"},
+            message_limits={"agent_0": 0, "agent_1": 0},  # Zero budget
+        )
+        warning = PDKBSolver().check_communication_budget(problem, obs)
+        assert warning is None  # Trivial K() doesn't need communication

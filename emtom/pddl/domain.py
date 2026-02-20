@@ -74,6 +74,69 @@ EMTOM_PREDICATES = [
 
 
 # ---------------------------------------------------------------------------
+# Predicate descriptions (for prompt generation)
+# ---------------------------------------------------------------------------
+
+# Maps predicate name to a one-line description for the LLM prompt.
+# Grouped by comment headers in EMTOM_PREDICATES above.
+_PREDICATE_DESCRIPTIONS = {
+    "is_on_top": "object is on top of furniture",
+    "is_inside": "object is inside furniture (container)",
+    "is_in_room": "object is located in room",
+    "is_on_floor": "object is on the floor",
+    "is_next_to": "object is adjacent to another object",
+    "is_open": "furniture is open",
+    "is_closed": "furniture is closed",
+    "is_clean": "object is clean",
+    "is_dirty": "object is dirty",
+    "is_filled": "object is filled with liquid",
+    "is_empty": "object is empty",
+    "is_powered_on": "object is powered on",
+    "is_powered_off": "object is powered off",
+    "is_unlocked": "furniture is unlocked",
+    "is_held_by": "object is held by agent",
+    "agent_in_room": "agent is in room",
+    "has_item": "agent has item in inventory",
+    "has_at_least": "agent has at least N of item",
+    "has_most": "agent has the most of item among all agents",
+    "is_inverse": "(mechanic) furniture has inverted open/close",
+    "mirrors": "(mechanic) furniture1 state mirrors furniture2",
+    "controls": "(mechanic) furniture1 remotely controls furniture2",
+    "is_restricted": "(mechanic) agent cannot enter room",
+    "is_locked_permanent": "(mechanic) furniture is locked until key used",
+    "requires_item": "(mechanic) furniture requires item to unlock",
+}
+
+_PREDICATE_GROUPS = [
+    ("Spatial / Relational", ["is_on_top", "is_inside", "is_in_room", "is_on_floor", "is_next_to"]),
+    ("Unary State", ["is_open", "is_closed", "is_clean", "is_dirty", "is_filled", "is_empty", "is_powered_on", "is_powered_off", "is_unlocked"]),
+    ("Agent", ["is_held_by", "agent_in_room", "has_item", "has_at_least", "has_most"]),
+    ("Mechanic (init-only, do NOT use in pddl_goal)", ["is_inverse", "mirrors", "controls", "is_restricted", "is_locked_permanent", "requires_item"]),
+]
+
+
+def get_predicates_for_prompt() -> str:
+    """
+    Generate predicate signatures for the LLM system prompt.
+
+    Dynamically derived from EMTOM_PREDICATES — never hardcoded.
+    """
+    pred_map = {p.name: p for p in EMTOM_PREDICATES}
+    lines = []
+    for group_name, pred_names in _PREDICATE_GROUPS:
+        lines.append(f"### {group_name}")
+        for name in pred_names:
+            pred = pred_map.get(name)
+            if not pred:
+                continue
+            params_str = " ".join(f"{p.name}:{p.type}" for p in pred.params)
+            desc = _PREDICATE_DESCRIPTIONS.get(name, "")
+            lines.append(f"- `({name} {params_str})` — {desc}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Actions
 # ---------------------------------------------------------------------------
 

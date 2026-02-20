@@ -478,6 +478,49 @@ def _parse_tokens(tokens: List[str], pos: int) -> Tuple[Formula, int]:
         return Literal(predicate=tokens[pos], args=()), pos + 1
 
 
+def validate_goal_predicates(goal: Formula, domain: Domain) -> List[str]:
+    """
+    Validate that all predicates in a goal formula exist in the domain
+    and have correct arity.
+
+    Args:
+        goal: Parsed Formula tree
+        domain: Domain with predicate definitions
+
+    Returns:
+        List of error strings (empty = valid)
+    """
+    pred_arities = {p.name: len(p.params) for p in domain.predicates}
+    errors: List[str] = []
+
+    def _walk(node: Formula) -> None:
+        if isinstance(node, Literal):
+            if node.predicate not in pred_arities:
+                errors.append(
+                    f"Unknown predicate '{node.predicate}'. "
+                    f"Available: {sorted(pred_arities.keys())}"
+                )
+            else:
+                expected = pred_arities[node.predicate]
+                actual = len(node.args)
+                if actual != expected:
+                    errors.append(
+                        f"Predicate '{node.predicate}' expects {expected} "
+                        f"argument(s) but got {actual}: {node.to_pddl()}"
+                    )
+        elif isinstance(node, EpistemicFormula):
+            _walk(node.inner)
+        elif isinstance(node, (And, Or)):
+            for op in node.operands:
+                _walk(op)
+        elif isinstance(node, Not):
+            if node.operand is not None:
+                _walk(node.operand)
+
+    _walk(goal)
+    return errors
+
+
 def goal_to_string(goal: Formula) -> str:
     """Serialize a Formula to its PDDL string representation."""
     return goal.to_pddl()

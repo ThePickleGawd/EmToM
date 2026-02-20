@@ -333,6 +333,10 @@ class TaskGeneratorAgent:
         import random
         task_category = self.category or random.choice(["cooperative", "competitive", "mixed"])
 
+        # Get available predicates from domain
+        from emtom.pddl.domain import get_predicates_for_prompt
+        available_predicates = get_predicates_for_prompt()
+
         # Initialize conversation with action descriptions and paths injected
         replacements = {
             "{action_descriptions}": ActionRegistry.get_all_action_descriptions(),
@@ -340,6 +344,7 @@ class TaskGeneratorAgent:
             "{working_dir}": str(self.working_dir),
             "{available_items}": available_items,
             "{available_mechanics}": available_mechanics,
+            "{available_predicates}": available_predicates,
             "{category}": task_category.upper(),
             "{diversity_section}": self._wrap_diversity_section(self._build_diversity_section()),
         }
@@ -2071,6 +2076,17 @@ SUMMARY:"""
                 "error": f"Invalid PDDL goal syntax: {e}",
             })
 
+        # Validate predicate arities against domain
+        from emtom.pddl.dsl import validate_goal_predicates
+        from emtom.pddl.domain import EMTOM_DOMAIN
+        arity_errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
+        if arity_errors:
+            return json.dumps({
+                "valid": False,
+                "error": "Predicate validation errors:\n" + "\n".join(arity_errors),
+                "pddl_goal": pddl_goal,
+            })
+
         # Build task object and verify solvability
         from emtom.task_gen.task_generator import GeneratedTask
         task = GeneratedTask.from_dict(task_data)
@@ -2093,8 +2109,9 @@ SUMMARY:"""
         from emtom.pddl.epistemic import ObservabilityModel
 
         problem = compile_task(task, scene_data)
-        observability = ObservabilityModel.from_task(task)
-        result = PDKBSolver().solve(EMTOM_DOMAIN, problem, observability)
+        solver = PDKBSolver()
+        observability = ObservabilityModel.from_task_with_scene(task, scene_data)
+        result = solver.solve(EMTOM_DOMAIN, problem, observability)
 
         if not result.solvable:
             return json.dumps({
@@ -2102,6 +2119,9 @@ SUMMARY:"""
                 "error": f"PDDL goal is not solvable: {result.error}",
                 "pddl_goal": pddl_goal,
             })
+
+        # Check communication budget
+        budget_warning = solver.check_communication_budget(problem, observability)
 
         # Compute ToM depth
         from emtom.pddl.tom_verifier import explain_tom_depth
@@ -2111,7 +2131,7 @@ SUMMARY:"""
         from emtom.pddl.describe import goal_to_natural_language
         description = goal_to_natural_language(goal)
 
-        return json.dumps({
+        output = {
             "valid": True,
             "pddl_goal": pddl_goal,
             "solvable": True,
@@ -2120,7 +2140,17 @@ SUMMARY:"""
             "goal_description": description,
             "num_conjuncts": len(goal.flatten()),
             "solve_time": result.solve_time,
-        }, indent=2)
+        }
+        if result.trivial_k_goals:
+            output["trivial_k_warnings"] = (
+                f"These K() goals are trivially satisfied (agent can directly observe the fact): "
+                f"{result.trivial_k_goals}. Consider removing them or adding room_restriction "
+                f"to create real information asymmetry."
+            )
+        if budget_warning:
+            output["budget_warning"] = budget_warning
+
+        return json.dumps(output, indent=2)
 
     def _verify_golden_trajectory(self) -> str:
         """

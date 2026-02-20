@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
-from emtom.pddl.dsl import Domain, Problem, Literal, And, Or, Knows, Believes, EpistemicFormula, Formula
+from emtom.pddl.dsl import Domain, Problem, Literal, And, Or, Not, Knows, Believes, EpistemicFormula, Formula
 from emtom.pddl.epistemic import ObservabilityModel
 
 
@@ -27,6 +27,7 @@ class SolverResult:
     belief_depth: int = 0
     solve_time: float = 0.0
     error: Optional[str] = None
+    trivial_k_goals: List[str] = field(default_factory=list)
 
 
 class PDKBSolver:
@@ -128,7 +129,7 @@ class PDKBSolver:
                 )
 
         # Check 4: Epistemic requirements
-        belief_depth = self._compute_min_belief_depth(
+        belief_depth, trivial_goals = self._compute_min_belief_depth(
             problem, observability, max_belief_depth
         )
 
@@ -136,6 +137,7 @@ class PDKBSolver:
             solvable=True,
             belief_depth=belief_depth,
             solve_time=time.time() - start,
+            trivial_k_goals=trivial_goals,
         )
 
     def _compute_min_belief_depth(
@@ -143,29 +145,120 @@ class PDKBSolver:
         problem: Problem,
         observability: Optional[ObservabilityModel],
         max_depth: int,
-    ) -> int:
+    ) -> Tuple[int, List[str]]:
         """
         Compute minimum belief depth needed.
+
+        Returns (depth, trivial_k_goals) where trivial_k_goals lists
+        K()/B() goals that are trivially satisfied because the agent
+        can directly observe the fact.
 
         Depth 0: No epistemic reasoning needed (all agents see everything)
         Depth 1: Agents must reason about others' knowledge
         Depth 2: Agents must reason about what others think they know
         Depth 3: Third-order nesting
         """
-        if not observability or not observability.has_information_asymmetry():
-            return 0
+        trivial_goals: List[str] = []
 
-        # Count nesting depth of epistemic formulas in the goal
-        goal_depth = _max_epistemic_depth(problem.goal) if problem.goal else 0
+        if not observability or not observability.has_information_asymmetry():
+            return 0, trivial_goals
+
+        # Count syntactic nesting depth of epistemic formulas in the goal
+        syntactic_depth = _max_epistemic_depth(problem.goal) if problem.goal else 0
 
         # If there's information asymmetry but no explicit epistemic goals,
         # the task requires at least depth 1 (agents need to model others' beliefs)
-        if goal_depth == 0 and observability.has_information_asymmetry():
-            # Check if communication is required to bridge information gaps
+        if syntactic_depth == 0 and observability.has_information_asymmetry():
             if observability.restricted_rooms or observability.hidden_effects:
-                return 1
+                return 1, trivial_goals
 
-        return min(goal_depth, max_depth)
+        # If scene data is available (object_rooms populated), do semantic check
+        if syntactic_depth > 0 and observability.object_rooms:
+            semantic_depth, trivial_goals = _compute_non_trivial_depth(
+                problem.goal, observability
+            )
+            # Use the semantic depth but ensure asymmetry still counts
+            if semantic_depth == 0 and observability.has_information_asymmetry():
+                return 1, trivial_goals
+            return min(semantic_depth, max_depth), trivial_goals
+
+        return min(syntactic_depth, max_depth), trivial_goals
+
+    def check_communication_budget(
+        self,
+        problem: Problem,
+        observability: ObservabilityModel,
+    ) -> Optional[str]:
+        """
+        Check if message limits can support K() goal requirements.
+
+        Returns None if OK, or a warning string if budget is insufficient.
+        """
+        if not observability.message_limits:
+            return None  # No limits, no problem
+
+        if not problem.goal:
+            return None
+
+        # Collect non-trivial K() goals that require communication
+        required_transfers: Dict[str, int] = {}  # receiver_agent -> count of K() goals needing info
+
+        for conjunct in problem.goal.flatten():
+            if not isinstance(conjunct, (Knows, Believes)):
+                continue
+
+            receiver = conjunct.agent
+            inner = conjunct.inner
+
+            # Get the inner literal
+            node = inner
+            while isinstance(node, EpistemicFormula):
+                node = node.inner
+            if not isinstance(node, Literal):
+                continue
+
+            # Check if receiver can directly observe this fact
+            if observability.is_fact_observable_by(receiver, node.predicate, node.args):
+                continue  # Trivial — no communication needed
+
+            # This K() goal requires someone to communicate to receiver
+            required_transfers[receiver] = required_transfers.get(receiver, 0) + 1
+
+        if not required_transfers:
+            return None
+
+        # For each receiver that needs info, check if any informer has budget
+        # Conservative: assume each K() goal needs at least 1 message from some sender
+        warnings = []
+        all_agents = set()
+        for agent in observability.message_limits:
+            all_agents.add(agent)
+        for agent in observability.restricted_rooms:
+            all_agents.add(agent)
+
+        for receiver, needed_facts in required_transfers.items():
+            # Find potential informers (agents who CAN observe the facts)
+            # and check their combined message budget
+            total_budget = 0
+            for agent in all_agents:
+                if agent == receiver:
+                    continue
+                limit = observability.message_limits.get(agent)
+                if limit is not None:
+                    total_budget += limit
+                else:
+                    total_budget = needed_facts  # Unlimited sender available
+                    break
+
+            if total_budget < needed_facts:
+                warnings.append(
+                    f"{receiver} needs {needed_facts} K() fact(s) communicated "
+                    f"but available senders have combined budget of {total_budget} message(s)"
+                )
+
+        if warnings:
+            return "Communication budget may be insufficient: " + "; ".join(warnings)
+        return None
 
 
 def _max_epistemic_depth(formula: Optional[Formula]) -> int:
@@ -179,3 +272,56 @@ def _max_epistemic_depth(formula: Optional[Formula]) -> int:
     if hasattr(formula, 'operand'):
         return _max_epistemic_depth(formula.operand)
     return 0
+
+
+def _compute_non_trivial_depth(
+    formula: Optional[Formula],
+    observability: ObservabilityModel,
+) -> Tuple[int, List[str]]:
+    """
+    Compute epistemic depth considering only non-trivial K()/B() goals.
+
+    A K(agent, phi) is trivial if agent can directly observe all entities
+    in phi. Only non-trivial epistemic operators contribute to depth.
+
+    Returns (depth, list of trivial goal PDDL strings).
+    """
+    if formula is None:
+        return 0, []
+
+    trivial_goals: List[str] = []
+
+    if isinstance(formula, (Knows, Believes)):
+        agent = formula.agent
+        inner = formula.inner
+
+        # Get the leaf literal to check observability
+        node = inner
+        while isinstance(node, EpistemicFormula):
+            node = node.inner
+
+        if isinstance(node, Literal):
+            if observability.is_k_goal_trivial(agent, node):
+                trivial_goals.append(formula.to_pddl())
+                # Trivial K() — doesn't add depth, but still recurse inner
+                inner_depth, inner_trivial = _compute_non_trivial_depth(inner, observability)
+                trivial_goals.extend(inner_trivial)
+                return inner_depth, trivial_goals
+
+        # Non-trivial K() — adds 1 to depth
+        inner_depth, inner_trivial = _compute_non_trivial_depth(inner, observability)
+        trivial_goals.extend(inner_trivial)
+        return 1 + inner_depth, trivial_goals
+
+    if isinstance(formula, (And, Or)):
+        max_depth = 0
+        for op in formula.operands:
+            d, t = _compute_non_trivial_depth(op, observability)
+            trivial_goals.extend(t)
+            max_depth = max(max_depth, d)
+        return max_depth, trivial_goals
+
+    if isinstance(formula, Not) and formula.operand is not None:
+        return _compute_non_trivial_depth(formula.operand, observability)
+
+    return 0, trivial_goals

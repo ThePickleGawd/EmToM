@@ -136,6 +136,9 @@ Each agent's secrets MUST mention their message limit: "You can only send N mess
 }}
 ```
 
+## Available PDDL Predicates
+{available_predicates}
+
 ## PDDL Goal Format
 Use `pddl_goal` instead of `subtasks`. Write goals as PDDL formulas:
 - Single goal: `"(is_open cabinet_27)"`
