@@ -113,10 +113,12 @@ fi
 NUM_CATEGORIES=${#CATEGORIES[@]}
 TOTAL_PROCESSES=$((NUM_GPUS * PER_GPU))
 
-# Create log directory
+# Create log and task directories
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
 LOG_DIR="outputs/bulk_gen_logs/${TIMESTAMP}-bulk-generate"
+TASK_DIR="outputs/bulk_gen_tasks/${TIMESTAMP}-bulk-generate"
 mkdir -p "$LOG_DIR"
+mkdir -p "$TASK_DIR"
 
 echo -e "${BOLD}=============================================="
 echo -e "Bulk EMTOM Task Generation"
@@ -130,6 +132,7 @@ echo -e "Tasks per process:  ${GREEN}$NUM_TASKS${NC}"
 echo -e "Iterations/task:    ${GREEN}$ITERATIONS_PER_TASK${NC}"
 [ -n "$SUBTASKS_MIN" ] && echo -e "Subtasks min:       ${GREEN}$SUBTASKS_MIN${NC}"
 [ -n "$SUBTASKS_MAX" ] && echo -e "Subtasks max:       ${GREEN}$SUBTASKS_MAX${NC}"
+echo -e "Task directory:     ${CYAN}$TASK_DIR${NC}"
 echo -e "Log directory:      ${CYAN}$LOG_DIR${NC}"
 echo "=============================================="
 echo ""
@@ -155,7 +158,7 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
 
         if [ "$DRY_RUN" = true ]; then
             echo -e "${YELLOW}[DRY-RUN]${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}"
-            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --iterations-per-task $ITERATIONS_PER_TASK --category $category$SUBTASK_FLAGS"
+            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --iterations-per-task $ITERATIONS_PER_TASK --category $category --output-dir $TASK_DIR$SUBTASK_FLAGS"
         else
             echo -e "${GREEN}Starting${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC} -> $log_file"
 
@@ -164,6 +167,7 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
                 --num-tasks "$NUM_TASKS" \
                 --iterations-per-task "$ITERATIONS_PER_TASK" \
                 --category "$category" \
+                --output-dir "$TASK_DIR" \
                 $SUBTASK_FLAGS \
                 > "$log_file" 2>&1 &
 
@@ -220,20 +224,20 @@ echo "=============================================="
 echo -e "Succeeded: ${GREEN}$succeeded${NC}"
 echo -e "Failed:    ${RED}$failed${NC}"
 echo -e "Logs:      $LOG_DIR/"
+echo -e "Tasks:     $TASK_DIR/"
 echo "=============================================="
 
-# Show saved task file paths extracted from logs
-task_paths=$(grep -rh --no-filename 'data/emtom/tasks/.*\.json' "$LOG_DIR"/*.log 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -oP 'data/emtom/tasks/\S+\.json' | sort -u)
+# Count saved task files in the output directory
+task_count=$(find "$TASK_DIR" -name '*.json' 2>/dev/null | wc -l)
 
-if [ -n "$task_paths" ]; then
-    task_count=$(echo "$task_paths" | wc -l)
+if [ "$task_count" -gt 0 ]; then
     echo ""
     echo -e "${BOLD}${GREEN}=============================================="
     echo -e "Saved Tasks ($task_count)"
     echo -e "==============================================${NC}"
-    while IFS= read -r path; do
+    for path in "$TASK_DIR"/*.json; do
         echo -e "  ${CYAN}${BOLD}$path${NC}"
-    done <<< "$task_paths"
+    done
     echo -e "${BOLD}${GREEN}==============================================${NC}"
 else
     echo ""
