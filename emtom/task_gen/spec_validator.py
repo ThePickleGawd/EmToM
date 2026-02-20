@@ -429,6 +429,46 @@ def validate_blocking_spec(
                 )
 
     # ------------------------------------------------------------------
+    # PDDL goal validation
+    # ------------------------------------------------------------------
+    pddl_goal = task_data.get("pddl_goal")
+    if isinstance(pddl_goal, str) and pddl_goal:
+        try:
+            from emtom.pddl.dsl import parse_goal_string
+            goal = parse_goal_string(pddl_goal)
+            conjuncts = goal.flatten()
+            if not conjuncts:
+                errors.append("pddl_goal parsed but contains no goal conjuncts")
+
+            # Validate ordering references valid goal predicates
+            pddl_ordering = task_data.get("pddl_ordering", [])
+            if isinstance(pddl_ordering, list):
+                conjunct_strs = {c.to_pddl() for c in conjuncts}
+                for i, constraint in enumerate(pddl_ordering):
+                    if not isinstance(constraint, dict):
+                        errors.append(f"pddl_ordering[{i}] must be an object")
+                        continue
+                    for key in ("before", "after"):
+                        ref = constraint.get(key)
+                        if ref and ref not in conjunct_strs:
+                            errors.append(
+                                f"pddl_ordering[{i}].{key} references '{ref}' "
+                                f"which is not a goal conjunct"
+                            )
+
+            # Validate pddl_owners references valid goal predicates
+            pddl_owners = task_data.get("pddl_owners", {})
+            if isinstance(pddl_owners, dict):
+                for literal_str, owner in pddl_owners.items():
+                    if literal_str not in conjunct_strs:
+                        errors.append(
+                            f"pddl_owners key '{literal_str}' is not a goal conjunct"
+                        )
+
+        except Exception as e:
+            errors.append(f"Invalid pddl_goal syntax: {e}")
+
+    # ------------------------------------------------------------------
     # Golden trajectory structural checks
     # ------------------------------------------------------------------
     golden = task_data.get("golden_trajectory", [])

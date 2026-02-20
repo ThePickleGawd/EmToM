@@ -3,8 +3,6 @@
   "title": "REPLACE_WITH_TITLE",
   "category": "cooperative|competitive|mixed",
   "task": "REPLACE_WITH_TASK_DESCRIPTION",
-  "tom_level": 1,
-  "tom_reasoning": "REPLACE_WITH_TOM_REASONING",
   "scene_id": "",
   "episode_id": "",
   "agent_spawns": {
@@ -41,43 +39,19 @@
   },
   "_COMMENT_MESSAGE_TARGETS": "Optional: restrict which agents each agent can message. Omit for no restrictions.",
   "message_targets": {},
-  "subtasks": [
-    {
-      "_COMMENT": "required field is polymorphic: true=task success, false=optional, 'team_X'=team wins, 'agent_X'=agent subgoal",
-      "id": "shared_prereq",
-      "description": "Shared prerequisite that must be done first",
-      "required": true,
-      "depends_on": [],
-      "success_condition": {
-        "entity": "REPLACE (agent_id for has_item, object_id for others)",
-        "property": "REPLACE (ex. has_item)",
-        "target": "REPLACE (omit for unary: is_on_floor/is_open/etc)"
-      }
-    },
-    {
-      "_COMMENT_COMPETITIVE": "For competitive: use required='team_X' for team win conditions",
-      "id": "team_0_wins",
-      "description": "Team 0 secures the trophy",
-      "required": "team_0",
-      "depends_on": ["shared_prereq"],
-      "success_condition": {"entity": "trophy_1", "property": "is_inside", "target": "cabinet_10"}
-    },
-    {
-      "id": "team_1_wins",
-      "description": "Team 1 secures the trophy",
-      "required": "team_1",
-      "depends_on": ["shared_prereq"],
-      "success_condition": {"entity": "trophy_1", "property": "is_inside", "target": "cabinet_20"}
-    },
-    {
-      "_COMMENT_MIXED": "For mixed: use required='agent_X' for agent subgoals",
-      "id": "agent_0_subgoal",
-      "description": "Agent 0's secret subgoal",
-      "required": "agent_0",
-      "depends_on": [],
-      "success_condition": {"entity": "vase_1", "property": "is_inside", "target": "closet_5"}
-    }
+
+  "_COMMENT_PDDL": "Use pddl_goal for task goals (replaces subtasks). tom_level is auto-computed.",
+  "pddl_goal": "(and (is_open REPLACE_FURNITURE) (is_on_top REPLACE_OBJECT REPLACE_FURNITURE))",
+  "pddl_ordering": [
+    {"_COMMENT": "Optional ordering: before must complete before after",
+     "before": "(is_open REPLACE_FURNITURE)",
+     "after": "(is_on_top REPLACE_OBJECT REPLACE_FURNITURE)"}
   ],
+  "pddl_owners": {
+    "_COMMENT_COMPETITIVE": "For competitive: '(is_inside trophy_1 cabinet_10)': 'team_0'",
+    "_COMMENT_MIXED": "For mixed: '(is_inside vase_1 closet_5)': 'agent_0'"
+  },
+
   "num_agents": 2,
   "golden_trajectory": [
     {

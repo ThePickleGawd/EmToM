@@ -1124,6 +1124,8 @@ SUMMARY:"""
             return self._verify_golden_trajectory()
         elif tool == "judge":
             return self._judge()
+        elif tool == "verify_pddl":
+            return self._verify_pddl()
         elif tool == "submit_task":
             return self._submit_task()
         elif tool == "new_scene":
@@ -1131,7 +1133,7 @@ SUMMARY:"""
         elif tool == "fail":
             return self._fail(args)
         else:
-            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, judge, submit_task, new_scene, fail"
+            return f"Unknown tool: {tool}. Available: bash, test_task, verify_pddl, verify_golden_trajectory, judge, submit_task, new_scene, fail"
 
     def _bash(self, command: str) -> str:
         """
@@ -1483,16 +1485,36 @@ SUMMARY:"""
                     "summary": "Task validation failed - item ID mismatch"
                 }
 
-        # Validate success condition OR subtasks DAG
+        # Validate success condition OR subtasks DAG OR pddl_goal
         has_success_condition = "success_condition" in task_data and task_data["success_condition"]
         has_subtasks = "subtasks" in task_data and task_data["subtasks"]
+        has_pddl_goal = "pddl_goal" in task_data and task_data["pddl_goal"]
 
-        if not has_success_condition and not has_subtasks:
+        if not has_success_condition and not has_subtasks and not has_pddl_goal:
             return {
                 "valid": False,
-                "error": "Task must have either 'success_condition' or 'subtasks' with valid DAG",
+                "error": "Task must have 'pddl_goal', 'success_condition', or 'subtasks' with valid DAG",
                 "summary": "Task validation failed"
             }
+
+        # Validate PDDL goal if present
+        if has_pddl_goal:
+            try:
+                from emtom.pddl.dsl import parse_goal_string
+                goal = parse_goal_string(task_data["pddl_goal"])
+                conjuncts = goal.flatten()
+                if not conjuncts:
+                    return {
+                        "valid": False,
+                        "error": "pddl_goal parsed but contains no goal conjuncts",
+                        "summary": "Task validation failed"
+                    }
+            except Exception as e:
+                return {
+                    "valid": False,
+                    "error": f"Invalid pddl_goal syntax: {e}",
+                    "summary": "Task validation failed"
+                }
 
         # Validate success-condition predicates use supported schema.
         from emtom.evaluation import PARTNR_PREDICATES, EMTOM_PREDICATES
@@ -2013,6 +2035,93 @@ SUMMARY:"""
                 "trajectory_dir": str(run_dir)
             }
 
+    def _verify_pddl(self) -> str:
+        """
+        Verify PDDL goal solvability and compute ToM depth.
+
+        Checks:
+        1. pddl_goal syntax is valid
+        2. All referenced objects exist in the scene
+        3. Goal predicates are achievable by domain actions
+        4. Computes ToM depth from epistemic structure
+        """
+        if not self.task_file.exists():
+            return "Error: working_task.json does not exist."
+
+        try:
+            with open(self.task_file) as f:
+                task_data = json.load(f)
+        except json.JSONDecodeError as e:
+            return f"Error: Invalid JSON: {e}"
+
+        pddl_goal = task_data.get("pddl_goal")
+        if not pddl_goal:
+            return json.dumps({
+                "valid": False,
+                "error": "No pddl_goal field in task. Add a pddl_goal string.",
+            })
+
+        # Parse goal
+        try:
+            from emtom.pddl.dsl import parse_goal_string
+            goal = parse_goal_string(pddl_goal)
+        except Exception as e:
+            return json.dumps({
+                "valid": False,
+                "error": f"Invalid PDDL goal syntax: {e}",
+            })
+
+        # Build task object and verify solvability
+        from emtom.task_gen.task_generator import GeneratedTask
+        task = GeneratedTask.from_dict(task_data)
+
+        scene_data = getattr(self, '_scene_data', None)
+
+        # Load scene data from current_scene.json if not already set
+        if scene_data is None:
+            scene_file = self.working_dir / "current_scene.json"
+            if scene_file.exists():
+                try:
+                    with open(scene_file) as sf:
+                        scene_data = json.load(sf)
+                except (json.JSONDecodeError, IOError):
+                    pass
+
+        from emtom.pddl.solver import PDKBSolver
+        from emtom.pddl.domain import EMTOM_DOMAIN
+        from emtom.pddl.compiler import compile_task
+        from emtom.pddl.epistemic import ObservabilityModel
+
+        problem = compile_task(task, scene_data)
+        observability = ObservabilityModel.from_task(task)
+        result = PDKBSolver().solve(EMTOM_DOMAIN, problem, observability)
+
+        if not result.solvable:
+            return json.dumps({
+                "valid": False,
+                "error": f"PDDL goal is not solvable: {result.error}",
+                "pddl_goal": pddl_goal,
+            })
+
+        # Compute ToM depth
+        from emtom.pddl.tom_verifier import explain_tom_depth
+        tom_info = explain_tom_depth(task, scene_data)
+
+        # Goal description
+        from emtom.pddl.describe import goal_to_natural_language
+        description = goal_to_natural_language(goal)
+
+        return json.dumps({
+            "valid": True,
+            "pddl_goal": pddl_goal,
+            "solvable": True,
+            "tom_level": tom_info["tom_level"],
+            "tom_reasoning": tom_info["tom_reasoning"],
+            "goal_description": description,
+            "num_conjuncts": len(goal.flatten()),
+            "solve_time": result.solve_time,
+        }, indent=2)
+
     def _verify_golden_trajectory(self) -> str:
         """
         Execute golden_trajectory step-by-step to prove task is completable.
@@ -2315,23 +2424,45 @@ SUMMARY:"""
         if "error" in validation_result:
             return json.dumps(validation_result, indent=2)
 
-        # Validate subtask count
-        subtasks = task_data.get("subtasks", [])
-        num_subtasks = len(subtasks)
-        if num_subtasks < self.subtasks_min:
-            return json.dumps({
-                "error": f"Task has {num_subtasks} subtasks, minimum is {self.subtasks_min}.",
-                "hint": f"Add more subtasks to reach at least {self.subtasks_min}.",
-                "current": num_subtasks,
-                "required_min": self.subtasks_min,
-            })
-        if num_subtasks > self.subtasks_max:
-            return json.dumps({
-                "error": f"Task has {num_subtasks} subtasks, maximum is {self.subtasks_max}.",
-                "hint": f"Reduce subtasks to at most {self.subtasks_max}, or consolidate steps.",
-                "current": num_subtasks,
-                "required_max": self.subtasks_max,
-            })
+        # Validate goal count (PDDL conjuncts or legacy subtasks)
+        if task_data.get("pddl_goal"):
+            from emtom.pddl.dsl import parse_goal_string
+            try:
+                goal = parse_goal_string(task_data["pddl_goal"])
+                num_goals = len(goal.flatten())
+            except Exception:
+                num_goals = 0
+            if num_goals < self.subtasks_min:
+                return json.dumps({
+                    "error": f"Task has {num_goals} PDDL goal conjuncts, minimum is {self.subtasks_min}.",
+                    "hint": f"Add more goal conjuncts to reach at least {self.subtasks_min}.",
+                    "current": num_goals,
+                    "required_min": self.subtasks_min,
+                })
+            if num_goals > self.subtasks_max:
+                return json.dumps({
+                    "error": f"Task has {num_goals} PDDL goal conjuncts, maximum is {self.subtasks_max}.",
+                    "hint": f"Reduce goal conjuncts to at most {self.subtasks_max}.",
+                    "current": num_goals,
+                    "required_max": self.subtasks_max,
+                })
+        else:
+            subtasks = task_data.get("subtasks", [])
+            num_subtasks = len(subtasks)
+            if num_subtasks < self.subtasks_min:
+                return json.dumps({
+                    "error": f"Task has {num_subtasks} subtasks, minimum is {self.subtasks_min}.",
+                    "hint": f"Add more subtasks to reach at least {self.subtasks_min}.",
+                    "current": num_subtasks,
+                    "required_min": self.subtasks_min,
+                })
+            if num_subtasks > self.subtasks_max:
+                return json.dumps({
+                    "error": f"Task has {num_subtasks} subtasks, maximum is {self.subtasks_max}.",
+                    "hint": f"Reduce subtasks to at most {self.subtasks_max}, or consolidate steps.",
+                    "current": num_subtasks,
+                    "required_max": self.subtasks_max,
+                })
 
         # Validate agent count
         num_agents = task_data.get("num_agents", 2)

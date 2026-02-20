@@ -865,12 +865,16 @@ class BenchmarkRunner(EMTOMBaseRunner):
         """
         Check if task is complete using smart success evaluation.
 
-        Required subtasks are evaluated based on their dependencies:
-        - Required subtasks with required deps → must be latched via DAG
-        - Required subtasks with optional-only deps → check directly
-        - Required subtasks with no deps → check directly
+        Supports both PDDL goals (new) and legacy subtask DAG.
         """
-        if not self.task or not self.task.subtasks:
+        if not self.task:
+            return None
+
+        # PDDL goal path
+        if self.task.uses_pddl:
+            return self._check_pddl_completion()
+
+        if not self.task.subtasks:
             return None
 
         # Category-aware handling
@@ -936,6 +940,95 @@ class BenchmarkRunner(EMTOMBaseRunner):
             "percent_complete": len(self._completed_subtasks) / total_subtasks if total_subtasks else 0.0,
             "percent_required_complete": completed_required / required_count if required_count else 0.0,
         }
+
+    def _check_pddl_completion(self) -> Dict[str, Any]:
+        """Check task completion using PDDL goal checker."""
+        checker = getattr(self, '_pddl_checker', None)
+        if checker is None:
+            checker = self.task.get_pddl_goal_checker()
+            self._pddl_checker = checker
+
+        if checker is None:
+            return {"success": False, "error": "No PDDL goal"}
+
+        category = getattr(self.task, "category", "cooperative")
+
+        if category == "competitive":
+            # Check team-owned conjuncts
+            teams = checker.get_all_teams()
+            team_status = {}
+            team_progress = {}
+            winner = None
+
+            # Check shared (required) first
+            required = checker.get_required_conjuncts()
+            shared_ok = all(
+                checker.is_conjunct_completed(checker.conjuncts.index(c))
+                for c in required
+            ) if required else True
+
+            for team_id in teams:
+                team_conj = checker.get_team_conjuncts(team_id)
+                if not team_conj:
+                    team_status[team_id] = shared_ok
+                    team_progress[team_id] = 1.0 if shared_ok else 0.0
+                    continue
+                done = sum(1 for c in team_conj if checker.is_conjunct_completed(checker.conjuncts.index(c)))
+                progress = done / len(team_conj)
+                team_progress[team_id] = progress
+                team_status[team_id] = shared_ok and (progress == 1.0)
+                if team_status[team_id] and winner is None:
+                    winner = team_id
+
+            total = len(checker.conjuncts)
+            return {
+                "success": winner is not None,
+                "winner": winner,
+                "team_status": team_status,
+                "team_progress": team_progress,
+                "completed_subtasks": list(self._completed_subtasks),
+                "total_subtasks": total,
+                "percent_complete": len(self._completed_subtasks) / total if total else 0.0,
+            }
+
+        elif category == "mixed":
+            required = checker.get_required_conjuncts()
+            required_done = sum(
+                1 for c in required
+                if checker.is_conjunct_completed(checker.conjuncts.index(c))
+            )
+            main_goal_success = (required_done == len(required)) if required else True
+
+            agent_subgoal_status = {}
+            for i in range(self.task.num_agents):
+                agent_id = f"agent_{i}"
+                agent_conj = checker.get_agent_conjuncts(agent_id)
+                if agent_conj:
+                    agent_subgoal_status[agent_id] = all(
+                        checker.is_conjunct_completed(checker.conjuncts.index(c))
+                        for c in agent_conj
+                    )
+
+            total = len(checker.conjuncts)
+            return {
+                "success": main_goal_success,
+                "main_goal_success": main_goal_success,
+                "agent_subgoal_status": agent_subgoal_status,
+                "completed_subtasks": list(self._completed_subtasks),
+                "total_subtasks": total,
+                "percent_complete": len(self._completed_subtasks) / total if total else 0.0,
+            }
+
+        else:
+            # Cooperative: all conjuncts must be complete
+            total = len(checker.conjuncts)
+            all_complete = len(checker.completed) == total
+            return {
+                "success": all_complete,
+                "completed_subtasks": list(self._completed_subtasks),
+                "total_subtasks": total,
+                "percent_complete": len(self._completed_subtasks) / total if total else 0.0,
+            }
 
     def _check_competitive_completion(self) -> Dict[str, Any]:
         """
@@ -1034,8 +1127,16 @@ class BenchmarkRunner(EMTOMBaseRunner):
         }
 
     def _check_subtasks(self) -> List[str]:
-        """Check subtasks and return newly completed IDs."""
-        if not self.task or not self.task.subtasks:
+        """Check subtasks/PDDL goals and return newly completed IDs."""
+        if not self.task:
+            return []
+
+        # PDDL goal path
+        if self.task.uses_pddl:
+            return self._check_pddl_goals()
+
+        # Legacy subtask DAG path
+        if not self.task.subtasks:
             return []
 
         subtasks = self.task.subtasks
@@ -1064,6 +1165,37 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 print(f"✓ SUBTASK COMPLETE: {subtask_id}", flush=True)
                 print(f"  {desc}", flush=True)
                 print(f"  Progress: {len(self._completed_subtasks)}/{len(subtasks)}", flush=True)
+                print(f"{'─'*50}", flush=True)
+
+        return newly_completed
+
+    def _check_pddl_goals(self) -> List[str]:
+        """Check PDDL goal conjuncts and return newly completed ones."""
+        if not hasattr(self, '_pddl_checker') or self._pddl_checker is None:
+            self._pddl_checker = self.task.get_pddl_goal_checker()
+            if self._pddl_checker is None:
+                return []
+
+        def check_predicate(pred_name, args):
+            prop = {"property": pred_name}
+            if args:
+                prop["entity"] = args[0]
+            if len(args) > 1:
+                prop["target"] = args[1]
+            result = self.evaluate_task({"required_states": [prop]})
+            return result and result.get("success", False)
+
+        result = self._pddl_checker.update(check_predicate)
+        newly_completed = result.get("newly_completed", [])
+
+        if newly_completed:
+            total = len(self._pddl_checker.conjuncts)
+            done = len(self._pddl_checker.completed)
+            for goal_str in newly_completed:
+                self._completed_subtasks.add(goal_str)
+                print(f"\n{'─'*50}", flush=True)
+                print(f"✓ GOAL COMPLETE: {goal_str}", flush=True)
+                print(f"  Progress: {done}/{total}", flush=True)
                 print(f"{'─'*50}", flush=True)
 
         return newly_completed

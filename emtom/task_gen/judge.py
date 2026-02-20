@@ -140,8 +140,9 @@ SHARED_CRITERIA = [
     "secret_quality",        # Secrets are actionable, natural, and non-leaking
     "task_naturalness",      # Task description uses natural language, not object IDs
     "narrative_consistency",
-    "subtask_relevance",
+    "goal_relevance",        # Renamed from subtask_relevance for PDDL
     "mechanic_utilization",
+    "pddl_solvability",     # PDDL goal solvability and ToM depth
 ]
 
 # Category-specific criteria
@@ -191,14 +192,23 @@ CRITERIA_DESCRIPTIONS = {
 0.7: Good match with minor omissions
 1.0: Perfect - description precisely matches subtask objectives""",
     },
-    "subtask_relevance": {
-        "name": "Subtask Relevance",
-        "description": "Does every subtask directly contribute to the main objective?",
-        "rubric": """0.0: Many filler subtasks (opening random furniture, navigating pointlessly)
-0.3: Several subtasks unrelated to main goal
-0.5: Some tangential subtasks that could be removed
-0.7: Most subtasks essential, 1-2 questionable
-1.0: All subtasks directly advance the objective - removing any would break the task""",
+    "goal_relevance": {
+        "name": "Goal Relevance",
+        "description": "Does every PDDL goal conjunct directly contribute to the main objective?",
+        "rubric": """0.0: Many filler goals (opening random furniture, navigating pointlessly)
+0.3: Several goal conjuncts unrelated to main objective
+0.5: Some tangential goals that could be removed
+0.7: Most goals essential, 1-2 questionable
+1.0: All goal conjuncts directly advance the objective - removing any would break the task""",
+    },
+    "pddl_solvability": {
+        "name": "PDDL Solvability",
+        "description": "Is the task structurally solvable? Are goal predicates valid and achievable?",
+        "rubric": """0.0: Goal references nonexistent objects or uses invalid predicates
+0.3: Goal is technically valid but trivially satisfied or impossible
+0.5: Goal is valid but some conjuncts are redundant or ordering is wrong
+0.7: Goal is well-formed with minor issues
+1.0: Goal is well-formed, all predicates valid, ordering correct, and structurally solvable""",
     },
     "mechanic_utilization": {
         "name": "Mechanic Utilization",

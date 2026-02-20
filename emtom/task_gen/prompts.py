@@ -36,6 +36,7 @@ Assigned!
 - `new_scene[N]` - **CALL FIRST!** Load scene with N agents (2-10), reset task.
 - `new_scene[N, keep]` - Change agent count, keep current scene and task edits.
 - `bash[cmd]` - Run shell commands.
+- `verify_pddl[]` - Check PDDL goal solvability and compute ToM depth.
 - `judge[]` - Evaluate task quality. Must pass before verify.
 - `verify_golden_trajectory[]` - Test trajectory in simulator. Run after judge passes.
 - `test_task[]` - Difficulty calibration. Measures LLM agent pass rate (target: ~10%).
@@ -45,12 +46,13 @@ Assigned!
 ## Workflow
 1. `new_scene[N]` → load scene with N agents
 2. Read `sampled_tasks/` for examples
-3. Edit `{task_file}`
-4. `judge[]` → fix → repeat until pass
-5. `verify_golden_trajectory[]` → fix → repeat until pass
-6. `test_task[]` → measures pass rate and records calibration data
-7. `submit_task[]`
-8. Repeat from step 1 for next task
+3. Edit `{task_file}` — use `pddl_goal` for goals
+4. `verify_pddl[]` → check solvability + ToM depth
+5. `judge[]` → fix → repeat until pass
+6. `verify_golden_trajectory[]` → fix → repeat until pass
+7. `test_task[]` → measures pass rate and records calibration data
+8. `submit_task[]`
+9. Repeat from step 1 for next task
 
 ## Files
 - `{task_file}` - Working task (created after new_scene)
@@ -121,29 +123,38 @@ Each agent's secrets MUST mention their message limit: "You can only send N mess
   "category": "cooperative|competitive|mixed",
   "num_agents": N,
   "task": "Natural language description (no IDs, no roles)",
-  "tom_level": 1,
-  "tom_reasoning": "Why this task requires this level of Theory of Mind",
   "agent_secrets": {{"agent_0": [...], "agent_1": [...]}},
   "team_secrets": {{"team_0": [...], "team_1": [...]}},
   "agent_actions": {{"agent_0": [...], "agent_1": [...]}},
   "message_targets": {{"agent_0": ["agent_1"], "agent_1": ["agent_0"]}},
-  "subtasks": [{{"id": "...", "required": true/false/"team_X"/"agent_X", "depends_on": [], "success_condition": {{...}}}}],
+  "pddl_goal": "(and (is_open cabinet_27) (is_on_top bottle_4 table_13))",
+  "pddl_ordering": [{{"before": "(is_open cabinet_27)", "after": "(is_on_top bottle_4 table_13)"}}],
+  "pddl_owners": {{}},
   "items": [{{"item_id": "item_X", "inside": "container"}}],
   "locked_containers": {{"container": "item_key"}},
   "golden_trajectory": [{{"actions": [{{"agent": "agent_0", "action": "Navigate[room]"}}]}}]
 }}
 ```
 
-## Theory of Mind Order
-Set `tom_level` to indicate the order of recursive mental modeling required to solve the task.
-The "order" counts how many layers of "X thinks that..." are nested:
-- **Order 1** (I think about what YOU know/believe/want): Agent A must reason about Agent B's knowledge, beliefs, goals, or intentions. Example: "A knows the key is moved, but B doesn't — A must reason about B's outdated belief."
-- **Order 2** (I think about what YOU think THEY know/believe): Agent A must reason about what Agent B believes about Agent C's mental state. Example: "A must figure out what B thinks C knows about the hidden item."
-- **Order 3** (I think about what YOU think THEY think someone knows): Agent A must model B's model of C's model of something. Very rare in practice.
+## PDDL Goal Format
+Use `pddl_goal` instead of `subtasks`. Write goals as PDDL formulas:
+- Single goal: `"(is_open cabinet_27)"`
+- Conjunction: `"(and (is_open cabinet_27) (is_on_top bottle_4 table_13))"`
+- Negation: `"(not (is_open drawer_5))"`
+- Use `pddl_ordering` for dependencies: `{{"before": "(pred ...)", "after": "(pred ...)"}}`
+- For competitive: use `pddl_owners` to assign goals to teams: `{{"(is_inside trophy_1 cabinet_10)": "team_0"}}`
+- For mixed: use `pddl_owners` for agent subgoals: `{{"(is_inside vase_1 closet_5)": "agent_0"}}`
+- `tom_level` and `tom_reasoning` are auto-computed from PDDL — do NOT set them manually
+- Run `verify_pddl[]` to check solvability and get computed ToM depth
 
-**Common mistake**: Simply needing to know what another agent can see or access is Order 1, NOT Order 2. Order 2 requires a belief *about* a belief, not just a belief about the world.
+## Theory of Mind
+ToM depth is auto-computed from task structure (room restrictions, hidden mechanics, communication constraints).
+- **Depth 0**: All agents share full information
+- **Depth 1**: Agents must reason about what others know (e.g., room restrictions create private knowledge)
+- **Depth 2**: Agents must reason about what others believe about third parties' knowledge
+- **Depth 3**: Third-order belief nesting (rare)
 
-Set `tom_reasoning` to a very simple explanation of WHY this task requires this order. Explicitly name the nested beliefs, e.g. "Agent A must reason about what B believes about C's knowledge of the key location."
+Use `verify_pddl[]` to see the computed ToM depth. Design information asymmetry via `room_restriction`, `remote_control` (hidden effects), and `limited_bandwidth` to increase ToM requirements.
 
 ## Success Conditions
 - Spatial: `is_on_top`, `is_inside`, `is_in_room` (need `target`)
@@ -176,6 +187,6 @@ USER_PROMPT_TEMPLATE = """Generate {num_tasks} quality benchmark tasks.
 {extra_sections}
 ## Constraints
 - Agents: {agents_min}-{agents_max}
-- Subtasks: {subtasks_min}-{subtasks_max}
+- Goal conjuncts: {subtasks_min}-{subtasks_max}
 
 **Start with `new_scene[N]` to load a scene.**"""

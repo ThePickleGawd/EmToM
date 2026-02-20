@@ -1325,7 +1325,10 @@ class EMTOMBaseRunner(ABC):
         object_parts = []
         try:
             for obj in wg.get_all_objects():
-                obj_room = wg.get_room_for_entity(obj)
+                try:
+                    obj_room = wg.get_room_for_entity(obj)
+                except ValueError:
+                    continue
                 if obj_room and obj_room.name == current_room:
                     furniture = wg.find_furniture_for_object(obj)
                     if furniture:

@@ -229,13 +229,18 @@ class GeneratedTask:
     # METADATA
     num_agents: int
 
-    # Optional
+    # PDDL GOAL (replaces subtask DAG)
+    pddl_goal: Optional[str] = None  # PDDL goal formula, e.g. "(and (is_open cabinet_27) ...)"
+    pddl_ordering: List[Dict[str, str]] = field(default_factory=list)  # [{"before": "...", "after": "..."}]
+    pddl_owners: Dict[str, str] = field(default_factory=dict)  # literal_str -> owner ("team_0", "agent_0")
+
+    # Legacy subtask DAG (kept for backward compat with old tasks)
     subtasks: List[Subtask] = field(default_factory=list)
     items: List[Dict[str, Any]] = field(default_factory=list)
     locked_containers: Dict[str, str] = field(default_factory=dict)
     initial_states: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Object -> {property: value}
 
-    # THEORY OF MIND
+    # THEORY OF MIND — computed from PDDL when pddl_goal is set
     tom_level: int = 1  # 1=beliefs about others, 2=beliefs about beliefs, 3=3rd-order nesting
     tom_reasoning: Optional[str] = None  # Why this task requires this ToM level
 
@@ -314,6 +319,11 @@ class GeneratedTask:
         team_secrets = data.get("team_secrets") if isinstance(data.get("team_secrets"), dict) else None
         # NOTE: team_goals and agent_subgoals are now unified into subtasks
 
+        # Parse PDDL fields
+        pddl_goal = data.get("pddl_goal")
+        pddl_ordering = _ensure_list(data.get("pddl_ordering", []))
+        pddl_owners = _ensure_dict(data.get("pddl_owners", {}))
+
         return cls(
             task_id=data.get("task_id", "unknown"),
             title=data.get("title", "Untitled"),
@@ -327,6 +337,9 @@ class GeneratedTask:
             agent_actions=_ensure_dict(data.get("agent_actions", {})),
             success_condition=success_condition,
             num_agents=data.get("num_agents", 2),
+            pddl_goal=pddl_goal,
+            pddl_ordering=pddl_ordering,
+            pddl_owners=pddl_owners,
             subtasks=subtasks,
             items=items,
             locked_containers=locked_containers,
@@ -338,7 +351,54 @@ class GeneratedTask:
             team_secrets=team_secrets,
         )
 
-    # DAG-related methods
+    # PDDL-related methods
+
+    @property
+    def uses_pddl(self) -> bool:
+        """Check if this task uses PDDL goals (vs legacy subtask DAG)."""
+        return self.pddl_goal is not None
+
+    def get_pddl_goal_checker(self):
+        """Create a PDDLGoalChecker for this task."""
+        from emtom.pddl.goal_checker import PDDLGoalChecker
+        from emtom.pddl.dsl import parse_goal_string
+        if not self.pddl_goal:
+            return None
+        goal = parse_goal_string(self.pddl_goal)
+        return PDDLGoalChecker(
+            goal=goal,
+            ordering=self.pddl_ordering,
+            owners=self.pddl_owners,
+        )
+
+    def compute_tom_level(self, scene_data=None) -> int:
+        """Compute ToM level from PDDL. Returns stored tom_level for legacy tasks."""
+        if not self.pddl_goal:
+            return self.tom_level
+        from emtom.pddl.tom_verifier import compute_tom_depth
+        depth = compute_tom_depth(self, scene_data)
+        return max(depth, 1)  # At least 1 for multi-agent tasks
+
+    def get_pddl_propositions(self) -> List[Dict[str, Any]]:
+        """Get goal conjuncts as evaluation.py proposition format."""
+        checker = self.get_pddl_goal_checker()
+        if checker:
+            return checker.to_propositions()
+        return []
+
+    def get_required_pddl_propositions(self) -> List[Dict[str, Any]]:
+        """Get only required (non-owned) propositions."""
+        return [p for p in self.get_pddl_propositions() if p.get("required") is True]
+
+    def get_team_pddl_propositions(self, team_id: str) -> List[Dict[str, Any]]:
+        """Get propositions owned by a team."""
+        return [p for p in self.get_pddl_propositions() if p.get("required") == team_id]
+
+    def get_agent_pddl_propositions(self, agent_id: str) -> List[Dict[str, Any]]:
+        """Get propositions owned by an agent."""
+        return [p for p in self.get_pddl_propositions() if p.get("required") == agent_id]
+
+    # DAG-related methods (legacy)
 
     def get_terminal_subtasks(self) -> List[Subtask]:
         """Get terminal subtasks (nodes with no dependents)."""
@@ -379,13 +439,23 @@ class GeneratedTask:
         """
         Get the effective success condition.
 
-        If success_condition is explicitly set, return it.
-        Otherwise, derive from required subtasks.
+        Priority: explicit success_condition > PDDL goal > required subtasks.
         """
         if self.success_condition:
             return self.success_condition
 
-        # Derive from required subtasks
+        # Derive from PDDL goal if available
+        if self.pddl_goal:
+            # Use all propositions (not just required=True) so competitive/mixed
+            # tasks with team-owned goals also produce a success condition.
+            props = self.get_pddl_propositions()
+            if props:
+                return SuccessCondition(
+                    description=f"Complete all {len(props)} PDDL goal conjunct(s)",
+                    required_states=[p for p in props],
+                )
+
+        # Derive from required subtasks (legacy)
         required_conditions = self.get_required_conditions()
         if not required_conditions:
             return None

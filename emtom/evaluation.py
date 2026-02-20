@@ -642,6 +642,10 @@ class CategoryTaskEvaluator:
 
     def evaluate(self):
         """Evaluate based on task category."""
+        # PDDL goal path: convert to propositions and evaluate
+        if self.task.uses_pddl:
+            return self._evaluate_pddl()
+
         category = self.task.category
         if category == "cooperative":
             return self._evaluate_cooperative()
@@ -652,6 +656,121 @@ class CategoryTaskEvaluator:
         else:
             # Default to cooperative
             return self._evaluate_cooperative()
+
+    def _evaluate_pddl(self):
+        """Evaluate using PDDL goal propositions. Dispatches by category."""
+        category = self.task.category
+
+        if category == "cooperative":
+            props = self.task.get_required_pddl_propositions()
+            if not props:
+                return EvaluationResult(1.0, True, [], {})
+
+            proposition_status = {}
+            failure_explanations = []
+            satisfied = 0
+            for i, prop in enumerate(props):
+                prop_id = f"goal_{i}"
+                try:
+                    result = self._check_proposition(prop)
+                    proposition_status[prop_id] = result.is_satisfied
+                    if result.is_satisfied:
+                        satisfied += 1
+                    else:
+                        failure_explanations.append(f"goal_{i}: {prop.get('property')}({prop.get('entity')})")
+                except Exception as e:
+                    proposition_status[prop_id] = False
+                    failure_explanations.append(f"Error checking goal_{i}: {e}")
+
+            pct = satisfied / len(props)
+            return EvaluationResult(pct, pct == 1.0, failure_explanations, proposition_status)
+
+        elif category == "competitive":
+            # Delegate to competitive evaluation using PDDL propositions
+            teams = set()
+            for literal_str, owner in (self.task.pddl_owners or {}).items():
+                if isinstance(owner, str) and owner.startswith("team_"):
+                    teams.add(owner)
+            teams = sorted(teams)
+
+            if not teams:
+                return CompetitiveResult(None, {}, {}, {})
+
+            is_terminated = False
+            if self.game_manager:
+                is_terminated = self.game_manager.state.is_terminated
+
+            if not is_terminated:
+                return CompetitiveResult(
+                    None, {t: False for t in teams}, {t: 0.0 for t in teams},
+                    {}, in_progress=True,
+                )
+
+            team_status = {}
+            team_progress = {}
+            winner = None
+            proposition_status = {}
+
+            for team_id in teams:
+                team_props = self.task.get_team_pddl_propositions(team_id)
+                if not team_props:
+                    team_status[team_id] = True
+                    team_progress[team_id] = 1.0
+                    if winner is None:
+                        winner = team_id
+                    continue
+
+                satisfied = 0
+                for i, prop in enumerate(team_props):
+                    pid = f"{team_id}_goal_{i}"
+                    try:
+                        result = self._check_proposition(prop)
+                        proposition_status[pid] = result.is_satisfied
+                        if result.is_satisfied:
+                            satisfied += 1
+                    except Exception:
+                        proposition_status[pid] = False
+
+                progress = satisfied / len(team_props)
+                team_progress[team_id] = progress
+                team_status[team_id] = (progress == 1.0)
+                if team_status[team_id] and winner is None:
+                    winner = team_id
+
+            return CompetitiveResult(winner, team_status, team_progress, proposition_status)
+
+        elif category == "mixed":
+            # Evaluate main cooperative goals
+            props = self.task.get_required_pddl_propositions()
+            proposition_status = {}
+            satisfied = 0
+            if props:
+                for i, prop in enumerate(props):
+                    pid = f"goal_{i}"
+                    try:
+                        result = self._check_proposition(prop)
+                        proposition_status[pid] = result.is_satisfied
+                        if result.is_satisfied:
+                            satisfied += 1
+                    except Exception:
+                        proposition_status[pid] = False
+            main_success = (satisfied == len(props)) if props else True
+            main_progress = satisfied / len(props) if props else 1.0
+
+            # Evaluate per-agent subgoals
+            agent_subgoal_status = {}
+            for i in range(self.task.num_agents):
+                agent_id = f"agent_{i}"
+                agent_props = self.task.get_agent_pddl_propositions(agent_id)
+                if agent_props:
+                    agent_subgoal_status[agent_id] = all(
+                        self._check_proposition(p).is_satisfied for p in agent_props
+                    )
+
+            return MixedResult(main_success, main_progress, agent_subgoal_status, proposition_status)
+
+        # Fallback
+        return self._evaluate_cooperative()
 
     def _evaluate_cooperative(self) -> EvaluationResult:
         """Evaluate cooperative task: all required=True subtasks must be satisfied."""
