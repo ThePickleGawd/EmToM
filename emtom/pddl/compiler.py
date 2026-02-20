@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from emtom.pddl.dsl import Literal, Knows, Problem, parse_goal_string
+from emtom.pddl.dsl import Literal, Knows, EpistemicFormula, Problem, parse_goal_string
 from emtom.pddl.epistemic import ObservabilityModel
 
 if TYPE_CHECKING:
@@ -132,8 +132,14 @@ def compile_task(
         goal = parse_goal_string(pddl_goal)
 
         # Auto-register objects referenced in goal but not yet in objects dict
-        for lit in goal.flatten():
-            for arg in lit.args:
+        for conjunct in goal.flatten():
+            # Unwrap epistemic layers to get leaf literals
+            node = conjunct
+            while isinstance(node, EpistemicFormula):
+                node = node.inner
+            if not isinstance(node, Literal):
+                continue
+            for arg in node.args:
                 if not arg.startswith("?") and arg not in objects:
                     # Infer type from naming convention
                     if any(arg.startswith(p) for p in ("agent_",)):
