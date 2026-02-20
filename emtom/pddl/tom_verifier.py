@@ -47,7 +47,7 @@ def compute_tom_depth(
         Minimum ToM depth (0-3), or -1 if unsolvable at any depth
     """
     problem = compile_task(task, scene_data)
-    observability = ObservabilityModel.from_task(task)
+    observability = ObservabilityModel.from_task_with_scene(task, scene_data)
     solver = PDKBSolver()
 
     # Base check: is the problem structurally solvable at all?
@@ -78,9 +78,10 @@ def explain_tom_depth(
         - tom_reasoning: str explaining why
         - information_gaps: list of asymmetries
         - communication_required: bool
+        - trivial_k_goals: list of trivially satisfied K() goals (if any)
     """
     depth = compute_tom_depth(task, scene_data)
-    observability = ObservabilityModel.from_task(task)
+    observability = ObservabilityModel.from_task_with_scene(task, scene_data)
 
     # Analyze information gaps
     gaps = []
@@ -91,6 +92,13 @@ def explain_tom_depth(
 
     # Determine if communication is required
     comm_required = bool(observability.restricted_rooms or observability.hidden_effects)
+
+    # Check for trivial K() goals
+    trivial_goals = []
+    problem = compile_task(task, scene_data)
+    result = PDKBSolver().solve(EMTOM_DOMAIN, problem, observability)
+    if result.trivial_k_goals:
+        trivial_goals = result.trivial_k_goals
 
     # Build reasoning explanation
     if depth == 0:
@@ -116,9 +124,16 @@ def explain_tom_depth(
     else:
         reasoning = f"Task appears unsolvable at belief depth <= 3."
 
+    if trivial_goals:
+        reasoning += (
+            f" WARNING: {len(trivial_goals)} K() goal(s) are trivially satisfied "
+            f"(agent can directly observe the fact)."
+        )
+
     return {
         "tom_level": depth,
         "tom_reasoning": reasoning,
         "information_gaps": gaps,
         "communication_required": comm_required,
+        "trivial_k_goals": trivial_goals,
     }

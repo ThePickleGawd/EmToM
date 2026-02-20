@@ -7,12 +7,15 @@ Evaluates PDDL goal formulas against simulator state with latching behavior
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, TYPE_CHECKING
 
 from emtom.pddl.dsl import (
     Formula, Literal, And, Or, Not, Knows, Believes, EpistemicFormula,
     parse_goal_string,
 )
+
+if TYPE_CHECKING:
+    from emtom.pddl.belief_tracker import BeliefStateTracker
 
 
 class PDDLGoalChecker:
@@ -23,6 +26,10 @@ class PDDLGoalChecker:
     Conjuncts are latched: once completed, they stay completed.
 
     Supports ordering constraints via pddl_ordering (replaces depends_on).
+
+    If a belief_tracker is provided, epistemic goals (K/B) are evaluated
+    using the belief model. Otherwise, falls back to conservative evaluation
+    (K(a, phi) = phi is true in the world).
     """
 
     def __init__(
@@ -30,6 +37,7 @@ class PDDLGoalChecker:
         goal: Formula,
         ordering: Optional[List[Dict[str, str]]] = None,
         owners: Optional[Dict[str, str]] = None,
+        belief_tracker: Optional["BeliefStateTracker"] = None,
     ):
         """
         Args:
@@ -37,6 +45,7 @@ class PDDLGoalChecker:
             ordering: List of {"before": "(pred ...)", "after": "(pred ...)"} constraints
             owners: Map from goal literal string to owner (e.g., "team_0", "agent_0")
                    Literals not in this map default to required (cooperative).
+            belief_tracker: Optional tracker for epistemic goal evaluation
         """
         self.goal = goal
         self.conjuncts: List[Formula] = goal.flatten()
@@ -54,6 +63,9 @@ class PDDLGoalChecker:
                 for idx, cs in enumerate(conjunct_strs):
                     if cs == literal_str:
                         self._owners[idx] = owner
+
+        # Belief tracker for proper K/B evaluation
+        self._belief_tracker = belief_tracker
 
     def _build_ordering(self, ordering: List[Dict[str, str]]) -> None:
         """Build prerequisite map from ordering constraints."""
@@ -95,7 +107,16 @@ class PDDLGoalChecker:
             if not prereqs.issubset(self.completed):
                 continue
 
-            if conjunct.evaluate(check_predicate):
+            # Use belief-aware evaluation for epistemic conjuncts
+            if self._belief_tracker and isinstance(conjunct, EpistemicFormula):
+                satisfied = self._belief_tracker.evaluate_epistemic(
+                    conjunct, check_predicate
+                )
+            else:
+                # Fallback: conservative evaluation (K(a,phi) = phi)
+                satisfied = conjunct.evaluate(check_predicate)
+
+            if satisfied:
                 self.completed.add(idx)
                 newly_completed.append(conjunct.to_pddl())
 
@@ -169,7 +190,11 @@ class PDDLGoalChecker:
         self.completed.clear()
 
     @classmethod
-    def from_task_data(cls, task_data: Dict[str, Any]) -> Optional["PDDLGoalChecker"]:
+    def from_task_data(
+        cls,
+        task_data: Dict[str, Any],
+        belief_tracker: Optional["BeliefStateTracker"] = None,
+    ) -> Optional["PDDLGoalChecker"]:
         """
         Create a PDDLGoalChecker from raw task JSON data.
 
@@ -183,4 +208,9 @@ class PDDLGoalChecker:
         ordering = task_data.get("pddl_ordering", [])
         owners = task_data.get("pddl_owners", {})
 
-        return cls(goal=goal, ordering=ordering, owners=owners)
+        return cls(
+            goal=goal,
+            ordering=ordering,
+            owners=owners,
+            belief_tracker=belief_tracker,
+        )

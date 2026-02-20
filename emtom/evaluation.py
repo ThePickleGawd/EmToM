@@ -641,21 +641,8 @@ class CategoryTaskEvaluator:
         return PropositionResult(False, {"error": f"Unknown game state predicate: {property_name}"})
 
     def evaluate(self):
-        """Evaluate based on task category."""
-        # PDDL goal path: convert to propositions and evaluate
-        if self.task.uses_pddl:
-            return self._evaluate_pddl()
-
-        category = self.task.category
-        if category == "cooperative":
-            return self._evaluate_cooperative()
-        elif category == "competitive":
-            return self._evaluate_competitive()
-        elif category == "mixed":
-            return self._evaluate_mixed()
-        else:
-            # Default to cooperative
-            return self._evaluate_cooperative()
+        """Evaluate task completion using PDDL goals."""
+        return self._evaluate_pddl()
 
     def _evaluate_pddl(self):
         """Evaluate using PDDL goal propositions. Dispatches by category."""
@@ -770,149 +757,10 @@ class CategoryTaskEvaluator:
             return MixedResult(main_success, main_progress, agent_subgoal_status, proposition_status)
 
         # Fallback
-        return self._evaluate_cooperative()
-
-    def _evaluate_cooperative(self) -> EvaluationResult:
-        """Evaluate cooperative task: all required=True subtasks must be satisfied."""
-        required_subtasks = self.task.get_required_subtasks()
-
-        if not required_subtasks:
+        props = self.task.get_required_pddl_propositions()
+        if not props:
             return EvaluationResult(1.0, True, [], {})
-
-        proposition_status = {}
-        failure_explanations = []
-        satisfied_count = 0
-
-        for subtask in required_subtasks:
-            if not subtask.has_valid_condition():
-                continue
-
-            try:
-                result = self._check_proposition(subtask.success_condition)
-                proposition_status[subtask.id] = result.is_satisfied
-                if result.is_satisfied:
-                    satisfied_count += 1
-                else:
-                    failure_explanations.append(f"{subtask.id}: {subtask.description}")
-            except Exception as e:
-                proposition_status[subtask.id] = False
-                failure_explanations.append(f"Error checking {subtask.id}: {e}")
-
-        total = len([s for s in required_subtasks if s.has_valid_condition()])
-        percent_complete = satisfied_count / total if total > 0 else 1.0
-
-        return EvaluationResult(
-            percent_complete=percent_complete,
-            success=percent_complete == 1.0,
-            failure_explanations=failure_explanations,
-            proposition_status=proposition_status,
-        )
-
-    def _evaluate_competitive(self) -> CompetitiveResult:
-        """
-        Evaluate competitive task: determine winner based on team subtasks.
-
-        For predicates like has_most, evaluation only happens at episode termination.
-        If the episode hasn't terminated yet, returns in_progress=True.
-        """
-        teams = self.task.get_all_teams()
-
-        if not teams:
-            # No team subtasks, treat as draw
-            return CompetitiveResult(
-                winner=None,
-                team_status={},
-                team_progress={},
-                proposition_status={},
-            )
-
-        # Check if episode has terminated (required for has_most predicates)
-        is_terminated = False
-        termination_reason = None
-        if self.game_manager:
-            is_terminated = self.game_manager.state.is_terminated
-            termination_reason = self.game_manager.state.termination_reason
-
-        # If not terminated, return in_progress result
-        if not is_terminated:
-            return CompetitiveResult(
-                winner=None,
-                team_status={team_id: False for team_id in teams},
-                team_progress={team_id: 0.0 for team_id in teams},
-                proposition_status={},
-                in_progress=True,
-                termination_reason=None,
-            )
-
-        proposition_status = {}
-        team_status = {}
-        team_progress = {}
-        winner = None
-
-        for team_id in teams:
-            team_subtasks = self.task.get_team_subtasks(team_id)
-            valid_subtasks = [s for s in team_subtasks if s.has_valid_condition()]
-
-            if not valid_subtasks:
-                team_status[team_id] = True
-                team_progress[team_id] = 1.0
-                if winner is None:
-                    winner = team_id
-                continue
-
-            satisfied_count = 0
-            for subtask in valid_subtasks:
-                try:
-                    result = self._check_proposition(subtask.success_condition)
-                    proposition_status[subtask.id] = result.is_satisfied
-                    if result.is_satisfied:
-                        satisfied_count += 1
-                except Exception:
-                    proposition_status[subtask.id] = False
-
-            progress = satisfied_count / len(valid_subtasks)
-            team_progress[team_id] = progress
-            team_status[team_id] = (progress == 1.0)
-
-            # First team to complete all subtasks wins
-            if team_status[team_id] and winner is None:
-                winner = team_id
-
-        return CompetitiveResult(
-            winner=winner,
-            team_status=team_status,
-            team_progress=team_progress,
-            proposition_status=proposition_status,
-            in_progress=False,
-            termination_reason=termination_reason,
-        )
-
-    def _evaluate_mixed(self) -> MixedResult:
-        """Evaluate mixed task: main goal (required=True) + agent subgoals (required="agent_X")."""
-        # Evaluate main goal (required=True subtasks)
-        coop_result = self._evaluate_cooperative()
-
-        # Evaluate agent subgoals
-        agent_subgoal_status = {}
-        proposition_status = dict(coop_result.proposition_status)
-
-        for subtask in self.task.subtasks:
-            owner = subtask.owner
-            if owner and owner.startswith("agent_") and subtask.has_valid_condition():
-                try:
-                    result = self._check_proposition(subtask.success_condition)
-                    proposition_status[subtask.id] = result.is_satisfied
-                    agent_subgoal_status[owner] = result.is_satisfied
-                except Exception:
-                    proposition_status[subtask.id] = False
-                    agent_subgoal_status[owner] = False
-
-        return MixedResult(
-            main_goal_success=coop_result.success,
-            main_goal_progress=coop_result.percent_complete,
-            agent_subgoal_status=agent_subgoal_status,
-            proposition_status=proposition_status,
-        )
+        return self._evaluate_pddl()
 
 
 def evaluate_category_task(

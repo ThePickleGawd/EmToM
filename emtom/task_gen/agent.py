@@ -336,6 +336,10 @@ class TaskGeneratorAgent:
         import random
         task_category = self.category or random.choice(["cooperative", "competitive", "mixed"])
 
+        # Get available predicates from domain
+        from emtom.pddl.domain import get_predicates_for_prompt
+        available_predicates = get_predicates_for_prompt()
+
         # Initialize conversation with action descriptions and paths injected
         replacements = {
             "{action_descriptions}": ActionRegistry.get_all_action_descriptions(),
@@ -343,6 +347,7 @@ class TaskGeneratorAgent:
             "{working_dir}": str(self.working_dir),
             "{available_items}": available_items,
             "{available_mechanics}": available_mechanics,
+            "{available_predicates}": available_predicates,
             "{category}": task_category.upper(),
             "{diversity_section}": self._wrap_diversity_section(self._build_diversity_section()),
         }

@@ -58,7 +58,7 @@ def _make_minimal_task(**overrides) -> dict:
         "mechanic_bindings": [],
         "agent_secrets": {"agent_0": ["secret0"], "agent_1": ["secret1"]},
         "agent_actions": {"agent_0": ["Navigate"], "agent_1": ["Navigate"]},
-        "pddl_goal": "(and (on cup_1 table_2))",
+        "pddl_goal": "(and (is_on_top cup_1 table_2))",
         "golden_trajectory": [
             {"actions": [
                 {"agent": "agent_0", "action": "Navigate[table_1]"},

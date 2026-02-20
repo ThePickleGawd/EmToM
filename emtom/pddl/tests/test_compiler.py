@@ -613,3 +613,135 @@ class TestEpistemicDescribe:
         nl = goal_to_natural_language(goal)
         assert "knows" in nl.lower()
         assert "top" in nl.lower()
+
+
+# ---------------------------------------------------------------------------
+# Predicate arity validation tests
+# ---------------------------------------------------------------------------
+
+from emtom.pddl.dsl import validate_goal_predicates
+from emtom.pddl.domain import EMTOM_DOMAIN, get_predicates_for_prompt
+
+
+class TestArityValidation:
+    def test_valid_unary_predicate(self):
+        goal = Literal("is_open", ("cabinet_27",))
+        errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
+        assert errors == []
+
+    def test_valid_binary_predicate(self):
+        goal = Literal("is_on_top", ("bottle_4", "table_13"))
+        errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
+        assert errors == []
+
+    def test_wrong_arity_too_many(self):
+        goal = Literal("is_open", ("cabinet_27", "extra_arg"))
+        errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
+        assert len(errors) == 1
+        assert "expects 1" in errors[0]
+
+    def test_wrong_arity_too_few(self):
+        goal = Literal("is_on_top", ("bottle_4",))
+        errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
+        assert len(errors) == 1
+        assert "expects 2" in errors[0]
+
+    def test_unknown_predicate(self):
+        goal = Literal("is_flying", ("cabinet_27",))
+        errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
+        assert len(errors) == 1
+        assert "Unknown predicate" in errors[0]
+
+    def test_epistemic_inner_checked(self):
+        # K(agent_0, (is_open cabinet_27 extra))
+        goal = Knows("agent_0", Literal("is_open", ("cabinet_27", "extra")))
+        errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
+        assert len(errors) == 1
+        assert "expects 1" in errors[0]
+
+    def test_conjunction_all_checked(self):
+        goal = And(operands=(
+            Literal("is_open", ("cabinet_27",)),
+            Literal("is_on_top", ("x",)),  # wrong arity
+        ))
+        errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
+        assert len(errors) == 1
+
+    def test_valid_conjunction(self):
+        goal = And(operands=(
+            Literal("is_open", ("cabinet_27",)),
+            Literal("is_on_top", ("bottle_4", "table_13")),
+        ))
+        errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
+        assert errors == []
+
+
+class TestPredicatesForPrompt:
+    def test_returns_string(self):
+        result = get_predicates_for_prompt()
+        assert isinstance(result, str)
+
+    def test_contains_predicates(self):
+        result = get_predicates_for_prompt()
+        assert "is_open" in result
+        assert "is_on_top" in result
+        assert "is_inside" in result
+
+    def test_contains_types(self):
+        result = get_predicates_for_prompt()
+        assert "furniture" in result
+        assert "object" in result
+        assert "agent" in result
+
+    def test_contains_groups(self):
+        result = get_predicates_for_prompt()
+        assert "Spatial" in result
+        assert "Unary State" in result
+        assert "Agent" in result
+
+    def test_mechanic_predicates_marked(self):
+        result = get_predicates_for_prompt()
+        assert "init-only" in result
+
+
+# ---------------------------------------------------------------------------
+# PDDL ordering cycle detection tests
+# ---------------------------------------------------------------------------
+
+try:
+    from emtom.task_gen.spec_validator import _has_ordering_cycle
+except ImportError:
+    # Fall back to importing the function directly if task_gen has missing deps
+    _has_ordering_cycle = None
+
+
+@pytest.mark.skipif(_has_ordering_cycle is None, reason="task_gen dependencies unavailable")
+class TestPDDLOrderingCycle:
+    def test_no_cycle(self):
+        ordering = [
+            {"before": "(is_open a)", "after": "(is_open b)"},
+            {"before": "(is_open b)", "after": "(is_open c)"},
+        ]
+        assert not _has_ordering_cycle(ordering)
+
+    def test_simple_cycle(self):
+        ordering = [
+            {"before": "(is_open a)", "after": "(is_open b)"},
+            {"before": "(is_open b)", "after": "(is_open a)"},
+        ]
+        assert _has_ordering_cycle(ordering)
+
+    def test_indirect_cycle(self):
+        ordering = [
+            {"before": "(is_open a)", "after": "(is_open b)"},
+            {"before": "(is_open b)", "after": "(is_open c)"},
+            {"before": "(is_open c)", "after": "(is_open a)"},
+        ]
+        assert _has_ordering_cycle(ordering)
+
+    def test_empty_ordering(self):
+        assert not _has_ordering_cycle([])
+
+    def test_single_constraint(self):
+        ordering = [{"before": "(is_open a)", "after": "(is_open b)"}]
+        assert not _has_ordering_cycle(ordering)

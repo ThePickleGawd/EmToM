@@ -59,6 +59,17 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     except Exception as e:
         return failure(f"Invalid PDDL goal syntax: {e}")
 
+    # Validate predicate arities against domain
+    from emtom.pddl.dsl import validate_goal_predicates
+    from emtom.pddl.domain import EMTOM_DOMAIN
+
+    arity_errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
+    if arity_errors:
+        return failure(
+            "Predicate validation errors:\n" + "\n".join(arity_errors),
+            data={"valid": False, "pddl_goal": pddl_goal},
+        )
+
     # Build task object
     from emtom.task_gen.task_generator import GeneratedTask
 
@@ -77,19 +88,22 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
 
     # Compile and solve
     from emtom.pddl.compiler import compile_task
-    from emtom.pddl.domain import EMTOM_DOMAIN
     from emtom.pddl.epistemic import ObservabilityModel
     from emtom.pddl.solver import PDKBSolver
 
     problem = compile_task(task, scene_data)
-    observability = ObservabilityModel.from_task(task)
-    result = PDKBSolver().solve(EMTOM_DOMAIN, problem, observability)
+    solver = PDKBSolver()
+    observability = ObservabilityModel.from_task_with_scene(task, scene_data)
+    result = solver.solve(EMTOM_DOMAIN, problem, observability)
 
     if not result.solvable:
         return failure(
             f"PDDL goal is not solvable: {result.error}",
             data={"valid": False, "pddl_goal": pddl_goal},
         )
+
+    # Check communication budget
+    budget_warning = solver.check_communication_budget(problem, observability)
 
     # Compute ToM depth
     from emtom.pddl.tom_verifier import explain_tom_depth
@@ -101,7 +115,7 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
 
     description = goal_to_natural_language(goal)
 
-    return success({
+    output = {
         "valid": True,
         "pddl_goal": pddl_goal,
         "solvable": True,
@@ -110,7 +124,17 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
         "goal_description": description,
         "num_conjuncts": len(goal.flatten()),
         "solve_time": result.solve_time,
-    })
+    }
+    if result.trivial_k_goals:
+        output["trivial_k_warnings"] = (
+            f"These K() goals are trivially satisfied (agent can directly observe the fact): "
+            f"{result.trivial_k_goals}. Consider removing them or adding room_restriction "
+            f"to create real information asymmetry."
+        )
+    if budget_warning:
+        output["budget_warning"] = budget_warning
+
+    return success(output)
 
 
 if __name__ == "__main__":

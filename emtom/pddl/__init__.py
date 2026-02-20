@@ -25,6 +25,7 @@ from emtom.pddl.dsl import (
 from emtom.pddl.epistemic import ObservabilityModel
 from emtom.pddl.compiler import compile_task
 from emtom.pddl.goal_checker import PDDLGoalChecker
+from emtom.pddl.belief_tracker import BeliefStateTracker
 from emtom.pddl.describe import describe_task
 
 __all__ = [
@@ -46,5 +47,6 @@ __all__ = [
     "ObservabilityModel",
     "compile_task",
     "PDDLGoalChecker",
+    "BeliefStateTracker",
     "describe_task",
 ]

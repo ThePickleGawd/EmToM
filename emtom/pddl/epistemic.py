@@ -8,9 +8,10 @@ mechanic bindings) to determine what each agent can/cannot observe.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from emtom.pddl.dsl import Literal
     from emtom.task_gen.task_generator import GeneratedTask
 
 
@@ -35,6 +36,9 @@ class ObservabilityModel:
 
     # agent -> message limit (None = unlimited)
     message_limits: Dict[str, Optional[int]] = field(default_factory=dict)
+
+    # object/furniture/room -> room it's in (populated from scene data)
+    object_rooms: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_task(cls, task: "GeneratedTask") -> "ObservabilityModel":
@@ -79,6 +83,20 @@ class ObservabilityModel:
 
         return model
 
+    @classmethod
+    def from_task_with_scene(
+        cls,
+        task: "GeneratedTask",
+        scene_data: Optional[Dict[str, Any]] = None,
+    ) -> "ObservabilityModel":
+        """Build observability model with scene-level object-to-room mapping."""
+        model = cls.from_task(task)
+
+        if scene_data:
+            model.object_rooms = _build_object_room_map(scene_data)
+
+        return model
+
     def agent_can_observe_room(self, agent: str, room: str) -> bool:
         """Check if an agent can observe events in a room."""
         return room not in self.restricted_rooms.get(agent, set())
@@ -99,3 +117,86 @@ class ObservabilityModel:
     def has_information_asymmetry(self) -> bool:
         """Check if the task has any information asymmetry between agents."""
         return bool(self.restricted_rooms or self.hidden_effects)
+
+    def is_fact_observable_by(
+        self,
+        agent: str,
+        predicate: str,
+        args: Tuple[str, ...],
+    ) -> bool:
+        """
+        Check if a specific fact is directly observable by an agent.
+
+        A fact is observable if the agent can access the rooms containing
+        all entities referenced in the fact. Returns True (conservative)
+        if we can't determine an entity's room.
+        """
+        if not self.restricted_rooms.get(agent):
+            return True  # No restrictions — agent can see everything
+
+        agent_restricted = self.restricted_rooms[agent]
+
+        for arg in args:
+            # Skip agent references (agents observe their own state)
+            if arg.startswith("agent_"):
+                continue
+            room = self.object_rooms.get(arg)
+            if room and room in agent_restricted:
+                return False  # Entity is in a room agent can't access
+
+        return True  # All entities are in accessible rooms (or room unknown)
+
+    def is_k_goal_trivial(
+        self,
+        agent: str,
+        inner: "Literal",
+    ) -> bool:
+        """
+        Check if K(agent, literal) is trivially satisfied.
+
+        Trivial means the agent can directly observe all entities
+        referenced in the literal. A trivial K() goal doesn't add
+        real ToM depth — the agent can just look.
+
+        Returns True if the K() goal is trivial.
+        """
+        return self.is_fact_observable_by(agent, inner.predicate, inner.args)
+
+
+def _build_object_room_map(scene_data: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Build object/furniture -> room mapping from scene data.
+
+    Same logic as spec_validator._build_target_to_room() but takes raw dict.
+    """
+    obj_rooms: Dict[str, str] = {}
+
+    rooms = scene_data.get("rooms", [])
+    furniture_in_rooms = scene_data.get("furniture_in_rooms", {})
+    objects_on_furniture = scene_data.get("objects_on_furniture", {})
+
+    # Rooms map to themselves
+    for room in rooms:
+        if isinstance(room, str):
+            obj_rooms[room] = room
+
+    # Furniture -> room
+    furniture_to_room: Dict[str, str] = {}
+    for room, furns in furniture_in_rooms.items():
+        if not isinstance(furns, list):
+            continue
+        for furn in furns:
+            if isinstance(furn, str):
+                furniture_to_room[furn] = room
+                obj_rooms[furn] = room
+
+    # Objects -> room (via furniture)
+    for furn, objs in objects_on_furniture.items():
+        room = furniture_to_room.get(furn)
+        if not room or not isinstance(objs, list):
+            continue
+        for obj in objs:
+            if isinstance(obj, str):
+                obj_rooms[obj] = room
+
+    return obj_rooms

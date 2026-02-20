@@ -529,6 +529,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     "skill_steps": skill_steps,
                 })
 
+                # Update belief tracker with action results
+                self._update_beliefs_for_action(agent_id, high_level_action, response)
+
                 self.check_and_inject_item_tools(uid)
 
                 if state['planner_done']:
@@ -632,7 +635,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
             if cmd == "status":
                 self._print_full_status()
                 continue
-            if cmd == "subtasks":
+            if cmd in ("subtasks", "goals"):
                 self._print_subtasks()
                 continue
             if cmd == "mechanics":
@@ -729,28 +732,32 @@ class BenchmarkRunner(EMTOMBaseRunner):
             print(f"Error: {e}")
 
     def _print_subtasks(self) -> None:
-        """Print subtask status."""
-        if not self.task or not self.task.subtasks:
-            print("No subtasks defined.")
+        """Print PDDL goal status."""
+        if not self.task:
+            print("No task loaded.")
             return
 
-        subtasks = self.task.subtasks
+        checker = getattr(self, '_pddl_checker', None)
+        if checker is None:
+            checker = self.task.get_pddl_goal_checker()
+            self._pddl_checker = checker
+
+        if checker is None:
+            print("No PDDL goals defined.")
+            return
+
+        total = len(checker.conjuncts)
+        completed = len(checker.completed)
         print(f"\n{'='*50}")
-        print(f"SUBTASKS ({len(self._completed_subtasks)}/{len(subtasks)})")
+        print(f"PDDL GOALS ({completed}/{total})")
         print(f"{'='*50}")
 
-        for subtask in subtasks:
-            subtask_id = subtask.id if hasattr(subtask, 'id') else subtask.get("id", "")
-            desc = subtask.description if hasattr(subtask, 'description') else subtask.get("description", "")
-
-            if subtask_id in self._completed_subtasks:
-                status = "✓"
-            else:
-                depends = subtask.depends_on if hasattr(subtask, 'depends_on') else subtask.get("depends_on", [])
-                deps_met = all(d in self._completed_subtasks for d in depends)
-                status = "○" if deps_met else "◌"
-
-            print(f"  {status} {subtask_id}: {desc}")
+        for i, conjunct in enumerate(checker.conjuncts):
+            done = checker.is_conjunct_completed(i)
+            status = "✓" if done else "○"
+            owner = checker.get_owner(i) if hasattr(checker, 'get_owner') else ""
+            owner_str = f" [{owner}]" if owner else ""
+            print(f"  {status} {conjunct}{owner_str}")
 
     def _print_mechanics(self) -> None:
         """Print active mechanics."""
@@ -862,84 +869,10 @@ class BenchmarkRunner(EMTOMBaseRunner):
     # -------------------------------------------------------------------------
 
     def _check_task_completion(self) -> Optional[Dict[str, Any]]:
-        """
-        Check if task is complete using smart success evaluation.
-
-        Supports both PDDL goals (new) and legacy subtask DAG.
-        """
+        """Check if task is complete using PDDL goal evaluation."""
         if not self.task:
             return None
-
-        # PDDL goal path
-        if self.task.uses_pddl:
-            return self._check_pddl_completion()
-
-        if not self.task.subtasks:
-            return None
-
-        # Category-aware handling
-        category = getattr(self.task, "category", "cooperative")
-        if category == "competitive":
-            return self._check_competitive_completion()
-        if category == "mixed":
-            return self._check_mixed_completion()
-
-        # Get all required subtasks (identity check: only True, not truthy strings like "team_0")
-        required_subtasks = [
-            s for s in self.task.subtasks
-            if getattr(s, 'required', True) is True
-        ]
-
-        if not required_subtasks:
-            return {"success": False, "error": "No required subtasks"}
-
-        # Build lookup for required subtask IDs
-        required_ids = {
-            s.id if hasattr(s, 'id') else s.get("id", "")
-            for s in required_subtasks
-        }
-
-        all_satisfied = True
-        conditions_checked = []
-
-        for subtask in required_subtasks:
-            subtask_id = subtask.id if hasattr(subtask, 'id') else subtask.get("id", "")
-            depends_on = subtask.depends_on if hasattr(subtask, 'depends_on') else subtask.get("depends_on", [])
-            success_condition = subtask.success_condition if hasattr(subtask, 'success_condition') else subtask.get("success_condition")
-
-            if not success_condition:
-                continue
-
-            # Check if this subtask has any REQUIRED dependencies
-            required_deps = [dep for dep in depends_on if dep in required_ids]
-
-            if required_deps:
-                # Has required dependencies → must be latched via DAG
-                if subtask_id not in self._completed_subtasks:
-                    all_satisfied = False
-            else:
-                # No required dependencies → check directly
-                result = self.evaluate_task({"required_states": [success_condition]})
-                if not result or not result.get("success"):
-                    all_satisfied = False
-
-            conditions_checked.append(subtask_id)
-
-        # Calculate completion percentages
-        total_subtasks = len(self.task.subtasks)
-        required_count = len(required_subtasks)
-        completed_required = len([s for s in self._completed_subtasks if s in required_ids])
-
-        return {
-            "success": all_satisfied,
-            "conditions_checked": conditions_checked,
-            "completed_subtasks": list(self._completed_subtasks),
-            "total_subtasks": total_subtasks,
-            "required_subtasks": required_count,
-            "completed_required": completed_required,
-            "percent_complete": len(self._completed_subtasks) / total_subtasks if total_subtasks else 0.0,
-            "percent_required_complete": completed_required / required_count if required_count else 0.0,
-        }
+        return self._check_pddl_completion()
 
     def _check_pddl_completion(self) -> Dict[str, Any]:
         """Check task completion using PDDL goal checker."""
@@ -981,14 +914,15 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     winner = team_id
 
             total = len(checker.conjuncts)
+            completed = len(checker.completed)
             return {
                 "success": winner is not None,
                 "winner": winner,
                 "team_status": team_status,
                 "team_progress": team_progress,
-                "completed_subtasks": list(self._completed_subtasks),
+                "completed_subtasks": list(checker.completed),
                 "total_subtasks": total,
-                "percent_complete": len(self._completed_subtasks) / total if total else 0.0,
+                "percent_complete": completed / total if total else 0.0,
             }
 
         elif category == "mixed":
@@ -1010,171 +944,145 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     )
 
             total = len(checker.conjuncts)
+            completed = len(checker.completed)
             return {
                 "success": main_goal_success,
                 "main_goal_success": main_goal_success,
                 "agent_subgoal_status": agent_subgoal_status,
-                "completed_subtasks": list(self._completed_subtasks),
+                "completed_subtasks": list(checker.completed),
                 "total_subtasks": total,
-                "percent_complete": len(self._completed_subtasks) / total if total else 0.0,
+                "percent_complete": completed / total if total else 0.0,
             }
 
         else:
             # Cooperative: all conjuncts must be complete
             total = len(checker.conjuncts)
-            all_complete = len(checker.completed) == total
+            completed = len(checker.completed)
+            all_complete = completed == total
             return {
                 "success": all_complete,
-                "completed_subtasks": list(self._completed_subtasks),
+                "completed_subtasks": list(checker.completed),
                 "total_subtasks": total,
-                "percent_complete": len(self._completed_subtasks) / total if total else 0.0,
+                "percent_complete": completed / total if total else 0.0,
             }
 
-    def _check_competitive_completion(self) -> Dict[str, Any]:
-        """
-        Competitive tasks: any team can win.
-
-        - Shared required=True subtasks act as global prerequisites.
-        - Team-owned subtasks (required="team_X") determine the winner.
-        """
-        subtasks = self.task.subtasks
-        total_subtasks = len(subtasks)
-
-        # Shared prerequisites (required=True only)
-        shared_required = [s for s in subtasks if s.required is True]
-        shared_ok = all(
-            (s.id in self._completed_subtasks) or not s.has_valid_condition()
-            for s in shared_required
-        )
-
-        teams = self.task.get_all_teams()
-        team_status: Dict[str, bool] = {}
-        team_progress: Dict[str, float] = {}
-        winner: Optional[str] = None
-
-        for team_id in teams:
-            team_subtasks = self.task.get_team_subtasks(team_id)
-            valid_team_subtasks = [s for s in team_subtasks if s.has_valid_condition()]
-            if not valid_team_subtasks:
-                # No explicit subtasks: treat as completed
-                team_status[team_id] = shared_ok
-                team_progress[team_id] = 1.0 if shared_ok else 0.0
-                if shared_ok and winner is None:
-                    winner = team_id
-                continue
-
-            completed = sum(1 for s in valid_team_subtasks if s.id in self._completed_subtasks)
-            progress = completed / len(valid_team_subtasks)
-            team_progress[team_id] = progress
-            team_status[team_id] = shared_ok and (progress == 1.0)
-
-            if team_status[team_id] and winner is None:
-                winner = team_id
-
-        # Aggregate counts for summaries (identity check: only True, not truthy strings)
-        required_subtasks = [s for s in subtasks if getattr(s, "required", True) is True]
-        required_count = len(required_subtasks)
-        completed_required = len([s for s in self._completed_subtasks if s in {st.id for st in required_subtasks}])
-
-        return {
-            "success": winner is not None,
-            "winner": winner,
-            "team_status": team_status,
-            "team_progress": team_progress,
-            "completed_subtasks": list(self._completed_subtasks),
-            "total_subtasks": total_subtasks,
-            "required_subtasks": required_count,
-            "completed_required": completed_required,
-            "percent_complete": len(self._completed_subtasks) / total_subtasks if total_subtasks else 0.0,
-            "percent_required_complete": completed_required / required_count if required_count else 0.0,
-        }
-
-    def _check_mixed_completion(self) -> Dict[str, Any]:
-        """
-        Mixed tasks: success is defined by completing the shared main goal (required=True).
-        Agent-specific subtasks are tracked but do not block main success.
-        """
-        subtasks = self.task.subtasks
-        total_subtasks = len(subtasks)
-
-        # Shared main goal
-        shared_required = [s for s in subtasks if s.required is True]
-        shared_valid = [s for s in shared_required if s.has_valid_condition()]
-        completed_shared = sum(1 for s in shared_valid if s.id in self._completed_subtasks)
-        main_goal_success = completed_shared == len(shared_valid) if shared_valid else True
-
-        # Agent subgoals
-        agent_subgoal_status: Dict[str, bool] = {}
-        for subtask in subtasks:
-            owner = subtask.owner
-            if owner and owner.startswith("agent_") and subtask.has_valid_condition():
-                agent_subgoal_status[owner] = subtask.id in self._completed_subtasks
-
-        required_count = len(shared_required)
-        completed_required = completed_shared
-
-        return {
-            "success": main_goal_success,
-            "main_goal_success": main_goal_success,
-            "main_goal_progress": completed_shared / len(shared_valid) if shared_valid else 1.0,
-            "agent_subgoal_status": agent_subgoal_status,
-            "completed_subtasks": list(self._completed_subtasks),
-            "total_subtasks": total_subtasks,
-            "required_subtasks": required_count,
-            "completed_required": completed_required,
-            "percent_complete": len(self._completed_subtasks) / total_subtasks if total_subtasks else 0.0,
-            "percent_required_complete": completed_required / required_count if required_count else 0.0,
-        }
-
     def _check_subtasks(self) -> List[str]:
-        """Check subtasks/PDDL goals and return newly completed IDs."""
+        """Check PDDL goal conjuncts and return newly completed IDs."""
         if not self.task:
             return []
+        return self._check_pddl_goals()
 
-        # PDDL goal path
-        if self.task.uses_pddl:
-            return self._check_pddl_goals()
+    def _get_belief_tracker(self):
+        """Get or create the belief state tracker for epistemic goal evaluation."""
+        if hasattr(self, '_belief_tracker'):
+            return self._belief_tracker
 
-        # Legacy subtask DAG path
-        if not self.task.subtasks:
-            return []
+        self._belief_tracker = None
+        try:
+            from emtom.pddl.belief_tracker import BeliefStateTracker
+            from emtom.pddl.epistemic import ObservabilityModel
 
-        subtasks = self.task.subtasks
-        newly_completed = []
+            # Build object-room mapping from world graph
+            object_rooms = {}
+            world_graph = self.get_world_graph()
+            if world_graph:
+                try:
+                    room_map = world_graph.get_furniture_to_room_map()
+                    for furn, room in room_map.items():
+                        object_rooms[furn] = room
+                    for room in world_graph.get_all_rooms():
+                        room_name = getattr(room, 'name', str(room))
+                        object_rooms[room_name] = room_name
+                except Exception:
+                    pass
 
-        for subtask in subtasks:
-            subtask_id = subtask.id if hasattr(subtask, 'id') else subtask.get("id", "")
-            if not subtask_id or subtask_id in self._completed_subtasks:
-                continue
+            observability = None
+            if self.task:
+                observability = ObservabilityModel.from_task(self.task)
 
-            depends_on = subtask.depends_on if hasattr(subtask, 'depends_on') else subtask.get("depends_on", [])
-            if not all(dep in self._completed_subtasks for dep in depends_on):
-                continue
+            self._belief_tracker = BeliefStateTracker.from_scene_and_observability(
+                object_rooms=object_rooms,
+                observability=observability,
+                num_agents=getattr(self.task, 'num_agents', 2),
+            )
+        except Exception as e:
+            print(f"[Benchmark] Could not create belief tracker: {e}", flush=True)
 
-            success_condition = subtask.success_condition if hasattr(subtask, 'success_condition') else subtask.get("success_condition")
-            if not success_condition:
-                continue
+        return self._belief_tracker
 
-            result = self.evaluate_task({"required_states": [success_condition]})
-            if result and result.get("success"):
-                self._completed_subtasks.add(subtask_id)
-                newly_completed.append(subtask_id)
+    def _update_beliefs_for_action(
+        self, agent_id: str, action: str, result: str
+    ) -> None:
+        """Update belief tracker after an action completes."""
+        tracker = self._get_belief_tracker()
+        if tracker is None:
+            return
 
-                desc = subtask.description if hasattr(subtask, 'description') else subtask.get("description", subtask_id)
-                print(f"\n{'─'*50}", flush=True)
-                print(f"✓ SUBTASK COMPLETE: {subtask_id}", flush=True)
-                print(f"  {desc}", flush=True)
-                print(f"  Progress: {len(self._completed_subtasks)}/{len(subtasks)}", flush=True)
-                print(f"{'─'*50}", flush=True)
+        # Parse action name and target
+        action_name, target = self._parse_action_to_tuple(action)
+        if not action_name:
+            return
 
-        return newly_completed
+        # Skip failed actions
+        if any(phrase in (result or "").lower() for phrase in [
+            "too far", "occluded", "failed to", "unexpected failure",
+            "cannot", "blocked",
+        ]):
+            return
+
+        def check_fn(pred, args):
+            prop = {"property": pred}
+            if args:
+                prop["entity"] = args[0]
+            if len(args) > 1:
+                prop["target"] = args[1]
+            res = self.evaluate_task({"required_states": [prop]})
+            return res and res.get("success", False)
+
+        if action_name == "Navigate" and target:
+            # Agent entered a room — observe everything there
+            room = target
+            tracker.record_room_entry(agent_id, room, check_fn)
+
+        elif action_name == "Communicate" and target:
+            # Parse Communicate["message", recipient]
+            import re
+            comm_match = re.match(r'Communicate\[(["\'])(.*?)\1,\s*(.*?)\]', action)
+            if comm_match:
+                message = comm_match.group(2)
+                recipient = comm_match.group(3).strip()
+                if recipient == "all":
+                    for i in range(getattr(self.task, 'num_agents', 2)):
+                        other = f"agent_{i}"
+                        if other != agent_id:
+                            tracker.record_communication(
+                                agent_id, other, message, check_fn
+                            )
+                else:
+                    tracker.record_communication(
+                        agent_id, recipient, message, check_fn
+                    )
+
+        elif action_name in ("Open", "Close", "Pick", "Place", "Clean", "Fill",
+                             "PowerOn", "PowerOff", "UseItem"):
+            # State-changing action — agents in same room observe it
+            if target:
+                change_room = tracker.object_rooms.get(target)
+                # Record for all agents in the same room
+                for pred in ("is_open", "is_closed", "is_on_top", "is_inside",
+                             "is_clean", "is_dirty", "is_unlocked"):
+                    if check_fn(pred, (target,)):
+                        tracker.record_state_change(pred, (target,), change_room)
 
     def _check_pddl_goals(self) -> List[str]:
         """Check PDDL goal conjuncts and return newly completed ones."""
         if not hasattr(self, '_pddl_checker') or self._pddl_checker is None:
+            belief_tracker = self._get_belief_tracker()
             self._pddl_checker = self.task.get_pddl_goal_checker()
             if self._pddl_checker is None:
                 return []
+            # Inject belief tracker into checker
+            self._pddl_checker._belief_tracker = belief_tracker
 
         def check_predicate(pred_name, args):
             prop = {"property": pred_name}

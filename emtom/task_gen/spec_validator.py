@@ -96,6 +96,47 @@ def _parse_action(action_str: str) -> Tuple[Optional[str], Optional[str]]:
     return action_name, args
 
 
+def _has_ordering_cycle(ordering: List[Dict[str, Any]]) -> bool:
+    """
+    Check if pddl_ordering constraints form a cycle.
+
+    Uses DFS with recursion stack (same pattern as dag._has_cycle).
+    """
+    # Build adjacency list
+    graph: Dict[str, Set[str]] = {}
+    nodes: Set[str] = set()
+    for constraint in ordering:
+        if not isinstance(constraint, dict):
+            continue
+        before = constraint.get("before", "")
+        after = constraint.get("after", "")
+        if before and after:
+            graph.setdefault(before, set()).add(after)
+            nodes.add(before)
+            nodes.add(after)
+
+    visited: Set[str] = set()
+    rec_stack: Set[str] = set()
+
+    def dfs(node: str) -> bool:
+        visited.add(node)
+        rec_stack.add(node)
+        for neighbor in graph.get(node, set()):
+            if neighbor not in visited:
+                if dfs(neighbor):
+                    return True
+            elif neighbor in rec_stack:
+                return True  # Back edge = cycle
+        rec_stack.discard(node)
+        return False
+
+    for node in nodes:
+        if node not in visited:
+            if dfs(node):
+                return True
+    return False
+
+
 def _extract_defined_items(task_data: Dict[str, Any]) -> Set[str]:
     item_ids: Set[str] = set()
     for item in task_data.get("items", []):
@@ -434,11 +475,16 @@ def validate_blocking_spec(
     pddl_goal = task_data.get("pddl_goal")
     if isinstance(pddl_goal, str) and pddl_goal:
         try:
-            from emtom.pddl.dsl import parse_goal_string, Knows, Believes, EpistemicFormula
+            from emtom.pddl.dsl import parse_goal_string, validate_goal_predicates, Knows, Believes, EpistemicFormula
+            from emtom.pddl.domain import EMTOM_DOMAIN
             goal = parse_goal_string(pddl_goal)
             conjuncts = goal.flatten()
             if not conjuncts:
                 errors.append("pddl_goal parsed but contains no goal conjuncts")
+
+            # Validate predicate arities against domain
+            arity_errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
+            errors.extend(arity_errors)
 
             # Validate K/B agent names reference valid agent IDs
             def _check_epistemic_agents(formula, path="pddl_goal"):
@@ -471,6 +517,13 @@ def validate_blocking_spec(
                                 f"pddl_ordering[{i}].{key} references '{ref}' "
                                 f"which is not a goal conjunct"
                             )
+
+                # Check for cycles in ordering
+                if pddl_ordering and _has_ordering_cycle(pddl_ordering):
+                    errors.append(
+                        "pddl_ordering contains a cycle. "
+                        "Ordering constraints must form a DAG."
+                    )
 
                 # Warn if ordering is empty with multi-conjunct goals
                 if len(conjuncts) > 1 and not pddl_ordering:

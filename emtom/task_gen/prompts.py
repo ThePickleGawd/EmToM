@@ -137,6 +137,9 @@ Each agent's secrets MUST mention their message limit: "You can only send N mess
 }}
 ```
 
+## Available PDDL Predicates
+{available_predicates}
+
 ## PDDL Goal Format
 Use `pddl_goal` instead of `subtasks`. Write goals as PDDL formulas:
 - Single goal: `"(is_open cabinet_27)"`
@@ -216,6 +219,14 @@ Use `verify_pddl[]` to see the computed ToM depth. Design information asymmetry 
 `golden_trajectory` is a derived artifact. Do NOT hand-author it as source-of-truth.
 `verify_golden_trajectory[]` and `submit_task[]` regenerate it deterministically from the task spec.
 You should focus on editing spec fields (`pddl_goal`, mechanics, constraints, secrets).
+
+The deterministic planner generates **physical actions only** (Navigate, Open, Close, Pick, Place, UseItem).
+It does NOT generate Communicate actions. K() epistemic goals are unwrapped to their inner
+world-state literals for planning — communication is how LLM agents satisfy K() goals at runtime,
+but the golden trajectory only verifies that the physical end state is achievable.
+This means the planner respects `room_restriction` (assigns agents to reachable targets) and
+`remote_control` (uses trigger objects for `is_unlocked` goals), but K() goals add no extra
+trajectory steps. Design K() goals to express *what agents must learn*, not *physical actions*.
 
 ## Structural Diversity
 {diversity_section}"""

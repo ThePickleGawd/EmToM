@@ -6,7 +6,6 @@
   "scene_id": "",
   "episode_id": "",
   "agent_spawns": {
-    "_COMMENT": "Auto-populated by new_scene[], do not edit manually",
     "agent_0": {"position": [0, 0, 0], "rotation": 0.0},
     "agent_1": {"position": [0, 0, 0], "rotation": 0.0}
   },
@@ -37,31 +36,16 @@
     "agent_0": ["Navigate", "Open", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"],
     "agent_1": ["Navigate", "Open", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
   },
-  "_COMMENT_MESSAGE_TARGETS": "Optional: restrict which agents each agent can message. Omit for no restrictions.",
   "message_targets": {},
-
-  "_COMMENT_PDDL": "Use pddl_goal for task goals. Use K() for epistemic goals. tom_level is auto-computed from K/B nesting depth.",
   "pddl_goal": "(and (K agent_0 (is_inside REPLACE_ITEM REPLACE_CONTAINER)) (is_open REPLACE_FURNITURE) (is_on_top REPLACE_OBJECT REPLACE_FURNITURE))",
   "pddl_ordering": [
     {"before": "(K agent_0 (is_inside REPLACE_ITEM REPLACE_CONTAINER))", "after": "(is_open REPLACE_FURNITURE)"},
     {"before": "(is_open REPLACE_FURNITURE)", "after": "(is_on_top REPLACE_OBJECT REPLACE_FURNITURE)"}
   ],
-  "pddl_owners": {
-    "_COMMENT_COMPETITIVE": "For competitive: '(is_inside trophy_1 cabinet_10)': 'team_0'",
-    "_COMMENT_MIXED": "For mixed: '(is_inside vase_1 closet_5)': 'agent_0'"
-  },
-
+  "pddl_owners": {},
   "num_agents": 2,
-  "golden_trajectory": [
-    {
-      "actions": [
-        {"agent": "agent_0", "action": "ACTION_NAME[TARGET]"},
-        {"agent": "agent_1", "action": "Wait"}
-      ]
-    }
-  ],
-
-  "_COMPETITIVE_ONLY_FIELDS": "Include teams and team_secrets for competitive tasks",
+  "golden_trajectory": [],
+  "golden_trajectory_metadata": {},
   "teams": {},
   "team_secrets": {}
 }
