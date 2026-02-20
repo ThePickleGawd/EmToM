@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
-from emtom.pddl.dsl import Formula, Literal, And, Or, Not, parse_goal_string
+from emtom.pddl.dsl import Formula, Literal, And, Or, Not, Knows, Believes, parse_goal_string
 from emtom.pddl.tom_verifier import compute_tom_depth, explain_tom_depth
 
 if TYPE_CHECKING:
@@ -87,6 +87,14 @@ def goal_to_natural_language(goal: Formula) -> str:
     if isinstance(goal, Not):
         inner = goal_to_natural_language(goal.operand)
         return f"NOT: {inner}"
+
+    if isinstance(goal, Knows):
+        inner_nl = goal_to_natural_language(goal.inner)
+        return f"{_format_object_id(goal.agent)} knows that: {inner_nl}"
+
+    if isinstance(goal, Believes):
+        inner_nl = goal_to_natural_language(goal.inner)
+        return f"{_format_object_id(goal.agent)} believes that: {inner_nl}"
 
     return goal.to_pddl()
 

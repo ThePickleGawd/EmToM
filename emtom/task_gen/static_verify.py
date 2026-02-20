@@ -348,17 +348,30 @@ def verify_task(
     pddl_goal = task.get("pddl_goal")
     if isinstance(pddl_goal, str) and pddl_goal:
         try:
-            from emtom.pddl.dsl import parse_goal_string
+            from emtom.pddl.dsl import parse_goal_string, Literal, EpistemicFormula
             goal = parse_goal_string(pddl_goal)
             conjuncts = goal.flatten()
+
+            # Extract inner Literal nodes from conjuncts (unwrap K/B wrappers)
+            def _extract_literals(formula):
+                """Unwrap epistemic layers to get leaf Literal nodes."""
+                if isinstance(formula, Literal):
+                    return [formula]
+                if isinstance(formula, EpistemicFormula):
+                    return _extract_literals(formula.inner)
+                return []
+
+            literals = []
+            for c in conjuncts:
+                literals.extend(_extract_literals(c))
 
             # Check goal predicate names are valid
             from emtom.evaluation import PARTNR_PREDICATES, EMTOM_PREDICATES
             from emtom.state.manager import GameStateManager
             supported = PARTNR_PREDICATES | EMTOM_PREDICATES | GameStateManager.GAME_STATE_PREDICATES
-            for c in conjuncts:
-                if c.predicate not in supported:
-                    errors.append(f"PDDL goal uses unsupported predicate '{c.predicate}'")
+            for lit in literals:
+                if lit.predicate not in supported:
+                    errors.append(f"PDDL goal uses unsupported predicate '{lit.predicate}'")
 
             # Check object references
             if scene_data:
@@ -371,8 +384,8 @@ def verify_task(
                 num_agents = task.get("num_agents", 2)
                 scene_ids.update(f"agent_{i}" for i in range(num_agents))
 
-                for c in conjuncts:
-                    for arg in c.args:
+                for lit in literals:
+                    for arg in lit.args:
                         if arg.startswith("?"):
                             continue
                         if arg not in scene_ids and not arg.startswith("item_"):

@@ -40,12 +40,11 @@
   "_COMMENT_MESSAGE_TARGETS": "Optional: restrict which agents each agent can message. Omit for no restrictions.",
   "message_targets": {},
 
-  "_COMMENT_PDDL": "Use pddl_goal for task goals (replaces subtasks). tom_level is auto-computed.",
-  "pddl_goal": "(and (is_open REPLACE_FURNITURE) (is_on_top REPLACE_OBJECT REPLACE_FURNITURE))",
+  "_COMMENT_PDDL": "Use pddl_goal for task goals. Use K() for epistemic goals. tom_level is auto-computed from K/B nesting depth.",
+  "pddl_goal": "(and (K agent_0 (is_inside REPLACE_ITEM REPLACE_CONTAINER)) (is_open REPLACE_FURNITURE) (is_on_top REPLACE_OBJECT REPLACE_FURNITURE))",
   "pddl_ordering": [
-    {"_COMMENT": "Optional ordering: before must complete before after",
-     "before": "(is_open REPLACE_FURNITURE)",
-     "after": "(is_on_top REPLACE_OBJECT REPLACE_FURNITURE)"}
+    {"before": "(K agent_0 (is_inside REPLACE_ITEM REPLACE_CONTAINER))", "after": "(is_open REPLACE_FURNITURE)"},
+    {"before": "(is_open REPLACE_FURNITURE)", "after": "(is_on_top REPLACE_OBJECT REPLACE_FURNITURE)"}
   ],
   "pddl_owners": {
     "_COMMENT_COMPETITIVE": "For competitive: '(is_inside trophy_1 cabinet_10)': 'team_0'",

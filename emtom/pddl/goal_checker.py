@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from emtom.pddl.dsl import Formula, Literal, And, Or, Not, parse_goal_string
+from emtom.pddl.dsl import (
+    Formula, Literal, And, Or, Not, Knows, Believes, EpistemicFormula,
+    parse_goal_string,
+)
 
 
 class PDDLGoalChecker:
@@ -36,7 +39,7 @@ class PDDLGoalChecker:
                    Literals not in this map default to required (cooperative).
         """
         self.goal = goal
-        self.conjuncts = goal.flatten()
+        self.conjuncts: List[Formula] = goal.flatten()
         self.completed: Set[int] = set()  # indices into self.conjuncts
 
         # Build ordering constraints: index -> set of prerequisite indices
@@ -104,21 +107,21 @@ class PDDLGoalChecker:
             "all_complete": len(self.completed) == len(self.conjuncts),
         }
 
-    def get_required_conjuncts(self) -> List[Literal]:
+    def get_required_conjuncts(self) -> List[Formula]:
         """Get conjuncts that are required for task success (no owner or required=True)."""
         return [
             c for idx, c in enumerate(self.conjuncts)
             if idx not in self._owners
         ]
 
-    def get_team_conjuncts(self, team_id: str) -> List[Literal]:
+    def get_team_conjuncts(self, team_id: str) -> List[Formula]:
         """Get conjuncts owned by a specific team."""
         return [
             c for idx, c in enumerate(self.conjuncts)
             if self._owners.get(idx) == team_id
         ]
 
-    def get_agent_conjuncts(self, agent_id: str) -> List[Literal]:
+    def get_agent_conjuncts(self, agent_id: str) -> List[Formula]:
         """Get conjuncts owned by a specific agent."""
         return [
             c for idx, c in enumerate(self.conjuncts)
@@ -142,11 +145,16 @@ class PDDLGoalChecker:
         Convert PDDL goal conjuncts to evaluation.py proposition format.
 
         Returns list of {"entity": ..., "property": ..., "target": ..., "required": ...}
+        Epistemic conjuncts extract the inner literal for proposition format.
         """
         props = []
         for idx, conjunct in enumerate(self.conjuncts):
-            if isinstance(conjunct, Literal):
-                prop = conjunct.to_proposition()
+            literal = conjunct
+            # Unwrap epistemic layers to get the inner literal
+            while isinstance(literal, EpistemicFormula):
+                literal = literal.inner
+            if isinstance(literal, Literal):
+                prop = literal.to_proposition()
                 # Add ownership/required info
                 owner = self._owners.get(idx)
                 if owner:

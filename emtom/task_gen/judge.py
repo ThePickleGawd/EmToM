@@ -202,13 +202,13 @@ CRITERIA_DESCRIPTIONS = {
 1.0: All goal conjuncts directly advance the objective - removing any would break the task""",
     },
     "pddl_solvability": {
-        "name": "PDDL Solvability",
-        "description": "Is the task structurally solvable? Are goal predicates valid and achievable?",
+        "name": "PDDL Solvability & Epistemic Coherence",
+        "description": "Is the task structurally solvable? Are K() goals backed by information asymmetry? Is ordering non-empty for multi-conjunct goals?",
         "rubric": """0.0: Goal references nonexistent objects or uses invalid predicates
-0.3: Goal is technically valid but trivially satisfied or impossible
-0.5: Goal is valid but some conjuncts are redundant or ordering is wrong
-0.7: Goal is well-formed with minor issues
-1.0: Goal is well-formed, all predicates valid, ordering correct, and structurally solvable""",
+0.3: Goal is technically valid but trivially satisfied or impossible; K() goals without backing information asymmetry (no room_restriction or hidden mechanic making the knowledge non-trivial)
+0.5: Goal is valid but ordering is empty with multiple conjuncts; K() goals that are trivially satisfied (agent already has direct access)
+0.7: Goal is well-formed, K() goals have backing asymmetry, minor ordering issues
+1.0: Goal is well-formed, all predicates valid, K() goals backed by real information gaps, ordering defines meaningful dependencies, and structurally solvable""",
     },
     "mechanic_utilization": {
         "name": "Mechanic Utilization",

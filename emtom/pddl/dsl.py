@@ -64,8 +64,8 @@ class Formula:
     def to_pddl(self) -> str:
         raise NotImplementedError
 
-    def flatten(self) -> List["Literal"]:
-        """Flatten to list of leaf Literals (for goal conjuncts)."""
+    def flatten(self) -> List["Formula"]:
+        """Flatten to list of conjuncts (Literals or epistemic wrappers)."""
         raise NotImplementedError
 
     def evaluate(self, check_fn) -> bool:
@@ -87,7 +87,7 @@ class Literal(Formula):
             return f"(not {inner})"
         return inner
 
-    def flatten(self) -> List["Literal"]:
+    def flatten(self) -> List["Formula"]:
         return [self]
 
     def evaluate(self, check_fn) -> bool:
@@ -134,7 +134,7 @@ class And(Formula):
         inner = " ".join(f.to_pddl() for f in self.operands)
         return f"(and {inner})"
 
-    def flatten(self) -> List[Literal]:
+    def flatten(self) -> List["Formula"]:
         result = []
         for op in self.operands:
             result.extend(op.flatten())
@@ -155,7 +155,7 @@ class Or(Formula):
         inner = " ".join(f.to_pddl() for f in self.operands)
         return f"(or {inner})"
 
-    def flatten(self) -> List[Literal]:
+    def flatten(self) -> List["Formula"]:
         # For Or, we can't simply flatten — return all children
         result = []
         for op in self.operands:
@@ -174,7 +174,7 @@ class Not(Formula):
     def to_pddl(self) -> str:
         return f"(not {self.operand.to_pddl()})"
 
-    def flatten(self) -> List[Literal]:
+    def flatten(self) -> List["Formula"]:
         return self.operand.flatten()
 
     def evaluate(self, check_fn) -> bool:
@@ -199,14 +199,19 @@ class Knows(EpistemicFormula):
     def to_pddl(self) -> str:
         return f"(K {self.agent} {self.inner.to_pddl()})"
 
-    def flatten(self) -> List[Literal]:
-        return self.inner.flatten()
+    def flatten(self) -> List["Formula"]:
+        # Preserve the epistemic wrapper as a single conjunct
+        return [self]
 
     def evaluate(self, check_fn) -> bool:
         # Epistemic evaluation requires a belief model, not just predicate checks.
         # For runtime goal checking, we treat K(a, phi) as phi being true
         # (conservative: if it's true in the world, the agent can know it).
         return self.inner.evaluate(check_fn)
+
+    def get_inner_literals(self) -> List["Literal"]:
+        """Extract leaf Literal nodes from inside the epistemic wrapper."""
+        return self.inner.flatten()
 
 
 @dataclass(frozen=True)
@@ -218,7 +223,12 @@ class Believes(EpistemicFormula):
     def to_pddl(self) -> str:
         return f"(B {self.agent} {self.inner.to_pddl()})"
 
-    def flatten(self) -> List[Literal]:
+    def flatten(self) -> List["Formula"]:
+        # Preserve the epistemic wrapper as a single conjunct
+        return [self]
+
+    def get_inner_literals(self) -> List["Literal"]:
+        """Extract leaf Literal nodes from inside the epistemic wrapper."""
         return self.inner.flatten()
 
     def evaluate(self, check_fn) -> bool:
@@ -342,13 +352,15 @@ def parse_goal_string(goal_str: str) -> Formula:
     """
     Parse a PDDL goal string into a Formula tree.
 
-    Supports: (and ...), (or ...), (not ...), (predicate arg1 arg2 ...)
-    Does NOT support epistemic operators in goal strings (those are in epistemic_init).
+    Supports: (and ...), (or ...), (not ...), (K agent ...), (B agent ...),
+              (predicate arg1 arg2 ...)
 
     Examples:
         "(is_open cabinet_27)" -> Literal("is_open", ("cabinet_27",))
         "(and (is_open cabinet_27) (is_on_top bottle_4 table_13))"
             -> And(Literal(...), Literal(...))
+        "(K agent_0 (is_open cabinet_27))" -> Knows("agent_0", Literal(...))
+        "(K agent_0 (K agent_1 (is_open cabinet_27)))" -> nested Knows (depth 2)
     """
     goal_str = goal_str.strip()
     if not goal_str:
@@ -427,6 +439,30 @@ def _parse_tokens(tokens: List[str], pos: int) -> Tuple[Formula, int]:
             if pos < len(tokens) and tokens[pos] == ')':
                 pos += 1
             return Not(operand=child), pos
+
+        elif head == 'k':
+            if pos >= len(tokens) or tokens[pos] == ')':
+                raise ValueError("K() requires an agent and inner formula")
+            agent_name = tokens[pos]
+            pos += 1
+            if pos >= len(tokens) or tokens[pos] == ')':
+                raise ValueError("K() requires an inner formula after agent name")
+            inner, pos = _parse_tokens(tokens, pos)
+            if pos < len(tokens) and tokens[pos] == ')':
+                pos += 1
+            return Knows(agent=agent_name, inner=inner), pos
+
+        elif head == 'b':
+            if pos >= len(tokens) or tokens[pos] == ')':
+                raise ValueError("B() requires an agent and inner formula")
+            agent_name = tokens[pos]
+            pos += 1
+            if pos >= len(tokens) or tokens[pos] == ')':
+                raise ValueError("B() requires an inner formula after agent name")
+            inner, pos = _parse_tokens(tokens, pos)
+            if pos < len(tokens) and tokens[pos] == ')':
+                pos += 1
+            return Believes(agent=agent_name, inner=inner), pos
 
         else:
             # It's a predicate literal: (pred_name arg1 arg2 ...)

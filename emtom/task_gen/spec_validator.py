@@ -434,16 +434,32 @@ def validate_blocking_spec(
     pddl_goal = task_data.get("pddl_goal")
     if isinstance(pddl_goal, str) and pddl_goal:
         try:
-            from emtom.pddl.dsl import parse_goal_string
+            from emtom.pddl.dsl import parse_goal_string, Knows, Believes, EpistemicFormula
             goal = parse_goal_string(pddl_goal)
             conjuncts = goal.flatten()
             if not conjuncts:
                 errors.append("pddl_goal parsed but contains no goal conjuncts")
 
-            # Validate ordering references valid goal predicates
+            # Validate K/B agent names reference valid agent IDs
+            def _check_epistemic_agents(formula, path="pddl_goal"):
+                if isinstance(formula, (Knows, Believes)):
+                    if formula.agent not in valid_agent_ids:
+                        errors.append(
+                            f"{path}: epistemic operator references invalid agent '{formula.agent}'. "
+                            f"Valid IDs: {sorted(valid_agent_ids)}"
+                        )
+                    _check_epistemic_agents(formula.inner, path)
+                elif hasattr(formula, 'operands'):
+                    for op in formula.operands:
+                        _check_epistemic_agents(op, path)
+                elif hasattr(formula, 'operand') and formula.operand is not None:
+                    _check_epistemic_agents(formula.operand, path)
+            _check_epistemic_agents(goal)
+
+            # Validate ordering references valid goal conjuncts
+            conjunct_strs = {c.to_pddl() for c in conjuncts}
             pddl_ordering = task_data.get("pddl_ordering", [])
             if isinstance(pddl_ordering, list):
-                conjunct_strs = {c.to_pddl() for c in conjuncts}
                 for i, constraint in enumerate(pddl_ordering):
                     if not isinstance(constraint, dict):
                         errors.append(f"pddl_ordering[{i}] must be an object")
@@ -456,14 +472,33 @@ def validate_blocking_spec(
                                 f"which is not a goal conjunct"
                             )
 
-            # Validate pddl_owners references valid goal predicates
+                # Warn if ordering is empty with multi-conjunct goals
+                if len(conjuncts) > 1 and not pddl_ordering:
+                    errors.append(
+                        "pddl_ordering is empty but goal has multiple conjuncts. "
+                        "Add ordering constraints to define dependencies between goals."
+                    )
+
+            # Validate pddl_owners references valid goal conjuncts
             pddl_owners = task_data.get("pddl_owners", {})
             if isinstance(pddl_owners, dict):
                 for literal_str, owner in pddl_owners.items():
+                    if literal_str.startswith("_"):
+                        continue  # Skip comment keys
                     if literal_str not in conjunct_strs:
                         errors.append(
                             f"pddl_owners key '{literal_str}' is not a goal conjunct"
                         )
+
+            # Warn if owners empty for competitive/mixed tasks
+            if isinstance(category, str) and category in ("competitive", "mixed"):
+                real_owners = {k: v for k, v in (pddl_owners or {}).items()
+                              if not k.startswith("_")}
+                if not real_owners:
+                    errors.append(
+                        f"pddl_owners is empty for {category} task. "
+                        f"Assign goals to teams/agents via pddl_owners."
+                    )
 
         except Exception as e:
             errors.append(f"Invalid pddl_goal syntax: {e}")

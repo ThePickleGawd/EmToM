@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from emtom.pddl.dsl import Domain, Problem, Literal, And, Or, Knows, Believes, Formula
+from emtom.pddl.dsl import Domain, Problem, Literal, And, Or, Knows, Believes, EpistemicFormula, Formula
 from emtom.pddl.epistemic import ObservabilityModel
 
 
@@ -68,8 +68,17 @@ class PDKBSolver:
                 solve_time=time.time() - start,
             )
 
+        # Extract leaf literals from goal (unwrap K/B wrappers)
+        goal_conjuncts = problem.goal.flatten()
+        goal_literals = []
+        for c in goal_conjuncts:
+            node = c
+            while isinstance(node, EpistemicFormula):
+                node = node.inner
+            if isinstance(node, Literal):
+                goal_literals.append(node)
+
         # Check 1: All goal predicates must be achievable
-        goal_literals = problem.goal.flatten()
         domain_predicate_names = {p.name for p in domain.predicates}
 
         for literal in goal_literals:

@@ -3,10 +3,11 @@
 import pytest
 
 from emtom.pddl.dsl import (
-    Literal, And, Or, Not, Knows, Believes,
+    Literal, And, Or, Not, Knows, Believes, EpistemicFormula,
     parse_goal_string, goal_to_string,
     Type, Predicate, Param, Problem, Domain,
 )
+from emtom.pddl.solver import _max_epistemic_depth
 from emtom.pddl.goal_checker import PDDLGoalChecker
 from emtom.pddl.epistemic import ObservabilityModel
 from emtom.pddl.compiler import compile_task
@@ -349,3 +350,266 @@ class TestCompiler:
         task = self._make_task(pddl_goal=None)
         problem = compile_task(task)
         assert problem.goal is None
+
+
+# ---------------------------------------------------------------------------
+# Epistemic parser tests
+# ---------------------------------------------------------------------------
+
+class TestEpistemicParser:
+    def test_parse_knows(self):
+        result = parse_goal_string("(K agent_0 (is_open cabinet_27))")
+        assert isinstance(result, Knows)
+        assert result.agent == "agent_0"
+        assert isinstance(result.inner, Literal)
+        assert result.inner.predicate == "is_open"
+        assert result.inner.args == ("cabinet_27",)
+
+    def test_parse_believes(self):
+        result = parse_goal_string("(B agent_1 (is_inside key_1 safe_3))")
+        assert isinstance(result, Believes)
+        assert result.agent == "agent_1"
+        assert isinstance(result.inner, Literal)
+        assert result.inner.predicate == "is_inside"
+
+    def test_parse_nested_knows(self):
+        result = parse_goal_string("(K agent_0 (K agent_1 (is_inside key_1 safe_3)))")
+        assert isinstance(result, Knows)
+        assert result.agent == "agent_0"
+        assert isinstance(result.inner, Knows)
+        assert result.inner.agent == "agent_1"
+        assert isinstance(result.inner.inner, Literal)
+
+    def test_parse_and_with_epistemic(self):
+        result = parse_goal_string(
+            "(and (K agent_0 (is_open cabinet_27)) (is_on_top bottle_4 table_13))"
+        )
+        assert isinstance(result, And)
+        assert len(result.operands) == 2
+        assert isinstance(result.operands[0], Knows)
+        assert isinstance(result.operands[1], Literal)
+
+    def test_parse_not_knows(self):
+        result = parse_goal_string("(not (K agent_1 (is_inside gem_1 safe_3)))")
+        assert isinstance(result, Not)
+        assert isinstance(result.operand, Knows)
+        assert result.operand.agent == "agent_1"
+
+    def test_roundtrip_knows(self):
+        original = "(K agent_0 (is_open cabinet_27))"
+        parsed = parse_goal_string(original)
+        serialized = goal_to_string(parsed)
+        assert serialized == original
+        reparsed = parse_goal_string(serialized)
+        assert isinstance(reparsed, Knows)
+
+    def test_roundtrip_nested_knows(self):
+        original = "(K agent_0 (K agent_1 (is_inside key_1 safe_3)))"
+        parsed = parse_goal_string(original)
+        serialized = goal_to_string(parsed)
+        assert serialized == original
+
+    def test_roundtrip_and_with_epistemic(self):
+        original = "(and (K agent_0 (is_inside key_1 cabinet_27)) (is_open safe_3))"
+        parsed = parse_goal_string(original)
+        serialized = goal_to_string(parsed)
+        reparsed = parse_goal_string(serialized)
+        assert serialized == reparsed.to_pddl()
+
+    def test_malformed_k_no_args(self):
+        with pytest.raises(ValueError, match="K\\(\\) requires"):
+            parse_goal_string("(K)")
+
+    def test_malformed_k_no_inner(self):
+        with pytest.raises(ValueError, match="K\\(\\) requires an inner formula"):
+            parse_goal_string("(K agent_0)")
+
+    def test_case_insensitive(self):
+        """K and k should both work."""
+        result = parse_goal_string("(k agent_0 (is_open cabinet_27))")
+        assert isinstance(result, Knows)
+
+
+# ---------------------------------------------------------------------------
+# Epistemic depth tests
+# ---------------------------------------------------------------------------
+
+class TestEpistemicDepth:
+    def test_depth_0_literal(self):
+        formula = Literal("is_open", ("cabinet_27",))
+        assert _max_epistemic_depth(formula) == 0
+
+    def test_depth_0_and(self):
+        formula = And(operands=(
+            Literal("is_open", ("cabinet_27",)),
+            Literal("is_on_top", ("bottle_4", "table_13")),
+        ))
+        assert _max_epistemic_depth(formula) == 0
+
+    def test_depth_1_knows(self):
+        formula = Knows(agent="agent_0", inner=Literal("is_open", ("cabinet_27",)))
+        assert _max_epistemic_depth(formula) == 1
+
+    def test_depth_2_nested_knows(self):
+        inner = Knows(agent="agent_1", inner=Literal("is_open", ("cabinet_27",)))
+        outer = Knows(agent="agent_0", inner=inner)
+        assert _max_epistemic_depth(outer) == 2
+
+    def test_depth_mixed_and(self):
+        """Max depth across And operands."""
+        formula = And(operands=(
+            Knows(agent="agent_0", inner=Literal("is_open", ("c",))),
+            Literal("is_on_top", ("b", "t")),
+        ))
+        assert _max_epistemic_depth(formula) == 1
+
+    def test_depth_none(self):
+        assert _max_epistemic_depth(None) == 0
+
+
+# ---------------------------------------------------------------------------
+# Epistemic flatten tests
+# ---------------------------------------------------------------------------
+
+class TestEpistemicFlatten:
+    def test_knows_flatten_preserves_wrapper(self):
+        k = Knows(agent="agent_0", inner=Literal("is_open", ("cabinet_27",)))
+        flat = k.flatten()
+        assert len(flat) == 1
+        assert isinstance(flat[0], Knows)
+
+    def test_believes_flatten_preserves_wrapper(self):
+        b = Believes(agent="agent_1", inner=Literal("is_inside", ("key_1", "drawer_5")))
+        flat = b.flatten()
+        assert len(flat) == 1
+        assert isinstance(flat[0], Believes)
+
+    def test_and_with_epistemic_flatten(self):
+        """And with mixed Knows and Literal preserves both."""
+        goal = And(operands=(
+            Knows(agent="agent_0", inner=Literal("is_open", ("c",))),
+            Literal("is_on_top", ("b", "t")),
+        ))
+        flat = goal.flatten()
+        assert len(flat) == 2
+        assert isinstance(flat[0], Knows)
+        assert isinstance(flat[1], Literal)
+
+    def test_get_inner_literals(self):
+        k = Knows(agent="agent_0", inner=Literal("is_open", ("cabinet_27",)))
+        literals = k.get_inner_literals()
+        assert len(literals) == 1
+        assert isinstance(literals[0], Literal)
+        assert literals[0].predicate == "is_open"
+
+
+# ---------------------------------------------------------------------------
+# Epistemic goal checker tests
+# ---------------------------------------------------------------------------
+
+class TestEpistemicGoalChecker:
+    def test_epistemic_conjuncts_tracked(self):
+        """K() conjuncts should be tracked as whole units."""
+        goal = And(operands=(
+            Knows(agent="agent_0", inner=Literal("is_inside", ("key_1", "cabinet_27"))),
+            Literal("is_open", ("safe_3",)),
+        ))
+        checker = PDDLGoalChecker(goal)
+        assert len(checker.conjuncts) == 2
+        assert isinstance(checker.conjuncts[0], Knows)
+        assert isinstance(checker.conjuncts[1], Literal)
+
+    def test_epistemic_evaluate(self):
+        """K() goal evaluates via inner literal's truth."""
+        goal = And(operands=(
+            Knows(agent="agent_0", inner=Literal("is_inside", ("key_1", "cabinet_27"))),
+            Literal("is_open", ("safe_3",)),
+        ))
+        checker = PDDLGoalChecker(goal)
+
+        # K(agent_0, is_inside key_1 cabinet_27) completes when inner literal is true
+        state = {("is_inside", ("key_1", "cabinet_27")): True}
+        result = checker.update(lambda p, a: state.get((p, a), False))
+        assert result["percent_complete"] == 0.5
+        assert len(result["newly_completed"]) == 1
+        assert "(K agent_0" in result["newly_completed"][0]
+
+    def test_epistemic_ordering(self):
+        """Ordering should work with K() conjunct strings."""
+        goal = And(operands=(
+            Knows(agent="agent_0", inner=Literal("is_inside", ("key_1", "cabinet_27"))),
+            Literal("is_open", ("safe_3",)),
+        ))
+        ordering = [
+            {"before": "(K agent_0 (is_inside key_1 cabinet_27))", "after": "(is_open safe_3)"}
+        ]
+        checker = PDDLGoalChecker(goal, ordering=ordering)
+
+        # safe_3 is open but K() prerequisite not met
+        result = checker.update(lambda p, a: p == "is_open")
+        assert len(result["newly_completed"]) == 0
+
+        # Now both are true
+        result = checker.update(lambda p, a: True)
+        assert result["all_complete"]
+
+    def test_epistemic_to_propositions(self):
+        """K() conjuncts should extract inner literal for propositions."""
+        goal = And(operands=(
+            Knows(agent="agent_0", inner=Literal("is_inside", ("key_1", "cabinet_27"))),
+            Literal("is_open", ("safe_3",)),
+        ))
+        checker = PDDLGoalChecker(goal)
+        props = checker.to_propositions()
+        assert len(props) == 2
+        assert props[0]["property"] == "is_inside"
+        assert props[0]["entity"] == "key_1"
+        assert props[1]["property"] == "is_open"
+
+    def test_from_task_data_with_epistemic(self):
+        task_data = {
+            "pddl_goal": "(and (K agent_0 (is_inside key_1 cabinet_27)) (is_open safe_3))",
+            "pddl_ordering": [
+                {"before": "(K agent_0 (is_inside key_1 cabinet_27))", "after": "(is_open safe_3)"}
+            ],
+        }
+        checker = PDDLGoalChecker.from_task_data(task_data)
+        assert checker is not None
+        assert len(checker.conjuncts) == 2
+        assert isinstance(checker.conjuncts[0], Knows)
+
+
+# ---------------------------------------------------------------------------
+# Epistemic describe tests
+# ---------------------------------------------------------------------------
+
+class TestEpistemicDescribe:
+    def test_knows_nl(self):
+        k = Knows(agent="agent_0", inner=Literal("is_open", ("cabinet_27",)))
+        nl = goal_to_natural_language(k)
+        assert "agent 0" in nl.lower()
+        assert "knows" in nl.lower()
+        assert "open" in nl.lower()
+
+    def test_nested_knows_nl(self):
+        inner = Knows(agent="agent_1", inner=Literal("is_open", ("cabinet_27",)))
+        outer = Knows(agent="agent_0", inner=inner)
+        nl = goal_to_natural_language(outer)
+        assert "agent 0" in nl.lower()
+        assert "agent 1" in nl.lower()
+        assert "knows" in nl.lower()
+
+    def test_believes_nl(self):
+        b = Believes(agent="agent_1", inner=Literal("is_inside", ("key_1", "drawer_5")))
+        nl = goal_to_natural_language(b)
+        assert "agent 1" in nl.lower()
+        assert "believes" in nl.lower()
+
+    def test_and_with_epistemic_nl(self):
+        goal = And(operands=(
+            Knows(agent="agent_0", inner=Literal("is_open", ("cabinet_27",))),
+            Literal("is_on_top", ("bottle_4", "table_13")),
+        ))
+        nl = goal_to_natural_language(goal)
+        assert "knows" in nl.lower()
+        assert "top" in nl.lower()

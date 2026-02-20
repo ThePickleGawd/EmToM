@@ -141,17 +141,53 @@ Use `pddl_goal` instead of `subtasks`. Write goals as PDDL formulas:
 - Single goal: `"(is_open cabinet_27)"`
 - Conjunction: `"(and (is_open cabinet_27) (is_on_top bottle_4 table_13))"`
 - Negation: `"(not (is_open drawer_5))"`
+- Epistemic: `"(K agent_0 (is_inside key_1 cabinet_27))"` — agent_0 must know this fact
+- Nested: `"(K agent_0 (K agent_1 (is_open safe_3)))"` — agent_0 knows that agent_1 knows
+- Negated knowledge: `"(not (K agent_1 (is_inside gem_1 safe_3)))"` — agent_1 must NOT know this
+- **ToM depth** = max nesting depth of K/B operators (auto-computed by `verify_pddl[]`)
 - Use `pddl_ordering` for dependencies: `{{"before": "(pred ...)", "after": "(pred ...)"}}`
+  - **REQUIRED** when goal has >1 conjunct — ordering must be non-empty
+  - K() goals should be prerequisites for actions that depend on that knowledge
 - For competitive: use `pddl_owners` to assign goals to teams: `{{"(is_inside trophy_1 cabinet_10)": "team_0"}}`
+  - **REQUIRED** for competitive/mixed tasks — assign team/agent ownership
 - For mixed: use `pddl_owners` for agent subgoals: `{{"(is_inside vase_1 closet_5)": "agent_0"}}`
 - `tom_level` and `tom_reasoning` are auto-computed from PDDL — do NOT set them manually
 - Run `verify_pddl[]` to check solvability and get computed ToM depth
 
+## When to Use K() Goals
+- Use `(K agent_X ...)` when agent_X cannot directly observe the fact (room_restriction, hidden mechanic) AND the task requires them to learn it
+- K() goals naturally express Theory of Mind: the agent must acquire knowledge through communication or inference
+- Every task SHOULD include at least one K() goal when there is information asymmetry (room restrictions, hidden mechanics)
+- K() goals should appear as prerequisites in `pddl_ordering` for physical actions that depend on that knowledge
+
+### Example: K=0 (no epistemic reasoning)
+```json
+"pddl_goal": "(and (is_open cabinet_27) (is_on_top bottle_4 table_13))",
+"pddl_ordering": [{{"before": "(is_open cabinet_27)", "after": "(is_on_top bottle_4 table_13)"}}]
+```
+
+### Example: K=1 (agent must acquire knowledge via communication)
+```json
+"pddl_goal": "(and (K agent_0 (is_inside key_1 cabinet_27)) (is_open safe_3) (is_on_top trophy_1 table_8))",
+"pddl_ordering": [
+  {{"before": "(K agent_0 (is_inside key_1 cabinet_27))", "after": "(is_open safe_3)"}},
+  {{"before": "(is_open safe_3)", "after": "(is_on_top trophy_1 table_8)"}}
+]
+```
+
+### Example: K=2 (agent must reason about another's beliefs)
+```json
+"pddl_goal": "(and (K agent_0 (K agent_2 (is_inside gem_1 safe_3))) (is_on_top gem_1 table_8))",
+"pddl_ordering": [
+  {{"before": "(K agent_0 (K agent_2 (is_inside gem_1 safe_3)))", "after": "(is_on_top gem_1 table_8)"}}
+]
+```
+
 ## Theory of Mind
-ToM depth is auto-computed from task structure (room restrictions, hidden mechanics, communication constraints).
-- **Depth 0**: All agents share full information
-- **Depth 1**: Agents must reason about what others know (e.g., room restrictions create private knowledge)
-- **Depth 2**: Agents must reason about what others believe about third parties' knowledge
+ToM depth is auto-computed from the K/B nesting depth in `pddl_goal`.
+- **Depth 0**: No K() goals — all agents share full information
+- **Depth 1**: K(agent, fact) — agents must reason about what others know (e.g., room restrictions create private knowledge)
+- **Depth 2**: K(agent, K(other, fact)) — agents must reason about what others believe about third parties' knowledge
 - **Depth 3**: Third-order belief nesting (rare)
 
 Use `verify_pddl[]` to see the computed ToM depth. Design information asymmetry via `room_restriction`, `remote_control` (hidden effects), and `limited_bandwidth` to increase ToM requirements.
