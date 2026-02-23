@@ -983,16 +983,34 @@ class BenchmarkRunner(EMTOMBaseRunner):
             from emtom.pddl.epistemic import ObservabilityModel
 
             # Build object-room mapping from world graph
+            # Include BOTH furniture and small objects (for binary predicate tracking)
             object_rooms = {}
             world_graph = self.get_world_graph()
             if world_graph:
                 try:
+                    from habitat_llm.world_model.world_graph import Furniture, Object
+
                     room_map = world_graph.get_furniture_to_room_map()
+                    furn_name_to_room = {}
                     for furn, room in room_map.items():
-                        object_rooms[furn] = room
+                        furn_name = getattr(furn, 'name', str(furn))
+                        room_name = getattr(room, 'name', str(room))
+                        object_rooms[furn_name] = room_name
+                        furn_name_to_room[furn_name] = room_name
+
                     for room in world_graph.get_all_rooms():
                         room_name = getattr(room, 'name', str(room))
                         object_rooms[room_name] = room_name
+
+                    # Also map small objects to their room via their furniture parent
+                    for obj_node in world_graph.get_all_objects():
+                        obj_name = getattr(obj_node, 'name', str(obj_node))
+                        for neighbor in world_graph.graph[obj_node]:
+                            if isinstance(neighbor, Furniture):
+                                furn_name = getattr(neighbor, 'name', str(neighbor))
+                                if furn_name in furn_name_to_room:
+                                    object_rooms[obj_name] = furn_name_to_room[furn_name]
+                                break
                 except Exception:
                     pass
 
@@ -1040,8 +1058,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
             return res and res.get("success", False)
 
         if action_name == "Navigate" and target:
-            # Agent entered a room — observe everything there
-            room = target
+            # Resolve furniture/object targets to their room
+            # (Navigate targets are often furniture like table_29, not rooms)
+            room = tracker.object_rooms.get(target, target)
             tracker.record_room_entry(agent_id, room, check_fn)
 
         elif action_name == "Communicate" and target:

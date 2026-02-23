@@ -1441,7 +1441,11 @@ SUMMARY:"""
             self._cleanup_temp_files(temp_task_file)
 
             try:
-                result_data = json.loads(proc.stdout)
+                stdout = proc.stdout
+                json_start = stdout.find("{")
+                if json_start >= 0:
+                    stdout = stdout[json_start:]
+                result_data = json.loads(stdout)
             except (json.JSONDecodeError, ValueError):
                 return {"steps": 0, "done": False, "error": f"Failed to parse output: {proc.stderr[:500]}"}
 
@@ -1552,7 +1556,11 @@ SUMMARY:"""
                 cmd, capture_output=True, text=True, timeout=1200,
             )
             try:
-                result = json.loads(proc.stdout)
+                stdout = proc.stdout
+                json_start = stdout.find("{")
+                if json_start >= 0:
+                    stdout = stdout[json_start:]
+                result = json.loads(stdout)
             except (json.JSONDecodeError, ValueError):
                 return json.dumps({
                     "valid": False,
@@ -1582,9 +1590,19 @@ SUMMARY:"""
         """Evaluate task quality using multi-model council."""
         from emtom.cli.judge_task import run
 
+        # Find trajectory dir for the CURRENT task (not the latest overall)
+        current_task_num = len(self.submitted_tasks) + 1
+        task_traj_dir = self.trajectories_dir / f"task_{current_task_num}"
+        traj_dir = None
+        if task_traj_dir.exists():
+            run_dirs = sorted(task_traj_dir.glob("run_*"), key=lambda p: p.name)
+            if run_dirs:
+                traj_dir = str(run_dirs[-1])
+
         result = run(
             str(self.task_file),
             working_dir=str(self.working_dir),
+            trajectory_dir=traj_dir,
             threshold=self.judge.overall_threshold,
             difficulty=self.difficulty if self.difficulty else None,
         )
@@ -1834,7 +1852,12 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
                 try:
-                    result = json.loads(proc.stdout)
+                    # Extract JSON from stdout (Hydra may prepend non-JSON lines)
+                    stdout = proc.stdout
+                    json_start = stdout.find("{")
+                    if json_start >= 0:
+                        stdout = stdout[json_start:]
+                    result = json.loads(stdout)
                 except (json.JSONDecodeError, ValueError):
                     last_error = proc.stderr or "No output from subprocess"
                     self._log(f"Scene loading failed (attempt {attempt}): {last_error}")

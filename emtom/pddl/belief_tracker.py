@@ -112,12 +112,28 @@ class BeliefStateTracker:
 
         agent_beliefs = self.beliefs.setdefault(agent, set())
 
-        # Check observable predicates for each object
+        # Check unary predicates for each object/furniture in room
+        _UNARY_PREDS = {"is_open", "is_closed", "is_clean", "is_dirty",
+                        "is_filled", "is_empty", "is_powered_on", "is_powered_off",
+                        "is_unlocked", "is_on_floor"}
         for obj in objects_in_room:
-            for pred in _OBSERVABLE_PREDICATES:
+            for pred in _UNARY_PREDS:
                 args = (obj,)
                 if check_fn(pred, args):
                     agent_beliefs.add((pred, args))
+
+        # Check binary predicates (is_on_top, is_inside) between all
+        # objects/furniture in the room. This catches facts like
+        # is_on_top(laptop_0, table_29) when the agent enters the room.
+        _BINARY_PREDS = {"is_on_top", "is_inside", "is_in_room"}
+        all_in_room = list(objects_in_room)
+        for entity in all_in_room:
+            for target in all_in_room:
+                if entity != target:
+                    for pred in _BINARY_PREDS:
+                        args = (entity, target)
+                        if check_fn(pred, args):
+                            agent_beliefs.add((pred, args))
 
     def record_communication(
         self,
@@ -130,28 +146,40 @@ class BeliefStateTracker:
         When an agent sends a message, the receiver gains knowledge.
 
         Transfer sender's beliefs about entities mentioned (by ID) in
-        the message to the receiver.
+        the message to the receiver. Also check binary predicates between
+        mentioned entities against the world state.
         """
-        sender_beliefs = self.beliefs.get(sender, set())
+        sender_beliefs = self.beliefs.setdefault(sender, set())
         receiver_beliefs = self.beliefs.setdefault(receiver, set())
 
         # Find object IDs mentioned in the message
         # Match patterns like: cabinet_27, bottle_4, item_key_1, etc.
         mentioned_ids = set(re.findall(r'\b([a-z][a-z_]*_\d+)\b', message))
+        # Exclude agent IDs from mentioned objects
+        mentioned_ids = {mid for mid in mentioned_ids if not mid.startswith("agent_")}
 
         # Transfer sender's beliefs about mentioned objects
-        for fact in sender_beliefs:
+        for fact in list(sender_beliefs):
             pred, args = fact
-            # Check if any of the fact's arguments are mentioned in message
             if any(arg in mentioned_ids for arg in args):
                 receiver_beliefs.add(fact)
 
-        # Also transfer beliefs about facts whose truth value is
-        # explicitly stated (e.g. "the cabinet is open")
-        # This is a best-effort heuristic for natural language messages
+        # Check binary predicates between mentioned ID pairs against world state.
+        # When sender mentions e.g. "laptop_0 on table_29", verify the
+        # relationship and record it as a belief for both sender and receiver.
+        _BINARY_PREDS = ("is_on_top", "is_inside", "is_in_room")
+        mentioned_list = sorted(mentioned_ids)
+        for i, id1 in enumerate(mentioned_list):
+            for id2 in mentioned_list[i + 1:]:
+                for pred in _BINARY_PREDS:
+                    for args in [(id1, id2), (id2, id1)]:
+                        if check_fn(pred, args):
+                            fact = (pred, args)
+                            sender_beliefs.add(fact)
+                            receiver_beliefs.add(fact)
+
         if not mentioned_ids:
             # If no IDs mentioned, transfer all sender beliefs
-            # (conservative: sender chose to communicate, so share everything)
             receiver_beliefs.update(sender_beliefs)
 
     def record_state_change(

@@ -162,6 +162,15 @@ class EMTOMGameState:
     # Once an object is in here, no further actions can target it
     locked_objects: Dict[str, str] = field(default_factory=dict)
 
+    # === Restricted communication mechanic ===
+    # Maps agent_id -> list of agent_ids they can send messages to
+    # Agents not listed have no restrictions
+    allowed_targets: Dict[str, List[str]] = field(default_factory=dict)
+
+    # === Unreliable communication mechanic ===
+    # Maps agent_id -> probability (0.0–1.0) that a message fails to deliver
+    message_failure_prob: Dict[str, float] = field(default_factory=dict)
+
     def get_object_property(self, obj_id: str, prop: str, default: Any = None) -> Any:
         """Get a custom property for an object."""
         return self.object_properties.get(obj_id, {}).get(prop, default)
@@ -276,6 +285,10 @@ class EMTOMGameState:
             "messages_sent": self.messages_sent,
             # Irreversible action
             "locked_objects": self.locked_objects,
+            # Restricted communication
+            "allowed_targets": self.allowed_targets,
+            # Unreliable communication
+            "message_failure_prob": self.message_failure_prob,
         }
 
     @classmethod
@@ -335,6 +348,10 @@ class EMTOMGameState:
         state.messages_sent = data.get("messages_sent", {})
         # Irreversible action
         state.locked_objects = data.get("locked_objects", {})
+        # Restricted communication
+        state.allowed_targets = data.get("allowed_targets", {})
+        # Unreliable communication
+        state.message_failure_prob = data.get("message_failure_prob", {})
         return state
 
     def to_json(self) -> str:

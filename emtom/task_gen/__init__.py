@@ -19,7 +19,6 @@ from emtom.task_gen.dag import (
     topological_sort,
     validate_dag,
 )
-from emtom.task_gen.dag_visualizer import view_dag, view_task_dag
 from emtom.task_gen.agent import TaskGeneratorAgent
 from emtom.task_gen.judge import Judge, Judgment, CouncilVerdict, CriterionScore
 
@@ -40,9 +39,6 @@ __all__ = [
     "find_terminal_nodes",
     "topological_sort",
     "validate_dag",
-    # DAG visualization
-    "view_dag",
-    "view_task_dag",
     # Agentic generator
     "TaskGeneratorAgent",
     # Judge

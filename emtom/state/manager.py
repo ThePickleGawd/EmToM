@@ -243,6 +243,23 @@ class GameStateManager:
             # and gets populated as actions succeed.
             pass
 
+        elif mech_type == "restricted_communication":
+            allowed = binding.get("allowed_targets", {})
+            for agent_id, targets in allowed.items():
+                state.allowed_targets[agent_id] = targets
+
+        elif mech_type == "unreliable_communication":
+            prob = binding.get("failure_probability", 0.3)
+            if isinstance(prob, dict):
+                for agent_id, p in prob.items():
+                    state.message_failure_prob[agent_id] = float(p)
+            else:
+                # Uniform probability for all agents — use num_agents from task
+                # or default to 2 agents
+                num_agents = len(state.agent_rooms) or 2
+                for i in range(num_agents):
+                    state.message_failure_prob[f"agent_{i}"] = float(prob)
+
     def sync_from_habitat(self, state: Optional[EMTOMGameState] = None) -> EMTOMGameState:
         """
         Sync state from Habitat simulator.

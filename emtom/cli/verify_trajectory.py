@@ -97,24 +97,36 @@ def main():
         print_result(validation)
         sys.exit(1)
 
-    # Deterministically regenerate golden trajectory from PDDL
-    try:
-        from emtom.pddl.planner import regenerate_golden_trajectory
-
-        regen = regenerate_golden_trajectory(
-            task_data,
-            scene_data=scene_data_obj,
-            source="cli_verify",
-            task_file=args.task_file,
-        )
+    # Deterministically regenerate golden trajectory from PDDL —
+    # but only for K=0 tasks. Epistemic (K/Knows) goals require
+    # hand-crafted trajectories with Communicate actions that the
+    # rule-based planner cannot generate.
+    pddl_goal = task_data.get("pddl_goal", "")
+    has_epistemic = "(K " in pddl_goal or "(Knows " in pddl_goal
+    if has_epistemic:
         print(
-            f"Regenerated trajectory: {regen['num_steps']} steps "
-            f"(spec_hash={regen['spec_hash'][:8]})",
+            "Epistemic goal detected — using hand-crafted golden trajectory "
+            "(skipping deterministic regeneration).",
             file=sys.stderr,
         )
-    except Exception as e:
-        print_result(failure(f"Failed to regenerate trajectory from PDDL: {e}"))
-        sys.exit(1)
+    else:
+        try:
+            from emtom.pddl.planner import regenerate_golden_trajectory
+
+            regen = regenerate_golden_trajectory(
+                task_data,
+                scene_data=scene_data_obj,
+                source="cli_verify",
+                task_file=args.task_file,
+            )
+            print(
+                f"Regenerated trajectory: {regen['num_steps']} steps "
+                f"(spec_hash={regen['spec_hash'][:8]})",
+                file=sys.stderr,
+            )
+        except Exception as e:
+            print_result(failure(f"Failed to regenerate trajectory from PDDL: {e}"))
+            sys.exit(1)
 
     golden = task_data.get("golden_trajectory", [])
     if not golden:

@@ -11,6 +11,8 @@ Handlers don't store any state - all state lives in EMTOMGameState.
 from typing import Any, Dict, Optional, Tuple, Callable
 from dataclasses import dataclass
 import copy
+import random
+import re
 
 from emtom.state.game_state import EMTOMGameState
 
@@ -106,6 +108,30 @@ MECHANIC_INFO = {
         "agent_observation": "That action is permanent — {target} is now locked and cannot be interacted with again.",
         "tom_use": "Agents must plan carefully and communicate before acting, since mistakes cannot be undone. Creates high-stakes coordination pressure.",
         "example_binding": {"mechanic_type": "irreversible_action"},
+        "recommended_for_tom": True,
+    },
+    "restricted_communication": {
+        "description": "Restricts which agents each agent can send messages to, creating relay chains",
+        "category": "communication_constraint",
+        "setup_keys": ["allowed_targets"],
+        "agent_observation": "You can only send messages to: {allowed}",
+        "tom_use": "Agents must relay information through intermediaries, creating genuine second-order knowledge requirements",
+        "example_binding": {
+            "mechanic_type": "restricted_communication",
+            "allowed_targets": {"agent_0": ["agent_1"], "agent_1": ["agent_2"], "agent_2": ["agent_0"]},
+        },
+        "recommended_for_tom": True,
+    },
+    "unreliable_communication": {
+        "description": "Messages have a probability of failing to deliver. Sender receives ambiguous feedback.",
+        "category": "communication_constraint",
+        "setup_keys": ["failure_probability"],
+        "agent_observation": "Your message may or may not have been delivered.",
+        "tom_use": "Sender cannot be sure recipient received the message, requiring acknowledgment protocols",
+        "example_binding": {
+            "mechanic_type": "unreliable_communication",
+            "failure_probability": 0.3,
+        },
         "recommended_for_tom": True,
     },
 }
@@ -657,6 +683,96 @@ def handle_irreversible_action(
     )
 
 
+def handle_restricted_communication(
+    action_name: str,
+    agent_id: str,
+    target: Optional[str],
+    state: EMTOMGameState,
+) -> HandlerResult:
+    """
+    Restricted Communication: Controls who each agent can message.
+
+    Creates relay chains that force genuine K=2 epistemic scenarios.
+    If agent_0 can only message agent_1, and agent_1 can only message agent_2,
+    then agent_0 must rely on agent_1 to relay information to agent_2.
+
+    Setup in state:
+        state.allowed_targets = {"agent_0": ["agent_1"], "agent_1": ["agent_2"]}
+    """
+    if action_name.lower() != "communicate":
+        return no_effect(state)
+
+    # Check if this agent has any restrictions
+    allowed = state.allowed_targets.get(agent_id)
+    if allowed is None:
+        # Agent not listed — no restrictions
+        return no_effect(state)
+
+    # Parse recipient from Communicate action string
+    # target is the full content inside brackets: '"message text", agent_1'
+    # The actual recipient is the LAST agent_\d+ match (message content may mention other agents)
+    recipient = None
+    if target:
+        matches = re.findall(r'agent_\d+', target)
+        if matches:
+            recipient = matches[-1]
+
+    if recipient and recipient not in allowed:
+        allowed_str = ", ".join(allowed)
+        return HandlerResult(
+            applies=True,
+            state=state,
+            observation=f"You can only send messages to: {allowed_str}. Message to {recipient} was blocked.",
+            success=False,
+            effects=[f"blocked_communicate={agent_id}_to_{recipient}"],
+            blocked=True,
+            mechanic_type="restricted_communication",
+        )
+
+    # Message is to an allowed target (or broadcast) — let it through
+    return no_effect(state)
+
+
+def handle_unreliable_communication(
+    action_name: str,
+    agent_id: str,
+    target: Optional[str],
+    state: EMTOMGameState,
+) -> HandlerResult:
+    """
+    Unreliable Communication: Messages fail with a probability.
+
+    The sender receives ambiguous feedback — they don't know if the message
+    was delivered. This creates K=2 pressure because the sender needs an
+    acknowledgment from the recipient to be sure.
+
+    Setup in state:
+        state.message_failure_prob = {"agent_0": 0.3, "agent_1": 0.3}
+    """
+    if action_name.lower() != "communicate":
+        return no_effect(state)
+
+    # Check if this agent has a failure probability
+    prob = state.message_failure_prob.get(agent_id)
+    if prob is None or prob <= 0.0:
+        return no_effect(state)
+
+    # Roll for failure
+    if random.random() < prob:
+        return HandlerResult(
+            applies=True,
+            state=state,
+            observation="Your message may or may not have been delivered.",
+            success=False,
+            effects=[f"message_failed={agent_id}"],
+            blocked=True,
+            mechanic_type="unreliable_communication",
+        )
+
+    # Message succeeded — let it go through normally
+    return no_effect(state)
+
+
 # =============================================================================
 # Handler Registry
 # =============================================================================
@@ -669,6 +785,8 @@ MECHANIC_HANDLERS: Dict[str, MechanicHandler] = {
     "room_restriction": handle_room_restriction,
     "limited_bandwidth": handle_limited_bandwidth,
     "irreversible_action": handle_irreversible_action,
+    "restricted_communication": handle_restricted_communication,
+    "unreliable_communication": handle_unreliable_communication,
 }
 
 

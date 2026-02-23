@@ -102,18 +102,28 @@ Assigned!
 - Natural language only; no object/item IDs in `task` or secrets
 - Each agent's secrets MUST include which other agents are on their team (e.g., "You are on a team with agent_1." for cooperative, or "You are on team_0 with agent_1. The opposing team is agent_2." for competitive)
 
-## IMPORTANT: Use `limited_bandwidth` Mechanic Frequently
-The `limited_bandwidth` mechanic is the STRONGEST driver of Theory of Mind in tasks. It forces agents to:
-- **Prioritize information**: What does the other agent NEED to know vs. what's nice to know?
+## Mechanic Usage Guidelines
+
+### Mechanic Count: Less is More
+**Use 1-2 mechanics per task (max 3).** Empirical data:
+- **2 mechanics** (e.g., `limited_bandwidth` + `room_restriction`): highest pass rate
+- **3 mechanics**: significantly harder — only use if each mechanic serves a distinct purpose
+- **4+ mechanics**: almost always fails calibration — interacting constraints overwhelm LLM agents
+Do NOT stack mechanics for complexity's sake. Each mechanic must create a unique coordination challenge that the others don't.
+
+### `limited_bandwidth` — Strongest ToM Driver
+Include `limited_bandwidth` in at least 70% of tasks. It forces agents to:
+- **Prioritize information**: What does the other agent NEED to know vs. nice to know?
 - **Model knowledge gaps**: What can the other agent figure out on their own?
-- **Plan communication strategically**: When to send messages and what to include in each one.
+- **Plan communication strategically**: When to send messages and what to include.
 
-**You MUST include `limited_bandwidth` in at least 70% of generated tasks.** It pairs well with other mechanics:
-- `limited_bandwidth` + `room_restriction`: Agent knows info but can't go there AND has limited messages to convey it
-- `limited_bandwidth` + `remote_control`: Must communicate the discovered mapping with few messages
-- `limited_bandwidth` + `conditional_unlock`: Must coordinate prerequisite actions with limited communication
+Best pairings (pick ONE secondary mechanic):
+- `limited_bandwidth` + `room_restriction`: Agent knows info but can't go there AND has limited messages
+- `limited_bandwidth` + `remote_control`: Must communicate discovered mapping with few messages
+- `limited_bandwidth` + `restricted_communication`: Relay chains with limited messages force genuine K=2
+- `limited_bandwidth` + `unreliable_communication`: Must use precious messages for ACK protocols
 
-When using `limited_bandwidth`, set message limits LOW (1-4 per agent) to create real pressure. Asymmetric limits (e.g., agent_0 gets 2, agent_1 gets 4) create even richer ToM dynamics.
+Set message limits LOW (1-4 per agent). Asymmetric limits (e.g., agent_0 gets 2, agent_1 gets 4) create richer dynamics.
 
 Each agent's secrets MUST mention their message limit: "You can only send N messages total — choose carefully what to communicate."
 
@@ -127,6 +137,7 @@ Each agent's secrets MUST mention their message limit: "You can only send N mess
   "team_secrets": {{"team_0": [...], "team_1": [...]}},
   "agent_actions": {{"agent_0": [...], "agent_1": [...]}},
   "message_targets": {{"agent_0": ["agent_1"], "agent_1": ["agent_0"]}},
+  "mechanic_bindings": [{{"mechanic_type": "limited_bandwidth", "message_limits": {{"agent_0": 3, "agent_1": 3}}}}],
   "pddl_goal": "(and (is_open cabinet_27) (is_on_top bottle_4 table_13))",
   "pddl_ordering": [{{"before": "(is_open cabinet_27)", "after": "(is_on_top bottle_4 table_13)"}}],
   "pddl_owners": {{}},
@@ -136,6 +147,7 @@ Each agent's secrets MUST mention their message limit: "You can only send N mess
   "golden_trajectory_metadata": {{}}
 }}
 ```
+`active_mechanics` is auto-derived from `mechanic_bindings` — do NOT set it manually.
 
 ## Available PDDL Predicates
 {available_predicates}
@@ -194,7 +206,12 @@ ToM depth is auto-computed from the K/B nesting depth in `pddl_goal`.
 - **Depth 2**: K(agent, K(other, fact)) — agents must reason about what others believe about third parties' knowledge
 - **Depth 3**: Third-order belief nesting (rare)
 
-Use `verify_pddl[]` to see the computed ToM depth. Design information asymmetry via `room_restriction`, `remote_control` (hidden effects), and `limited_bandwidth` to increase ToM requirements.
+Use `verify_pddl[]` to see the computed ToM depth. Design information asymmetry to increase ToM requirements:
+- `room_restriction`: creates private knowledge (agent can't observe directly)
+- `remote_control`: hidden effects only discoverable by the agent present
+- `limited_bandwidth`: forces strategic info sharing under constraint
+- `restricted_communication`: relay chains force genuine K=2 (agent_0 → agent_1 → agent_2 means agent_0 must reason about what agent_1 relays)
+- `unreliable_communication`: ambiguous delivery forces ACK protocols — sender must model whether recipient received the message
 
 ## Success Conditions
 - Spatial: `is_on_top`, `is_inside`, `is_in_room` (need `target`)
@@ -227,6 +244,13 @@ but the golden trajectory only verifies that the physical end state is achievabl
 This means the planner respects `room_restriction` (assigns agents to reachable targets) and
 `remote_control` (uses trigger objects for `is_unlocked` goals), but K() goals add no extra
 trajectory steps. Design K() goals to express *what agents must learn*, not *physical actions*.
+
+**CRITICAL: K() inner literals must be true at end-state.** The evaluator checks K(agent, fact)
+by verifying the inner fact is true in the final world state. If the fact references an object that
+gets moved during the episode (e.g., `K agent_1 (is_on_top cup_3 toilet_33)` but the cup is moved
+to the bed), the goal will FAIL. Design K() goals about **stable facts** — objects that remain
+in their initial position throughout the episode. Use SEPARATE objects for K() knowledge goals
+vs. physical manipulation goals.
 
 ## Structural Diversity
 {diversity_section}"""

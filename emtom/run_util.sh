@@ -28,7 +28,7 @@ print_usage() {
     echo ""
     echo -e "${YELLOW}Commands:${NC}"
     echo "  prompt <task.json>     Show the built prompt for each agent"
-    echo "  dag <task.json>        Visualize the subtask DAG as a PNG graph"
+    echo "  dag <task.json>        Visualize the PDDL goal DAG as a PNG graph"
     echo "  summarize <output_dir> Summarize benchmark results from a run directory"
     echo "  list-tasks             List all curated task files"
     echo ""
@@ -91,7 +91,7 @@ run_dag() {
         ARGS="$ARGS -o $OUTPUT_FILE"
     fi
 
-    python -m emtom.task_gen.dag_visualizer $ARGS
+    python -m emtom.cli.visualize_task $ARGS
 }
 
 run_list_tasks() {

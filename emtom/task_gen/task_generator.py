@@ -166,6 +166,12 @@ class MechanicBinding:
     # room_restriction mechanic fields
     restricted_rooms: Optional[List[str]] = None  # Rooms agents cannot enter
     for_agents: Optional[List[str]] = None  # Which agents are restricted
+    # limited_bandwidth mechanic fields
+    message_limits: Optional[Dict[str, int]] = None  # agent_id -> max messages
+    # restricted_communication mechanic fields
+    allowed_targets: Optional[Dict[str, List[str]]] = None  # agent_id -> allowed recipient agent_ids
+    # unreliable_communication mechanic fields
+    failure_probability: Optional[Any] = None  # float or dict of agent_id -> float
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -184,6 +190,12 @@ class MechanicBinding:
             result["restricted_rooms"] = self.restricted_rooms
         if self.for_agents is not None:
             result["for_agents"] = self.for_agents
+        if self.message_limits is not None:
+            result["message_limits"] = self.message_limits
+        if self.allowed_targets is not None:
+            result["allowed_targets"] = self.allowed_targets
+        if self.failure_probability is not None:
+            result["failure_probability"] = self.failure_probability
         return result
 
     @classmethod
@@ -196,6 +208,9 @@ class MechanicBinding:
             count=data.get("count"),
             restricted_rooms=data.get("restricted_rooms"),
             for_agents=data.get("for_agents"),
+            message_limits=data.get("message_limits"),
+            allowed_targets=data.get("allowed_targets"),
+            failure_probability=data.get("failure_probability"),
         )
 
 

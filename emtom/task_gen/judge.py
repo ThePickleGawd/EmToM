@@ -175,12 +175,12 @@ CRITERIA_DESCRIPTIONS = {
     },
     "task_naturalness": {
         "name": "Task Description Natural Language",
-        "description": "Does the task description use natural language instead of object IDs? Agents use FindObjectTool to resolve descriptions. Check for patterns like toy_airplane_0, microwave_29, table_54.",
-        "rubric": """0.0: Task contains many object IDs (toy_airplane_0, microwave_29) or a 'Grounding note' with IDs
-0.3: Task has some object IDs mixed with natural descriptions
-0.5: Mostly natural language but a few IDs slip through
-0.7: Natural language throughout, minor specificity issues
-1.0: Pure natural language ('the toy airplane', 'the kitchen microwave') - agents discover IDs via FindObjectTool""",
+        "description": "Does the `task` field and `agent_secrets` use natural language instead of object IDs? Agents use FindObjectTool to resolve descriptions. Check ONLY `task` and `agent_secrets` text — NOT `pddl_goal`, `golden_trajectory`, or `pddl_ordering` (these are machine-readable fields that use IDs by design).",
+        "rubric": """0.0: `task` or `agent_secrets` contain many object IDs (toy_airplane_0, microwave_29) or a 'Grounding note' with IDs
+0.3: `task` or `agent_secrets` have some object IDs mixed with natural descriptions
+0.5: Mostly natural language in task/secrets but a few IDs slip through
+0.7: Natural language throughout task/secrets, minor specificity issues
+1.0: Pure natural language in `task` and `agent_secrets` — agents discover IDs via FindObjectTool. (IDs in pddl_goal/trajectory are expected and should not lower this score.)""",
     },
     # Task quality criteria
     "narrative_consistency": {
@@ -203,21 +203,21 @@ CRITERIA_DESCRIPTIONS = {
     },
     "pddl_solvability": {
         "name": "PDDL Solvability & Epistemic Coherence",
-        "description": "Is the task structurally solvable? Are K() goals backed by information asymmetry? Is ordering non-empty for multi-conjunct goals?",
+        "description": "Is the task structurally solvable? Are K() goals backed by CONCRETE information asymmetry? Check: does a mechanic (room_restriction, restricted_communication, unreliable_communication) actually prevent the agent from directly observing the fact? If the agent could just walk to the room and see for themselves, the K() goal is trivially satisfied and should score LOW.",
         "rubric": """0.0: Goal references nonexistent objects or uses invalid predicates
-0.3: Goal is technically valid but trivially satisfied or impossible; K() goals without backing information asymmetry (no room_restriction or hidden mechanic making the knowledge non-trivial)
-0.5: Goal is valid but ordering is empty with multiple conjuncts; K() goals that are trivially satisfied (agent already has direct access)
-0.7: Goal is well-formed, K() goals have backing asymmetry, minor ordering issues
-1.0: Goal is well-formed, all predicates valid, K() goals backed by real information gaps, ordering defines meaningful dependencies, and structurally solvable""",
+0.3: Goal is technically valid but trivially satisfied or impossible; K() goals with NO backing mechanic (agent can directly observe the fact — no room_restriction, no restricted_communication blocking them)
+0.5: Goal is valid but ordering is empty with multiple conjuncts; K() goals where the agent has indirect access (could reach the location with extra steps)
+0.7: Goal is well-formed, K() goals each backed by a specific mechanic that prevents direct observation, minor ordering issues
+1.0: Goal is well-formed, all predicates valid, every K() goal has a concrete blocking mechanic (room_restriction, restricted_communication, etc.), ordering defines meaningful dependencies, structurally solvable""",
     },
     "mechanic_utilization": {
-        "name": "Mechanic Utilization",
-        "description": "Are listed mechanics actually essential to the task? (Empty mechanics list = auto-pass at 1.0)",
-        "rubric": """0.0: Mechanics listed but never triggered or used
-0.3: Mechanics present but could be removed without changing task
-0.5: Mechanics add flavor but aren't essential
-0.7: Mechanics contribute meaningfully
-1.0: Listed mechanics are essential - task wouldn't work without them""",
+        "name": "Mechanic Utilization & Balance",
+        "description": "Are listed mechanics essential AND is the count appropriate? (Empty list = auto-pass at 1.0). Too many mechanics (4+) overwhelm agents — penalize overstacking.",
+        "rubric": """0.0: Mechanics listed but never triggered or used; OR 4+ mechanics creating unmanageable complexity
+0.3: Mechanics present but could be removed; OR 3+ mechanics where some are redundant or don't serve distinct purposes
+0.5: Mechanics add flavor but aren't essential; OR mechanics are essential but there are too many interacting constraints
+0.7: 1-3 well-integrated mechanics that each serve a distinct purpose
+1.0: 1-2 tightly integrated mechanics that are essential — task wouldn't work without them""",
     },
     # Cooperative-specific
     "task_interdependence": {
@@ -368,6 +368,8 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 - Secrets must be natural language (no IDs) and not step-by-step
 - `required` semantics: true(shared), false(optional), "team_X"(win), "agent_X"(subgoal)
 - Category must match `required` usage
+- **Mechanic consistency**: Every mechanic referenced in `task` or `agent_secrets` (e.g., "the handle is reversed", "you have limited messages") MUST have a corresponding entry in `mechanic_bindings`. If secrets describe constraints that aren't in bindings, the simulator won't enforce them.
+- **K() goal backing**: Every `K()` goal in `pddl_goal` must be backed by a mechanic that prevents the agent from directly observing the fact (e.g., `room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). If the agent could just walk there and see, the K() goal is fake.
 
 ## Evaluation Criteria
 Score each criterion from 0.0 to 1.0.
@@ -433,8 +435,8 @@ This task is designed for the STRONGEST models. Expect high complexity:
 - **Agent necessity**: Each agent should be truly indispensable with unique capabilities or knowledge.
 - **Task interdependence / goal opposition / subgoal tension**: Complex multi-step dependencies, cascading information needs, or deep strategic considerations.
 - **Secret quality**: Secrets should create genuine reasoning challenges — layered information, indirect clues, or strategic deception opportunities.
-- **Mechanic utilization**: Creative use of multiple mechanics that interact with each other.
-- **Overall**: Reward tasks that would genuinely challenge top-tier AI models. Simple tasks should score LOW on complexity-related criteria.""",
+- **Mechanic utilization**: 2-3 well-integrated mechanics maximum. Complexity should come from deeper interactions between fewer mechanics, NOT from stacking 4+ mechanics. Penalize overloaded tasks.
+- **Overall**: Reward tasks that would genuinely challenge top-tier AI models through depth, not breadth of mechanics.""",
 }
 
 
@@ -486,10 +488,6 @@ class Judge:
 
     # Priority criteria - suggestions for these appear first
     PRIORITY_CRITERIA = ["agent_necessity", "secret_quality"]
-
-    # Thresholds (lowered for faster generation)
-    OVERALL_THRESHOLD = 0.6
-    MIN_CRITERION_THRESHOLD = 0.4
 
     # Default council models
     DEFAULT_MODELS = ["opus", "gpt-5.2"]
