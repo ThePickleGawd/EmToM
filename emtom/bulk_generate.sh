@@ -116,7 +116,7 @@ TOTAL_PROCESSES=$((NUM_GPUS * PER_GPU))
 # Create log and task directories
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
 LOG_DIR="outputs/bulk_gen_logs/${TIMESTAMP}-bulk-generate"
-TASK_DIR="outputs/bulk_gen_tasks/${TIMESTAMP}-bulk-generate"
+TASK_DIR="data/emtom/tasks"
 mkdir -p "$LOG_DIR"
 mkdir -p "$TASK_DIR"
 
