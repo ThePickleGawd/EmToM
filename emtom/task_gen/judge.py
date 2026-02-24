@@ -224,12 +224,12 @@ CRITERIA_DESCRIPTIONS = {
     },
     "pddl_solvability": {
         "name": "PDDL Solvability & Epistemic Coherence",
-        "description": "Is the task structurally solvable from `problem_pddl` (or legacy goal fields): are predicates valid, are K() goals backed by CONCRETE information asymmetry, and is the goal logically coherent for the category? A mechanic (room_restriction, restricted_communication, unreliable_communication) must actually prevent direct observation. If the agent could just walk there and see, the K() goal is trivially satisfied and should score LOW.",
+        "description": "Is the task structurally solvable from `problem_pddl`: are predicates valid, is the goal logically coherent for the category? For K() goals specifically: (1) is there a concrete blocking mechanic preventing direct observation, AND (2) does the K() knowledge serve as a prerequisite for a physical goal in the same task? K() should express 'agent must learn X in order to accomplish Y', not just 'agent knows X' with no purpose.",
         "rubric": """0.0: Goal references nonexistent objects or uses invalid predicates
-0.3: Goal is technically valid but trivially satisfied or impossible; K() goals with NO backing mechanic (agent can directly observe the fact — no room_restriction, no restricted_communication blocking them)
-0.5: Goal is valid but category logic is weak (e.g., competitive objective not clearly opposing); K() goals where the agent has indirect access (could reach the location with extra steps)
-0.7: Goal is well-formed, K() goals each backed by a specific mechanic that prevents direct observation, minor ordering issues
-1.0: Goal is well-formed, all predicates valid, every K() goal has a concrete blocking mechanic (room_restriction, restricted_communication, etc.), and category objective is structurally coherent and solvable""",
+0.3: Goal is technically valid but trivially satisfied or impossible; K() goals with NO backing mechanic OR no connection to any physical goal (decorative K())
+0.5: Goal is valid but category logic is weak; K() goals have a blocking mechanic but the knowledge doesn't clearly enable any physical goal
+0.7: Goal is well-formed, K() goals each backed by a mechanic AND linked to a physical goal they enable, minor issues
+1.0: Goal is well-formed, every K() goal has a blocking mechanic AND is a clear information prerequisite for a physical goal — the agent needs this knowledge to coordinate or act""",
     },
     "mechanic_utilization": {
         "name": "Mechanic Utilization & Balance",

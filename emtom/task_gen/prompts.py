@@ -260,11 +260,30 @@ Use `problem_pddl` as the single goal source. It must contain a full PDDL proble
 - Run `verify_pddl[]` to check solvability and computed ToM depth
 
 ## When to Use K() Goals
-- Use `(K agent_X ...)` when agent_X cannot directly observe the fact (room_restriction, hidden mechanic) AND the task requires them to learn it
-- K() goals naturally express Theory of Mind: the agent must acquire knowledge through communication or inference
-- K() goals are OPTIONAL. Prefer K=0 unless you have a clear, enforceable observability barrier.
-- Never use K() if the target agent can physically navigate to observe the fact directly.
-- For each K() goal, include the exact mechanic that blocks direct observation (usually `room_restriction`).
+K() goals describe **information prerequisites** — knowledge an agent must acquire
+before they can accomplish a physical goal. For every K() goal, there must be a
+corresponding physical goal that DEPENDS on that knowledge.
+
+Pattern: If a physical goal requires agent_X to act on an object they cannot observe
+(due to room_restriction, hidden mechanic, etc.), add a K() goal for the knowledge
+they need to acquire first.
+
+**Good K()** — knowledge enables a physical action:
+- Physical goal: `(is_on_top trophy_1 table_8)` (agent_0 must place trophy on table)
+- Agent_0 is room-restricted from the kitchen where trophy_1 starts
+- K() goal: `(K agent_0 (is_in_room trophy_1 kitchen_0))` — agent_0 must learn
+  where the trophy is (via communication from agent_1) before they can plan retrieval
+
+**Bad K()** — knowledge serves no purpose:
+- `(K agent_0 (is_open safe_3))` — why does agent_0 need to *know* the safe is open?
+  No downstream action depends on this knowledge.
+- `(K agent_0 (is_on_top cushion_1 table_15))` — decorative, not a prerequisite
+
+**Rules:**
+- Every K() goal must pair with a physical goal that depends on that knowledge
+- Never use K() on facts the agent can directly observe (no blocking mechanic)
+- K() is NOT enforced for pass/fail — it annotates the ToM structure of the task
+- The evaluator unwraps K() to check the inner literal in the final world state
 
 ### Example: K=0 (no epistemic reasoning)
 ```json
@@ -273,13 +292,15 @@ Use `problem_pddl` as the single goal source. It must contain a full PDDL proble
 
 ### Example: K=1 (agent must acquire knowledge via communication)
 ```json
-"problem_pddl": "(define (problem task_k1)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent)\\n  (:init)\\n  (:goal (and (K agent_0 (is_open safe_3)) (is_open safe_3) (is_on_top trophy_1 table_8)))\\n)"
+"problem_pddl": "(define (problem task_k1)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent)\\n  (:init)\\n  (:goal (and (K agent_0 (is_in_room trophy_1 kitchen_0)) (is_on_top trophy_1 table_8)))\\n)"
 ```
+Scenario: agent_0 is restricted from kitchen. agent_1 observes trophy_1 in kitchen and communicates location. agent_0 uses this knowledge to coordinate retrieval.
 
 ### Example: K=2 (agent must reason about another's beliefs)
 ```json
-"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 agent_2 - agent)\\n  (:init)\\n  (:goal (and (K agent_0 (K agent_2 (is_open safe_3))) (is_open safe_3) (is_on_top gem_1 table_8)))\\n)"
+"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 agent_2 - agent)\\n  (:init)\\n  (:goal (and (K agent_0 (K agent_2 (is_in_room gem_1 bedroom_0))) (is_on_top gem_1 table_8)))\\n)"
 ```
+Scenario: 3-agent relay. agent_0 is restricted from bedroom. agent_2 can observe bedroom but can only communicate with agent_1 (restricted_communication). agent_0 needs to know that agent_2 has learned the gem's location — second-order belief required to coordinate the relay.
 
 ## Theory of Mind
 ToM depth is auto-computed from the K/B nesting depth in `problem_pddl` `:goal`.
