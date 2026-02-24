@@ -207,6 +207,39 @@ def _build_target_to_room(scene_data: Optional[Any]) -> Dict[str, str]:
     return target_to_room
 
 
+def _iter_formula_nodes(formula: Any):
+    """Depth-first walk of DSL formulas."""
+    if formula is None:
+        return
+    yield formula
+    inner = getattr(formula, "inner", None)
+    if inner is not None:
+        yield from _iter_formula_nodes(inner)
+    operand = getattr(formula, "operand", None)
+    if operand is not None:
+        yield from _iter_formula_nodes(operand)
+    operands = getattr(formula, "operands", None)
+    if isinstance(operands, tuple):
+        for op in operands:
+            yield from _iter_formula_nodes(op)
+
+
+def _collect_literals(formula: Any) -> List[Any]:
+    literals: List[Any] = []
+    for node in _iter_formula_nodes(formula):
+        if node.__class__.__name__ == "Literal":
+            literals.append(node)
+    return literals
+
+
+def _collect_epistemic_goals(formula: Any) -> List[Any]:
+    goals: List[Any] = []
+    for node in _iter_formula_nodes(formula):
+        if node.__class__.__name__ in {"Knows", "Believes"}:
+            goals.append(node)
+    return goals
+
+
 def validate_room_restriction_trajectory(
     task_data: Dict[str, Any],
     scene_data: Optional[Any],
@@ -285,6 +318,26 @@ def validate_blocking_spec(
                 errors.append("cooperative task should not include 'teams'")
             if task_data.get("team_secrets"):
                 errors.append("cooperative task should not include 'team_secrets'")
+        if category == "competitive":
+            teams = task_data.get("teams")
+            if not isinstance(teams, dict) or len(teams) < 2:
+                errors.append("competitive task must define at least two teams in 'teams'.")
+            else:
+                assigned: Set[str] = set()
+                for team_id, members in teams.items():
+                    if not isinstance(team_id, str) or not team_id:
+                        errors.append("teams must have non-empty string team IDs")
+                        continue
+                    if not isinstance(members, list) or not members:
+                        errors.append(f"teams['{team_id}'] must be a non-empty list of agent IDs")
+                        continue
+                    for member in members:
+                        if not isinstance(member, str):
+                            errors.append(f"teams['{team_id}'] contains non-string member '{member}'")
+                            continue
+                        if member in assigned:
+                            errors.append(f"Agent '{member}' appears in multiple teams")
+                        assigned.add(member)
 
     # ------------------------------------------------------------------
     # Template placeholder artifacts
@@ -318,6 +371,18 @@ def validate_blocking_spec(
                     f"{field_name} contains invalid agent ID '{agent_id}'. "
                     f"Valid IDs: {sorted(valid_agent_ids)}"
                 )
+    if category == "competitive":
+        teams = task_data.get("teams")
+        if isinstance(teams, dict):
+            for team_id, members in teams.items():
+                if not isinstance(members, list):
+                    continue
+                for member in members:
+                    if isinstance(member, str) and member not in valid_agent_ids:
+                        errors.append(
+                            f"teams['{team_id}'] contains invalid agent ID '{member}'. "
+                            f"Valid IDs: {sorted(valid_agent_ids)}"
+                        )
 
     # ------------------------------------------------------------------
     # Message targets validation
@@ -369,6 +434,10 @@ def validate_blocking_spec(
     if mechanic_bindings is not None and not isinstance(mechanic_bindings, list):
         errors.append("mechanic_bindings must be a list")
         mechanic_bindings = []
+    if isinstance(mechanic_bindings, list) and len(mechanic_bindings) > 3:
+        errors.append(
+            f"Too many mechanics ({len(mechanic_bindings)}). Use at most 3 mechanics per task."
+        )
 
     if isinstance(active_mechanics, list):
         dict_like = sum(1 for x in active_mechanics if isinstance(x, dict))
@@ -469,6 +538,31 @@ def validate_blocking_spec(
                     f"mechanic_bindings[{i}] ({mechanic_type}): requires_item='{req_item}' not found in items."
                 )
 
+    mechanic_types = {
+        b.get("mechanic_type")
+        for b in (mechanic_bindings or [])
+        if isinstance(b, dict) and isinstance(b.get("mechanic_type"), str)
+    }
+    if raw_mt and "restricted_communication" not in mechanic_types:
+        errors.append(
+            "message_targets is set but restricted_communication mechanic is missing. "
+            "Add restricted_communication so messaging constraints are simulator-enforced."
+        )
+    if category in {"cooperative", "mixed"} and num_agents > 1:
+        asymmetry_mechanics = {
+            "room_restriction",
+            "restricted_communication",
+            "unreliable_communication",
+            "conditional_unlock",
+            "remote_control",
+        }
+        if mechanic_types and not (mechanic_types & asymmetry_mechanics):
+            errors.append(
+                "cooperative/mixed tasks need at least one asymmetry mechanic "
+                "(room_restriction, restricted_communication, unreliable_communication, "
+                "conditional_unlock, or remote_control)."
+            )
+
     # ------------------------------------------------------------------
     # PDDL validation (single-format + transitional formats)
     # ------------------------------------------------------------------
@@ -478,6 +572,7 @@ def validate_blocking_spec(
     has_problem_pddl = isinstance(problem_pddl, str) and bool(problem_pddl.strip())
     has_goals = isinstance(goals, list) and bool(goals)
     has_pddl_goal = isinstance(pddl_goal, str) and bool(pddl_goal)
+    parsed_problem = None
 
     if has_problem_pddl:
         # Canonical format should not be mixed with legacy goal fields.
@@ -514,6 +609,63 @@ def validate_blocking_spec(
             spec = GoalSpec.from_legacy(parsed_problem.goal_pddl, [], {})
             spec_errors = spec.validate(EMTOM_DOMAIN, valid_agent_ids)
             errors.extend(spec_errors)
+
+            # Category-level structural lint for competitive goals.
+            goal_lower = parsed_problem.goal_pddl.lower()
+            has_or = any(n.__class__.__name__ == "Or" for n in _iter_formula_nodes(parsed_problem.goal_formula))
+            has_not = "(not" in goal_lower
+
+            # has_most/has_at_least are not fully modeled in deterministic PDDL planning.
+            if "has_most" in goal_lower or "has_at_least" in goal_lower:
+                errors.append(
+                    "problem_pddl goal uses has_most/has_at_least, which are not supported for "
+                    "deterministic PDDL solvability checks. Use explicit object-state opposition "
+                    "with concrete literals (e.g., OR of mutually exclusive branches)."
+                )
+
+            if category == "competitive":
+                if not has_or:
+                    errors.append(
+                        "competitive problem_pddl goal must encode opposed win branches "
+                        "(e.g., (or (and team_0_win (not team_1_win)) "
+                        "(and team_1_win (not team_0_win))))."
+                    )
+                if has_or and not has_not:
+                    errors.append(
+                        "competitive OR goal lacks explicit exclusivity. Add (not ...) constraints "
+                        "so exactly one team can satisfy a winning branch."
+                    )
+
+            # Epistemic-goal backing lint: K/B goals need concrete observation barriers.
+            epistemic_goals = _collect_epistemic_goals(parsed_problem.goal_formula)
+            if epistemic_goals and scene_data:
+                restrictions = _extract_room_restrictions(task_data)
+                for init_lit in parsed_problem.init_literals:
+                    if getattr(init_lit, "predicate", "") == "is_restricted" and len(getattr(init_lit, "args", ())) >= 2:
+                        agent = init_lit.args[0]
+                        room = init_lit.args[1]
+                        if isinstance(agent, str) and isinstance(room, str):
+                            restrictions.setdefault(agent, set()).add(room)
+
+                target_to_room = _build_target_to_room(scene_data)
+                for epi in epistemic_goals:
+                    agent = getattr(epi, "agent", None)
+                    if not isinstance(agent, str) or agent not in valid_agent_ids:
+                        continue
+                    inner_literals = _collect_literals(getattr(epi, "inner", None))
+                    relevant_rooms: Set[str] = set()
+                    for lit in inner_literals:
+                        for arg in getattr(lit, "args", ()):
+                            room = target_to_room.get(arg)
+                            if room:
+                                relevant_rooms.add(room)
+                    if relevant_rooms:
+                        blocked = any(room in restrictions.get(agent, set()) for room in relevant_rooms)
+                        if not blocked:
+                            errors.append(
+                                f"K/B goal for {agent} is not backed by a concrete room_restriction barrier "
+                                f"(relevant rooms: {sorted(relevant_rooms)})."
+                            )
         except Exception as e:
             errors.append(f"problem_pddl validation error: {e}")
 
@@ -685,6 +837,12 @@ def validate_blocking_spec(
                     f"golden_trajectory[{step_idx}].actions[{action_idx}] unknown action '{action_name}'"
                 )
                 continue
+            allowed_by_agent = task_data.get("agent_actions", {}).get(agent)
+            if isinstance(allowed_by_agent, list) and action_name not in allowed_by_agent:
+                errors.append(
+                    f"golden_trajectory[{step_idx}].actions[{action_idx}] uses '{action_name}' "
+                    f"for {agent}, but it is not in agent_actions[{agent}]"
+                )
 
             # Open/Close on non-articulated furniture is always invalid.
             if action_name in {"Open", "Close"} and args and furniture and articulated:

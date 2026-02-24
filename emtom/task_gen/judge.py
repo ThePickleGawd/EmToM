@@ -70,6 +70,8 @@ class BenchmarkRollout:
     action_history: List[Dict[str, Any]]
     subtask_status: Dict[str, bool]
     agent_traces: Dict[str, str]  # agent_id -> trace text
+    snapshot_spec_hash: Optional[str] = None
+    snapshot_task: Optional[str] = None
 
     @classmethod
     def from_trajectory_dir(cls, trajectory_dir: Path) -> Optional["BenchmarkRollout"]:
@@ -118,6 +120,22 @@ class BenchmarkRollout:
             except Exception:
                 pass
 
+        # Load snapshot metadata when present (used to detect stale rollouts).
+        snapshot_spec_hash = None
+        snapshot_task = None
+        snapshot_file = trajectory_dir / "task_snapshot.json"
+        if snapshot_file.exists():
+            try:
+                snapshot = json.loads(snapshot_file.read_text())
+                raw_hash = snapshot.get("spec_hash")
+                if isinstance(raw_hash, str) and raw_hash.strip():
+                    snapshot_spec_hash = raw_hash.strip()
+                raw_task = snapshot.get("task")
+                if isinstance(raw_task, str) and raw_task.strip():
+                    snapshot_task = raw_task.strip()
+            except Exception:
+                pass
+
         return cls(
             success=success,
             steps=steps,
@@ -126,6 +144,8 @@ class BenchmarkRollout:
             action_history=action_history,
             subtask_status=subtask_status,
             agent_traces=agent_traces,
+            snapshot_spec_hash=snapshot_spec_hash,
+            snapshot_task=snapshot_task,
         )
 
 
@@ -679,8 +699,28 @@ class Judge:
         rollout = None
         if trajectory_dir:
             rollout = BenchmarkRollout.from_trajectory_dir(Path(trajectory_dir))
-            if rollout and self.verbose:
-                print(f"[Judge] Loaded rollout: success={rollout.success}, {rollout.steps} steps")
+            if rollout:
+                current_spec_hash = None
+                try:
+                    from emtom.pddl.planner import compute_task_spec_hash
+
+                    current_spec_hash = compute_task_spec_hash(task_dict)
+                except Exception:
+                    current_spec_hash = None
+
+                # Only trust rollout if snapshot metadata exists and matches current spec.
+                if not rollout.snapshot_spec_hash:
+                    if self.verbose:
+                        print("[Judge] Ignoring rollout: missing task_snapshot.json/spec_hash metadata")
+                    rollout = None
+                elif current_spec_hash and rollout.snapshot_spec_hash != current_spec_hash:
+                    if self.verbose:
+                        print(
+                            "[Judge] Ignoring stale rollout: snapshot spec hash does not match current task"
+                        )
+                    rollout = None
+                elif self.verbose:
+                    print(f"[Judge] Loaded rollout: success={rollout.success}, {rollout.steps} steps")
 
         # Evaluate with all models in parallel
         from concurrent.futures import ThreadPoolExecutor, as_completed

@@ -36,9 +36,30 @@ def compile_task(
         parsed = parse_problem_pddl(task_problem_pddl)
         problem = parsed.to_problem()
 
+        # Canonical grounding for inline problems:
+        # keep authored goal/init, but normalize object inventory from
+        # scene + task metadata so solver checks don't fail on omitted
+        # declarations in :objects.
+        if scene_data:
+            for room in scene_data.get("rooms", []):
+                if isinstance(room, str) and room:
+                    problem.objects[room] = "room"
+            for furn in scene_data.get("furniture", []):
+                if isinstance(furn, str) and furn:
+                    problem.objects[furn] = "furniture"
+            for obj in scene_data.get("objects", []):
+                if isinstance(obj, str) and obj:
+                    problem.objects[obj] = "object"
+
+        for item_def in (task.items or []):
+            if isinstance(item_def, dict):
+                item_id = item_def.get("item_id")
+                if isinstance(item_id, str) and item_id:
+                    problem.objects[item_id] = "item"
+
         # Ensure declared agent cardinality is reflected in objects.
         for i in range(task.num_agents):
-            problem.objects.setdefault(f"agent_{i}", "agent")
+            problem.objects[f"agent_{i}"] = "agent"
         return problem
 
     objects: Dict[str, str] = {}

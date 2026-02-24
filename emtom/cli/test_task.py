@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -233,6 +234,25 @@ def main():
                 f.write(f"\n=== ACTION HISTORY ===\n")
                 for record in action_history:
                     f.write(f"[T{record.get('turn', '?')}] {record.get('agent', '?')}: {record.get('action', '?')}\n")
+
+            # Persist task snapshot metadata so judge can reject stale rollouts.
+            try:
+                from emtom.pddl.planner import compute_task_spec_hash
+
+                snapshot = {
+                    "task_id": task_data.get("task_id"),
+                    "title": task_data.get("title"),
+                    "task": task_data.get("task"),
+                    "scene_id": task_data.get("scene_id"),
+                    "episode_id": task_data.get("episode_id"),
+                    "spec_hash": compute_task_spec_hash(task_data),
+                    "saved_at": datetime.now().isoformat(),
+                }
+                with open(trajectory_dir / "task_snapshot.json", "w") as f:
+                    json.dump(snapshot, f, indent=2)
+            except Exception:
+                # Rollout trace remains usable even if snapshot persistence fails.
+                pass
 
         print_result(success({
             "steps": results.get("steps", 0),

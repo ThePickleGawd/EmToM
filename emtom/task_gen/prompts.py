@@ -75,8 +75,9 @@ Assigned!
 - Each team member should contribute - divide responsibilities within teams
 - Balance matters: if teams are uneven in size, give smaller team easier objectives
 - Define `teams` mapping and encode opposition directly in `problem_pddl :goal`
-  - Example patterns: `(or (has_most team_0 item_gold_coin) (has_most team_1 item_gold_coin))`
-  - Or explicit mutually-exclusive literals using `(or ...)` / `(not ...)`
+  - REQUIRED structure: explicit opposing win branches in `(or (and team_0_win ...) (and team_1_win ...))`
+  - Include exclusivity: each branch must negate opponent win literals so exactly one branch can hold
+  - Bad pattern (reject): one shared `(and ...)` that both teams can satisfy together
 - Keep the public `task` symmetric; do NOT reveal each team's target container
 
 **MIXED** - Cooperation with hidden conflicts
@@ -92,6 +93,7 @@ Assigned!
 - Maps agent_id to a list of allowed recipient agent_ids
 - Agents NOT listed in message_targets have no restrictions
 - Pairs well with competitive tasks to prevent cross-team communication
+- If you set `message_targets`, also add a `restricted_communication` mechanic binding that encodes the same graph.
 - Example: `"message_targets": {{"agent_0": ["agent_1"], "agent_2": ["agent_3"]}}` — team members can only message their own team
 
 ## Core Rules
@@ -104,6 +106,10 @@ Assigned!
 - Secrets create asymmetry; agents must communicate to combine clues
 - Natural language only; no object/item IDs in `task` or secrets
 - Each agent's secrets MUST include which other agents are on their team (e.g., "You are on a team with agent_1." for cooperative, or "You are on team_0 with agent_1. The opposing team is agent_2." for competitive)
+- Do NOT use positive `is_inside` goals unless the object is already inside in `:init` and meant to remain there. Prefer `is_on_top` for movable-placement goals.
+- Do NOT use `has_most` or `has_at_least` in `problem_pddl` goals; they are not part of deterministic PDDL solvability checks in this pipeline.
+- Before running `judge[]`, ensure `verify_pddl[]` passes and no goal references unknown scene IDs.
+- Avoid escaped `\\n` heredoc one-liners in `bash[...]`; prefer safe `python3 -c "..."` JSON edits for reliability.
 
 ## Mechanic Usage Guidelines
 
@@ -115,7 +121,7 @@ Assigned!
 Do NOT stack mechanics for complexity's sake. Each mechanic must create a unique coordination challenge that the others don't.
 
 ### `limited_bandwidth` — Strongest ToM Driver
-Include `limited_bandwidth` in at least 70% of tasks. It forces agents to:
+Use `limited_bandwidth` only when communication scarcity is truly required. It forces agents to:
 - **Prioritize information**: What does the other agent NEED to know vs. nice to know?
 - **Model knowledge gaps**: What can the other agent figure out on their own?
 - **Plan communication strategically**: When to send messages and what to include.
@@ -129,6 +135,12 @@ Best pairings (pick ONE secondary mechanic):
 Set message limits LOW (1-4 per agent). Asymmetric limits (e.g., agent_0 gets 2, agent_1 gets 4) create richer dynamics.
 
 Each agent's secrets MUST mention their message limit: "You can only send N messages total — choose carefully what to communicate."
+
+### Agent-necessity hard check
+Design goals so no single agent can complete all required physical literals.
+- Use room-restriction/access asymmetry to split required actions.
+- In competitive tasks, each team should need both members.
+- If deterministic trajectory would assign one active agent and others Wait, redesign before judge.
 
 ## Task JSON Structure
 ```json
@@ -158,7 +170,7 @@ Use `problem_pddl` as the single goal source. It must contain a full PDDL proble
 - Single goal example: `(:goal (is_open cabinet_27))`
 - Conjunction: `(:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))`
 - Negation: `(:goal (and (not (is_open drawer_5))))`
-- Epistemic: `(:goal (and (K agent_0 (is_inside key_1 cabinet_27))))`
+- Epistemic: `(:goal (and (K agent_0 (is_open safe_3))))`
 - Nested epistemic: `(:goal (and (K agent_0 (K agent_1 (is_open safe_3)))))`
 - `pddl_domain` must match the `:domain` value in `problem_pddl`
 - Do NOT set `goals`, `pddl_goal`, `subtasks`, or `success_condition` when using `problem_pddl`
@@ -168,8 +180,9 @@ Use `problem_pddl` as the single goal source. It must contain a full PDDL proble
 ## When to Use K() Goals
 - Use `(K agent_X ...)` when agent_X cannot directly observe the fact (room_restriction, hidden mechanic) AND the task requires them to learn it
 - K() goals naturally express Theory of Mind: the agent must acquire knowledge through communication or inference
-- Every task SHOULD include at least one K() goal when there is information asymmetry (room restrictions, hidden mechanics)
-- K() goals should appear with other goals listing them in their `after` field
+- K() goals are OPTIONAL. Prefer K=0 unless you have a clear, enforceable observability barrier.
+- Never use K() if the target agent can physically navigate to observe the fact directly.
+- For each K() goal, include the exact mechanic that blocks direct observation (usually `room_restriction`).
 
 ### Example: K=0 (no epistemic reasoning)
 ```json
@@ -178,12 +191,12 @@ Use `problem_pddl` as the single goal source. It must contain a full PDDL proble
 
 ### Example: K=1 (agent must acquire knowledge via communication)
 ```json
-"problem_pddl": "(define (problem task_k1)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent)\\n  (:init)\\n  (:goal (and (K agent_0 (is_inside key_1 cabinet_27)) (is_open safe_3) (is_on_top trophy_1 table_8)))\\n)"
+"problem_pddl": "(define (problem task_k1)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent)\\n  (:init)\\n  (:goal (and (K agent_0 (is_open safe_3)) (is_open safe_3) (is_on_top trophy_1 table_8)))\\n)"
 ```
 
 ### Example: K=2 (agent must reason about another's beliefs)
 ```json
-"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 agent_2 - agent)\\n  (:init)\\n  (:goal (and (K agent_0 (K agent_2 (is_inside gem_1 safe_3))) (is_on_top gem_1 table_8)))\\n)"
+"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 agent_2 - agent)\\n  (:init)\\n  (:goal (and (K agent_0 (K agent_2 (is_open safe_3))) (is_open safe_3) (is_on_top gem_1 table_8)))\\n)"
 ```
 
 ## Theory of Mind
@@ -201,7 +214,7 @@ Use `verify_pddl[]` to see the computed ToM depth. Design information asymmetry 
 - `unreliable_communication`: ambiguous delivery forces ACK protocols — sender must model whether recipient received the message
 
 ## Success Conditions
-- Spatial: `is_on_top`, `is_inside`, `is_in_room` (need `target`)
+- Spatial: `is_on_top`, `is_in_room` (need `target`). Use `is_inside` only for stable/initialized containment.
 - Unary: `is_open`, `is_closed`, `is_unlocked`
 - Agent: `has_item` (entity=agent, target=item)
 

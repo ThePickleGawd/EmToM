@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -37,6 +38,7 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
         CLIResult with data keys: valid, solvable, tom_level, tom_reasoning,
         goal_description, num_conjuncts, solve_time, pddl_goal.
     """
+    total_start = time.perf_counter()
     task_path = Path(task_file)
     if not task_path.exists():
         return failure(f"Task file not found: {task_file}")
@@ -57,6 +59,7 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     pddl_goal = task_data.get("pddl_goal")
     parsed_problem = None
 
+    parse_start = time.perf_counter()
     if isinstance(problem_pddl, str) and problem_pddl.strip():
         try:
             parsed_problem = parse_problem_pddl(problem_pddl)
@@ -93,6 +96,7 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
             return failure(f"Invalid PDDL goal syntax: {e}")
     else:
         return failure("No problem_pddl, goals array, or pddl_goal field in task.")
+    parse_time_s = time.perf_counter() - parse_start
 
     # Validate goal spec against domain
     num_agents = task_data.get("num_agents", 2)
@@ -124,10 +128,14 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     from emtom.pddl.epistemic import ObservabilityModel
     from emtom.pddl.solver import PDKBSolver
 
+    compile_start = time.perf_counter()
     problem = compile_task(task, scene_data)
+    compile_time_s = time.perf_counter() - compile_start
     solver = PDKBSolver()
     observability = ObservabilityModel.from_task_with_scene(task, scene_data)
+    solve_start = time.perf_counter()
     result = solver.solve(EMTOM_DOMAIN, problem, observability)
+    solve_wall_time_s = time.perf_counter() - solve_start
 
     if not result.solvable:
         return failure(
@@ -156,6 +164,12 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
         "goal_description": description,
         "num_conjuncts": len(goal_spec),
         "solve_time": result.solve_time,
+        "timing": {
+            "parse_time_ms": round(parse_time_s * 1000, 3),
+            "compile_time_ms": round(compile_time_s * 1000, 3),
+            "solve_time_ms": round(solve_wall_time_s * 1000, 3),
+            "total_time_ms": round((time.perf_counter() - total_start) * 1000, 3),
+        },
     }
     if result.trivial_k_goals:
         output["trivial_k_warnings"] = (

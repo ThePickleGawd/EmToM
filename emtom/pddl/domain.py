@@ -220,7 +220,12 @@ EMTOM_ACTIONS = [
         preconditions=Literal("is_held_by", ("?x", "?a")),
         effects=[
             Effect(Literal("is_held_by", ("?x", "?a"), negated=True)),
+            # Domain-level abstraction: runtime Place can realize either
+            # on-top or within placement depending on relation argument.
+            # We expose both so solvability checks remain aligned with
+            # task-level goals authored in problem_pddl.
             Effect(Literal("is_on_top", ("?x", "?f"))),
+            Effect(Literal("is_inside", ("?x", "?f"))),
         ],
         observability="full",
     ),

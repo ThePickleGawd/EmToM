@@ -149,7 +149,7 @@ class TaskGeneratorAgent:
                 template = json.load(f)
             # Set num_agents to max (LLM will choose within range)
             template["num_agents"] = self.agents_max
-            default_actions = ["Navigate", "Open", "Pick", "Place", "UseItem", "Communicate", "Wait"]
+            default_actions = ["Navigate", "Open", "Close", "Pick", "Place", "UseItem", "Communicate", "Wait"]
             template["agent_secrets"] = {
                 f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
                 for i in range(self.agents_max)
@@ -488,6 +488,7 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
 
         # Main ReAct loop
         llm_error_streak = 0
+        max_llm_error_streak = 8
         while len(self.submitted_tasks) < num_tasks_target and not self.failed:
             self.iteration_count += 1
 
@@ -513,6 +514,17 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
                 backoff_s = min(30, 2 ** min(llm_error_streak, 5))
                 self._log(f"LLM error: {e}")
                 self._log(f"Transient LLM failure streak={llm_error_streak}; backing off {backoff_s}s and retrying without consuming iteration.")
+                if llm_error_streak >= max_llm_error_streak:
+                    self.failed = True
+                    self.fail_reason = (
+                        "Repeated LLM API/network failures "
+                        f"({llm_error_streak} consecutive errors)."
+                    )
+                    self._log(
+                        "Stopping generation due to persistent LLM connectivity failures. "
+                        "Please verify API/network availability and retry."
+                    )
+                    break
                 self.messages.append({
                     "role": "user",
                     "content": f"Error getting LLM response: {e}. Please try again."
@@ -645,7 +657,7 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
         # Only generate placeholder agent fields when not using a seed task
         if not self.seed_task:
             # Include Find* tools so agents can discover objects at runtime instead of hardcoded IDs
-            default_actions = ["Navigate", "Open", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
+            default_actions = ["Navigate", "Open", "Close", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
             task["agent_secrets"] = {
                 f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
                 for i in range(num_agents)
