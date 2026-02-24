@@ -28,6 +28,11 @@ from emtom.pddl.goal_checker import PDDLGoalChecker
 from emtom.pddl.belief_tracker import BeliefStateTracker
 from emtom.pddl.describe import describe_task
 from emtom.pddl.goal_spec import GoalEntry, GoalSpec
+from emtom.pddl.problem_pddl import (
+    ParsedProblemPDDL,
+    parse_problem_pddl,
+    extract_goal_from_problem_pddl,
+)
 
 __all__ = [
     "Type",
@@ -52,4 +57,7 @@ __all__ = [
     "describe_task",
     "GoalEntry",
     "GoalSpec",
+    "ParsedProblemPDDL",
+    "parse_problem_pddl",
+    "extract_goal_from_problem_pddl",
 ]

@@ -344,9 +344,62 @@ def verify_task(
     # Shared deterministic checks used in generation path.
     errors.extend(validate_blocking_spec(task, scene_data))
 
-    # PDDL goal validation (new format)
+    # PDDL goal validation (single-format and legacy)
+    problem_pddl = task.get("problem_pddl")
     pddl_goal = task.get("pddl_goal")
-    if isinstance(pddl_goal, str) and pddl_goal:
+
+    if isinstance(problem_pddl, str) and problem_pddl.strip():
+        try:
+            from emtom.pddl.dsl import Literal, EpistemicFormula
+            from emtom.pddl.problem_pddl import parse_problem_pddl
+
+            parsed_problem = parse_problem_pddl(problem_pddl)
+            goal = parsed_problem.goal_formula
+            conjuncts = goal.flatten()
+
+            # Extract inner Literal nodes from conjuncts (unwrap K/B wrappers)
+            def _extract_literals(formula):
+                """Unwrap epistemic layers to get leaf Literal nodes."""
+                if isinstance(formula, Literal):
+                    return [formula]
+                if isinstance(formula, EpistemicFormula):
+                    return _extract_literals(formula.inner)
+                return []
+
+            literals = []
+            for c in conjuncts:
+                literals.extend(_extract_literals(c))
+
+            # Check goal predicate names are valid
+            from emtom.evaluation import PARTNR_PREDICATES, EMTOM_PREDICATES
+            from emtom.state.manager import GameStateManager
+            supported = PARTNR_PREDICATES | EMTOM_PREDICATES | GameStateManager.GAME_STATE_PREDICATES
+            for lit in literals:
+                if lit.predicate not in supported:
+                    errors.append(f"PDDL goal uses unsupported predicate '{lit.predicate}'")
+
+            # Check object references
+            if scene_data:
+                scene_ids = set()
+                for key in ("rooms", "furniture", "objects"):
+                    for value in scene_data.get(key, []):
+                        if isinstance(value, str):
+                            scene_ids.add(value)
+                scene_ids.update(_extract_defined_items(task))
+                num_agents = task.get("num_agents", 2)
+                scene_ids.update(f"agent_{i}" for i in range(num_agents))
+
+                for lit in literals:
+                    for arg in lit.args:
+                        if arg.startswith("?"):
+                            continue
+                        if arg not in scene_ids and not arg.startswith("item_"):
+                            errors.append(f"PDDL goal references unknown object '{arg}'")
+
+        except Exception as e:
+            errors.append(f"problem_pddl validation failed: {e}")
+
+    elif isinstance(pddl_goal, str) and pddl_goal:
         try:
             from emtom.pddl.dsl import parse_goal_string, Literal, EpistemicFormula
             goal = parse_goal_string(pddl_goal)

@@ -175,12 +175,12 @@ CRITERIA_DESCRIPTIONS = {
     },
     "task_naturalness": {
         "name": "Task Description Natural Language",
-        "description": "Does the `task` field and `agent_secrets` use natural language instead of object IDs? Agents use FindObjectTool to resolve descriptions. Check ONLY `task` and `agent_secrets` text — NOT `pddl_goal`, `golden_trajectory`, or `pddl_ordering` (these are machine-readable fields that use IDs by design).",
+        "description": "Does the `task` field and `agent_secrets` use natural language instead of object IDs? Agents use FindObjectTool to resolve descriptions. Check ONLY `task` and `agent_secrets` text — NOT `problem_pddl` / legacy goal fields or `golden_trajectory` (machine-readable fields can contain IDs).",
         "rubric": """0.0: `task` or `agent_secrets` contain many object IDs (toy_airplane_0, microwave_29) or a 'Grounding note' with IDs
 0.3: `task` or `agent_secrets` have some object IDs mixed with natural descriptions
 0.5: Mostly natural language in task/secrets but a few IDs slip through
 0.7: Natural language throughout task/secrets, minor specificity issues
-1.0: Pure natural language in `task` and `agent_secrets` — agents discover IDs via FindObjectTool. (IDs in pddl_goal/trajectory are expected and should not lower this score.)""",
+1.0: Pure natural language in `task` and `agent_secrets` — agents discover IDs via FindObjectTool. (IDs in problem_pddl/trajectory are expected and should not lower this score.)""",
     },
     # Task quality criteria
     "narrative_consistency": {
@@ -203,12 +203,12 @@ CRITERIA_DESCRIPTIONS = {
     },
     "pddl_solvability": {
         "name": "PDDL Solvability & Epistemic Coherence",
-        "description": "Is the task structurally solvable? Check the `goals` array (or legacy `pddl_goal`): are predicates valid, are `after` dependencies acyclic and meaningful, are K() goals backed by CONCRETE information asymmetry? A mechanic (room_restriction, restricted_communication, unreliable_communication) must actually prevent the agent from directly observing the fact. If the agent could just walk to the room and see for themselves, the K() goal is trivially satisfied and should score LOW.",
+        "description": "Is the task structurally solvable from `problem_pddl` (or legacy goal fields): are predicates valid, are K() goals backed by CONCRETE information asymmetry, and is the goal logically coherent for the category? A mechanic (room_restriction, restricted_communication, unreliable_communication) must actually prevent direct observation. If the agent could just walk there and see, the K() goal is trivially satisfied and should score LOW.",
         "rubric": """0.0: Goal references nonexistent objects or uses invalid predicates
 0.3: Goal is technically valid but trivially satisfied or impossible; K() goals with NO backing mechanic (agent can directly observe the fact — no room_restriction, no restricted_communication blocking them)
-0.5: Goal is valid but `after` ordering is empty with multiple goals; K() goals where the agent has indirect access (could reach the location with extra steps)
+0.5: Goal is valid but category logic is weak (e.g., competitive objective not clearly opposing); K() goals where the agent has indirect access (could reach the location with extra steps)
 0.7: Goal is well-formed, K() goals each backed by a specific mechanic that prevents direct observation, minor ordering issues
-1.0: Goal is well-formed, all predicates valid, every K() goal has a concrete blocking mechanic (room_restriction, restricted_communication, etc.), `after` ordering defines meaningful dependencies, structurally solvable""",
+1.0: Goal is well-formed, all predicates valid, every K() goal has a concrete blocking mechanic (room_restriction, restricted_communication, etc.), and category objective is structurally coherent and solvable""",
     },
     "mechanic_utilization": {
         "name": "Mechanic Utilization & Balance",
@@ -366,10 +366,10 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 - `task` is GLOBAL; for competitive/mixed it must not leak secret targets or team-specific objectives
 - Secrets must be actionable (room/furniture/key/constraint) and required
 - Secrets must be natural language (no IDs) and not step-by-step
-- `required` semantics: true(shared), false(optional), "team_X"(win), "agent_X"(subgoal)
-- Category must match `required` usage
+- Single-format goal source is `problem_pddl` (legacy formats may appear in old tasks)
+- Category intent must be reflected in `problem_pddl` objective structure
 - **Mechanic consistency**: Every mechanic referenced in `task` or `agent_secrets` (e.g., "the handle is reversed", "you have limited messages") MUST have a corresponding entry in `mechanic_bindings`. If secrets describe constraints that aren't in bindings, the simulator won't enforce them.
-- **K() goal backing**: Every `K()` goal in the `goals` array (or `pddl_goal`) must be backed by a mechanic that prevents the agent from directly observing the fact (e.g., `room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). If the agent could just walk there and see, the K() goal is fake.
+- **K() goal backing**: Every `K()` goal in `problem_pddl` (or legacy goal field) must be backed by a mechanic that prevents the agent from directly observing the fact (e.g., `room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). If the agent could just walk there and see, the K() goal is fake.
 
 ## Evaluation Criteria
 Score each criterion from 0.0 to 1.0.
@@ -399,17 +399,17 @@ CATEGORY_PROMPT_DESCRIPTIONS = {
 - Information is distributed: one agent might know key locations, another knows which locks need which keys
 - Success requires piecing together distributed information through communication
 - Complex tasks can have parallel workstreams that converge
-- Uses `agent_secrets` to distribute knowledge, `required: true` for shared goals""",
+- Uses `agent_secrets` to distribute knowledge and shared objective in `problem_pddl`""",
     "competitive": """**COMPETITIVE** - Teams with opposing objectives
 - Divide agents into teams (any split: 1v1, 2v1, 2v2, 3v2, etc.)
 - Teams compete for contested resources OR race to complete opposing objectives
 - Each team member should contribute - divide responsibilities within teams
 - Balance matters: if teams are uneven in size, give smaller team easier objectives
-- Uses `teams` mapping, `required: "team_X"` for each team's win conditions
+- Uses `teams` mapping and encodes opposition directly in `problem_pddl` (e.g., OR over team-winning conditions)
 - Public `task` must be symmetric; team-specific targets belong in secrets""",
     "mixed": """**MIXED** - Cooperation with hidden conflicts
-- All agents share a main goal they must complete together (`required: true`)
-- Each agent also has a SECRET personal subgoal (`required: "agent_X"`) that may conflict with others
+- All agents share a main objective in `problem_pddl`
+- Hidden tension is induced by asymmetry/mechanics/epistemic conditions rather than legacy `required` tags
 - Tension: agents must cooperate on the main task while secretly pursuing conflicting interests
 - Subgoals should create interesting dilemmas, not make main goal impossible
 - Public `task` must not reveal secret subgoals or targets""",

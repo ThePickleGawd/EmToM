@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from emtom.pddl.dsl import Literal, Knows, EpistemicFormula, Problem, parse_goal_string
 from emtom.pddl.epistemic import ObservabilityModel
+from emtom.pddl.problem_pddl import parse_problem_pddl
 
 if TYPE_CHECKING:
     from emtom.task_gen.task_generator import GeneratedTask
@@ -23,12 +24,23 @@ def compile_task(
     Compile a GeneratedTask into a PDDL Problem.
 
     Args:
-        task: The generated task with pddl_goal
+        task: Generated task with inline `problem_pddl` or legacy goal fields
         scene_data: Optional scene data with rooms/furniture/objects lists
 
     Returns:
         Problem instance ready for solver
     """
+    # New single-format path: inline task-level problem PDDL.
+    task_problem_pddl = getattr(task, "problem_pddl", None)
+    if isinstance(task_problem_pddl, str) and task_problem_pddl.strip():
+        parsed = parse_problem_pddl(task_problem_pddl)
+        problem = parsed.to_problem()
+
+        # Ensure declared agent cardinality is reflected in objects.
+        for i in range(task.num_agents):
+            problem.objects.setdefault(f"agent_{i}", "agent")
+        return problem
+
     objects: Dict[str, str] = {}
     init: List[Literal] = []
     epistemic_init: List[Knows] = []

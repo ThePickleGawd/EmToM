@@ -97,39 +97,24 @@ def main():
         print_result(validation)
         sys.exit(1)
 
-    # Deterministically regenerate golden trajectory from PDDL —
-    # but only for K=0 tasks. Epistemic (K/Knows) goals require
-    # hand-crafted trajectories with Communicate actions that the
-    # rule-based planner cannot generate.
-    pddl_goal = task_data.get("pddl_goal", "")
-    goals_array = task_data.get("goals", [])
-    has_epistemic = "(K " in pddl_goal or "(Knows " in pddl_goal
-    if not has_epistemic and goals_array:
-        has_epistemic = any("(K " in g.get("pddl", "") or "(Knows " in g.get("pddl", "") for g in goals_array)
-    if has_epistemic:
+    # Deterministically regenerate golden trajectory from authoritative task spec.
+    try:
+        from emtom.pddl.planner import regenerate_golden_trajectory
+
+        regen = regenerate_golden_trajectory(
+            task_data,
+            scene_data=scene_data_obj,
+            source="cli_verify",
+            task_file=args.task_file,
+        )
         print(
-            "Epistemic goal detected — using hand-crafted golden trajectory "
-            "(skipping deterministic regeneration).",
+            f"Regenerated trajectory: {regen['num_steps']} steps "
+            f"(spec_hash={regen['spec_hash'][:8]})",
             file=sys.stderr,
         )
-    else:
-        try:
-            from emtom.pddl.planner import regenerate_golden_trajectory
-
-            regen = regenerate_golden_trajectory(
-                task_data,
-                scene_data=scene_data_obj,
-                source="cli_verify",
-                task_file=args.task_file,
-            )
-            print(
-                f"Regenerated trajectory: {regen['num_steps']} steps "
-                f"(spec_hash={regen['spec_hash'][:8]})",
-                file=sys.stderr,
-            )
-        except Exception as e:
-            print_result(failure(f"Failed to regenerate trajectory from PDDL: {e}"))
-            sys.exit(1)
+    except Exception as e:
+        print_result(failure(f"Failed to regenerate trajectory from task spec: {e}"))
+        sys.exit(1)
 
     golden = task_data.get("golden_trajectory", [])
     if not golden:

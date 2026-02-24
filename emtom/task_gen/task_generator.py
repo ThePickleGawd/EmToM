@@ -244,6 +244,10 @@ class GeneratedTask:
     # METADATA
     num_agents: int
 
+    # Single-format PDDL problem payload (authoritative goal spec)
+    pddl_domain: str = "emtom"  # Domain name pinned by task (must match problem_pddl :domain)
+    problem_pddl: Optional[str] = None  # Full inline PDDL problem string
+
     # PDDL GOAL (replaces subtask DAG)
     pddl_goal: Optional[str] = None  # PDDL goal formula, e.g. "(and (is_open cabinet_27) ...)"
     pddl_ordering: List[Dict[str, str]] = field(default_factory=list)  # [{"before": "...", "after": "..."}]
@@ -274,6 +278,15 @@ class GeneratedTask:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         d = asdict(self)
+        # New single-format: when inline problem is present, keep it authoritative.
+        if d.get("problem_pddl"):
+            d.pop("goals", None)
+            d.pop("pddl_goal", None)
+            d.pop("pddl_ordering", None)
+            d.pop("pddl_owners", None)
+            d.pop("subtasks", None)
+            d.pop("success_condition", None)
+            return d
         # When goals array is present, drop legacy fields
         if d.get("goals"):
             d.pop("pddl_goal", None)
@@ -344,13 +357,25 @@ class GeneratedTask:
         # NOTE: team_goals and agent_subgoals are now unified into subtasks
 
         # Parse PDDL fields — unified goals array or legacy triple
+        pddl_domain = data.get("pddl_domain", "emtom")
+        problem_pddl = data.get("problem_pddl") if isinstance(data.get("problem_pddl"), str) else None
+
         raw_goals = data.get("goals")
         goals = None
         pddl_goal = None
         pddl_ordering: List[Dict[str, str]] = []
         pddl_owners: Dict[str, str] = {}
 
-        if isinstance(raw_goals, list) and len(raw_goals) > 0:
+        if problem_pddl and problem_pddl.strip():
+            # Canonical inline format: derive pddl_goal for compatibility with
+            # existing helper methods that still consume goal strings.
+            try:
+                from emtom.pddl.problem_pddl import extract_goal_from_problem_pddl
+
+                pddl_goal = extract_goal_from_problem_pddl(problem_pddl)
+            except Exception:
+                pddl_goal = None
+        elif isinstance(raw_goals, list) and len(raw_goals) > 0:
             # New unified format: derive legacy fields from goals array
             goals = raw_goals
             pddl_strings = [e["pddl"] for e in goals]
@@ -392,6 +417,8 @@ class GeneratedTask:
             agent_actions=_ensure_dict(data.get("agent_actions", {})),
             success_condition=success_condition,
             num_agents=data.get("num_agents", 2),
+            pddl_domain=pddl_domain,
+            problem_pddl=problem_pddl,
             pddl_goal=pddl_goal,
             pddl_ordering=pddl_ordering,
             pddl_owners=pddl_owners,
@@ -412,12 +439,21 @@ class GeneratedTask:
     @property
     def uses_pddl(self) -> bool:
         """Check if this task uses PDDL goals (vs legacy subtask DAG)."""
-        return self.goals is not None or self.pddl_goal is not None
+        return (
+            self.problem_pddl is not None
+            or self.goals is not None
+            or self.pddl_goal is not None
+        )
 
     @property
     def goal_spec(self):
         """Return a GoalSpec from the goals array or legacy fields."""
         from emtom.pddl.goal_spec import GoalSpec
+        if self.problem_pddl:
+            from emtom.pddl.problem_pddl import extract_goal_from_problem_pddl
+
+            goal_str = extract_goal_from_problem_pddl(self.problem_pddl)
+            return GoalSpec.from_legacy(goal_str, [], {})
         if self.goals:
             return GoalSpec.from_goals_array(self.goals)
         if self.pddl_goal:
@@ -444,7 +480,7 @@ class GeneratedTask:
 
     def compute_tom_level(self, scene_data=None) -> int:
         """Compute ToM level from PDDL. Returns stored tom_level for legacy tasks."""
-        if not self.pddl_goal and not self.goals:
+        if not self.problem_pddl and not self.pddl_goal and not self.goals:
             return self.tom_level
         from emtom.pddl.tom_verifier import compute_tom_depth
         depth = compute_tom_depth(self, scene_data)

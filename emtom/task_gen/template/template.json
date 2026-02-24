@@ -37,14 +37,9 @@
     "agent_1": ["Navigate", "Open", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
   },
   "message_targets": {},
-  "goals": [
-    {"id": 0, "pddl": "(K agent_0 (is_inside REPLACE_ITEM REPLACE_CONTAINER))", "after": []},
-    {"id": 1, "pddl": "(is_open REPLACE_FURNITURE)", "after": [0]},
-    {"id": 2, "pddl": "(is_on_top REPLACE_OBJECT REPLACE_FURNITURE)", "after": [1]}
-  ],
+  "pddl_domain": "emtom",
+  "problem_pddl": "(define (problem REPLACE_PROBLEM_NAME)\n  (:domain emtom)\n  (:objects\n    agent_0 agent_1 - agent\n  )\n  (:init\n  )\n  (:goal (and\n    (K agent_0 (is_inside REPLACE_ITEM REPLACE_CONTAINER))\n    (is_open REPLACE_FURNITURE)\n    (is_on_top REPLACE_OBJECT REPLACE_FURNITURE)\n  ))\n)",
   "num_agents": 2,
-  "golden_trajectory": [],
-  "golden_trajectory_metadata": {},
   "teams": {},
   "team_secrets": {}
 }

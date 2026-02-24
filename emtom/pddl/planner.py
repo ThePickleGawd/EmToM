@@ -35,6 +35,7 @@ def compute_task_spec_hash(task_data: Dict[str, Any]) -> str:
         "scene_id", "episode_id", "num_agents",
         "active_mechanics", "mechanic_bindings",
         "agent_secrets", "agent_actions",
+        "pddl_domain", "problem_pddl",
         "goals",  # new unified format
         "pddl_goal", "pddl_ordering", "pddl_owners",  # legacy
         "items", "locked_containers", "initial_states",
@@ -241,7 +242,19 @@ def generate_deterministic_trajectory(
         Dict with keys: trajectory, planned_literals, ignored_literals, planner_notes.
     """
     num_agents = int(task_data.get("num_agents", 2) or 2)
-    pddl_goal = task_data.get("pddl_goal")
+    pddl_goal = None
+
+    problem_pddl = task_data.get("problem_pddl")
+    if isinstance(problem_pddl, str) and problem_pddl.strip():
+        try:
+            from emtom.pddl.problem_pddl import extract_goal_from_problem_pddl
+
+            pddl_goal = extract_goal_from_problem_pddl(problem_pddl)
+        except Exception:
+            pddl_goal = None
+
+    if not pddl_goal:
+        pddl_goal = task_data.get("pddl_goal")
 
     # Support new goals format
     if not pddl_goal:

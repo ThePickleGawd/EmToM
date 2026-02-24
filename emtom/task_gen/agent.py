@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -157,14 +158,6 @@ class TaskGeneratorAgent:
                 f"agent_{i}": default_actions.copy()
                 for i in range(self.agents_max)
             }
-            template["golden_trajectory"] = [
-                {
-                    "actions": [
-                        {"agent": f"agent_{i}", "action": "Wait[]"}
-                        for i in range(self.agents_max)
-                    ]
-                }
-            ]
             with open(self.template_file, 'w') as f:
                 json.dump(template, f, indent=2)
 
@@ -494,6 +487,7 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
         self._save_context_window()
 
         # Main ReAct loop
+        llm_error_streak = 0
         while len(self.submitted_tasks) < num_tasks_target and not self.failed:
             self.iteration_count += 1
 
@@ -511,12 +505,19 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
             # Get LLM response
             try:
                 response = self._get_llm_response()
+                llm_error_streak = 0
             except Exception as e:
+                llm_error_streak += 1
+                # Do not burn iteration budget on transient API/network failures.
+                self.iteration_count = max(0, self.iteration_count - 1)
+                backoff_s = min(30, 2 ** min(llm_error_streak, 5))
                 self._log(f"LLM error: {e}")
+                self._log(f"Transient LLM failure streak={llm_error_streak}; backing off {backoff_s}s and retrying without consuming iteration.")
                 self.messages.append({
                     "role": "user",
                     "content": f"Error getting LLM response: {e}. Please try again."
                 })
+                time.sleep(backoff_s)
                 continue
 
             # Parse all actions from response
@@ -653,16 +654,6 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
                 f"agent_{i}": default_actions.copy()
                 for i in range(num_agents)
             }
-
-            # Generate golden_trajectory template
-            task["golden_trajectory"] = [
-                {
-                    "actions": [
-                        {"agent": f"agent_{i}", "action": "Wait[]"}
-                        for i in range(num_agents)
-                    ]
-                }
-            ]
 
         # Clear task_id so a new one gets assigned on submit
         task["task_id"] = "REPLACE_WITH_UNIQUE_ID"
@@ -1510,35 +1501,18 @@ SUMMARY:"""
         except json.JSONDecodeError as e:
             return json.dumps({"valid": False, "error": f"Invalid JSON: {e}"})
 
-        # Check for epistemic (K/Knows) goals — planner can't generate Communicate
-        pddl_goal = task_data.get("pddl_goal", "")
-        goals_array = task_data.get("goals", [])
-        has_epistemic = "(K " in pddl_goal or "(Knows " in pddl_goal
-        if not has_epistemic and goals_array:
-            has_epistemic = any(
-                "(K " in g.get("pddl", "") or "(Knows " in g.get("pddl", "")
-                for g in goals_array
-            )
-
-        if has_epistemic:
+        # Always regenerate golden trajectory from the authoritative task spec.
+        try:
+            regen = self._regenerate_golden_trajectory(task_data, source="verify")
             self._log(
-                "Epistemic goal detected — using existing golden trajectory "
-                "(skipping deterministic regeneration)."
+                f"Regenerated trajectory: {regen['num_steps']} steps "
+                f"(spec_hash={regen['spec_hash'][:8]})"
             )
-        else:
-            # Regenerate golden trajectory from PDDL BEFORE validation
-            # (validation requires golden_trajectory to exist)
-            try:
-                regen = self._regenerate_golden_trajectory(task_data, source="verify")
-                self._log(
-                    f"Regenerated trajectory: {regen['num_steps']} steps "
-                    f"(spec_hash={regen['spec_hash'][:8]})"
-                )
-            except Exception as e:
-                return json.dumps({
-                    "valid": False,
-                    "error": f"Failed to regenerate trajectory from PDDL: {e}",
-                })
+        except Exception as e:
+            return json.dumps({
+                "valid": False,
+                "error": f"Failed to regenerate trajectory from task spec: {e}",
+            })
 
         # Validate structure (after regeneration so golden_trajectory exists)
         validation = self._validate_task_structure(task_data)
@@ -1636,8 +1610,7 @@ SUMMARY:"""
             data.pop("suggestions", None)
             data["next_step"] = (
                 "Task passed judge. Do NOT change the task design. "
-                "If golden_trajectory is missing, add it now, then run "
-                "verify_golden_trajectory[] -> test_task[] -> submit_task[]."
+                "Run verify_golden_trajectory[] -> test_task[] -> submit_task[]."
             )
         else:
             self.consecutive_tom_failures += 1
@@ -1975,9 +1948,10 @@ working_task.json reset."""
 
         # Guidance about IDs vs natural language
         lines.append("**ID Usage Rules:**")
-        lines.append("- `golden_trajectory`, `subtasks`, `locked_containers`: Use EXACT object IDs from this list")
+        lines.append("- `problem_pddl`, `mechanic_bindings`, `locked_containers`: Use EXACT object IDs from this list")
         lines.append("- `task` description: Use NATURAL LANGUAGE (e.g., 'the microwave', 'a toy airplane') - agents use FindObjectTool")
         lines.append("- `agent_secrets`: Use NATURAL LANGUAGE (e.g., 'a drawer in the bedroom') - no object IDs\n")
+        lines.append("- `current_scene.json` schema: `objects` is a list of object IDs (strings), locations come from `objects_on_furniture` + `furniture_in_rooms`\n")
 
         # Rooms - show all
         lines.append("### Rooms")

@@ -46,7 +46,7 @@ Assigned!
 ## Workflow
 1. `new_scene[N]` → load scene with N agents
 2. Read `sampled_tasks/` for examples
-3. Edit `{task_file}` — use `goals` array for goals
+3. Edit `{task_file}` — define goals in `problem_pddl` (inline full problem file)
 4. `verify_pddl[]` → check solvability + ToM depth
 5. `judge[]` → fix → repeat until pass
 6. `verify_golden_trajectory[]` → deterministic regeneration + simulator check → fix spec → repeat until pass
@@ -67,19 +67,21 @@ Assigned!
 - Information is distributed: one agent might know key locations, another knows which locks need which keys
 - Success requires piecing together distributed information through communication
 - Complex tasks can have parallel workstreams that converge
-- Use `agent_secrets` to distribute knowledge, `required: true` for shared goals
+- Use `agent_secrets` to distribute knowledge and encode shared objective in `problem_pddl :goal`
 
 **COMPETITIVE** - Teams with opposing objectives
 - Divide agents into teams (any split: 1v1, 2v1, 2v2, 3v2, etc.)
 - Teams compete for contested resources OR race to complete opposing objectives
 - Each team member should contribute - divide responsibilities within teams
 - Balance matters: if teams are uneven in size, give smaller team easier objectives
-- Define `teams` mapping, use `required: "team_X"` for each team's win conditions
+- Define `teams` mapping and encode opposition directly in `problem_pddl :goal`
+  - Example patterns: `(or (has_most team_0 item_gold_coin) (has_most team_1 item_gold_coin))`
+  - Or explicit mutually-exclusive literals using `(or ...)` / `(not ...)`
 - Keep the public `task` symmetric; do NOT reveal each team's target container
 
 **MIXED** - Cooperation with hidden conflicts
-- All agents share a main goal they must complete together (`required: true`)
-- Each agent also has a SECRET personal subgoal (`required: "agent_X"`) that may conflict with others
+- All agents share a main goal encoded in `problem_pddl`
+- Hidden tensions should be encoded via epistemic goals, asymmetric mechanics, and secret incentives
 - Tension: agents must cooperate on the main task while secretly pursuing conflicting interests
 - Subgoals should create interesting dilemmas, not make main goal impossible
 - Public `task` should not reveal secret subgoals or targets
@@ -94,6 +96,7 @@ Assigned!
 
 ## Core Rules
 - **NEVER reference objects with unknown locations.** Only use objects listed in the scene data with a known furniture parent (shown as "object (on furniture)"). If an object has no location, it does not exist for task purposes.
+- `current_scene.json` schema: `objects` is a list of object IDs (strings), not dicts. Use `objects_on_furniture` (object->furniture via reverse map) and `furniture_in_rooms` to resolve locations.
 - Every agent essential; **no assigned roles**
 - `task` is GLOBAL; keep high-level; do not leak secret targets (competitive/mixed)
 - Secrets must be actionable (room/furniture/key/constraint) and not prescriptive (no step-by-step instructions)
@@ -138,14 +141,10 @@ Each agent's secrets MUST mention their message limit: "You can only send N mess
   "agent_actions": {{"agent_0": [...], "agent_1": [...]}},
   "message_targets": {{"agent_0": ["agent_1"], "agent_1": ["agent_0"]}},
   "mechanic_bindings": [{{"mechanic_type": "limited_bandwidth", "message_limits": {{"agent_0": 3, "agent_1": 3}}}}],
-  "goals": [
-    {{"id": 0, "pddl": "(is_open cabinet_27)", "after": []}},
-    {{"id": 1, "pddl": "(is_on_top bottle_4 table_13)", "after": [0]}}
-  ],
+  "pddl_domain": "emtom",
+  "problem_pddl": "(define (problem task_x)\\n  (:domain emtom)\\n  (:objects\\n    agent_0 agent_1 - agent\\n  )\\n  (:init\\n  )\\n  (:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))\\n)",
   "items": [{{"item_id": "item_X", "inside": "container"}}],
-  "locked_containers": {{"container": "item_key"}},
-  "golden_trajectory": [{{"actions": [{{"agent": "agent_0", "action": "Wait[]"}}]}}],
-  "golden_trajectory_metadata": {{}}
+  "locked_containers": {{"container": "item_key"}}
 }}
 ```
 `active_mechanics` is auto-derived from `mechanic_bindings` — do NOT set it manually.
@@ -154,22 +153,17 @@ Each agent's secrets MUST mention their message limit: "You can only send N mess
 {available_predicates}
 
 ## PDDL Goal Format
-Use the `goals` array instead of `subtasks`. Each entry has an `id`, `pddl` formula, `after` (dependency IDs), and optional `owner`:
-- Single goal: `"(is_open cabinet_27)"`
-- Conjunction: `"(and (is_open cabinet_27) (is_on_top bottle_4 table_13))"`
-- Negation: `"(not (is_open drawer_5))"`
-- Epistemic: `"(K agent_0 (is_inside key_1 cabinet_27))"` — agent_0 must know this fact
-- Nested: `"(K agent_0 (K agent_1 (is_open safe_3)))"` — agent_0 knows that agent_1 knows
-- Negated knowledge: `"(not (K agent_1 (is_inside gem_1 safe_3)))"` — agent_1 must NOT know this
-- **ToM depth** = max nesting depth of K/B operators (auto-computed by `verify_pddl[]`)
-- Use the `after` field for dependencies between goals (by ID reference)
-  - **REQUIRED** when goal has >1 conjunct — ordering must be non-empty
-  - K() goals should be prerequisites for actions that depend on that knowledge
-- For competitive: use the `owner` field to assign goals to teams: `{{"id": 0, "pddl": "(is_inside trophy_1 cabinet_10)", "after": [], "owner": "team_0"}}`
-  - **REQUIRED** for competitive/mixed tasks — assign team/agent ownership
-- For mixed: use the `owner` field for agent subgoals: `{{"id": 0, "pddl": "(is_inside vase_1 closet_5)", "after": [], "owner": "agent_0"}}`
-- `tom_level` and `tom_reasoning` are auto-computed from goals — do NOT set them manually
-- Run `verify_pddl[]` to check solvability and get computed ToM depth
+Use `problem_pddl` as the single goal source. It must contain a full PDDL problem:
+- Required sections: `(:domain ...)`, `(:objects ...)`, `(:init ...)`, `(:goal ...)`
+- Single goal example: `(:goal (is_open cabinet_27))`
+- Conjunction: `(:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))`
+- Negation: `(:goal (and (not (is_open drawer_5))))`
+- Epistemic: `(:goal (and (K agent_0 (is_inside key_1 cabinet_27))))`
+- Nested epistemic: `(:goal (and (K agent_0 (K agent_1 (is_open safe_3)))))`
+- `pddl_domain` must match the `:domain` value in `problem_pddl`
+- Do NOT set `goals`, `pddl_goal`, `subtasks`, or `success_condition` when using `problem_pddl`
+- `tom_level` and `tom_reasoning` are auto-computed from `problem_pddl` — do NOT set manually
+- Run `verify_pddl[]` to check solvability and computed ToM depth
 
 ## When to Use K() Goals
 - Use `(K agent_X ...)` when agent_X cannot directly observe the fact (room_restriction, hidden mechanic) AND the task requires them to learn it
@@ -179,31 +173,21 @@ Use the `goals` array instead of `subtasks`. Each entry has an `id`, `pddl` form
 
 ### Example: K=0 (no epistemic reasoning)
 ```json
-"goals": [
-  {{"id": 0, "pddl": "(is_open cabinet_27)", "after": []}},
-  {{"id": 1, "pddl": "(is_on_top bottle_4 table_13)", "after": [0]}}
-]
+"problem_pddl": "(define (problem task_k0)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent)\\n  (:init)\\n  (:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))\\n)"
 ```
 
 ### Example: K=1 (agent must acquire knowledge via communication)
 ```json
-"goals": [
-  {{"id": 0, "pddl": "(K agent_0 (is_inside key_1 cabinet_27))", "after": []}},
-  {{"id": 1, "pddl": "(is_open safe_3)", "after": [0]}},
-  {{"id": 2, "pddl": "(is_on_top trophy_1 table_8)", "after": [1]}}
-]
+"problem_pddl": "(define (problem task_k1)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent)\\n  (:init)\\n  (:goal (and (K agent_0 (is_inside key_1 cabinet_27)) (is_open safe_3) (is_on_top trophy_1 table_8)))\\n)"
 ```
 
 ### Example: K=2 (agent must reason about another's beliefs)
 ```json
-"goals": [
-  {{"id": 0, "pddl": "(K agent_0 (K agent_2 (is_inside gem_1 safe_3)))", "after": []}},
-  {{"id": 1, "pddl": "(is_on_top gem_1 table_8)", "after": [0]}}
-]
+"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 agent_2 - agent)\\n  (:init)\\n  (:goal (and (K agent_0 (K agent_2 (is_inside gem_1 safe_3))) (is_on_top gem_1 table_8)))\\n)"
 ```
 
 ## Theory of Mind
-ToM depth is auto-computed from the K/B nesting depth in `goals`.
+ToM depth is auto-computed from the K/B nesting depth in `problem_pddl` `:goal`.
 - **Depth 0**: No K() goals — all agents share full information
 - **Depth 1**: K(agent, fact) — agents must reason about what others know (e.g., room restrictions create private knowledge)
 - **Depth 2**: K(agent, K(other, fact)) — agents must reason about what others believe about third parties' knowledge
@@ -238,7 +222,7 @@ Use `verify_pddl[]` to see the computed ToM depth. Design information asymmetry 
 ## Golden Trajectory
 `golden_trajectory` is a derived artifact. Do NOT hand-author it as source-of-truth.
 `verify_golden_trajectory[]` and `submit_task[]` regenerate it deterministically from the task spec.
-You should focus on editing spec fields (`goals`, mechanics, constraints, secrets).
+You should focus on editing spec fields (`problem_pddl`, mechanics, constraints, secrets).
 
 The deterministic planner generates **physical actions only** (Navigate, Open, Close, Pick, Place, UseItem).
 It does NOT generate Communicate actions. K() epistemic goals are unwrapped to their inner

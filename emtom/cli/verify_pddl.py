@@ -2,7 +2,7 @@
 Verify PDDL goal solvability and compute ToM depth.
 
 Checks:
-1. Goal syntax is valid (via GoalSpec)
+1. `problem_pddl` / goal syntax is valid
 2. Goal compiles against scene objects
 3. Goal is structurally solvable by PDKBSolver
 4. Computes ToM depth from epistemic structure
@@ -47,14 +47,37 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     except json.JSONDecodeError as e:
         return failure(f"Invalid JSON: {e}")
 
-    # Build GoalSpec from goals array or legacy fields
+    # Build GoalSpec from inline problem_pddl, goals array, or legacy fields
     from emtom.pddl.goal_spec import GoalSpec
     from emtom.pddl.domain import EMTOM_DOMAIN
+    from emtom.pddl.problem_pddl import parse_problem_pddl
 
+    problem_pddl = task_data.get("problem_pddl")
     goals_array = task_data.get("goals")
     pddl_goal = task_data.get("pddl_goal")
+    parsed_problem = None
 
-    if goals_array:
+    if isinstance(problem_pddl, str) and problem_pddl.strip():
+        try:
+            parsed_problem = parse_problem_pddl(problem_pddl)
+        except ValueError as e:
+            return failure(f"Invalid problem_pddl: {e}")
+
+        declared_domain = task_data.get("pddl_domain")
+        if isinstance(declared_domain, str) and declared_domain:
+            if parsed_problem.domain_name != declared_domain:
+                return failure(
+                    "problem_pddl domain mismatch: "
+                    f":domain is '{parsed_problem.domain_name}' but pddl_domain is '{declared_domain}'"
+                )
+        if parsed_problem.domain_name != EMTOM_DOMAIN.name:
+            return failure(
+                f"Unsupported problem domain '{parsed_problem.domain_name}'. "
+                f"Expected '{EMTOM_DOMAIN.name}'."
+            )
+
+        goal_spec = GoalSpec.from_legacy(parsed_problem.goal_pddl, [], {})
+    elif goals_array:
         try:
             goal_spec = GoalSpec.from_goals_array(goals_array)
         except ValueError as e:
@@ -69,7 +92,7 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
         except Exception as e:
             return failure(f"Invalid PDDL goal syntax: {e}")
     else:
-        return failure("No goals array or pddl_goal field in task.")
+        return failure("No problem_pddl, goals array, or pddl_goal field in task.")
 
     # Validate goal spec against domain
     num_agents = task_data.get("num_agents", 2)
@@ -126,7 +149,7 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
 
     output = {
         "valid": True,
-        "pddl_goal": goal_spec.to_pddl_string(),
+        "pddl_goal": parsed_problem.goal_pddl if parsed_problem else goal_spec.to_pddl_string(),
         "solvable": True,
         "tom_level": tom_info["tom_level"],
         "tom_reasoning": tom_info["tom_reasoning"],

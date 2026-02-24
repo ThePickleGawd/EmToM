@@ -234,6 +234,18 @@ class PDDLGoalChecker:
         belief_tracker: Optional["BeliefStateTracker"] = None,
     ) -> Optional["PDDLGoalChecker"]:
         """Create from raw task JSON data. Supports both goals array and legacy format."""
+        problem_pddl = task_data.get("problem_pddl")
+        if isinstance(problem_pddl, str) and problem_pddl.strip():
+            from emtom.pddl.problem_pddl import extract_goal_from_problem_pddl
+
+            goal = parse_goal_string(extract_goal_from_problem_pddl(problem_pddl))
+            return cls(
+                goal=goal,
+                ordering=[],
+                owners={},
+                belief_tracker=belief_tracker,
+            )
+
         # Try new goals array format first
         goals = task_data.get("goals")
         if isinstance(goals, list) and goals:

@@ -79,58 +79,64 @@ def validate(
         if item_id:
             defined_items.add(item_id)
 
-    # Validate object IDs in golden_trajectory exist in scene or are custom items
-    if scene_data and task_data.get("golden_trajectory"):
-        all_valid_ids = set(
-            scene_data.rooms + scene_data.furniture + scene_data.objects
-        )
-        all_valid_ids.update(defined_items)
-
-        invalid_ids = []
-        invalid_items = []
-        for step in task_data["golden_trajectory"]:
-            actions = step.get("actions", [])
-            for action_entry in actions:
-                action_str = action_entry.get("action", "")
-                match = re.match(r'(\w+)(?:\[(.*)\])?$', action_str)
-                if not match:
-                    continue
-                action_name, args = match.group(1), match.group(2)
-
-                if not args or action_name in ("Communicate", "Wait"):
-                    continue
-
-                place_keywords = {"on", "within", "next_to"}
-                parts = [p.strip() for p in args.split(",")]
-                for target_id in parts:
-                    if not target_id or target_id == "None" or target_id in place_keywords:
-                        continue
-                    if target_id.startswith("item_"):
-                        if target_id not in defined_items:
-                            invalid_items.append(target_id)
-                    elif target_id not in all_valid_ids:
-                        invalid_ids.append(target_id)
-
-        if invalid_ids:
-            return failure(
-                f"golden_trajectory contains invalid object IDs not in scene: {list(set(invalid_ids))}"
-            )
-        if invalid_items:
-            return failure(
-                f"golden_trajectory references undefined items: {list(set(invalid_items))}. "
-                f"Defined items: {list(defined_items)}"
-            )
+    # golden_trajectory is a derived artifact and may be stale/missing before
+    # verify_golden_trajectory. Static trajectory checks run separately.
 
     # Validate success condition OR subtasks DAG OR pddl_goal OR goals array
+    has_problem_pddl = bool(task_data.get("problem_pddl"))
     has_success_condition = bool(task_data.get("success_condition"))
     has_subtasks = bool(task_data.get("subtasks"))
     has_pddl_goal = bool(task_data.get("pddl_goal"))
     has_goals_array = bool(task_data.get("goals"))
 
-    if not has_success_condition and not has_subtasks and not has_pddl_goal and not has_goals_array:
+    if not has_problem_pddl and not has_success_condition and not has_subtasks and not has_pddl_goal and not has_goals_array:
         return failure(
-            "Task must have 'goals', 'pddl_goal', 'success_condition', or 'subtasks' with valid DAG"
+            "Task must have 'problem_pddl', 'goals', 'pddl_goal', 'success_condition', or 'subtasks' with valid DAG"
         )
+
+    if has_problem_pddl:
+        # problem_pddl is the canonical format; reject mixed goal sources.
+        legacy_fields = []
+        for name, present in (
+            ("goals", has_goals_array),
+            ("pddl_goal", has_pddl_goal),
+            ("subtasks", has_subtasks),
+            ("success_condition", has_success_condition),
+        ):
+            if present:
+                legacy_fields.append(name)
+        if legacy_fields:
+            return failure(
+                "problem_pddl cannot be combined with legacy goal fields: "
+                f"{legacy_fields}"
+            )
+
+        try:
+            from emtom.pddl.problem_pddl import parse_problem_pddl
+            from emtom.pddl.domain import EMTOM_DOMAIN
+            from emtom.pddl.dsl import validate_goal_predicates
+
+            parsed = parse_problem_pddl(task_data["problem_pddl"])
+            declared_domain = task_data.get("pddl_domain", "")
+            if declared_domain and parsed.domain_name != declared_domain:
+                return failure(
+                    "problem_pddl domain mismatch: "
+                    f":domain is '{parsed.domain_name}' but pddl_domain is '{declared_domain}'"
+                )
+            if parsed.domain_name != EMTOM_DOMAIN.name:
+                return failure(
+                    f"Unsupported problem domain '{parsed.domain_name}'. "
+                    f"Expected '{EMTOM_DOMAIN.name}'."
+                )
+
+            pred_errors = validate_goal_predicates(parsed.goal_formula, EMTOM_DOMAIN)
+            if pred_errors:
+                return failure(
+                    "problem_pddl goal predicate validation failed: "
+                    + "; ".join(pred_errors)
+                )
+        except Exception as e:
+            return failure(f"Invalid problem_pddl: {e}")
 
     # Validate goals array if present
     if has_goals_array:

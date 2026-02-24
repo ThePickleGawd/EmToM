@@ -470,10 +470,54 @@ def validate_blocking_spec(
                 )
 
     # ------------------------------------------------------------------
-    # Goals array validation (new unified format)
+    # PDDL validation (single-format + transitional formats)
     # ------------------------------------------------------------------
+    problem_pddl = task_data.get("problem_pddl")
     goals = task_data.get("goals")
-    if isinstance(goals, list) and goals:
+    pddl_goal = task_data.get("pddl_goal")
+    has_problem_pddl = isinstance(problem_pddl, str) and bool(problem_pddl.strip())
+    has_goals = isinstance(goals, list) and bool(goals)
+    has_pddl_goal = isinstance(pddl_goal, str) and bool(pddl_goal)
+
+    if has_problem_pddl:
+        # Canonical format should not be mixed with legacy goal fields.
+        mixed_fields = []
+        if has_goals:
+            mixed_fields.append("goals")
+        if has_pddl_goal:
+            mixed_fields.append("pddl_goal")
+        if mixed_fields:
+            errors.append(
+                "problem_pddl cannot be combined with legacy goal fields: "
+                f"{mixed_fields}"
+            )
+
+        try:
+            from emtom.pddl.domain import EMTOM_DOMAIN
+            from emtom.pddl.goal_spec import GoalSpec
+            from emtom.pddl.problem_pddl import parse_problem_pddl
+
+            parsed_problem = parse_problem_pddl(problem_pddl)
+            declared_domain = task_data.get("pddl_domain")
+            if isinstance(declared_domain, str) and declared_domain:
+                if parsed_problem.domain_name != declared_domain:
+                    errors.append(
+                        "problem_pddl domain mismatch: "
+                        f":domain is '{parsed_problem.domain_name}' but pddl_domain is '{declared_domain}'"
+                    )
+            if parsed_problem.domain_name != EMTOM_DOMAIN.name:
+                errors.append(
+                    f"Unsupported problem domain '{parsed_problem.domain_name}'. "
+                    f"Expected '{EMTOM_DOMAIN.name}'."
+                )
+
+            spec = GoalSpec.from_legacy(parsed_problem.goal_pddl, [], {})
+            spec_errors = spec.validate(EMTOM_DOMAIN, valid_agent_ids)
+            errors.extend(spec_errors)
+        except Exception as e:
+            errors.append(f"problem_pddl validation error: {e}")
+
+    elif has_goals:
         try:
             from emtom.pddl.goal_spec import GoalSpec
             from emtom.pddl.domain import EMTOM_DOMAIN
@@ -503,13 +547,9 @@ def validate_blocking_spec(
         except Exception as e:
             errors.append(f"Goals validation error: {e}")
 
-    # ------------------------------------------------------------------
-    # PDDL goal validation
-    # ------------------------------------------------------------------
-    pddl_goal = task_data.get("pddl_goal")
-    if not (isinstance(goals, list) and goals) and isinstance(pddl_goal, str) and pddl_goal:
+    elif has_pddl_goal:
         try:
-            from emtom.pddl.dsl import parse_goal_string, validate_goal_predicates, Knows, Believes, EpistemicFormula
+            from emtom.pddl.dsl import parse_goal_string, validate_goal_predicates, Knows, Believes
             from emtom.pddl.domain import EMTOM_DOMAIN
             goal = parse_goal_string(pddl_goal)
             conjuncts = goal.flatten()
@@ -591,11 +631,15 @@ def validate_blocking_spec(
             errors.append(f"Invalid pddl_goal syntax: {e}")
 
     # ------------------------------------------------------------------
-    # Golden trajectory structural checks
+    # Golden trajectory structural checks (optional derived artifact)
     # ------------------------------------------------------------------
-    golden = task_data.get("golden_trajectory", [])
-    if not isinstance(golden, list) or not golden:
-        errors.append("No golden_trajectory found in task. Add a golden_trajectory field.")
+    golden = task_data.get("golden_trajectory")
+    if golden is None:
+        return errors
+    if not isinstance(golden, list):
+        errors.append("golden_trajectory must be a list when provided.")
+        return errors
+    if not golden:
         return errors
 
     for step_idx, step in enumerate(golden):
