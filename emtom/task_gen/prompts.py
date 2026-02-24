@@ -77,6 +77,7 @@ Assigned!
 - Each team member should contribute - divide responsibilities within teams
 - Balance matters: if teams are uneven in size, give smaller team easier objectives
 - Define `teams` mapping and encode opposition directly in `problem_pddl :goal`
+- Use `:goal-owners` section to assign goals to teams (see "Goal Ownership" section)
 - Keep the public `task` symmetric; do NOT reveal each team's target container
 - **Competitive PDDL goal MUST use `(or ...)` with exactly two branches** — see "Competitive OR Goals" section below
 
@@ -258,6 +259,32 @@ Use `problem_pddl` as the single goal source. It must contain a full PDDL proble
 - Do NOT set `goals`, `pddl_goal`, `subtasks`, or `success_condition` when using `problem_pddl`
 - `tom_level` and `tom_reasoning` are auto-computed from `problem_pddl` — do NOT set manually
 - Run `verify_pddl[]` to check solvability and computed ToM depth
+
+## Goal Ownership (`:goal-owners`)
+For **competitive** and **mixed** tasks, use a `:goal-owners` section in `problem_pddl` to assign goals to teams or agents.
+- Placed after `:goal` in the problem definition
+- Each entry maps an owner to a PDDL goal literal
+- Unowned conjuncts in `:goal` are shared/cooperative goals
+- Competitive tasks: use `team_0`, `team_1` as owners
+- Mixed tasks: use `agent_0`, `agent_1` etc. for per-agent subgoals
+
+Example (competitive):
+```
+(:goal (and (is_inside trophy_1 cabinet_10) (is_inside trophy_1 cabinet_20) (is_open safe_3)))
+(:goal-owners
+  (team_0 (is_inside trophy_1 cabinet_10))
+  (team_1 (is_inside trophy_1 cabinet_20)))
+```
+Here `(is_open safe_3)` is unowned = shared. Each team owns one `is_inside` goal.
+
+Example (mixed):
+```
+(:goal (and (is_on_top report_1 table_8) (K agent_0 (is_in_room gem_1 bedroom_0))))
+(:goal-owners
+  (agent_1 (K agent_0 (is_in_room gem_1 bedroom_0))))
+```
+
+Cooperative tasks do NOT need `:goal-owners` — all goals are shared by default.
 
 ## When to Use K() Goals
 K() goals describe **information prerequisites** — knowledge an agent must acquire

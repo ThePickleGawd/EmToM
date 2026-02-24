@@ -1,6 +1,7 @@
+; Generated from domain.py -- do not edit manually
 (define (domain emtom)
-  (:requirements :strips :typing :epistemic)
-  (:types agent object furniture - object room item)
+  (:requirements :strips :typing :conditional-effects)
+  (:types agent room item furniture - object)
   (:predicates
     (is_on_top ?x - object ?y - furniture)
     (is_inside ?x - object ?y - furniture)
@@ -27,24 +28,25 @@
     (is_restricted ?a - agent ?r - room)
     (is_locked_permanent ?f - furniture)
     (requires_item ?f - furniture ?i - item)
+    (can_communicate ?from - agent ?to - agent)
   )
 
 (:action open
   :parameters (?a - agent ?f - furniture)
   :precondition (and (is_closed ?f) (not (is_locked_permanent ?f)))
-  :effect (and (is_open ?f) (not (is_closed ?f)) (when (is_inverse ?f) (is_closed ?f)) (when (mirrors ?f ?g) (is_open ?g)) (when (controls ?f ?g) (is_unlocked ?g)))
+  :effect (and (is_open ?f) (not (is_closed ?f)) (when (is_inverse ?f) (is_closed ?f)) (when (is_inverse ?f) (not (is_open ?f))) (forall (?g - furniture) (when (mirrors ?f ?g) (is_open ?g))) (forall (?g - furniture) (when (controls ?f ?g) (is_unlocked ?g))))
 )
 
 (:action close
   :parameters (?a - agent ?f - furniture)
   :precondition (is_open ?f)
-  :effect (and (is_closed ?f) (not (is_open ?f)) (when (is_inverse ?f) (is_open ?f)) (when (mirrors ?f ?g) (is_closed ?g)))
+  :effect (and (is_closed ?f) (not (is_open ?f)) (when (is_inverse ?f) (is_open ?f)) (when (is_inverse ?f) (not (is_closed ?f))) (forall (?g - furniture) (when (mirrors ?f ?g) (is_closed ?g))))
 )
 
 (:action navigate
   :parameters (?a - agent ?r - room)
   :precondition (not (is_restricted ?a ?r))
-  :effect (agent_in_room ?a ?r)
+  :effect (and (agent_in_room ?a ?r) (forall (?old - room) (when (agent_in_room ?a ?old) (and (agent_in_room ?a ?r) (not (agent_in_room ?a ?old))))))
 )
 
 (:action pick
@@ -56,19 +58,7 @@
 (:action place
   :parameters (?a - agent ?x - object ?f - furniture)
   :precondition (is_held_by ?x ?a)
-  :effect (and (not (is_held_by ?x ?a)) (is_on_top ?x ?f))
-)
-
-(:action communicate
-  :parameters (?from - agent ?to - agent)
-  :precondition ()
-  :effect (and )
-)
-
-(:action wait
-  :parameters (?a - agent)
-  :precondition ()
-  :effect (and )
+  :effect (and (not (is_held_by ?x ?a)) (is_on_top ?x ?f) (is_inside ?x ?f))
 )
 
 (:action use_item

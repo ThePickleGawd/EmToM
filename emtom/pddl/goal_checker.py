@@ -200,12 +200,12 @@ class PDDLGoalChecker:
         if not isinstance(problem_pddl, str) or not problem_pddl.strip():
             return None
 
-        from emtom.pddl.problem_pddl import extract_goal_from_problem_pddl
+        from emtom.pddl.problem_pddl import parse_problem_pddl
 
-        goal = parse_goal_string(extract_goal_from_problem_pddl(problem_pddl))
+        parsed = parse_problem_pddl(problem_pddl)
         return cls(
-            goal=goal,
+            goal=parsed.goal_formula,
             ordering=[],
-            owners={},
+            owners=parsed.owners or {},
             belief_tracker=belief_tracker,
         )

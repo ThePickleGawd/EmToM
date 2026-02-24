@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 from emtom.pddl.compiler import compile_task
 from emtom.pddl.domain import EMTOM_DOMAIN
 from emtom.pddl.epistemic import ObservabilityModel
-from emtom.pddl.solver import PDKBSolver
+from emtom.pddl.solver import PDKBSolver, SolverResult
 
 if TYPE_CHECKING:
     from emtom.task_gen.task_generator import GeneratedTask
@@ -24,11 +24,15 @@ def compute_tom_depth(
     task: "GeneratedTask",
     scene_data: Optional[Dict[str, Any]] = None,
     max_depth: int = 3,
+    solver_result: Optional[SolverResult] = None,
 ) -> int:
     """
     Compute the minimum Theory of Mind depth for a task.
 
-    This replaces the manually-assigned tom_level field.
+    When *solver_result* is provided (e.g. from FastDownwardSolver with
+    epistemic compilation), its ``belief_depth`` is used directly —
+    this is the authoritative result.  Otherwise falls back to
+    PDKBSolver's structural heuristic.
 
     ToM depth meanings:
     - 0: No belief reasoning needed (all information is shared)
@@ -42,41 +46,45 @@ def compute_tom_depth(
         task: The generated task
         scene_data: Optional scene data for object resolution
         max_depth: Maximum depth to check (default 3)
+        solver_result: Optional pre-computed SolverResult from FD
 
     Returns:
         Minimum ToM depth (0-3), or -1 if unsolvable at any depth
     """
+    # Fast path: use authoritative FD result when available.
+    if solver_result is not None:
+        if not solver_result.solvable:
+            return -1
+        return solver_result.belief_depth
+
+    # Fallback: PDKBSolver structural heuristic.
     problem = compile_task(task, scene_data)
     observability = ObservabilityModel.from_task_with_scene(task, scene_data)
     solver = PDKBSolver()
 
-    # Base check: is the problem structurally solvable at all?
     result = solver.solve(EMTOM_DOMAIN, problem, observability, max_depth)
 
-    # The PDKBSolver provides structural checks. For actual plan-based
-    # verification, use solve_with_epistemic_planner() which does BFS search.
-    # The solver's belief_depth gives syntactic depth; actual difficulty
-    # may differ based on communication constraints.
-
     if not result.solvable:
-        # If it failed due to missing scene data (unknown objects),
-        # fall back to observability-based estimate
         if result.error and "unknown object" in result.error and scene_data is None:
             if observability.has_information_asymmetry():
                 return 1
             return 0
         return -1
 
-    # The solver's belief depth computation handles the iterative check
     return result.belief_depth
 
 
 def explain_tom_depth(
     task: "GeneratedTask",
     scene_data: Optional[Dict[str, Any]] = None,
+    solver_result: Optional[SolverResult] = None,
 ) -> Dict[str, Any]:
     """
     Explain why a task requires a specific ToM depth.
+
+    When *solver_result* is provided (e.g. from FastDownwardSolver with
+    epistemic compilation), its ``belief_depth`` and ``trivial_k_goals``
+    are used directly instead of re-solving via PDKBSolver.
 
     Returns:
         Dict with:
@@ -86,7 +94,7 @@ def explain_tom_depth(
         - communication_required: bool
         - trivial_k_goals: list of trivially satisfied K() goals (if any)
     """
-    depth = compute_tom_depth(task, scene_data)
+    depth = compute_tom_depth(task, scene_data, solver_result=solver_result)
     observability = ObservabilityModel.from_task_with_scene(task, scene_data)
 
     # Analyze information gaps
@@ -99,12 +107,15 @@ def explain_tom_depth(
     # Determine if communication is required
     comm_required = bool(observability.restricted_rooms or observability.hidden_effects)
 
-    # Check for trivial K() goals
+    # Get trivial K() goals from solver result or fallback
     trivial_goals = []
-    problem = compile_task(task, scene_data)
-    result = PDKBSolver().solve(EMTOM_DOMAIN, problem, observability)
-    if result.trivial_k_goals:
-        trivial_goals = result.trivial_k_goals
+    if solver_result is not None:
+        trivial_goals = solver_result.trivial_k_goals or []
+    else:
+        problem = compile_task(task, scene_data)
+        result = PDKBSolver().solve(EMTOM_DOMAIN, problem, observability)
+        if result.trivial_k_goals:
+            trivial_goals = result.trivial_k_goals
 
     # Build reasoning explanation
     if depth == 0:

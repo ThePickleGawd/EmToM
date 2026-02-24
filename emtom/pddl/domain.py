@@ -11,6 +11,7 @@ from emtom.pddl.dsl import (
     Param,
     Action,
     Effect,
+    ForallEffect,
     Literal,
     And,
     Not,
@@ -70,6 +71,7 @@ EMTOM_PREDICATES = [
     Predicate("is_restricted", (Param("a", "agent"), Param("r", "room"))),
     Predicate("is_locked_permanent", (Param("f", "furniture"),)),
     Predicate("requires_item", (Param("f", "furniture"), Param("i", "item"))),
+    Predicate("can_communicate", (Param("from", "agent"), Param("to", "agent"))),
 ]
 
 
@@ -105,13 +107,14 @@ _PREDICATE_DESCRIPTIONS = {
     "is_restricted": "(mechanic) agent cannot enter room",
     "is_locked_permanent": "(mechanic) furniture is locked until key used",
     "requires_item": "(mechanic) furniture requires item to unlock",
+    "can_communicate": "(mechanic) agent can send messages to another agent",
 }
 
 _PREDICATE_GROUPS = [
     ("Spatial / Relational", ["is_on_top", "is_inside", "is_in_room", "is_on_floor", "is_next_to"]),
     ("Unary State", ["is_open", "is_closed", "is_clean", "is_dirty", "is_filled", "is_empty", "is_powered_on", "is_powered_off", "is_unlocked"]),
     ("Agent", ["is_held_by", "agent_in_room", "has_item", "has_at_least", "has_most"]),
-    ("Mechanic (init-only, do NOT use in pddl_goal)", ["is_inverse", "mirrors", "controls", "is_restricted", "is_locked_permanent", "requires_item"]),
+    ("Mechanic (init-only, do NOT use in pddl_goal)", ["is_inverse", "mirrors", "controls", "is_restricted", "is_locked_permanent", "requires_item", "can_communicate"]),
 ]
 
 
@@ -152,20 +155,26 @@ EMTOM_ACTIONS = [
         effects=[
             Effect(Literal("is_open", ("?f",))),
             Effect(Literal("is_closed", ("?f",), negated=True)),
-            # Conditional: inverse mechanic reverses the effect
+            # Conditional: inverse mechanic — undo the open, leave it closed
             Effect(
                 Literal("is_closed", ("?f",)),
                 condition=Literal("is_inverse", ("?f",)),
             ),
-            # Conditional: state mirroring propagates
             Effect(
-                Literal("is_open", ("?g",)),
-                condition=Literal("mirrors", ("?f", "?g")),
+                Literal("is_open", ("?f",), negated=True),
+                condition=Literal("is_inverse", ("?f",)),
             ),
-            # Conditional: remote control triggers unlock
-            Effect(
-                Literal("is_unlocked", ("?g",)),
+            # Conditional: state mirroring propagates (forall quantified)
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("mirrors", ("?f", "?g")),
+                effect=Literal("is_open", ("?g",)),
+            ),
+            # Conditional: remote control triggers unlock (forall quantified)
+            ForallEffect(
+                variable=Param("g", "furniture"),
                 condition=Literal("controls", ("?f", "?g")),
+                effect=Literal("is_unlocked", ("?g",)),
             ),
         ],
         observability="full",
@@ -179,25 +188,39 @@ EMTOM_ACTIONS = [
         effects=[
             Effect(Literal("is_closed", ("?f",))),
             Effect(Literal("is_open", ("?f",), negated=True)),
+            # Conditional: inverse mechanic — undo the close, leave it open
             Effect(
                 Literal("is_open", ("?f",)),
                 condition=Literal("is_inverse", ("?f",)),
             ),
             Effect(
-                Literal("is_closed", ("?g",)),
+                Literal("is_closed", ("?f",), negated=True),
+                condition=Literal("is_inverse", ("?f",)),
+            ),
+            # Conditional: state mirroring propagates (forall quantified)
+            ForallEffect(
+                variable=Param("g", "furniture"),
                 condition=Literal("mirrors", ("?f", "?g")),
+                effect=Literal("is_closed", ("?g",)),
             ),
         ],
         observability="full",
     ),
 
-    # Navigate
+    # Navigate: move agent to a room, remove from old room
     Action(
         name="navigate",
         params=[Param("a", "agent"), Param("r", "room")],
         preconditions=Not(operand=Literal("is_restricted", ("?a", "?r"))),
         effects=[
             Effect(Literal("agent_in_room", ("?a", "?r"))),
+            # Remove agent from any previous room
+            ForallEffect(
+                variable=Param("old", "room"),
+                condition=Literal("agent_in_room", ("?a", "?old")),
+                effect=Literal("agent_in_room", ("?a", "?r")),
+                negative_effect=Literal("agent_in_room", ("?a", "?old")),
+            ),
         ],
         observability="full",
     ),
@@ -234,7 +257,7 @@ EMTOM_ACTIONS = [
     Action(
         name="communicate",
         params=[Param("from", "agent"), Param("to", "agent")],
-        preconditions=None,
+        preconditions=Literal("can_communicate", ("?from", "?to")),
         effects=[],  # Epistemic effects handled by the solver
         observability="full",
     ),

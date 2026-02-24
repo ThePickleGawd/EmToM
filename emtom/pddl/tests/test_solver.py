@@ -73,6 +73,7 @@ class TestSolver:
         assert result.belief_depth >= 1
 
     def test_static_literal_requires_exact_init_match(self):
+        """is_inside is achievable via place action, so PDKBSolver treats it as dynamic."""
         goal = Literal("is_inside", ("item_key_1", "cabinet_27"))
         problem = self._make_problem(
             goal,
@@ -85,8 +86,8 @@ class TestSolver:
             init=[Literal("is_inside", ("item_key_1", "cabinet_30"))],
         )
         result = PDKBSolver().solve(EMTOM_DOMAIN, problem)
-        assert not result.solvable
-        assert "No action can achieve literal" in result.error
+        # is_inside is achievable via place action → dynamic predicate
+        assert result.solvable
 
     def test_static_literal_satisfied_from_exact_init(self):
         goal = Literal("is_inside", ("item_key_1", "cabinet_27"))
@@ -140,7 +141,14 @@ class TestTomVerifier:
         task.mechanic_bindings = mechanics or []
         task.locked_containers = {}
         task.message_targets = None
-        task.pddl_goal = pddl_goal
+        task.problem_pddl = (
+            f"(define (problem test_001)\n"
+            f"  (:domain emtom)\n"
+            f"  (:objects)\n"
+            f"  (:init)\n"
+            f"  (:goal {pddl_goal})\n"
+            f")"
+        )
         return task
 
     def test_no_asymmetry_depth_0(self):

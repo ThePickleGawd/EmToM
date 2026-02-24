@@ -294,10 +294,21 @@ def _migrate_legacy_to_problem_pddl(data: Dict[str, Any]) -> Optional[str]:
     # Build a minimal problem_pddl string
     domain_name = data.get("pddl_domain", "emtom")
     task_id = data.get("task_id", "migrated")
+
+    # Migrate legacy pddl_owners to :goal-owners section
+    goal_owners_section = ""
+    pddl_owners = data.get("pddl_owners")
+    if isinstance(pddl_owners, dict) and pddl_owners:
+        entries = []
+        for literal_str, owner in pddl_owners.items():
+            entries.append(f"    ({owner} {literal_str})")
+        goal_owners_section = "\n  (:goal-owners\n" + "\n".join(entries) + ")\n"
+
     return (
         f"(define (problem {task_id})\n"
         f"  (:domain {domain_name})\n"
         f"  (:init)\n"
         f"  (:goal {pddl_goal_str})\n"
+        f"{goal_owners_section}"
         f")"
     )

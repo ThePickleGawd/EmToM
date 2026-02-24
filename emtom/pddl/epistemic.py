@@ -67,11 +67,7 @@ class ObservabilityModel:
 
             elif mtype == "limited_bandwidth":
                 # Extract per-agent message limits from binding
-                raw_limits = getattr(binding, '_raw_data', {})
-                if isinstance(raw_limits, dict):
-                    ml = raw_limits.get("message_limits", {})
-                else:
-                    ml = {}
+                ml = binding.message_limits or {}
                 for agent_id, limit in ml.items():
                     if isinstance(limit, (int, float)):
                         model.message_limits[agent_id] = int(limit)

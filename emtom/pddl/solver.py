@@ -111,8 +111,12 @@ class PDKBSolver:
         positive_effect_predicates = set()
         for action in domain.actions:
             for effect in action.effects:
-                if not effect.literal.negated:
-                    positive_effect_predicates.add(effect.literal.predicate)
+                if hasattr(effect, 'literal'):
+                    if not effect.literal.negated:
+                        positive_effect_predicates.add(effect.literal.predicate)
+                elif hasattr(effect, 'effect'):
+                    # ForallEffect: the .effect field is the positive effect
+                    positive_effect_predicates.add(effect.effect.predicate)
 
         init_positive_literals = {
             (l.predicate, l.args)

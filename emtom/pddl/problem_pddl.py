@@ -38,6 +38,11 @@ class ParsedProblemPDDL:
     epistemic_init: List[Union[Knows, Believes]]
     goal_formula: Formula
     goal_pddl: str
+    owners: Dict[str, str] = None  # literal PDDL string -> owner ID
+
+    def __post_init__(self):
+        if self.owners is None:
+            object.__setattr__(self, 'owners', {})
 
     def to_problem(self) -> Problem:
         """Convert to DSL `Problem` dataclass."""
@@ -69,13 +74,19 @@ def parse_problem_pddl(problem_pddl: str) -> ParsedProblemPDDL:
 
     problem_name = _extract_problem_name(raw)
     domain_name = _extract_domain_name(raw)
-    objects_text = _extract_section(raw, "objects")
+    try:
+        objects_text = _extract_section(raw, "objects")
+    except ValueError:
+        objects_text = ""  # :objects is optional
     init_text = _extract_section(raw, "init")
     goal_text = _extract_goal(raw)
 
     objects = _parse_objects_block(objects_text)
     init_literals, epistemic_init = _parse_init_block(init_text)
     goal_formula = parse_goal_string(goal_text)
+
+    # Parse optional :goal-owners section
+    owners = _parse_goal_owners(raw)
 
     return ParsedProblemPDDL(
         problem_name=problem_name,
@@ -85,6 +96,7 @@ def parse_problem_pddl(problem_pddl: str) -> ParsedProblemPDDL:
         epistemic_init=epistemic_init,
         goal_formula=goal_formula,
         goal_pddl=goal_text,
+        owners=owners,
     )
 
 
@@ -270,3 +282,64 @@ def _parse_init_block(text: str) -> Tuple[List[Literal], List[Union[Knows, Belie
             epistemic.append(parsed)
 
     return literals, epistemic
+
+
+def _parse_goal_owners(text: str) -> Dict[str, str]:
+    """Parse optional (:goal-owners ...) section from problem PDDL.
+
+    Format::
+
+        (:goal-owners
+          (team_0 (is_inside trophy_1 cabinet_10))
+          (team_1 (is_inside trophy_1 cabinet_20)))
+
+    Returns mapping from PDDL literal string to owner ID.
+    """
+    lower = text.lower()
+    needle = "(:goal-owners"
+    idx = lower.find(needle)
+    if idx < 0:
+        return {}
+
+    start = idx + len(needle)
+    end = _find_matching_paren(text, idx)
+    body = text[start:end].strip()
+
+    owners: Dict[str, str] = {}
+    for entry in _split_top_level_s_exprs(body):
+        # Each entry is (owner_id formula)
+        # Strip outer parens
+        inner = entry.strip()
+        if inner.startswith("(") and inner.endswith(")"):
+            inner = inner[1:-1].strip()
+
+        # First token is owner, rest is the PDDL formula
+        parts = inner.split(None, 1)
+        if len(parts) != 2:
+            continue
+        owner_id = parts[0]
+        formula_str = parts[1].strip()
+        # Normalize the formula via parse+serialize for consistent keys
+        try:
+            formula = parse_goal_string(formula_str)
+            owners[formula.to_pddl()] = owner_id
+        except ValueError:
+            # Best-effort: use raw string
+            owners[formula_str] = owner_id
+
+    return owners
+
+
+def strip_goal_owners_pddl(pddl_str: str) -> str:
+    """Remove (:goal-owners ...) section from a PDDL string.
+
+    Used before passing to planners that don't understand this extension.
+    """
+    lower = pddl_str.lower()
+    needle = "(:goal-owners"
+    idx = lower.find(needle)
+    if idx < 0:
+        return pddl_str
+
+    end = _find_matching_paren(pddl_str, idx)
+    return pddl_str[:idx] + pddl_str[end + 1:]

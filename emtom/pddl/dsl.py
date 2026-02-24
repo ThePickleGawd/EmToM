@@ -251,6 +251,23 @@ class Effect:
         return self.literal.to_pddl()
 
 
+@dataclass
+class ForallEffect:
+    """(forall (?var - type) (when condition effect))"""
+    variable: Param
+    condition: Formula
+    effect: Literal
+    negative_effect: Optional[Literal] = None  # for (and pos (not neg)) patterns
+
+    def to_pddl(self) -> str:
+        if self.negative_effect:
+            body = f"(and {self.effect.to_pddl()} (not {self.negative_effect.to_pddl()}))"
+        else:
+            body = self.effect.to_pddl()
+        return (f"(forall (?{self.variable.name} - {self.variable.type}) "
+                f"(when {self.condition.to_pddl()} {body}))")
+
+
 # ---------------------------------------------------------------------------
 # Actions
 # ---------------------------------------------------------------------------
@@ -261,7 +278,7 @@ class Action:
     name: str
     params: List[Param] = field(default_factory=list)
     preconditions: Optional[Formula] = None
-    effects: List[Effect] = field(default_factory=list)
+    effects: List[Union[Effect, "ForallEffect"]] = field(default_factory=list)
     # Observability: which agents can observe this action's effects
     # "full" = acting agent, "partial" = same-room agents, "none" = other agents
     observability: str = "full"
@@ -269,18 +286,20 @@ class Action:
     def to_pddl(self) -> str:
         params_str = " ".join(p.to_pddl() for p in self.params)
         pre_str = self.preconditions.to_pddl() if self.preconditions else "()"
-        if len(self.effects) == 1:
-            eff_str = self.effects[0].to_pddl()
-        else:
-            effs = " ".join(e.to_pddl() for e in self.effects)
-            eff_str = f"(and {effs})"
-        return (
-            f"(:action {self.name}\n"
-            f"  :parameters ({params_str})\n"
-            f"  :precondition {pre_str}\n"
-            f"  :effect {eff_str}\n"
-            f")"
-        )
+        lines = [
+            f"(:action {self.name}",
+            f"  :parameters ({params_str})",
+            f"  :precondition {pre_str}",
+        ]
+        if self.effects:
+            if len(self.effects) == 1:
+                eff_str = self.effects[0].to_pddl()
+            else:
+                effs = " ".join(e.to_pddl() for e in self.effects)
+                eff_str = f"(and {effs})"
+            lines.append(f"  :effect {eff_str}")
+        lines.append(")")
+        return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +356,47 @@ class Domain:
         return (
             f"(define (domain {self.name})\n"
             f"  (:requirements :strips :typing :epistemic)\n"
+            f"  (:types {types_str})\n"
+            f"  (:predicates\n    {preds_str}\n  )\n\n"
+            f"{actions_str}\n"
+            f")"
+        )
+
+    def to_planning_pddl(self) -> str:
+        """Output PDDL with :strips :typing :conditional-effects (no :epistemic).
+
+        Fast Downward and other classical planners don't understand epistemic
+        extensions. This method produces standard PDDL suitable for them.
+
+        Types are grouped by parent to avoid ambiguous PDDL (e.g. the raw
+        sequence ``agent object furniture - object`` would make ``object``
+        a child of itself).
+        """
+        # Group types by parent for unambiguous PDDL.
+        # Skip user type "object" — it conflicts with PDDL's built-in root
+        # type of the same name and confuses unified-planning's type checker.
+        by_parent: Dict[Optional[str], List[str]] = {}
+        for t in self.types:
+            if t.name == "object" and t.parent is None:
+                continue  # implicit root type
+            by_parent.setdefault(t.parent, []).append(t.name)
+        types_parts: List[str] = []
+        if None in by_parent:
+            types_parts.extend(by_parent[None])
+        for parent, names in by_parent.items():
+            if parent is not None:
+                types_parts.append(f"{' '.join(names)} - {parent}")
+        types_str = " ".join(types_parts)
+
+        preds_str = "\n    ".join(p.to_pddl() for p in self.predicates)
+        # Skip actions with no physical effects (e.g. communicate, wait)
+        # — classical planners can't use them and FD rejects empty :effect
+        planning_actions = [a for a in self.actions if a.effects]
+        actions_str = "\n\n".join(a.to_pddl() for a in planning_actions)
+        return (
+            f"; Generated from domain.py -- do not edit manually\n"
+            f"(define (domain {self.name})\n"
+            f"  (:requirements :strips :typing :conditional-effects)\n"
             f"  (:types {types_str})\n"
             f"  (:predicates\n    {preds_str}\n  )\n\n"
             f"{actions_str}\n"

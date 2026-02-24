@@ -123,15 +123,15 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
             except (json.JSONDecodeError, IOError):
                 pass
 
-    # Compile and solve with PDKBSolver
+    # Compile and solve with FastDownwardSolver (real state-space search)
     from emtom.pddl.compiler import compile_task
     from emtom.pddl.epistemic import ObservabilityModel
-    from emtom.pddl.solver import PDKBSolver
+    from emtom.pddl.fd_solver import FastDownwardSolver
 
     compile_start = time.perf_counter()
     problem = compile_task(task, scene_data)
     compile_time_s = time.perf_counter() - compile_start
-    solver = PDKBSolver()
+    solver = FastDownwardSolver()
     observability = ObservabilityModel.from_task_with_scene(task, scene_data)
     solve_start = time.perf_counter()
     result = solver.solve(EMTOM_DOMAIN, problem, observability)
@@ -146,9 +146,9 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     # Check communication budget
     budget_warning = solver.check_communication_budget(problem, observability)
 
-    # Compute ToM depth
+    # Compute ToM depth (use FD solver result for authoritative belief_depth)
     from emtom.pddl.tom_verifier import explain_tom_depth
-    tom_info = explain_tom_depth(task, scene_data)
+    tom_info = explain_tom_depth(task, scene_data, solver_result=result)
 
     # Goal description
     formula = goal_spec.to_formula()
@@ -171,6 +171,8 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
             "total_time_ms": round((time.perf_counter() - total_start) * 1000, 3),
         },
     }
+    if result.plan:
+        output["plan"] = result.plan
     if result.trivial_k_goals:
         output["trivial_k_warnings"] = (
             f"These K() goals are trivially satisfied (agent can directly observe the fact): "
