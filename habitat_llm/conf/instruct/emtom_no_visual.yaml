@@ -25,85 +25,75 @@ prompt: |-
     {eot_tag}
 
     {user_tag}
-    Here are examples showing correct format:
+    Here are examples showing correct response format (these are NOT your actual task):
     {eot_tag}
     {assistant_tag}
-    Example 1 - Finding and using a key:
-    Task: Unlock the cabinet and retrieve the radio inside.
-    Thought: I need to find where the key might be hidden. My secret knowledge mentions chest_of_drawers_52.
-    Agent_{id}_Action: Navigate[chest_of_drawers_52]
+    FORMAT EXAMPLE 1 - Navigation and interaction:
+    Thought: I need to go to the target object first before I can interact with it.
+    Agent_{id}_Action: Navigate[EXAMPLE_OBJECT]
     Assigned!
     {eot_tag}
     {user_tag}
     Agent_{id}_Observation: Successful execution!
     {eot_tag}
     {assistant_tag}
-    Thought: I'm at the chest of drawers. I should open it to check for hidden items.
-    Agent_{id}_Action: Open[chest_of_drawers_52]
+    Thought: I'm near the object now. I'll open it to check inside.
+    Agent_{id}_Action: Open[EXAMPLE_OBJECT]
     Assigned!
     {eot_tag}
     {user_tag}
-    Agent_{id}_Observation: Successful execution! Inside you find: item_small_key_1. It's now in your inventory.
+    Agent_{id}_Observation: Successful execution! Inside you find: item_key_0. It's now in your inventory.
     {eot_tag}
     {assistant_tag}
-    Thought: I found the key! Now I need to use it to unlock the cabinet.
-    Agent_{id}_Action: UseItem[item_small_key_1, cabinet_45]
+    Thought: Found an item. I'll use it on the locked container.
+    Agent_{id}_Action: UseItem[item_key_0, EXAMPLE_CONTAINER]
     Assigned!
     {eot_tag}
     {user_tag}
-    Agent_{id}_Observation: You unlock cabinet_45 with the Small Key.
+    Agent_{id}_Observation: You unlock EXAMPLE_CONTAINER with the Key.
     {eot_tag}
     {assistant_tag}
-    Thought: Cabinet is unlocked. I should tell my teammate and then open it.
-    Agent_{id}_Action: Communicate["I unlocked cabinet_45! Opening it now.", agent_1]
+    Thought: Done with my part. I'll let my teammate know.
+    Agent_{id}_Action: Communicate["I finished unlocking the container.", agent_1]
     Assigned!
     {eot_tag}
     {user_tag}
     Agent_{id}_Observation: Message delivered.
     {eot_tag}
     {assistant_tag}
-    Thought: Now I can open the cabinet to get the radio.
-    Agent_{id}_Action: Open[cabinet_45]
-    Assigned!
-    {eot_tag}
-    {user_tag}
-    Agent_{id}_Observation: Successful execution!
-    {eot_tag}
-    {assistant_tag}
-    Thought: Task complete - cabinet is open and radio is accessible.
+    Thought: All objectives complete.
     Final Thought: Exit!
     {eot_tag}
     {assistant_tag}
 
     {user_tag}
     {assistant_tag}
-    Example 2 - Coordinating with teammate:
-    Task: One agent has the key location, the other is near the locked fridge. Coordinate to unlock it.
-    Thought: I don't know where the key is, but my teammate might. I should ask them.
-    Agent_{id}_Action: Communicate["Do you know where the key is? I'm at the locked fridge.", agent_1]
+    FORMAT EXAMPLE 2 - Coordination and waiting:
+    Thought: I need help from my teammate. I'll ask them.
+    Agent_{id}_Action: Communicate["Can you check the other room? I'll wait here.", agent_1]
     Assigned!
     {eot_tag}
     {user_tag}
-    Agent_{id}_Observation: Message delivered. Your teammate said: The key is in drawer_5. I'm getting it.
+    Agent_{id}_Observation: Message delivered. Your teammate said: On my way there now.
     {eot_tag}
     {assistant_tag}
-    Thought: My teammate is getting the key. I should wait here at the fridge.
+    Thought: My teammate is handling it. I should wait.
     Agent_{id}_Action: Wait[]
     Assigned!
     {eot_tag}
     {user_tag}
-    Agent_{id}_Observation: Waited. Your teammate said: Got the key! Using it now.
+    Agent_{id}_Observation: Waited. Your teammate said: Done! You can proceed now.
     {eot_tag}
     {assistant_tag}
-    Thought: Teammate used the key. I should try opening the fridge now.
-    Agent_{id}_Action: Open[fridge_50]
+    Thought: Teammate finished. Now I can complete my part.
+    Agent_{id}_Action: Navigate[EXAMPLE_TARGET]
     Assigned!
     {eot_tag}
     {user_tag}
     Agent_{id}_Observation: Successful execution!
     {eot_tag}
     {assistant_tag}
-    Thought: Fridge is open. Task complete.
+    Thought: Task complete.
     Final Thought: Exit!
     {eot_tag}
 

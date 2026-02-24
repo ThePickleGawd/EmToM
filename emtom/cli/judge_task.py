@@ -59,10 +59,26 @@ def run(
     except json.JSONDecodeError as e:
         return failure(f"Invalid JSON: {e}")
 
+    scene_data = _load_scene_data(working_dir, scene_file)
+
+    # Auto-regenerate golden trajectory from goals/pddl_goal if missing
+    golden = task_data.get("golden_trajectory")
+    if not golden or not isinstance(golden, list):
+        try:
+            from emtom.pddl.planner import regenerate_golden_trajectory
+
+            regenerate_golden_trajectory(
+                task_data,
+                scene_data=scene_data,
+                source="judge_auto",
+                task_file=task_file,
+            )
+        except Exception:
+            pass  # validate() will catch missing trajectory
+
     # Validate task structure before expensive LLM calls
     from emtom.cli.validate_task import validate
 
-    scene_data = _load_scene_data(working_dir, scene_file)
     validation = validate(task_data, scene_data)
     if not validation["success"]:
         return validation

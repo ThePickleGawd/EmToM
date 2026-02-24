@@ -102,7 +102,10 @@ def main():
     # hand-crafted trajectories with Communicate actions that the
     # rule-based planner cannot generate.
     pddl_goal = task_data.get("pddl_goal", "")
+    goals_array = task_data.get("goals", [])
     has_epistemic = "(K " in pddl_goal or "(Knows " in pddl_goal
+    if not has_epistemic and goals_array:
+        has_epistemic = any("(K " in g.get("pddl", "") or "(Knows " in g.get("pddl", "") for g in goals_array)
     if has_epistemic:
         print(
             "Epistemic goal detected — using hand-crafted golden trajectory "
@@ -349,18 +352,24 @@ def main():
                                 nav_target = parts[2] if len(parts) >= 3 else parts[0]
                             else:
                                 nav_target = (target or "").split(",")[0].strip()
-                            print(f"    {agent_str}: Auto-retry: Navigate[{nav_target}] then {action}", file=sys.stderr)
-                            runner.execute_actions_concurrent({agent_id: ("Navigate", nav_target)})
-                            retry_result = runner.execute_actions_concurrent({agent_id: (action, target or "")})
-                            retry_res = retry_result.get(agent_id, {})
-                            if retry_res.get("success", False):
-                                retry_obs = retry_res.get("observation", "")
-                                print(f"    {agent_str}: {action_str} OK (after retry)", file=sys.stderr)
-                                step_results[-1] = {
-                                    "agent": agent_str, "action": action_str,
-                                    "success": True,
-                                    "observation": f"(retried) {retry_obs[:180]}" if retry_obs else "(retried)",
-                                }
+                            # Retry up to 3 times (simulator physics can be flaky)
+                            retry_succeeded = False
+                            for retry_num in range(3):
+                                print(f"    {agent_str}: Auto-retry {retry_num+1}/3: Navigate[{nav_target}] then {action}", file=sys.stderr)
+                                runner.execute_actions_concurrent({agent_id: ("Navigate", nav_target)})
+                                retry_result = runner.execute_actions_concurrent({agent_id: (action, target or "")})
+                                retry_res = retry_result.get(agent_id, {})
+                                if retry_res.get("success", False):
+                                    retry_obs = retry_res.get("observation", "")
+                                    print(f"    {agent_str}: {action_str} OK (after retry {retry_num+1})", file=sys.stderr)
+                                    step_results[-1] = {
+                                        "agent": agent_str, "action": action_str,
+                                        "success": True,
+                                        "observation": f"(retried x{retry_num+1}) {retry_obs[:170]}" if retry_obs else f"(retried x{retry_num+1})",
+                                    }
+                                    retry_succeeded = True
+                                    break
+                            if retry_succeeded:
                                 continue
 
                         runner.cleanup()

@@ -52,6 +52,12 @@ def compute_tom_depth(
 
     # Base check: is the problem structurally solvable at all?
     result = solver.solve(EMTOM_DOMAIN, problem, observability, max_depth)
+
+    # The PDKBSolver provides structural checks. For actual plan-based
+    # verification, use solve_with_epistemic_planner() which does BFS search.
+    # The solver's belief_depth gives syntactic depth; actual difficulty
+    # may differ based on communication constraints.
+
     if not result.solvable:
         # If it failed due to missing scene data (unknown objects),
         # fall back to observability-based estimate

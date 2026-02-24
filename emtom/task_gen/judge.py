@@ -203,12 +203,12 @@ CRITERIA_DESCRIPTIONS = {
     },
     "pddl_solvability": {
         "name": "PDDL Solvability & Epistemic Coherence",
-        "description": "Is the task structurally solvable? Are K() goals backed by CONCRETE information asymmetry? Check: does a mechanic (room_restriction, restricted_communication, unreliable_communication) actually prevent the agent from directly observing the fact? If the agent could just walk to the room and see for themselves, the K() goal is trivially satisfied and should score LOW.",
+        "description": "Is the task structurally solvable? Check the `goals` array (or legacy `pddl_goal`): are predicates valid, are `after` dependencies acyclic and meaningful, are K() goals backed by CONCRETE information asymmetry? A mechanic (room_restriction, restricted_communication, unreliable_communication) must actually prevent the agent from directly observing the fact. If the agent could just walk to the room and see for themselves, the K() goal is trivially satisfied and should score LOW.",
         "rubric": """0.0: Goal references nonexistent objects or uses invalid predicates
 0.3: Goal is technically valid but trivially satisfied or impossible; K() goals with NO backing mechanic (agent can directly observe the fact — no room_restriction, no restricted_communication blocking them)
-0.5: Goal is valid but ordering is empty with multiple conjuncts; K() goals where the agent has indirect access (could reach the location with extra steps)
+0.5: Goal is valid but `after` ordering is empty with multiple goals; K() goals where the agent has indirect access (could reach the location with extra steps)
 0.7: Goal is well-formed, K() goals each backed by a specific mechanic that prevents direct observation, minor ordering issues
-1.0: Goal is well-formed, all predicates valid, every K() goal has a concrete blocking mechanic (room_restriction, restricted_communication, etc.), ordering defines meaningful dependencies, structurally solvable""",
+1.0: Goal is well-formed, all predicates valid, every K() goal has a concrete blocking mechanic (room_restriction, restricted_communication, etc.), `after` ordering defines meaningful dependencies, structurally solvable""",
     },
     "mechanic_utilization": {
         "name": "Mechanic Utilization & Balance",
@@ -369,7 +369,7 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 - `required` semantics: true(shared), false(optional), "team_X"(win), "agent_X"(subgoal)
 - Category must match `required` usage
 - **Mechanic consistency**: Every mechanic referenced in `task` or `agent_secrets` (e.g., "the handle is reversed", "you have limited messages") MUST have a corresponding entry in `mechanic_bindings`. If secrets describe constraints that aren't in bindings, the simulator won't enforce them.
-- **K() goal backing**: Every `K()` goal in `pddl_goal` must be backed by a mechanic that prevents the agent from directly observing the fact (e.g., `room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). If the agent could just walk there and see, the K() goal is fake.
+- **K() goal backing**: Every `K()` goal in the `goals` array (or `pddl_goal`) must be backed by a mechanic that prevents the agent from directly observing the fact (e.g., `room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). If the agent could just walk there and see, the K() goal is fake.
 
 ## Evaluation Criteria
 Score each criterion from 0.0 to 1.0.

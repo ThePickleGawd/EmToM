@@ -121,15 +121,27 @@ def validate(
                 f"Defined items: {list(defined_items)}"
             )
 
-    # Validate success condition OR subtasks DAG OR pddl_goal
+    # Validate success condition OR subtasks DAG OR pddl_goal OR goals array
     has_success_condition = bool(task_data.get("success_condition"))
     has_subtasks = bool(task_data.get("subtasks"))
     has_pddl_goal = bool(task_data.get("pddl_goal"))
+    has_goals_array = bool(task_data.get("goals"))
 
-    if not has_success_condition and not has_subtasks and not has_pddl_goal:
+    if not has_success_condition and not has_subtasks and not has_pddl_goal and not has_goals_array:
         return failure(
-            "Task must have 'pddl_goal', 'success_condition', or 'subtasks' with valid DAG"
+            "Task must have 'goals', 'pddl_goal', 'success_condition', or 'subtasks' with valid DAG"
         )
+
+    # Validate goals array if present
+    if has_goals_array:
+        try:
+            from emtom.pddl.goal_spec import GoalSpec
+
+            goal_spec = GoalSpec.from_goals_array(task_data["goals"])
+            if len(goal_spec) == 0:
+                return failure("goals array is empty")
+        except ValueError as e:
+            return failure(f"Invalid goals array: {e}")
 
     # Validate PDDL goal if present
     if has_pddl_goal:

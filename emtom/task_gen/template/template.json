@@ -37,12 +37,11 @@
     "agent_1": ["Navigate", "Open", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
   },
   "message_targets": {},
-  "pddl_goal": "(and (K agent_0 (is_inside REPLACE_ITEM REPLACE_CONTAINER)) (is_open REPLACE_FURNITURE) (is_on_top REPLACE_OBJECT REPLACE_FURNITURE))",
-  "pddl_ordering": [
-    {"before": "(K agent_0 (is_inside REPLACE_ITEM REPLACE_CONTAINER))", "after": "(is_open REPLACE_FURNITURE)"},
-    {"before": "(is_open REPLACE_FURNITURE)", "after": "(is_on_top REPLACE_OBJECT REPLACE_FURNITURE)"}
+  "goals": [
+    {"id": 0, "pddl": "(K agent_0 (is_inside REPLACE_ITEM REPLACE_CONTAINER))", "after": []},
+    {"id": 1, "pddl": "(is_open REPLACE_FURNITURE)", "after": [0]},
+    {"id": 2, "pddl": "(is_on_top REPLACE_OBJECT REPLACE_FURNITURE)", "after": [1]}
   ],
-  "pddl_owners": {},
   "num_agents": 2,
   "golden_trajectory": [],
   "golden_trajectory_metadata": {},

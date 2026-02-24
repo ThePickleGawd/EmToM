@@ -249,6 +249,9 @@ class GeneratedTask:
     pddl_ordering: List[Dict[str, str]] = field(default_factory=list)  # [{"before": "...", "after": "..."}]
     pddl_owners: Dict[str, str] = field(default_factory=dict)  # literal_str -> owner ("team_0", "agent_0")
 
+    # Unified goals array (new format, replaces pddl_goal/pddl_ordering/pddl_owners)
+    goals: Optional[List[Dict[str, Any]]] = None  # [{"id": 0, "pddl": "...", "after": [...], "owner": "..."}]
+
     # Legacy subtask DAG (kept for backward compat with old tasks)
     subtasks: List[Subtask] = field(default_factory=list)
     items: List[Dict[str, Any]] = field(default_factory=list)
@@ -270,7 +273,13 @@ class GeneratedTask:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
-        return asdict(self)
+        d = asdict(self)
+        # When goals array is present, drop legacy fields
+        if d.get("goals"):
+            d.pop("pddl_goal", None)
+            d.pop("pddl_ordering", None)
+            d.pop("pddl_owners", None)
+        return d
 
     def to_json(self) -> str:
         """Convert to JSON string."""
@@ -334,10 +343,41 @@ class GeneratedTask:
         team_secrets = data.get("team_secrets") if isinstance(data.get("team_secrets"), dict) else None
         # NOTE: team_goals and agent_subgoals are now unified into subtasks
 
-        # Parse PDDL fields
-        pddl_goal = data.get("pddl_goal")
-        pddl_ordering = _ensure_list(data.get("pddl_ordering", []))
-        pddl_owners = _ensure_dict(data.get("pddl_owners", {}))
+        # Parse PDDL fields — unified goals array or legacy triple
+        raw_goals = data.get("goals")
+        goals = None
+        pddl_goal = None
+        pddl_ordering: List[Dict[str, str]] = []
+        pddl_owners: Dict[str, str] = {}
+
+        if isinstance(raw_goals, list) and len(raw_goals) > 0:
+            # New unified format: derive legacy fields from goals array
+            goals = raw_goals
+            pddl_strings = [e["pddl"] for e in goals]
+            if len(pddl_strings) == 1:
+                pddl_goal = pddl_strings[0]
+            else:
+                pddl_goal = "(and " + " ".join(pddl_strings) + ")"
+            # Build ordering from after dependencies
+            id_to_pddl = {e["id"]: e["pddl"] for e in goals}
+            for entry in goals:
+                for dep_id in entry.get("after", []):
+                    if dep_id in id_to_pddl:
+                        pddl_ordering.append({
+                            "before": id_to_pddl[dep_id],
+                            "after": entry["pddl"],
+                        })
+            # Build owners mapping
+            for entry in goals:
+                if entry.get("owner"):
+                    pddl_owners[entry["pddl"]] = entry["owner"]
+        elif data.get("pddl_goal"):
+            # Legacy format: parse legacy fields and build goals array
+            pddl_goal = data.get("pddl_goal")
+            pddl_ordering = _ensure_list(data.get("pddl_ordering", []))
+            pddl_owners = _ensure_dict(data.get("pddl_owners", {}))
+            from emtom.pddl.goal_spec import GoalSpec
+            goals = GoalSpec.from_legacy(pddl_goal, pddl_ordering, pddl_owners).to_goals_array()
 
         return cls(
             task_id=data.get("task_id", "unknown"),
@@ -355,6 +395,7 @@ class GeneratedTask:
             pddl_goal=pddl_goal,
             pddl_ordering=pddl_ordering,
             pddl_owners=pddl_owners,
+            goals=goals,
             subtasks=subtasks,
             items=items,
             locked_containers=locked_containers,
@@ -371,14 +412,29 @@ class GeneratedTask:
     @property
     def uses_pddl(self) -> bool:
         """Check if this task uses PDDL goals (vs legacy subtask DAG)."""
-        return self.pddl_goal is not None
+        return self.goals is not None or self.pddl_goal is not None
+
+    @property
+    def goal_spec(self):
+        """Return a GoalSpec from the goals array or legacy fields."""
+        from emtom.pddl.goal_spec import GoalSpec
+        if self.goals:
+            return GoalSpec.from_goals_array(self.goals)
+        if self.pddl_goal:
+            return GoalSpec.from_legacy(self.pddl_goal, self.pddl_ordering, self.pddl_owners)
+        return None
 
     def get_pddl_goal_checker(self):
         """Create a PDDLGoalChecker for this task."""
         from emtom.pddl.goal_checker import PDDLGoalChecker
-        from emtom.pddl.dsl import parse_goal_string
-        if not self.pddl_goal:
+        spec = self.goal_spec
+        if spec is None:
             return None
+        # Use GoalSpec-based construction if available, else fall back to legacy
+        if hasattr(PDDLGoalChecker, 'from_goal_spec'):
+            return PDDLGoalChecker.from_goal_spec(spec)
+        # Fallback: construct from legacy fields
+        from emtom.pddl.dsl import parse_goal_string
         goal = parse_goal_string(self.pddl_goal)
         return PDDLGoalChecker(
             goal=goal,
@@ -388,7 +444,7 @@ class GeneratedTask:
 
     def compute_tom_level(self, scene_data=None) -> int:
         """Compute ToM level from PDDL. Returns stored tom_level for legacy tasks."""
-        if not self.pddl_goal:
+        if not self.pddl_goal and not self.goals:
             return self.tom_level
         from emtom.pddl.tom_verifier import compute_tom_depth
         depth = compute_tom_depth(self, scene_data)

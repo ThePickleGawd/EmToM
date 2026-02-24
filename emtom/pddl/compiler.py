@@ -127,10 +127,16 @@ def compile_task(
     # --- Goal ---
 
     goal = None
-    pddl_goal = getattr(task, 'pddl_goal', None)
-    if pddl_goal:
-        goal = parse_goal_string(pddl_goal)
+    # Prefer goal_spec (handles both new goals array and legacy fields)
+    task_goal_spec = getattr(task, 'goal_spec', None)
+    if task_goal_spec is not None:
+        goal = task_goal_spec.to_formula()
+    else:
+        pddl_goal = getattr(task, 'pddl_goal', None)
+        if pddl_goal:
+            goal = parse_goal_string(pddl_goal)
 
+    if goal is not None:
         # Auto-register objects referenced in goal but not yet in objects dict
         for conjunct in goal.flatten():
             # Unwrap epistemic layers to get leaf literals

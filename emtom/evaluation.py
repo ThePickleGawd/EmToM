@@ -651,7 +651,7 @@ class CategoryTaskEvaluator:
         if category == "cooperative":
             props = self.task.get_required_pddl_propositions()
             if not props:
-                return EvaluationResult(1.0, True, [], {})
+                return EvaluationResult(0.0, False, ["No PDDL goal propositions found"], {})
 
             proposition_status = {}
             failure_explanations = []
@@ -675,9 +675,16 @@ class CategoryTaskEvaluator:
         elif category == "competitive":
             # Delegate to competitive evaluation using PDDL propositions
             teams = set()
-            for literal_str, owner in (self.task.pddl_owners or {}).items():
-                if isinstance(owner, str) and owner.startswith("team_"):
-                    teams.add(owner)
+            # Try goal_spec first (new format)
+            spec = getattr(self.task, 'goal_spec', None)
+            if spec is not None:
+                for entry in spec.entries:
+                    if entry.owner and isinstance(entry.owner, str) and entry.owner.startswith("team_"):
+                        teams.add(entry.owner)
+            else:
+                for literal_str, owner in (self.task.pddl_owners or {}).items():
+                    if isinstance(owner, str) and owner.startswith("team_"):
+                        teams.add(owner)
             teams = sorted(teams)
 
             if not teams:
@@ -701,10 +708,9 @@ class CategoryTaskEvaluator:
             for team_id in teams:
                 team_props = self.task.get_team_pddl_propositions(team_id)
                 if not team_props:
-                    team_status[team_id] = True
-                    team_progress[team_id] = 1.0
-                    if winner is None:
-                        winner = team_id
+                    # Team has no goals — cannot win
+                    team_status[team_id] = False
+                    team_progress[team_id] = 0.0
                     continue
 
                 satisfied = 0
@@ -729,20 +735,25 @@ class CategoryTaskEvaluator:
         elif category == "mixed":
             # Evaluate main cooperative goals
             props = self.task.get_required_pddl_propositions()
+            # If all goals have owners (no unowned "required" goals),
+            # treat all propositions as required to avoid vacuous success
+            if not props:
+                props = self.task.get_pddl_propositions()
+            if not props:
+                return MixedResult(False, 0.0, {}, {})
             proposition_status = {}
             satisfied = 0
-            if props:
-                for i, prop in enumerate(props):
-                    pid = f"goal_{i}"
-                    try:
-                        result = self._check_proposition(prop)
-                        proposition_status[pid] = result.is_satisfied
-                        if result.is_satisfied:
-                            satisfied += 1
-                    except Exception:
-                        proposition_status[pid] = False
-            main_success = (satisfied == len(props)) if props else True
-            main_progress = satisfied / len(props) if props else 1.0
+            for i, prop in enumerate(props):
+                pid = f"goal_{i}"
+                try:
+                    result = self._check_proposition(prop)
+                    proposition_status[pid] = result.is_satisfied
+                    if result.is_satisfied:
+                        satisfied += 1
+                except Exception:
+                    proposition_status[pid] = False
+            main_success = satisfied == len(props)
+            main_progress = satisfied / len(props)
 
             # Evaluate per-agent subgoals
             agent_subgoal_status = {}
@@ -759,7 +770,7 @@ class CategoryTaskEvaluator:
         # Fallback
         props = self.task.get_required_pddl_propositions()
         if not props:
-            return EvaluationResult(1.0, True, [], {})
+            return EvaluationResult(0.0, False, ["No PDDL goal propositions found"], {})
         return self._evaluate_pddl()
 
 

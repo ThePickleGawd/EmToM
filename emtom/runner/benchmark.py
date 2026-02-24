@@ -884,6 +884,11 @@ class BenchmarkRunner(EMTOMBaseRunner):
         if checker is None:
             return {"success": False, "error": "No PDDL goal"}
 
+        # Guard against empty conjuncts (vacuous success)
+        if not checker.conjuncts:
+            return {"success": False, "error": "PDDL goal checker has no conjuncts",
+                    "total_subtasks": 0, "percent_complete": 0.0}
+
         category = getattr(self.task, "category", "cooperative")
 
         if category == "competitive":
@@ -927,11 +932,15 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
         elif category == "mixed":
             required = checker.get_required_conjuncts()
+            # If all goals have owners (no unowned "required" goals),
+            # treat all conjuncts as required to avoid vacuous success
+            if not required and checker.conjuncts:
+                required = list(checker.conjuncts)
             required_done = sum(
                 1 for c in required
                 if checker.is_conjunct_completed(checker.conjuncts.index(c))
             )
-            main_goal_success = (required_done == len(required)) if required else True
+            main_goal_success = (required_done == len(required)) if required else False
 
             agent_subgoal_status = {}
             for i in range(self.task.num_agents):

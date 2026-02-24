@@ -35,7 +35,8 @@ def compute_task_spec_hash(task_data: Dict[str, Any]) -> str:
         "scene_id", "episode_id", "num_agents",
         "active_mechanics", "mechanic_bindings",
         "agent_secrets", "agent_actions",
-        "pddl_goal", "pddl_ordering", "pddl_owners",
+        "goals",  # new unified format
+        "pddl_goal", "pddl_ordering", "pddl_owners",  # legacy
         "items", "locked_containers", "initial_states",
         "message_targets", "teams", "team_secrets",
         "success_condition", "subtasks", "agent_spawns",
@@ -242,6 +243,15 @@ def generate_deterministic_trajectory(
     num_agents = int(task_data.get("num_agents", 2) or 2)
     pddl_goal = task_data.get("pddl_goal")
 
+    # Support new goals format
+    if not pddl_goal:
+        goals = task_data.get("goals")
+        if isinstance(goals, list) and goals:
+            if len(goals) == 1:
+                pddl_goal = goals[0].get("pddl", "")
+            else:
+                pddl_goal = "(and " + " ".join(g.get("pddl", "") for g in goals) + ")"
+
     if not pddl_goal:
         existing = task_data.get("golden_trajectory")
         if isinstance(existing, list) and existing:
@@ -264,8 +274,35 @@ def generate_deterministic_trajectory(
     literals = extract_plannable_literals(goal)
     literals = apply_literal_ordering(literals, task_data.get("pddl_ordering", []))
 
+    # If goals array provides index-based ordering, apply it
+    goals_array = task_data.get("goals")
+    if isinstance(goals_array, list) and goals_array and not task_data.get("pddl_ordering"):
+        # Build ordering from goals[].after
+        index_ordering = []
+        pddl_by_id = {g["id"]: g["pddl"] for g in goals_array if "id" in g and "pddl" in g}
+        for g in goals_array:
+            for dep_id in g.get("after", []):
+                dep_pddl = pddl_by_id.get(dep_id)
+                if dep_pddl:
+                    index_ordering.append({"before": dep_pddl, "after": g["pddl"]})
+        if index_ordering:
+            literals = apply_literal_ordering(literals, index_ordering)
+
     restrictions = extract_room_restrictions(task_data)
     target_to_room = build_target_to_room_map(scene_data)
+
+    # Build literal-pddl -> owner mapping from goals array
+    literal_owner: Dict[str, str] = {}
+    if isinstance(goals_array, list):
+        for g in goals_array:
+            owner = g.get("owner")
+            pddl_str = g.get("pddl", "")
+            if owner and pddl_str:
+                literal_owner[pddl_str.strip()] = owner
+    # Also from legacy pddl_owners
+    for lit_str, owner in (task_data.get("pddl_owners") or {}).items():
+        if isinstance(owner, str) and isinstance(lit_str, str):
+            literal_owner[lit_str.strip()] = owner
 
     remote_trigger_by_target: Dict[str, str] = {}
     for binding in task_data.get("mechanic_bindings", []):
@@ -298,6 +335,13 @@ def generate_deterministic_trajectory(
     def add_action(agent_id: str, action: str) -> None:
         trajectory.append(wrap_parallel_step(num_agents, agent_id, action))
 
+    def get_agent_for_literal(lit, target_id: str) -> str:
+        """Get agent for a literal, respecting owner field if set."""
+        owner = literal_owner.get(lit.to_pddl().strip())
+        if owner and owner.startswith("agent_"):
+            return owner
+        return pick_agent_for_target(target_id, num_agents, target_to_room, restrictions)
+
     for lit in literals:
         pred = lit.predicate
         args = list(lit.args)
@@ -305,7 +349,7 @@ def generate_deterministic_trajectory(
 
         if pred in ("is_open", "is_closed") and args:
             target = args[0]
-            agent_id = pick_agent_for_target(target, num_agents, target_to_room, restrictions)
+            agent_id = get_agent_for_literal(lit, target)
             add_action(agent_id, f"Navigate[{target}]")
             if pred == "is_open":
                 add_action(agent_id, f"{'Close' if lit.negated else 'Open'}[{target}]")
@@ -318,7 +362,7 @@ def generate_deterministic_trajectory(
             target = args[0]
             if target in remote_trigger_by_target:
                 trigger = remote_trigger_by_target[target]
-                agent_id = pick_agent_for_target(trigger, num_agents, target_to_room, restrictions)
+                agent_id = get_agent_for_literal(lit, trigger)
                 add_action(agent_id, f"Navigate[{trigger}]")
                 add_action(agent_id, f"Open[{trigger}]")
                 planned_literals.append(lit_str)
@@ -328,16 +372,16 @@ def generate_deterministic_trajectory(
             if isinstance(key_item, str):
                 source = item_location.get(key_item)
                 if source:
-                    src_agent = pick_agent_for_target(source, num_agents, target_to_room, restrictions)
+                    src_agent = get_agent_for_literal(lit, source)
                     add_action(src_agent, f"Navigate[{source}]")
                     add_action(src_agent, f"Open[{source}]")
-                dst_agent = pick_agent_for_target(target, num_agents, target_to_room, restrictions)
+                dst_agent = get_agent_for_literal(lit, target)
                 add_action(dst_agent, f"Navigate[{target}]")
                 add_action(dst_agent, f"UseItem[{key_item}, {target}]")
                 planned_literals.append(lit_str)
                 continue
 
-            fallback_agent = pick_agent_for_target(target, num_agents, target_to_room, restrictions)
+            fallback_agent = get_agent_for_literal(lit, target)
             add_action(fallback_agent, f"Navigate[{target}]")
             add_action(fallback_agent, f"Open[{target}]")
             planned_literals.append(lit_str)
@@ -352,12 +396,53 @@ def generate_deterministic_trajectory(
                 # Items are inventory-only in this benchmark variant.
                 ignored_literals.append(lit_str)
                 continue
-            agent_id = pick_agent_for_target(obj, num_agents, target_to_room, restrictions)
+            agent_id = get_agent_for_literal(lit, obj)
             add_action(agent_id, f"Navigate[{obj}]")
             add_action(agent_id, f"Pick[{obj}]")
             add_action(agent_id, f"Navigate[{receptacle}]")
             relation = "within" if pred == "is_inside" else "on"
             add_action(agent_id, f"Place[{obj}, {relation}, {receptacle}, None, None]")
+            planned_literals.append(lit_str)
+            continue
+
+        if pred == "agent_in_room" and len(args) >= 2 and not lit.negated:
+            agent_str, room = args[0], args[1]
+            # Navigate agent to a furniture item in the target room
+            nav_target = room
+            if isinstance(scene_data, dict):
+                fir = scene_data.get("furniture_in_rooms", {})
+            elif scene_data and hasattr(scene_data, "furniture_in_rooms"):
+                fir = scene_data.furniture_in_rooms
+            else:
+                fir = {}
+            room_furniture = fir.get(room, [])
+            if room_furniture:
+                nav_target = room_furniture[0]
+            add_action(agent_str, f"Navigate[{nav_target}]")
+            planned_literals.append(lit_str)
+            continue
+
+        if pred == "is_held_by" and len(args) >= 2 and not lit.negated:
+            obj, agent_str = args[0], args[1]
+            add_action(agent_str, f"Navigate[{obj}]")
+            add_action(agent_str, f"Pick[{obj}]")
+            planned_literals.append(lit_str)
+            continue
+
+        if pred in ("is_clean", "is_filled", "is_powered_on", "is_powered_off") and args:
+            target = args[0]
+            if lit.negated:
+                ignored_literals.append(lit_str)
+                continue
+            agent_id = get_agent_for_literal(lit, target)
+            add_action(agent_id, f"Navigate[{target}]")
+            action_map = {
+                "is_clean": "Clean",
+                "is_filled": "Fill",
+                "is_powered_on": "PowerOn",
+                "is_powered_off": "PowerOff",
+            }
+            add_action(agent_id, f"{action_map[pred]}[{target}]")
             planned_literals.append(lit_str)
             continue
 

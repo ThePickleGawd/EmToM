@@ -350,3 +350,5 @@ def _compute_non_trivial_depth(
         return _compute_non_trivial_depth(formula.operand, observability)
 
     return 0, trivial_goals
+
+

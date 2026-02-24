@@ -1,8 +1,10 @@
 """
 Visualize a task's PDDL goal as a DAG.
 
-Renders pddl_goal conjuncts as nodes, pddl_ordering as edges,
-with coloring by owner (team/agent) and shape by goal type (physical vs epistemic).
+Reads the ``goals`` array (GoalEntry format with index-based ``after``
+dependencies) when present, falling back to legacy ``pddl_goal`` /
+``pddl_ordering`` / ``pddl_owners`` fields.  Nodes are colored by owner
+and shaped by goal type (physical / epistemic / negated).
 
 Usage:
     python -m emtom.cli.visualize_task task.json [-o output.png] [--format svg]
@@ -122,23 +124,60 @@ def shorten_label(conjunct: str) -> str:
 
 
 def build_dag(task_data: Dict[str, Any]) -> Optional[Any]:
-    """Build a graphviz Digraph from task PDDL data."""
+    """Build a graphviz Digraph from task goal data."""
     import graphviz
 
-    pddl_goal = task_data.get("pddl_goal", "")
-    ordering = task_data.get("pddl_ordering", [])
-    owners = task_data.get("pddl_owners", {})
-    # Filter out _COMMENT keys
-    owners = {k: v for k, v in owners.items() if not k.startswith("_")}
     category = task_data.get("category", "cooperative")
     title = task_data.get("title", task_data.get("task_id", "Task"))
     num_agents = task_data.get("num_agents", 2)
 
-    if not pddl_goal:
-        return None
+    # Try goals array first, fall back to legacy
+    goals_array = task_data.get("goals")
+    if goals_array:
+        # New format: goals array with index-based ordering
+        entries = []
+        for g in goals_array:
+            entries.append({
+                "id": g["id"],
+                "pddl": g["pddl"],
+                "after": g.get("after", []),
+                "owner": g.get("owner"),
+            })
+    else:
+        # Legacy format: parse pddl_goal + pddl_ordering + pddl_owners
+        pddl_goal = task_data.get("pddl_goal", "")
+        ordering = task_data.get("pddl_ordering", [])
+        owners = task_data.get("pddl_owners", {})
+        owners = {k: v for k, v in owners.items() if not k.startswith("_")}
 
-    conjuncts = parse_conjuncts(pddl_goal)
-    if not conjuncts:
+        if not pddl_goal:
+            return None
+
+        conjuncts = parse_conjuncts(pddl_goal)
+        if not conjuncts:
+            return None
+
+        # Build index-based entries from legacy format
+        pddl_to_idx = {c: i for i, c in enumerate(conjuncts)}
+        after_map: Dict[int, List[int]] = {i: [] for i in range(len(conjuncts))}
+        for rule in ordering:
+            before_str = rule.get("before", "").strip()
+            after_str = rule.get("after", "").strip()
+            before_idx = pddl_to_idx.get(before_str)
+            after_idx = pddl_to_idx.get(after_str)
+            if before_idx is not None and after_idx is not None:
+                after_map[after_idx].append(before_idx)
+
+        entries = []
+        for i, conj in enumerate(conjuncts):
+            entries.append({
+                "id": i,
+                "pddl": conj,
+                "after": after_map[i],
+                "owner": owners.get(conj),
+            })
+
+    if not entries:
         return None
 
     # Build graph
@@ -166,14 +205,17 @@ def build_dag(task_data: Dict[str, Any]) -> Optional[Any]:
         },
     )
 
-    # Create node IDs and classify
-    node_ids = {}
-    for i, conj in enumerate(conjuncts):
-        node_id = f"g{i}"
-        node_ids[conj] = node_id
+    # Create nodes
+    id_to_node = {}
+    for entry in entries:
+        gid = entry["id"]
+        pddl = entry["pddl"]
+        owner = entry.get("owner")
+        node_id = f"g{gid}"
+        id_to_node[gid] = node_id
 
-        label = shorten_label(conj)
-        _, goal_type, tom_depth = classify_goal(conj)
+        label = shorten_label(pddl)
+        _, goal_type, tom_depth = classify_goal(pddl)
 
         # Shape by type
         if goal_type == "epistemic":
@@ -184,12 +226,10 @@ def build_dag(task_data: Dict[str, Any]) -> Optional[Any]:
             shape = "box"
 
         # Color by owner
-        owner = owners.get(conj, "")
         if owner:
             fillcolor = COLORS.get(owner, "#DDDDDD")
         elif goal_type == "epistemic":
-            # Extract agent from K/B
-            m = re.match(r'^\((K|B)\s+(\w+)', conj)
+            m = re.match(r'^\((K|B)\s+(\w+)', pddl)
             if m:
                 fillcolor = COLORS.get(m.group(2), "#D4E6F1")
             else:
@@ -197,24 +237,21 @@ def build_dag(task_data: Dict[str, Any]) -> Optional[Any]:
         else:
             fillcolor = "#E8E8E8"
 
-        # Lighter fill for readability
-        fontcolor = "#000000"
-
         dot.node(
             node_id,
             label=label,
             shape=shape,
             fillcolor=fillcolor,
-            fontcolor=fontcolor,
+            fontcolor="#000000",
             penwidth="1.5" if tom_depth > 0 else "1.0",
         )
 
-    # Add ordering edges
-    for rule in ordering:
-        before = rule.get("before", "")
-        after = rule.get("after", "")
-        if before in node_ids and after in node_ids:
-            dot.edge(node_ids[before], node_ids[after])
+    # Add ordering edges from 'after' references
+    for entry in entries:
+        gid = entry["id"]
+        for dep_id in entry.get("after", []):
+            if dep_id in id_to_node and gid in id_to_node:
+                dot.edge(id_to_node[dep_id], id_to_node[gid])
 
     # Add legend
     with dot.subgraph(name="cluster_legend") as legend:

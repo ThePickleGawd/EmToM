@@ -2,9 +2,9 @@
 Verify PDDL goal solvability and compute ToM depth.
 
 Checks:
-1. pddl_goal syntax is valid
+1. Goal syntax is valid (via GoalSpec)
 2. Goal compiles against scene objects
-3. Goal is solvable by the PDDL solver
+3. Goal is structurally solvable by PDKBSolver
 4. Computes ToM depth from epistemic structure
 
 Usage:
@@ -47,32 +47,42 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     except json.JSONDecodeError as e:
         return failure(f"Invalid JSON: {e}")
 
-    pddl_goal = task_data.get("pddl_goal")
-    if not pddl_goal:
-        return failure("No pddl_goal field in task. Add a pddl_goal string.")
-
-    # Parse goal
-    try:
-        from emtom.pddl.dsl import parse_goal_string
-
-        goal = parse_goal_string(pddl_goal)
-    except Exception as e:
-        return failure(f"Invalid PDDL goal syntax: {e}")
-
-    # Validate predicate arities against domain
-    from emtom.pddl.dsl import validate_goal_predicates
+    # Build GoalSpec from goals array or legacy fields
+    from emtom.pddl.goal_spec import GoalSpec
     from emtom.pddl.domain import EMTOM_DOMAIN
 
-    arity_errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
-    if arity_errors:
+    goals_array = task_data.get("goals")
+    pddl_goal = task_data.get("pddl_goal")
+
+    if goals_array:
+        try:
+            goal_spec = GoalSpec.from_goals_array(goals_array)
+        except ValueError as e:
+            return failure(f"Invalid goals array: {e}")
+    elif pddl_goal:
+        try:
+            goal_spec = GoalSpec.from_legacy(
+                pddl_goal,
+                task_data.get("pddl_ordering", []),
+                task_data.get("pddl_owners", {}),
+            )
+        except Exception as e:
+            return failure(f"Invalid PDDL goal syntax: {e}")
+    else:
+        return failure("No goals array or pddl_goal field in task.")
+
+    # Validate goal spec against domain
+    num_agents = task_data.get("num_agents", 2)
+    valid_agents = {f"agent_{i}" for i in range(num_agents)}
+    validation_errors = goal_spec.validate(EMTOM_DOMAIN, valid_agents)
+    if validation_errors:
         return failure(
-            "Predicate validation errors:\n" + "\n".join(arity_errors),
-            data={"valid": False, "pddl_goal": pddl_goal},
+            "Goal validation errors:\n" + "\n".join(validation_errors),
+            data={"valid": False, "pddl_goal": goal_spec.to_pddl_string()},
         )
 
     # Build task object
     from emtom.task_gen.task_generator import GeneratedTask
-
     task = GeneratedTask.from_dict(task_data)
 
     # Load scene data from current_scene.json if available
@@ -86,7 +96,7 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
             except (json.JSONDecodeError, IOError):
                 pass
 
-    # Compile and solve
+    # Compile and solve with PDKBSolver
     from emtom.pddl.compiler import compile_task
     from emtom.pddl.epistemic import ObservabilityModel
     from emtom.pddl.solver import PDKBSolver
@@ -99,7 +109,7 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     if not result.solvable:
         return failure(
             f"PDDL goal is not solvable: {result.error}",
-            data={"valid": False, "pddl_goal": pddl_goal},
+            data={"valid": False, "pddl_goal": goal_spec.to_pddl_string()},
         )
 
     # Check communication budget
@@ -107,22 +117,21 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
 
     # Compute ToM depth
     from emtom.pddl.tom_verifier import explain_tom_depth
-
     tom_info = explain_tom_depth(task, scene_data)
 
     # Goal description
+    formula = goal_spec.to_formula()
     from emtom.pddl.describe import goal_to_natural_language
-
-    description = goal_to_natural_language(goal)
+    description = goal_to_natural_language(formula)
 
     output = {
         "valid": True,
-        "pddl_goal": pddl_goal,
+        "pddl_goal": goal_spec.to_pddl_string(),
         "solvable": True,
         "tom_level": tom_info["tom_level"],
         "tom_reasoning": tom_info["tom_reasoning"],
         "goal_description": description,
-        "num_conjuncts": len(goal.flatten()),
+        "num_conjuncts": len(goal_spec),
         "solve_time": result.solve_time,
     }
     if result.trivial_k_goals:

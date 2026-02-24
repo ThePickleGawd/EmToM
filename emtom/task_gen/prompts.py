@@ -46,7 +46,7 @@ Assigned!
 ## Workflow
 1. `new_scene[N]` → load scene with N agents
 2. Read `sampled_tasks/` for examples
-3. Edit `{task_file}` — use `pddl_goal` for goals
+3. Edit `{task_file}` — use `goals` array for goals
 4. `verify_pddl[]` → check solvability + ToM depth
 5. `judge[]` → fix → repeat until pass
 6. `verify_golden_trajectory[]` → deterministic regeneration + simulator check → fix spec → repeat until pass
@@ -138,9 +138,10 @@ Each agent's secrets MUST mention their message limit: "You can only send N mess
   "agent_actions": {{"agent_0": [...], "agent_1": [...]}},
   "message_targets": {{"agent_0": ["agent_1"], "agent_1": ["agent_0"]}},
   "mechanic_bindings": [{{"mechanic_type": "limited_bandwidth", "message_limits": {{"agent_0": 3, "agent_1": 3}}}}],
-  "pddl_goal": "(and (is_open cabinet_27) (is_on_top bottle_4 table_13))",
-  "pddl_ordering": [{{"before": "(is_open cabinet_27)", "after": "(is_on_top bottle_4 table_13)"}}],
-  "pddl_owners": {{}},
+  "goals": [
+    {{"id": 0, "pddl": "(is_open cabinet_27)", "after": []}},
+    {{"id": 1, "pddl": "(is_on_top bottle_4 table_13)", "after": [0]}}
+  ],
   "items": [{{"item_id": "item_X", "inside": "container"}}],
   "locked_containers": {{"container": "item_key"}},
   "golden_trajectory": [{{"actions": [{{"agent": "agent_0", "action": "Wait[]"}}]}}],
@@ -153,7 +154,7 @@ Each agent's secrets MUST mention their message limit: "You can only send N mess
 {available_predicates}
 
 ## PDDL Goal Format
-Use `pddl_goal` instead of `subtasks`. Write goals as PDDL formulas:
+Use the `goals` array instead of `subtasks`. Each entry has an `id`, `pddl` formula, `after` (dependency IDs), and optional `owner`:
 - Single goal: `"(is_open cabinet_27)"`
 - Conjunction: `"(and (is_open cabinet_27) (is_on_top bottle_4 table_13))"`
 - Negation: `"(not (is_open drawer_5))"`
@@ -161,46 +162,48 @@ Use `pddl_goal` instead of `subtasks`. Write goals as PDDL formulas:
 - Nested: `"(K agent_0 (K agent_1 (is_open safe_3)))"` — agent_0 knows that agent_1 knows
 - Negated knowledge: `"(not (K agent_1 (is_inside gem_1 safe_3)))"` — agent_1 must NOT know this
 - **ToM depth** = max nesting depth of K/B operators (auto-computed by `verify_pddl[]`)
-- Use `pddl_ordering` for dependencies: `{{"before": "(pred ...)", "after": "(pred ...)"}}`
+- Use the `after` field for dependencies between goals (by ID reference)
   - **REQUIRED** when goal has >1 conjunct — ordering must be non-empty
   - K() goals should be prerequisites for actions that depend on that knowledge
-- For competitive: use `pddl_owners` to assign goals to teams: `{{"(is_inside trophy_1 cabinet_10)": "team_0"}}`
+- For competitive: use the `owner` field to assign goals to teams: `{{"id": 0, "pddl": "(is_inside trophy_1 cabinet_10)", "after": [], "owner": "team_0"}}`
   - **REQUIRED** for competitive/mixed tasks — assign team/agent ownership
-- For mixed: use `pddl_owners` for agent subgoals: `{{"(is_inside vase_1 closet_5)": "agent_0"}}`
-- `tom_level` and `tom_reasoning` are auto-computed from PDDL — do NOT set them manually
+- For mixed: use the `owner` field for agent subgoals: `{{"id": 0, "pddl": "(is_inside vase_1 closet_5)", "after": [], "owner": "agent_0"}}`
+- `tom_level` and `tom_reasoning` are auto-computed from goals — do NOT set them manually
 - Run `verify_pddl[]` to check solvability and get computed ToM depth
 
 ## When to Use K() Goals
 - Use `(K agent_X ...)` when agent_X cannot directly observe the fact (room_restriction, hidden mechanic) AND the task requires them to learn it
 - K() goals naturally express Theory of Mind: the agent must acquire knowledge through communication or inference
 - Every task SHOULD include at least one K() goal when there is information asymmetry (room restrictions, hidden mechanics)
-- K() goals should appear as prerequisites in `pddl_ordering` for physical actions that depend on that knowledge
+- K() goals should appear with other goals listing them in their `after` field
 
 ### Example: K=0 (no epistemic reasoning)
 ```json
-"pddl_goal": "(and (is_open cabinet_27) (is_on_top bottle_4 table_13))",
-"pddl_ordering": [{{"before": "(is_open cabinet_27)", "after": "(is_on_top bottle_4 table_13)"}}]
+"goals": [
+  {{"id": 0, "pddl": "(is_open cabinet_27)", "after": []}},
+  {{"id": 1, "pddl": "(is_on_top bottle_4 table_13)", "after": [0]}}
+]
 ```
 
 ### Example: K=1 (agent must acquire knowledge via communication)
 ```json
-"pddl_goal": "(and (K agent_0 (is_inside key_1 cabinet_27)) (is_open safe_3) (is_on_top trophy_1 table_8))",
-"pddl_ordering": [
-  {{"before": "(K agent_0 (is_inside key_1 cabinet_27))", "after": "(is_open safe_3)"}},
-  {{"before": "(is_open safe_3)", "after": "(is_on_top trophy_1 table_8)"}}
+"goals": [
+  {{"id": 0, "pddl": "(K agent_0 (is_inside key_1 cabinet_27))", "after": []}},
+  {{"id": 1, "pddl": "(is_open safe_3)", "after": [0]}},
+  {{"id": 2, "pddl": "(is_on_top trophy_1 table_8)", "after": [1]}}
 ]
 ```
 
 ### Example: K=2 (agent must reason about another's beliefs)
 ```json
-"pddl_goal": "(and (K agent_0 (K agent_2 (is_inside gem_1 safe_3))) (is_on_top gem_1 table_8))",
-"pddl_ordering": [
-  {{"before": "(K agent_0 (K agent_2 (is_inside gem_1 safe_3)))", "after": "(is_on_top gem_1 table_8)"}}
+"goals": [
+  {{"id": 0, "pddl": "(K agent_0 (K agent_2 (is_inside gem_1 safe_3)))", "after": []}},
+  {{"id": 1, "pddl": "(is_on_top gem_1 table_8)", "after": [0]}}
 ]
 ```
 
 ## Theory of Mind
-ToM depth is auto-computed from the K/B nesting depth in `pddl_goal`.
+ToM depth is auto-computed from the K/B nesting depth in `goals`.
 - **Depth 0**: No K() goals — all agents share full information
 - **Depth 1**: K(agent, fact) — agents must reason about what others know (e.g., room restrictions create private knowledge)
 - **Depth 2**: K(agent, K(other, fact)) — agents must reason about what others believe about third parties' knowledge
@@ -235,7 +238,7 @@ Use `verify_pddl[]` to see the computed ToM depth. Design information asymmetry 
 ## Golden Trajectory
 `golden_trajectory` is a derived artifact. Do NOT hand-author it as source-of-truth.
 `verify_golden_trajectory[]` and `submit_task[]` regenerate it deterministically from the task spec.
-You should focus on editing spec fields (`pddl_goal`, mechanics, constraints, secrets).
+You should focus on editing spec fields (`goals`, mechanics, constraints, secrets).
 
 The deterministic planner generates **physical actions only** (Navigate, Open, Close, Pick, Place, UseItem).
 It does NOT generate Communicate actions. K() epistemic goals are unwrapped to their inner

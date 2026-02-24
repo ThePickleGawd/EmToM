@@ -1510,23 +1510,40 @@ SUMMARY:"""
         except json.JSONDecodeError as e:
             return json.dumps({"valid": False, "error": f"Invalid JSON: {e}"})
 
-        # Validate structure
+        # Check for epistemic (K/Knows) goals — planner can't generate Communicate
+        pddl_goal = task_data.get("pddl_goal", "")
+        goals_array = task_data.get("goals", [])
+        has_epistemic = "(K " in pddl_goal or "(Knows " in pddl_goal
+        if not has_epistemic and goals_array:
+            has_epistemic = any(
+                "(K " in g.get("pddl", "") or "(Knows " in g.get("pddl", "")
+                for g in goals_array
+            )
+
+        if has_epistemic:
+            self._log(
+                "Epistemic goal detected — using existing golden trajectory "
+                "(skipping deterministic regeneration)."
+            )
+        else:
+            # Regenerate golden trajectory from PDDL BEFORE validation
+            # (validation requires golden_trajectory to exist)
+            try:
+                regen = self._regenerate_golden_trajectory(task_data, source="verify")
+                self._log(
+                    f"Regenerated trajectory: {regen['num_steps']} steps "
+                    f"(spec_hash={regen['spec_hash'][:8]})"
+                )
+            except Exception as e:
+                return json.dumps({
+                    "valid": False,
+                    "error": f"Failed to regenerate trajectory from PDDL: {e}",
+                })
+
+        # Validate structure (after regeneration so golden_trajectory exists)
         validation = self._validate_task_structure(task_data)
         if "error" in validation:
             return json.dumps(validation, indent=2)
-
-        # Deterministically regenerate golden trajectory from PDDL spec
-        try:
-            regen = self._regenerate_golden_trajectory(task_data, source="verify")
-            self._log(
-                f"Regenerated trajectory: {regen['num_steps']} steps "
-                f"(spec_hash={regen['spec_hash'][:8]})"
-            )
-        except Exception as e:
-            return json.dumps({
-                "valid": False,
-                "error": f"Failed to regenerate trajectory from PDDL: {e}",
-            })
 
         golden = task_data.get("golden_trajectory", [])
         if not golden:

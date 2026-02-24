@@ -470,10 +470,44 @@ def validate_blocking_spec(
                 )
 
     # ------------------------------------------------------------------
+    # Goals array validation (new unified format)
+    # ------------------------------------------------------------------
+    goals = task_data.get("goals")
+    if isinstance(goals, list) and goals:
+        try:
+            from emtom.pddl.goal_spec import GoalSpec
+            from emtom.pddl.domain import EMTOM_DOMAIN
+            spec = GoalSpec.from_goals_array(goals)
+
+            # Validate against domain and agents
+            spec_errors = spec.validate(EMTOM_DOMAIN, valid_agent_ids)
+            errors.extend(spec_errors)
+
+            # Warn if ordering is empty with multi-goal specs
+            if len(spec.entries) > 1 and all(not e.after for e in spec.entries):
+                errors.append(
+                    "goals: All entries have empty 'after' but there are multiple goals. "
+                    "Add ordering constraints to define dependencies between goals."
+                )
+
+            # Warn if owners empty for competitive/mixed tasks
+            if isinstance(category, str) and category in ("competitive", "mixed"):
+                has_owners = any(e.owner for e in spec.entries)
+                if not has_owners:
+                    errors.append(
+                        f"goals: No entries have 'owner' set for {category} task. "
+                        f"Assign goals to teams/agents via the 'owner' field."
+                    )
+        except ValueError as e:
+            errors.append(f"Invalid goals array: {e}")
+        except Exception as e:
+            errors.append(f"Goals validation error: {e}")
+
+    # ------------------------------------------------------------------
     # PDDL goal validation
     # ------------------------------------------------------------------
     pddl_goal = task_data.get("pddl_goal")
-    if isinstance(pddl_goal, str) and pddl_goal:
+    if not (isinstance(goals, list) and goals) and isinstance(pddl_goal, str) and pddl_goal:
         try:
             from emtom.pddl.dsl import parse_goal_string, validate_goal_predicates, Knows, Believes, EpistemicFormula
             from emtom.pddl.domain import EMTOM_DOMAIN

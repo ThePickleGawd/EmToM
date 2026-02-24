@@ -27,6 +27,7 @@ from emtom.pddl.compiler import compile_task
 from emtom.pddl.goal_checker import PDDLGoalChecker
 from emtom.pddl.belief_tracker import BeliefStateTracker
 from emtom.pddl.describe import describe_task
+from emtom.pddl.goal_spec import GoalEntry, GoalSpec
 
 __all__ = [
     "Type",
@@ -49,4 +50,6 @@ __all__ = [
     "PDDLGoalChecker",
     "BeliefStateTracker",
     "describe_task",
+    "GoalEntry",
+    "GoalSpec",
 ]
