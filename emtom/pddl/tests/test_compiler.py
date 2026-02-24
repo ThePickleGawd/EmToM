@@ -249,10 +249,13 @@ class TestGoalChecker:
 
     def test_from_task_data(self):
         task_data = {
-            "pddl_goal": "(and (is_open cabinet_27) (is_on_top bottle_4 table_13))",
-            "pddl_ordering": [
-                {"before": "(is_open cabinet_27)", "after": "(is_on_top bottle_4 table_13)"}
-            ],
+            "problem_pddl": (
+                "(define (problem test)\n"
+                "  (:domain emtom)\n"
+                "  (:init)\n"
+                "  (:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))\n"
+                ")"
+            ),
         }
         checker = PDDLGoalChecker.from_task_data(task_data)
         assert checker is not None
@@ -314,7 +317,17 @@ class TestCompiler:
         task.mechanic_bindings = []
         task.locked_containers = {}
         task.message_targets = None
-        task.pddl_goal = pddl_goal
+        if pddl_goal is not None:
+            task.problem_pddl = (
+                f"(define (problem test_001)\n"
+                f"  (:domain emtom)\n"
+                f"  (:objects)\n"
+                f"  (:init)\n"
+                f"  (:goal {pddl_goal})\n"
+                f")"
+            )
+        else:
+            task.problem_pddl = None
         return task
 
     def test_basic_compile(self):
@@ -325,22 +338,30 @@ class TestCompiler:
             "objects": ["bottle_4"],
         }
         problem = compile_task(task, scene_data)
-        assert problem.name == "task_test_001"
+        assert problem.name == "test_001"
         assert "agent_0" in problem.objects
         assert "cabinet_27" in problem.objects
         assert problem.goal is not None
 
     def test_mechanic_bindings(self):
+        """Test that problem_pddl init literals are preserved in compiled problem."""
         from unittest.mock import MagicMock
-        task = self._make_task()
-        binding = MagicMock()
-        binding.mechanic_type = "inverse_state"
-        binding.trigger_object = "cabinet_27"
-        binding.target_object = None
-        binding.restricted_rooms = None
-        binding.for_agents = None
-        binding.requires_item = None
-        task.mechanic_bindings = [binding]
+        task = MagicMock()
+        task.task_id = "test_001"
+        task.num_agents = 2
+        task.items = []
+        task.initial_states = {}
+        task.mechanic_bindings = []
+        task.locked_containers = {}
+        task.message_targets = None
+        task.problem_pddl = (
+            "(define (problem test_001)\n"
+            "  (:domain emtom)\n"
+            "  (:objects cabinet_27 - furniture)\n"
+            "  (:init (is_inverse cabinet_27))\n"
+            "  (:goal (is_open cabinet_27))\n"
+            ")"
+        )
 
         problem = compile_task(task)
         init_preds = {l.predicate for l in problem.init}
@@ -568,10 +589,14 @@ class TestEpistemicGoalChecker:
 
     def test_from_task_data_with_epistemic(self):
         task_data = {
-            "pddl_goal": "(and (K agent_0 (is_inside key_1 cabinet_27)) (is_open safe_3))",
-            "pddl_ordering": [
-                {"before": "(K agent_0 (is_inside key_1 cabinet_27))", "after": "(is_open safe_3)"}
-            ],
+            "problem_pddl": (
+                "(define (problem test)\n"
+                "  (:domain emtom)\n"
+                "  (:objects)\n"
+                "  (:init)\n"
+                "  (:goal (and (K agent_0 (is_inside key_1 cabinet_27)) (is_open safe_3)))\n"
+                ")"
+            ),
         }
         checker = PDDLGoalChecker.from_task_data(task_data)
         assert checker is not None

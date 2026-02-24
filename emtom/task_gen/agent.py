@@ -1963,13 +1963,16 @@ Use new_scene[] if you want a different scene, or start creating your next task.
             if keep_mode:
                 task_file = self.working_dir / "working_task.json"
                 if task_file.exists():
-                    with open(task_file) as f:
-                        task_data = json.load(f)
-                    task_data["num_agents"] = num_agents
-                    if self.scene_data.agent_spawns:
-                        task_data["agent_spawns"] = self.scene_data.agent_spawns
-                    with open(task_file, "w") as f:
-                        json.dump(task_data, f, indent=2)
+                    try:
+                        with open(task_file) as f:
+                            task_data = json.load(f)
+                        task_data["num_agents"] = num_agents
+                        if self.scene_data.agent_spawns:
+                            task_data["agent_spawns"] = self.scene_data.agent_spawns
+                        with open(task_file, "w") as f:
+                            json.dump(task_data, f, indent=2)
+                    except (json.JSONDecodeError, KeyError):
+                        self._create_working_task_from_template(num_agents=num_agents)
                 else:
                     self._create_working_task_from_template(num_agents=num_agents)
                 return f"""Scene reloaded with {num_agents} agents. Task preserved.
@@ -2009,7 +2012,7 @@ working_task.json reset."""
         return f"Task generation aborted: {reason}"
 
     def _format_scene_data(self) -> str:
-        """Format scene data for the LLM prompt."""
+        """Format scene data as room→furniture→object hierarchy for the LLM prompt."""
         if not self.scene_data:
             return "No scene data available."
 
@@ -2020,39 +2023,61 @@ working_task.json reset."""
         lines.append("- `problem_pddl`, `mechanic_bindings`, `locked_containers`: Use EXACT object IDs from this list")
         lines.append("- `task` description: Use NATURAL LANGUAGE (e.g., 'the microwave', 'a toy airplane') - agents use FindObjectTool")
         lines.append("- `agent_secrets`: Use NATURAL LANGUAGE (e.g., 'a drawer in the bedroom') - no object IDs\n")
-        lines.append("- `current_scene.json` schema: `objects` is a list of object IDs (strings), locations come from `objects_on_furniture` + `furniture_in_rooms`\n")
 
-        # Rooms - show all
-        lines.append("### Rooms")
-        for room in self.scene_data.rooms:
-            lines.append(f"  - {room}")
-
-        # Articulated furniture (can open/close - good for mechanics) - show all
-        lines.append("\n### Articulated Furniture (can open/close)")
-        for furn in self.scene_data.articulated_furniture:
-            lines.append(f"  - {furn}")
-
-        # Other furniture - show all
-        other_furniture = [f for f in self.scene_data.furniture
-                          if f not in self.scene_data.articulated_furniture]
-        lines.append("\n### Other Furniture (tables, counters, etc.)")
-        for furn in other_furniture:
-            lines.append(f"  - {furn}")
-
-        # Objects with their locations - show all
-        lines.append("\n### Objects (can be picked up and placed)")
-        # Build reverse mapping: object -> furniture it's on
+        # Build reverse mappings
         obj_locations = {}
         for furn, objs in self.scene_data.objects_on_furniture.items():
             for obj in objs:
                 obj_locations[obj] = furn
 
-        for obj in self.scene_data.objects:
-            location = obj_locations.get(obj)
-            if location:
-                lines.append(f"  - {obj} (on {location})")
-            # Skip objects without a known location — they resolve to
-            # "unknown" at runtime and cause agent navigation failures.
+        furn_to_room = {}
+        for room, furns in self.scene_data.furniture_in_rooms.items():
+            for furn in furns:
+                furn_to_room[furn] = room
+
+        articulated_set = set(self.scene_data.articulated_furniture)
+
+        # Room → Furniture → Object hierarchy
+        lines.append("### Scene Layout (Room → Furniture → Objects)")
+        lines.append("Furniture marked with [A] can be opened/closed (articulated). Use `is_open`/`is_closed` ONLY on [A] furniture.\n")
+
+        for room in self.scene_data.rooms:
+            lines.append(f"**{room}**")
+            room_furniture = self.scene_data.furniture_in_rooms.get(room, [])
+            if not room_furniture:
+                lines.append("  (no furniture)")
+            for furn in room_furniture:
+                tag = " [A]" if furn in articulated_set else ""
+                # Find objects on this furniture
+                objs_on = self.scene_data.objects_on_furniture.get(furn, [])
+                if objs_on:
+                    obj_list = ", ".join(objs_on)
+                    lines.append(f"  - {furn}{tag} ← {obj_list}")
+                else:
+                    lines.append(f"  - {furn}{tag}")
+            lines.append("")
+
+        # Unassigned furniture (not in any room mapping)
+        all_mapped = set()
+        for furns in self.scene_data.furniture_in_rooms.values():
+            all_mapped.update(furns)
+        unmapped = [f for f in self.scene_data.furniture if f not in all_mapped]
+        if unmapped:
+            lines.append("**Unmapped Furniture (room unknown — avoid in room_restriction goals)**")
+            for furn in unmapped:
+                tag = " [A]" if furn in articulated_set else ""
+                lines.append(f"  - {furn}{tag}")
+            lines.append("")
+
+        # Objects without known locations (warn)
+        orphan_objs = [obj for obj in self.scene_data.objects if obj not in obj_locations]
+        if orphan_objs:
+            lines.append(f"**WARNING: {len(orphan_objs)} objects have unknown locations (DO NOT USE):** {', '.join(orphan_objs)}")
+            lines.append("")
+
+        # Summary counts for quick reference
+        located_count = sum(1 for obj in self.scene_data.objects if obj in obj_locations)
+        lines.append(f"**Summary:** {len(self.scene_data.rooms)} rooms, {len(self.scene_data.furniture)} furniture ({len(articulated_set)} articulated), {located_count} usable objects")
 
         return "\n".join(lines)
 

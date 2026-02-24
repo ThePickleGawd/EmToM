@@ -204,9 +204,14 @@ class TestGoalCheckerWithBeliefs:
     def test_from_task_data_with_tracker(self):
         """from_task_data passes belief tracker through."""
         task_data = {
-            "pddl_goal": "(K agent_0 (is_open cabinet_27))",
-            "pddl_ordering": [],
-            "pddl_owners": {},
+            "problem_pddl": (
+                "(define (problem test)\n"
+                "  (:domain emtom)\n"
+                "  (:objects)\n"
+                "  (:init)\n"
+                "  (:goal (K agent_0 (is_open cabinet_27)))\n"
+                ")"
+            ),
         }
         tracker = BeliefStateTracker.from_scene_and_observability(
             object_rooms={"cabinet_27": "kitchen_1"},

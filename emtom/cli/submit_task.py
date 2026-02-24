@@ -126,17 +126,6 @@ def run(
         task_data["problem_pddl"] = compiled.to_pddl()
         task_data["pddl_domain"] = compiled.domain_name
 
-        # Remove legacy goal fields from submitted artifact.
-        for legacy_field in (
-            "goals",
-            "pddl_goal",
-            "pddl_ordering",
-            "pddl_owners",
-            "subtasks",
-            "success_condition",
-        ):
-            task_data.pop(legacy_field, None)
-
         # Persist canonicalized artifact back to working file so follow-up tools
         # operate on the same spec.
         with open(task_path, "w") as f:

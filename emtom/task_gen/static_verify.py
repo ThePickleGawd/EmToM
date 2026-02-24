@@ -134,37 +134,8 @@ def _parse_action(action_str: str) -> Tuple[Optional[str], Optional[str]]:
 
 
 def _validate_supported_predicates(task: Dict[str, Any]) -> List[str]:
-    errors: List[str] = []
-
-    from emtom.evaluation import PARTNR_PREDICATES, EMTOM_PREDICATES
-    from emtom.state.manager import GameStateManager
-
-    supported = PARTNR_PREDICATES | EMTOM_PREDICATES | GameStateManager.GAME_STATE_PREDICATES
-
-    def check_condition(condition: Dict[str, Any], scope: str) -> None:
-        prop = condition.get("property")
-        if not prop:
-            errors.append(f"{scope} missing 'property'")
-            return
-        if prop not in supported:
-            errors.append(f"{scope} uses unsupported predicate '{prop}'")
-
-    success_condition = task.get("success_condition", {})
-    if isinstance(success_condition, dict):
-        req = success_condition.get("required_states", [])
-        if isinstance(req, list):
-            for idx, cond in enumerate(req):
-                if isinstance(cond, dict):
-                    check_condition(cond, f"success_condition.required_states[{idx}]")
-
-    for idx, subtask in enumerate(task.get("subtasks", [])):
-        if not isinstance(subtask, dict):
-            continue
-        condition = subtask.get("success_condition", {})
-        if isinstance(condition, dict):
-            check_condition(condition, f"subtasks[{idx}].success_condition")
-
-    return errors
+    """Validate PDDL goal predicates are supported (checked via spec_validator)."""
+    return []
 
 
 def _validate_golden_trajectory(
@@ -289,44 +260,8 @@ def _validate_success_condition_ids(
     task: Dict[str, Any],
     scene_data: Optional[Dict[str, Any]],
 ) -> List[str]:
-    """Validate that success condition entity/target IDs exist in the scene."""
-    if not scene_data:
-        return []
-
-    errors: List[str] = []
-
-    # Build set of valid scene IDs
-    scene_ids: Set[str] = set()
-    for key in ("rooms", "furniture", "objects"):
-        for value in scene_data.get(key, []):
-            if isinstance(value, str):
-                scene_ids.add(value)
-    # Also allow defined items
-    scene_ids.update(_extract_defined_items(task))
-    # Allow agent IDs
-    num_agents = task.get("num_agents", 2)
-    scene_ids.update(f"agent_{i}" for i in range(num_agents))
-
-    for idx, subtask in enumerate(task.get("subtasks", [])):
-        if not isinstance(subtask, dict):
-            continue
-        sc = subtask.get("success_condition", {})
-        if not isinstance(sc, dict):
-            continue
-        for field in ("entity", "target"):
-            val = sc.get(field)
-            if not isinstance(val, str) or not val:
-                continue
-            # Check concrete object IDs (pattern: word_number)
-            refs = ID_PATTERN.findall(val)
-            for ref in refs:
-                if ref not in scene_ids and not ref.startswith("item_"):
-                    errors.append(
-                        f"subtasks[{idx}].success_condition.{field} references "
-                        f"'{ref}' which is not in the scene"
-                    )
-
-    return errors
+    """Validate that PDDL goal object IDs exist in the scene (checked via PDDL validation)."""
+    return []
 
 
 def verify_task(
@@ -446,20 +381,6 @@ def verify_task(
 
         except Exception as e:
             errors.append(f"PDDL goal validation failed: {e}")
-
-    # DAG checks (legacy format)
-    elif isinstance(task.get("subtasks"), list) and task.get("subtasks"):
-        try:
-            from emtom.task_gen import Subtask
-            from emtom.task_gen.dag import validate_dag
-
-            subtasks = [Subtask.from_dict(s) for s in task["subtasks"] if isinstance(s, dict)]
-            is_valid_dag, dag_errors = validate_dag(subtasks)
-            if not is_valid_dag:
-                for err in dag_errors:
-                    errors.append(f"Invalid subtask DAG: {err}")
-        except Exception as e:
-            errors.append(f"DAG validation failed: {e}")
 
     errors.extend(_validate_supported_predicates(task))
     errors.extend(_validate_success_condition_ids(task, scene_data))

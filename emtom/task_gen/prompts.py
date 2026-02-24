@@ -43,6 +43,8 @@ Assigned!
 - `submit_task[]` - Save task. Requires judge + verify + test_task.
 - `fail[reason]` - **STOPS ALL GENERATION.** Only for simulator bugs or critical errors. Use `new_scene[N]` for task issues.
 
+**Stuck detection:** If you've spent 10+ iterations on the same scene without passing `judge[]`, call `new_scene[N]` for a fresh scene. Don't iterate endlessly on a scene that can't support your concept.
+
 ## Workflow
 1. `new_scene[N]` → load scene with N agents
 2. Read `sampled_tasks/` for examples
@@ -75,10 +77,8 @@ Assigned!
 - Each team member should contribute - divide responsibilities within teams
 - Balance matters: if teams are uneven in size, give smaller team easier objectives
 - Define `teams` mapping and encode opposition directly in `problem_pddl :goal`
-  - REQUIRED structure: explicit opposing win branches in `(or (and team_0_win ...) (and team_1_win ...))`
-  - Include exclusivity: each branch must negate opponent win literals so exactly one branch can hold
-  - Bad pattern (reject): one shared `(and ...)` that both teams can satisfy together
 - Keep the public `task` symmetric; do NOT reveal each team's target container
+- **Competitive PDDL goal MUST use `(or ...)` with exactly two branches** — see "Competitive OR Goals" section below
 
 **MIXED** - Cooperation with hidden conflicts
 - All agents share a main goal encoded in `problem_pddl`
@@ -140,6 +140,89 @@ Design goals so no single agent can complete all required physical literals.
 - Use room-restriction/access asymmetry to split required actions.
 - In competitive tasks, each team should need both members.
 - If deterministic trajectory would assign one active agent and others Wait, redesign before judge.
+
+## Competitive OR Goals — Required Pattern
+Competitive tasks MUST use a disjunctive `(or ...)` goal with exactly two branches — one per team.
+Each branch represents that team's win condition. The evaluator checks if ANY branch is fully satisfied.
+
+### Correct pattern:
+```
+(:goal
+  (or
+    (and
+      (is_on_top laptop_0 table_24)    ;; team_0 placement
+      (is_open cabinet_39)              ;; team_0 furniture state
+      (not (is_on_top laptop_0 bed_26)) ;; block team_1 win
+    )
+    (and
+      (is_on_top laptop_0 bed_26)       ;; team_1 placement
+      (is_closed cabinet_39)            ;; team_1 furniture state
+      (not (is_on_top laptop_0 table_24)) ;; block team_0 win
+    )
+  )
+)
+```
+
+### Rules:
+1. **Exactly two top-level branches** inside the `(or ...)` — one per team
+2. **Each branch is internally consistent** — never assert `(is_open X)` and `(is_closed X)` in the same branch
+3. **Mutual exclusivity via negation** — each branch negates a key literal from the opposing branch so both cannot hold simultaneously
+4. **Contested resources** — at least one object (e.g., laptop_0) appears in BOTH branches at different locations, creating direct competition
+5. **`is_open` and `is_closed` are mutually exclusive** — never use both positively in one branch. Use one positively in one branch and the other positively in the opposing branch.
+
+### Common mistakes (REJECT these):
+- `(and (is_open X) (is_closed X))` — contradictory, never satisfiable
+- `(and (is_open X) (not (is_closed X)))` — redundant, wastes a literal (is_open already implies not is_closed)
+- Flat `(and ...)` without `(or ...)` — both teams would need the same end-state, no competition
+- Three or more OR branches — only two teams supported
+- No negation of opponent literals — both branches could be true simultaneously
+
+## Scene Validation Checklist
+Before designing any task, verify the scene supports your concept. Do this IMMEDIATELY after `new_scene[N]`:
+
+1. **Check objects have known locations**: Every object you plan to use must show "(on furniture_X)" in the scene data. Objects without furniture parents are unusable.
+2. **Check furniture is in rooms**: Look at the scene data to see which room each furniture is in. You need this for `room_restriction` and `is_in_room` goals.
+3. **Check articulated furniture**: Only furniture listed under "Articulated Furniture" can be opened/closed. Do NOT use `is_open`/`is_closed` on tables, beds, counters, or other non-articulated furniture.
+4. **Minimum object count**: Need at least 3 movable objects with known locations for a viable task. If fewer, call `new_scene[N]` for a different scene.
+5. **Room count for restrictions**: Need at least 2 rooms with useful furniture/objects to use `room_restriction` effectively.
+
+If the scene fails any check, immediately call `new_scene[N]` — do NOT waste iterations trying to design around a bad scene.
+
+## PDDL-Scene Consistency Rules
+The most common source of verify failures is mismatches between PDDL and scene data. Before running `verify_pddl[]`:
+
+1. **`:objects` section must list only scene IDs**: Every agent, object, furniture, and room in `:objects` must exist in the current scene data. Never invent IDs.
+2. **`:init` must reflect actual scene state**: If an object is on table_29 in the scene, write `(is_on_top object table_29)` in `:init`. Do NOT invent initial locations.
+3. **`room_restriction` in `:init`**: For each `room_restriction` mechanic binding, add `(is_restricted agent_X room_Y)` to `:init` to match.
+4. **Furniture-room consistency**: If a goal requires placing an object on furniture_X in room_Y, verify that furniture_X is actually in room_Y by checking the scene data room listings.
+5. **Secrets must match `:init`**: If a secret says "the cup is in the bedroom drawer," the `:init` must have `(is_on_top cup_X drawer_Y)` or `(is_inside cup_X drawer_Y)` where drawer_Y is in a bedroom. Mismatches cause judge "narrative_consistency" failures.
+
+## Common Pitfalls — Learn from These
+These are the most frequent failure patterns. Avoid them:
+
+### Pitfall 1: Using non-articulated furniture for open/close goals
+- BAD: `(is_open table_22)` or `(is_closed bed_26)` — tables and beds cannot be opened/closed
+- GOOD: `(is_open cabinet_39)` — cabinets, drawers, fridges are articulated
+- CHECK: Only use `is_open`/`is_closed` on furniture listed under "Articulated Furniture" in scene data
+
+### Pitfall 2: Mechanic-goal decoupling
+- BAD: Adding `room_restriction` but all goals are in unrestricted rooms → agents can do everything alone
+- GOOD: Restrict agent_0 from room_Y, then put a goal literal in room_Y → agent_0 needs agent_1 to act there
+- RULE: Every `room_restriction` must block an agent from a room that contains at least one goal-relevant object/furniture
+
+### Pitfall 3: Sparse scene → novelty dead-end
+- If scene has <5 movable objects and no items-in-containers, you're limited to simple placement goals
+- Don't iterate 50+ times trying different mechanic combos — call `new_scene[N]` instead
+- After 10 failed iterations on the same scene, switch scenes
+
+### Pitfall 4: Secrets contradicting PDDL init state
+- If `:init` says `(is_on_top cup_3 table_18)` but a secret says "the cup is hidden in the bedroom drawer" → judge fails on narrative_consistency
+- Always cross-check secrets against `:init` before running `judge[]`
+
+### Pitfall 5: Competitive tasks without team-separation mechanics
+- Competitive tasks almost always need `restricted_communication` + `limited_bandwidth` so teams can't coordinate with opponents
+- Also need `room_restriction` or `remote_control` so team members have distinct roles
+- Without these, one team can just copy the other team's strategy → no competition
 
 ## Task JSON Structure
 ```json

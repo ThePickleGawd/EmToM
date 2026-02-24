@@ -82,35 +82,17 @@ def validate(
     # golden_trajectory is a derived artifact and may be stale/missing before
     # verify_golden_trajectory. Static trajectory checks run separately.
 
-    # Validate success condition OR subtasks DAG OR pddl_goal OR goals array
+    # Validate problem_pddl (canonical goal format)
     has_problem_pddl = bool(task_data.get("problem_pddl"))
-    has_success_condition = bool(task_data.get("success_condition"))
-    has_subtasks = bool(task_data.get("subtasks"))
     has_pddl_goal = bool(task_data.get("pddl_goal"))
     has_goals_array = bool(task_data.get("goals"))
 
-    if not has_problem_pddl and not has_success_condition and not has_subtasks and not has_pddl_goal and not has_goals_array:
+    if not has_problem_pddl and not has_pddl_goal and not has_goals_array:
         return failure(
-            "Task must have 'problem_pddl', 'goals', 'pddl_goal', 'success_condition', or 'subtasks' with valid DAG"
+            "Task must have 'problem_pddl', 'goals', or 'pddl_goal'"
         )
 
     if has_problem_pddl:
-        # problem_pddl is the canonical format; reject mixed goal sources.
-        legacy_fields = []
-        for name, present in (
-            ("goals", has_goals_array),
-            ("pddl_goal", has_pddl_goal),
-            ("subtasks", has_subtasks),
-            ("success_condition", has_success_condition),
-        ):
-            if present:
-                legacy_fields.append(name)
-        if legacy_fields:
-            return failure(
-                "problem_pddl cannot be combined with legacy goal fields: "
-                f"{legacy_fields}"
-            )
-
         try:
             from emtom.pddl.problem_pddl import parse_problem_pddl
             from emtom.pddl.domain import EMTOM_DOMAIN
@@ -137,100 +119,6 @@ def validate(
                 )
         except Exception as e:
             return failure(f"Invalid problem_pddl: {e}")
-
-    # Validate goals array if present
-    if has_goals_array:
-        try:
-            from emtom.pddl.goal_spec import GoalSpec
-
-            goal_spec = GoalSpec.from_goals_array(task_data["goals"])
-            if len(goal_spec) == 0:
-                return failure("goals array is empty")
-        except ValueError as e:
-            return failure(f"Invalid goals array: {e}")
-
-    # Validate PDDL goal if present
-    if has_pddl_goal:
-        try:
-            from emtom.pddl.dsl import parse_goal_string
-
-            goal = parse_goal_string(task_data["pddl_goal"])
-            conjuncts = goal.flatten()
-            if not conjuncts:
-                return failure("pddl_goal parsed but contains no goal conjuncts")
-        except Exception as e:
-            return failure(f"Invalid pddl_goal syntax: {e}")
-
-    # Validate success-condition predicates use supported schema
-    from emtom.evaluation import PARTNR_PREDICATES, EMTOM_PREDICATES
-    from emtom.state.manager import GameStateManager
-
-    supported_predicates = (
-        PARTNR_PREDICATES | EMTOM_PREDICATES | GameStateManager.GAME_STATE_PREDICATES
-    )
-
-    def _check_predicate(condition: Dict[str, Any], scope: str) -> Optional[CLIResult]:
-        prop = condition.get("property")
-        if not prop:
-            return failure(f"{scope} missing 'property' field in success_condition")
-        if prop not in supported_predicates:
-            return failure(
-                f"{scope} uses unsupported predicate '{prop}'. "
-                f"Supported predicates: {sorted(supported_predicates)}"
-            )
-        return None
-
-    top_level_condition = task_data.get("success_condition")
-    if isinstance(top_level_condition, dict):
-        for idx, cond in enumerate(top_level_condition.get("required_states", [])):
-            if isinstance(cond, dict):
-                error = _check_predicate(cond, f"success_condition.required_states[{idx}]")
-                if error:
-                    return error
-
-    # If using subtasks, validate DAG structure
-    if has_subtasks:
-        from emtom.task_gen import Subtask
-        from emtom.task_gen.dag import validate_dag
-
-        subtasks = []
-        for s in task_data["subtasks"]:
-            if isinstance(s, dict):
-                subtasks.append(Subtask.from_dict(s))
-
-        is_valid, errors = validate_dag(subtasks)
-        if not is_valid:
-            return failure(f"Invalid subtask DAG: {'; '.join(errors)}")
-
-        required_subtasks = [s for s in subtasks if getattr(s, 'required', True) is True]
-        if not required_subtasks:
-            return failure("At least one subtask must have 'required: true' for task success")
-
-        # Validate item IDs in subtask success conditions
-        invalid_items_in_subtasks = []
-        for s in task_data["subtasks"]:
-            if isinstance(s, dict):
-                condition = s.get("success_condition", {})
-                if isinstance(condition, dict):
-                    if condition.get("property") == "has_item":
-                        target_item = condition.get("target") or condition.get("value")
-                        if target_item and target_item.startswith("item_"):
-                            if target_item not in defined_items:
-                                invalid_items_in_subtasks.append(target_item)
-
-        if invalid_items_in_subtasks:
-            return failure(
-                f"subtasks reference undefined items: {list(set(invalid_items_in_subtasks))}. "
-                f"Defined items: {list(defined_items)}"
-            )
-
-        for i, s in enumerate(task_data["subtasks"]):
-            if isinstance(s, dict):
-                condition = s.get("success_condition", {})
-                if isinstance(condition, dict):
-                    error = _check_predicate(condition, f"subtasks[{i}]")
-                    if error:
-                        return error
 
     # Validate locked_containers references
     locked_containers = task_data.get("locked_containers", {})
@@ -277,22 +165,6 @@ def validate(
                 f"Valid: {sorted(valid_agent_ids)} (num_agents={num_agents})"
             )
 
-    # Check subtask success_condition entity references valid agents
-    for subtask in task_data.get("subtasks", []):
-        if not isinstance(subtask, dict):
-            continue
-        sc = subtask.get("success_condition", {})
-        if not isinstance(sc, dict):
-            continue
-        entity = sc.get("entity", "")
-        if not isinstance(entity, str):
-            entity = str(entity)
-        if entity.startswith("agent_") and entity not in valid_agent_ids:
-            return failure(
-                f"subtask '{subtask.get('id')}' references invalid agent '{entity}'. "
-                f"Valid: {sorted(valid_agent_ids)}"
-            )
-
     # Check task description is not empty
     if not task_data.get("task") or len(task_data.get("task", "")) < 20:
         return failure("task field must be at least 20 characters")
@@ -336,27 +208,6 @@ def validate(
                         f"agent_secrets[{agent_id}] references objects that don't exist in scene: "
                         f"{invalid_secret_refs}"
                     )
-
-        # Check subtask success_conditions for invented object IDs
-        for subtask in task_data.get("subtasks", []):
-            if not isinstance(subtask, dict):
-                continue
-            sc = subtask.get("success_condition", {})
-            if not isinstance(sc, dict):
-                continue
-            for field_name in ("entity", "target"):
-                val = sc.get(field_name, "")
-                if val and isinstance(val, str) and not val.startswith("agent_"):
-                    val_refs = re.findall(object_pattern, val)
-                    invalid_sc_refs = [
-                        ref for ref in val_refs
-                        if ref not in valid_scene_ids and not ref.startswith("item_")
-                    ]
-                    if invalid_sc_refs:
-                        return failure(
-                            f"subtask '{subtask.get('id')}' success_condition references "
-                            f"objects that don't exist: {invalid_sc_refs}"
-                        )
 
     # Check mechanic_bindings structure
     TRIGGER_OBJECT_MECHANICS = {

@@ -36,11 +36,9 @@ def compute_task_spec_hash(task_data: Dict[str, Any]) -> str:
         "active_mechanics", "mechanic_bindings",
         "agent_secrets", "agent_actions",
         "pddl_domain", "problem_pddl",
-        "goals",  # new unified format
-        "pddl_goal", "pddl_ordering", "pddl_owners",  # legacy
         "items", "locked_containers", "initial_states",
         "message_targets", "teams", "team_secrets",
-        "success_condition", "subtasks", "agent_spawns",
+        "agent_spawns",
     ]
     spec_payload = {k: task_data.get(k) for k in spec_keys}
     return hashlib.sha256(canonical_json(spec_payload).encode("utf-8")).hexdigest()
@@ -130,7 +128,10 @@ def pick_agent_for_target(
         feasible.append(agent_id)
 
     if not feasible:
-        return "agent_0"
+        raise ValueError(
+            f"No agent can reach {target_id} (room={target_room}). "
+            f"All agents are restricted. Check room_restriction mechanics."
+        )
     if not agent_loads:
         return feasible[0]
 

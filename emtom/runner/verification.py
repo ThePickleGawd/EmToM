@@ -97,46 +97,18 @@ class VerificationRunner(EMTOMBaseRunner):
         success_condition: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Evaluate task completion using PARTNR-style predicates.
+        Evaluate task completion using PDDL formula evaluation.
 
-        Handles OR goals (competitive tasks) by evaluating the full PDDL
-        formula structure rather than flattening to a list of conjuncts.
+        Handles both AND and OR goals (cooperative/competitive tasks) by
+        evaluating the full PDDL formula structure.
         """
-        # For tasks with a PDDL goal, use formula-level evaluation which
-        # correctly handles OR (competitive) goals.
         if success_condition is None and self.task:
             goal_checker = self.task.get_pddl_goal_checker()
-            if goal_checker and self._has_or_goal(goal_checker):
-                    return self._evaluate_formula(goal_checker)
-
-            # Non-OR goals: derive flat success_condition as before
-            effective_condition = self.task.get_effective_success_condition()
-            if effective_condition:
-                success_condition = {
-                    "description": effective_condition.description,
-                    "required_states": effective_condition.required_states,
-                }
+            if goal_checker:
+                return self._evaluate_formula(goal_checker)
 
         # Fall back to parent implementation (flat AND evaluation)
         return super().evaluate_task(success_condition)
-
-    @staticmethod
-    def _has_or_goal(goal_checker) -> bool:
-        """Check if the goal formula contains an OR node."""
-        from emtom.pddl.dsl import Or
-
-        def _walk(f) -> bool:
-            if isinstance(f, Or):
-                return True
-            for attr in ("operands",):
-                children = getattr(f, attr, None)
-                if children:
-                    for child in children:
-                        if _walk(child):
-                            return True
-            return False
-
-        return _walk(goal_checker.goal)
 
     def _evaluate_formula(self, goal_checker) -> Dict[str, Any]:
         """Evaluate PDDL formula directly against simulator state (handles OR)."""

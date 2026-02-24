@@ -16,7 +16,6 @@ from emtom.pddl.dsl import (
 
 if TYPE_CHECKING:
     from emtom.pddl.belief_tracker import BeliefStateTracker
-    from emtom.pddl.goal_spec import GoalEntry, GoalSpec
 
 
 class PDDLGoalChecker:
@@ -191,80 +190,22 @@ class PDDLGoalChecker:
         self.completed.clear()
 
     @classmethod
-    def from_goal_spec(
-        cls,
-        goal_spec: "GoalSpec",
-        belief_tracker: Optional["BeliefStateTracker"] = None,
-    ) -> "PDDLGoalChecker":
-        """Create a PDDLGoalChecker from a GoalSpec.
-
-        Uses index-based ordering from GoalEntry.after instead of
-        fragile string matching.
-        """
-        from emtom.pddl.goal_spec import GoalSpec, GoalEntry
-
-        goal = goal_spec.to_formula()
-
-        # Build ordering: GoalEntry.after directly gives us prerequisite indices
-        # No more string matching needed!
-        checker = cls.__new__(cls)
-        checker.goal = goal
-        checker.conjuncts = goal.flatten()
-        checker.completed = set()
-        checker._belief_tracker = belief_tracker
-
-        # Build prerequisites from GoalEntry.after
-        checker._prerequisites = {}
-        for entry in goal_spec.entries:
-            if entry.after:
-                checker._prerequisites[entry.id] = set(entry.after)
-
-        # Build owners from GoalEntry.owner
-        checker._owners = {}
-        for entry in goal_spec.entries:
-            if entry.owner:
-                checker._owners[entry.id] = entry.owner
-
-        return checker
-
-    @classmethod
     def from_task_data(
         cls,
         task_data: Dict[str, Any],
         belief_tracker: Optional["BeliefStateTracker"] = None,
     ) -> Optional["PDDLGoalChecker"]:
-        """Create from raw task JSON data. Supports both goals array and legacy format."""
+        """Create from raw task JSON data containing problem_pddl."""
         problem_pddl = task_data.get("problem_pddl")
-        if isinstance(problem_pddl, str) and problem_pddl.strip():
-            from emtom.pddl.problem_pddl import extract_goal_from_problem_pddl
-
-            goal = parse_goal_string(extract_goal_from_problem_pddl(problem_pddl))
-            return cls(
-                goal=goal,
-                ordering=[],
-                owners={},
-                belief_tracker=belief_tracker,
-            )
-
-        # Try new goals array format first
-        goals = task_data.get("goals")
-        if isinstance(goals, list) and goals:
-            from emtom.pddl.goal_spec import GoalSpec
-            spec = GoalSpec.from_goals_array(goals)
-            return cls.from_goal_spec(spec, belief_tracker)
-
-        # Fall back to legacy format
-        pddl_goal_str = task_data.get("pddl_goal")
-        if not pddl_goal_str:
+        if not isinstance(problem_pddl, str) or not problem_pddl.strip():
             return None
 
-        goal = parse_goal_string(pddl_goal_str)
-        ordering = task_data.get("pddl_ordering", [])
-        owners = task_data.get("pddl_owners", {})
+        from emtom.pddl.problem_pddl import extract_goal_from_problem_pddl
 
+        goal = parse_goal_string(extract_goal_from_problem_pddl(problem_pddl))
         return cls(
             goal=goal,
-            ordering=ordering,
-            owners=owners,
+            ordering=[],
+            owners={},
             belief_tracker=belief_tracker,
         )

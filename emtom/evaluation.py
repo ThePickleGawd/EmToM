@@ -675,16 +675,12 @@ class CategoryTaskEvaluator:
         elif category == "competitive":
             # Delegate to competitive evaluation using PDDL propositions
             teams = set()
-            # Try goal_spec first (new format)
-            spec = getattr(self.task, 'goal_spec', None)
-            if spec is not None:
-                for entry in spec.entries:
-                    if entry.owner and isinstance(entry.owner, str) and entry.owner.startswith("team_"):
-                        teams.add(entry.owner)
-            else:
-                for literal_str, owner in (self.task.pddl_owners or {}).items():
-                    if isinstance(owner, str) and owner.startswith("team_"):
-                        teams.add(owner)
+            checker = self.task.get_pddl_goal_checker()
+            if checker:
+                teams = set(checker.get_all_teams())
+            # Also check task.teams dict
+            if not teams and self.task.teams:
+                teams = set(self.task.teams.keys())
             teams = sorted(teams)
 
             if not teams:

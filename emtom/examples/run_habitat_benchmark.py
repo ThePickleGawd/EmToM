@@ -516,6 +516,23 @@ def run_single_task(
 
 def _build_category_stats(all_results: list) -> dict:
     """Build per-category aggregate statistics from benchmark results."""
+    def _require_percent_complete(result: dict, category: str) -> float:
+        """Require normalized progress from PDDL evaluation payload."""
+        evaluation = result.get("evaluation")
+        if not isinstance(evaluation, dict):
+            raise ValueError(
+                f"Missing evaluation payload for task '{result.get('task_id', 'unknown')}'"
+                f" in category '{category}'"
+            )
+
+        progress = evaluation.get("percent_complete")
+        if not isinstance(progress, (int, float)):
+            raise ValueError(
+                f"Missing numeric evaluation.percent_complete for task"
+                f" '{result.get('task_id', 'unknown')}' in category '{category}'"
+            )
+        return float(progress)
+
     # Group results by category (skip skipped tasks)
     by_category = {}
     for r in all_results:
@@ -532,10 +549,7 @@ def _build_category_stats(all_results: list) -> dict:
         passed = sum(1 for r in results if r.get("success"))
         timed_out = sum(1 for r in results if not r.get("done", True))
         avg_steps = sum(r.get("steps", 0) for r in results) / total
-        avg_progress = sum(
-            e.get("percent_required_complete", e.get("main_goal_progress", 0))
-            for e in evals
-        ) / total
+        avg_progress = sum(_require_percent_complete(r, cat) for r in results) / total
 
         cat_stats = {
             "total": total,

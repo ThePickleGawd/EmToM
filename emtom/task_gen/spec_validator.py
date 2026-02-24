@@ -180,31 +180,8 @@ def _extract_room_restrictions(
 
 
 def _build_target_to_room(scene_data: Optional[Any]) -> Dict[str, str]:
-    target_to_room: Dict[str, str] = {}
-    if not scene_data:
-        return target_to_room
-
-    rooms = set(_get_scene_list(scene_data, "rooms"))
-    furniture_in_rooms = _get_scene_dict(scene_data, "furniture_in_rooms")
-    objects_on_furniture = _get_scene_dict(scene_data, "objects_on_furniture")
-
-    for room in rooms:
-        target_to_room[room] = room
-
-    furniture_to_room: Dict[str, str] = {}
-    for room, furns in furniture_in_rooms.items():
-        for furn in furns:
-            furniture_to_room[furn] = room
-            target_to_room[furn] = room
-
-    for furn, objs in objects_on_furniture.items():
-        room = furniture_to_room.get(furn)
-        if not room:
-            continue
-        for obj in objs:
-            target_to_room[obj] = room
-
-    return target_to_room
+    from emtom.pddl.planner import build_target_to_room_map
+    return build_target_to_room_map(scene_data)
 
 
 def _iter_formula_nodes(formula: Any):

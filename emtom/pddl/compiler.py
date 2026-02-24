@@ -160,14 +160,14 @@ def compile_task(
     # --- Goal ---
 
     goal = None
-    # Prefer goal_spec (handles both new goals array and legacy fields)
-    task_goal_spec = getattr(task, 'goal_spec', None)
-    if task_goal_spec is not None:
-        goal = task_goal_spec.to_formula()
-    else:
-        pddl_goal = getattr(task, 'pddl_goal', None)
-        if pddl_goal:
-            goal = parse_goal_string(pddl_goal)
+    # Extract goal from problem_pddl if available
+    task_problem_pddl = getattr(task, 'problem_pddl', None)
+    if isinstance(task_problem_pddl, str) and task_problem_pddl.strip():
+        try:
+            from emtom.pddl.problem_pddl import extract_goal_from_problem_pddl
+            goal = parse_goal_string(extract_goal_from_problem_pddl(task_problem_pddl))
+        except Exception:
+            pass
 
     if goal is not None:
         # Auto-register objects referenced in goal but not yet in objects dict
