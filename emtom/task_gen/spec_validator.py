@@ -434,10 +434,6 @@ def validate_blocking_spec(
     if mechanic_bindings is not None and not isinstance(mechanic_bindings, list):
         errors.append("mechanic_bindings must be a list")
         mechanic_bindings = []
-    if isinstance(mechanic_bindings, list) and len(mechanic_bindings) > 3:
-        errors.append(
-            f"Too many mechanics ({len(mechanic_bindings)}). Use at most 3 mechanics per task."
-        )
 
     if isinstance(active_mechanics, list):
         dict_like = sum(1 for x in active_mechanics if isinstance(x, dict))
@@ -636,36 +632,11 @@ def validate_blocking_spec(
                         "so exactly one team can satisfy a winning branch."
                     )
 
-            # Epistemic-goal backing lint: K/B goals need concrete observation barriers.
-            epistemic_goals = _collect_epistemic_goals(parsed_problem.goal_formula)
-            if epistemic_goals and scene_data:
-                restrictions = _extract_room_restrictions(task_data)
-                for init_lit in parsed_problem.init_literals:
-                    if getattr(init_lit, "predicate", "") == "is_restricted" and len(getattr(init_lit, "args", ())) >= 2:
-                        agent = init_lit.args[0]
-                        room = init_lit.args[1]
-                        if isinstance(agent, str) and isinstance(room, str):
-                            restrictions.setdefault(agent, set()).add(room)
-
-                target_to_room = _build_target_to_room(scene_data)
-                for epi in epistemic_goals:
-                    agent = getattr(epi, "agent", None)
-                    if not isinstance(agent, str) or agent not in valid_agent_ids:
-                        continue
-                    inner_literals = _collect_literals(getattr(epi, "inner", None))
-                    relevant_rooms: Set[str] = set()
-                    for lit in inner_literals:
-                        for arg in getattr(lit, "args", ()):
-                            room = target_to_room.get(arg)
-                            if room:
-                                relevant_rooms.add(room)
-                    if relevant_rooms:
-                        blocked = any(room in restrictions.get(agent, set()) for room in relevant_rooms)
-                        if not blocked:
-                            errors.append(
-                                f"K/B goal for {agent} is not backed by a concrete room_restriction barrier "
-                                f"(relevant rooms: {sorted(relevant_rooms)})."
-                            )
+            # Epistemic-goal backing: K/B goals benefit from observation
+            # barriers (room_restriction, communication mechanics, etc.) but
+            # this is evaluated by the judge, not enforced as a hard error
+            # here.  Hard-blocking was removed because it created a catch-22
+            # with agent necessity in cooperative tasks.
         except Exception as e:
             errors.append(f"problem_pddl validation error: {e}")
 
@@ -852,6 +823,32 @@ def validate_blocking_spec(
                         f"golden_trajectory[{step_idx}] uses {action_name}[{target}] "
                         f"but {target} is not articulated/openable."
                     )
+
+    # Multi-agent quality guard: avoid trajectories where one agent does all work.
+    if len(valid_agent_ids) > 1:
+        non_wait_counts: Dict[str, int] = {agent_id: 0 for agent_id in valid_agent_ids}
+        for step in golden:
+            actions = step.get("actions", []) if isinstance(step, dict) else []
+            if not isinstance(actions, list):
+                continue
+            for entry in actions:
+                if not isinstance(entry, dict):
+                    continue
+                agent = entry.get("agent")
+                action_str = entry.get("action")
+                if (
+                    isinstance(agent, str)
+                    and agent in non_wait_counts
+                    and isinstance(action_str, str)
+                    and action_str != "Wait[]"
+                ):
+                    non_wait_counts[agent] += 1
+        active_agents = [a for a, c in non_wait_counts.items() if c > 0]
+        if len(active_agents) <= 1:
+            errors.append(
+                "golden_trajectory has only one active agent (others only Wait[]). "
+                "Distribute required actions across multiple agents."
+            )
 
     # Room restriction consistency against trajectory Navigate actions.
     errors.extend(validate_room_restriction_trajectory(task_data, scene_data, golden))

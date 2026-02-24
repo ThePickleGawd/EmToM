@@ -1155,10 +1155,27 @@ SUMMARY:"""
         Allows file exploration and editing within allowed directories only.
         Allows command chaining (&&, ||, ;, |) but validates each sub-command.
         """
-        # NOTE: Do NOT blindly replace \n → newline here. LLM outputs already
-        # contain real newlines for line breaks. Literal \n sequences inside
-        # code strings (e.g. Python "\n".join(...)) must stay as-is, otherwise
-        # they become actual newlines and cause SyntaxError: EOL.
+        # Fix heredocs where the LLM emitted literal \n instead of real
+        # newlines.  Detect: heredoc delimiter immediately followed by \n
+        # (two chars) rather than an actual newline, meaning the entire
+        # heredoc body is on one line.  Convert literal \n → real newline
+        # only in the heredoc body so the shell can parse it.
+        heredoc_match = re.search(r"<<-?\s*['\"]?(\w+)['\"]?", command)
+        if heredoc_match:
+            delim = heredoc_match.group(1)
+            after_delim = command[heredoc_match.end():]
+            # If the heredoc body starts with literal \n (not a real newline),
+            # the LLM serialized the whole thing on one line.
+            if after_delim.startswith("\\n") or (
+                not after_delim.startswith("\n") and "\\n" in after_delim
+            ):
+                # Split into command line + heredoc body + closing delimiter.
+                # Replace literal \n with real newlines in the body.
+                pre = command[:heredoc_match.end()]
+                body = after_delim
+                # The closing delimiter may be followed by more commands
+                body = body.replace("\\n", "\n")
+                command = pre + body
 
         # Block command substitution (dangerous - allows arbitrary code execution)
         dangerous_patterns = ["`", "$(", "${"]
@@ -1578,7 +1595,30 @@ SUMMARY:"""
             # Return data portion as JSON for the agent
             if result.get("success"):
                 return json.dumps(result["data"], indent=2)
-            return json.dumps({"valid": False, "error": result.get("error", "Unknown error")}, indent=2)
+
+            # On failure, include diagnostic data so the agent can debug.
+            fail_resp: Dict[str, Any] = {
+                "valid": False,
+                "error": result.get("error", "Unknown error"),
+            }
+            data = result.get("data", {})
+            if data.get("evaluation"):
+                eval_info = data["evaluation"]
+                fail_resp["failure_explanations"] = eval_info.get(
+                    "failure_explanations", []
+                )
+                fail_resp["predicates_achieved"] = eval_info.get(
+                    "predicates_achieved", []
+                )
+                fail_resp["predicates_failed"] = eval_info.get(
+                    "predicates_failed", []
+                )
+            # Show last few executed steps for context
+            steps = data.get("executed_steps", [])
+            if steps:
+                fail_resp["last_steps"] = steps[-3:]
+                fail_resp["failed_step"] = data.get("failed_step")
+            return json.dumps(fail_resp, indent=2)
 
         except subprocess.TimeoutExpired:
             return json.dumps({
@@ -1882,7 +1922,7 @@ Use new_scene[] if you want a different scene, or start creating your next task.
 
             # Convert dict back to SceneData
             scene_dict = result["data"]["scene_data"]
-            self.scene_data = SceneData(
+            candidate = SceneData(
                 episode_id=scene_dict["episode_id"],
                 scene_id=scene_dict["scene_id"],
                 rooms=scene_dict["rooms"],
@@ -1893,6 +1933,23 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                 objects_on_furniture=scene_dict["objects_on_furniture"],
                 agent_spawns=scene_dict.get("agent_spawns", {}),
             )
+
+            # Reject scenes where objects have no known locations (world graph
+            # didn't map them to furniture).  Also reject scenes with orphaned
+            # furniture (mapped to unknown rooms).
+            min_objects = 3
+            if len(candidate.objects) < min_objects:
+                last_error = (
+                    f"Scene {candidate.scene_id} (ep {candidate.episode_id}) "
+                    f"has only {len(candidate.objects)} locatable objects "
+                    f"(need >= {min_objects}). Retrying..."
+                )
+                self._log(last_error)
+                if attempt < max_scene_retries:
+                    continue
+                return f"Error loading new scene after {max_scene_retries} attempts. Last error: {last_error}"
+
+            self.scene_data = candidate
 
             self._log(f"Loaded scene {self.scene_data.scene_id} (episode {self.scene_data.episode_id})")
 

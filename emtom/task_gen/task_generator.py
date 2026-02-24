@@ -461,15 +461,28 @@ class GeneratedTask:
         return None
 
     def get_pddl_goal_checker(self):
-        """Create a PDDLGoalChecker for this task."""
+        """Create a PDDLGoalChecker for this task.
+
+        Prefers from_task_data (parses problem_pddl directly) so OR goals
+        in competitive tasks are preserved.  Falls back to GoalSpec-based
+        construction for tasks without problem_pddl.
+        """
         from emtom.pddl.goal_checker import PDDLGoalChecker
+
+        # Use from_task_data to preserve OR structure from problem_pddl
+        task_dict = self.to_dict() if hasattr(self, "to_dict") else {}
+        if task_dict:
+            checker = PDDLGoalChecker.from_task_data(task_dict)
+            if checker:
+                return checker
+
+        # Fall back to GoalSpec-based construction
         spec = self.goal_spec
         if spec is None:
             return None
-        # Use GoalSpec-based construction if available, else fall back to legacy
         if hasattr(PDDLGoalChecker, 'from_goal_spec'):
             return PDDLGoalChecker.from_goal_spec(spec)
-        # Fallback: construct from legacy fields
+        # Legacy fallback
         from emtom.pddl.dsl import parse_goal_string
         goal = parse_goal_string(self.pddl_goal)
         return PDDLGoalChecker(

@@ -113,12 +113,11 @@ Assigned!
 
 ## Mechanic Usage Guidelines
 
-### Mechanic Count: Less is More
-**Use 1-2 mechanics per task (max 3).** Empirical data:
-- **2 mechanics** (e.g., `limited_bandwidth` + `room_restriction`): highest pass rate
-- **3 mechanics**: significantly harder — only use if each mechanic serves a distinct purpose
-- **4+ mechanics**: almost always fails calibration — interacting constraints overwhelm LLM agents
-Do NOT stack mechanics for complexity's sake. Each mechanic must create a unique coordination challenge that the others don't.
+### Mechanic Count: Quality Over Quantity
+**Use as many mechanics as the task genuinely needs.** Guidelines:
+- **2 mechanics** (e.g., `limited_bandwidth` + `room_restriction`): highest pass rate for easy/medium tasks
+- **3-4 mechanics**: appropriate for complex tasks where each mechanic serves a distinct purpose
+- Every mechanic must create a unique coordination challenge that the others don't — don't stack mechanics for complexity's sake
 
 ### `limited_bandwidth` — Strongest ToM Driver
 Use `limited_bandwidth` only when communication scarcity is truly required. It forces agents to:

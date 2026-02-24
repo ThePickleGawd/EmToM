@@ -113,15 +113,37 @@ def pick_agent_for_target(
     num_agents: int,
     target_to_room: Dict[str, str],
     restrictions: Dict[str, set],
+    agent_loads: Optional[Dict[str, int]] = None,
 ) -> str:
-    """Pick a deterministic feasible agent for interacting with a target."""
+    """
+    Pick a deterministic feasible agent for interacting with a target.
+
+    When agent_loads is provided, prefers the least-loaded feasible agent to
+    reduce trajectories where one agent does all work while others wait.
+    """
     target_room = target_to_room.get(target_id)
+    feasible: List[str] = []
     for i in range(max(1, num_agents)):
         agent_id = f"agent_{i}"
         if target_room and target_room in restrictions.get(agent_id, set()):
             continue
-        return agent_id
-    return "agent_0"
+        feasible.append(agent_id)
+
+    if not feasible:
+        return "agent_0"
+    if not agent_loads:
+        return feasible[0]
+
+    # Stable deterministic tie-breaker: (load, numeric agent index)
+    def _sort_key(agent_id: str) -> tuple:
+        try:
+            idx = int(agent_id.split("_", 1)[1])
+        except Exception:
+            idx = 0
+        return (agent_loads.get(agent_id, 0), idx)
+
+    feasible.sort(key=_sort_key)
+    return feasible[0]
 
 
 def wrap_parallel_step(num_agents: int, acting_agent: str, action: str) -> Dict[str, Any]:
@@ -243,6 +265,7 @@ def generate_deterministic_trajectory(
     """
     num_agents = int(task_data.get("num_agents", 2) or 2)
     pddl_goal = None
+    init_positive_literals = set()
 
     problem_pddl = task_data.get("problem_pddl")
     if isinstance(problem_pddl, str) and problem_pddl.strip():
@@ -252,6 +275,17 @@ def generate_deterministic_trajectory(
             pddl_goal = extract_goal_from_problem_pddl(problem_pddl)
         except Exception:
             pddl_goal = None
+        try:
+            from emtom.pddl.problem_pddl import parse_problem_pddl
+
+            parsed_problem = parse_problem_pddl(problem_pddl)
+            for init_lit in parsed_problem.init_literals:
+                if not getattr(init_lit, "negated", False):
+                    init_positive_literals.add(
+                        (init_lit.predicate, tuple(init_lit.args))
+                    )
+        except Exception:
+            pass
 
     if not pddl_goal:
         pddl_goal = task_data.get("pddl_goal")
@@ -344,21 +378,44 @@ def generate_deterministic_trajectory(
     trajectory: List[Dict[str, Any]] = []
     planned_literals: List[str] = []
     ignored_literals: List[str] = []
+    agent_action_queues: Dict[str, List[str]] = {
+        f"agent_{i}": [] for i in range(max(1, num_agents))
+    }
+    agent_loads: Dict[str, int] = {
+        f"agent_{i}": 0 for i in range(max(1, num_agents))
+    }
 
     def add_action(agent_id: str, action: str) -> None:
-        trajectory.append(wrap_parallel_step(num_agents, agent_id, action))
+        if agent_id not in agent_action_queues:
+            agent_action_queues[agent_id] = []
+            agent_loads.setdefault(agent_id, 0)
+        agent_action_queues[agent_id].append(action)
+        agent_loads[agent_id] = agent_loads.get(agent_id, 0) + 1
 
     def get_agent_for_literal(lit, target_id: str) -> str:
         """Get agent for a literal, respecting owner field if set."""
         owner = literal_owner.get(lit.to_pddl().strip())
         if owner and owner.startswith("agent_"):
             return owner
-        return pick_agent_for_target(target_id, num_agents, target_to_room, restrictions)
+        return pick_agent_for_target(
+            target_id,
+            num_agents,
+            target_to_room,
+            restrictions,
+            agent_loads=agent_loads,
+        )
 
     for lit in literals:
         pred = lit.predicate
         args = list(lit.args)
         lit_str = lit.to_pddl()
+
+        # Skip planning if this positive literal already holds in :init.
+        # This avoids pointless moves (and restriction violations) for stable facts,
+        # especially K() goals whose inner literal is already true in init.
+        if not lit.negated and (pred, tuple(args)) in init_positive_literals:
+            planned_literals.append(lit_str)
+            continue
 
         if pred in ("is_open", "is_closed") and args:
             target = args[0]
@@ -461,8 +518,19 @@ def generate_deterministic_trajectory(
 
         ignored_literals.append(lit_str)
 
-    if not trajectory:
+    # Emit parallel trajectory by interleaving per-agent queues.
+    max_queue_len = max((len(q) for q in agent_action_queues.values()), default=0)
+    if max_queue_len <= 0:
         trajectory = [wrap_parallel_step(num_agents, "agent_0", "Wait[]")]
+    else:
+        for turn_idx in range(max_queue_len):
+            step_actions: List[Dict[str, str]] = []
+            for i in range(max(1, num_agents)):
+                agent_id = f"agent_{i}"
+                queue = agent_action_queues.get(agent_id, [])
+                action = queue[turn_idx] if turn_idx < len(queue) else "Wait[]"
+                step_actions.append({"agent": agent_id, "action": action})
+            trajectory.append({"actions": step_actions})
 
     return {
         "trajectory": trajectory,
@@ -511,7 +579,7 @@ def regenerate_golden_trajectory(
 
     metadata.update({
         "planner": "deterministic_rule_based",
-        "planner_version": "v1",
+        "planner_version": "v2_parallel_balanced",
         "source": source,
         "spec_hash": spec_hash,
         "trajectory_hash": trajectory_hash,

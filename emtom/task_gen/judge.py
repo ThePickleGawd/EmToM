@@ -31,6 +31,7 @@ import argparse
 import json
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -232,12 +233,12 @@ CRITERIA_DESCRIPTIONS = {
     },
     "mechanic_utilization": {
         "name": "Mechanic Utilization & Balance",
-        "description": "Are listed mechanics essential AND is the count appropriate? (Empty list = auto-pass at 1.0). Too many mechanics (4+) overwhelm agents — penalize overstacking.",
-        "rubric": """0.0: Mechanics listed but never triggered or used; OR 4+ mechanics creating unmanageable complexity
-0.3: Mechanics present but could be removed; OR 3+ mechanics where some are redundant or don't serve distinct purposes
-0.5: Mechanics add flavor but aren't essential; OR mechanics are essential but there are too many interacting constraints
-0.7: 1-3 well-integrated mechanics that each serve a distinct purpose
-1.0: 1-2 tightly integrated mechanics that are essential — task wouldn't work without them""",
+        "description": "Are listed mechanics essential? (Empty list = auto-pass at 1.0). Penalize redundant or purposeless mechanics, not the count itself.",
+        "rubric": """0.0: Mechanics listed but never triggered or used
+0.3: Mechanics present but most could be removed without affecting the task
+0.5: Mechanics add flavor but aren't essential to the coordination challenge
+0.7: Well-integrated mechanics that each serve a distinct purpose
+1.0: Every mechanic is essential — task wouldn't work without each one""",
     },
     # Cooperative-specific
     "task_interdependence": {
@@ -448,14 +449,14 @@ This task is designed for WEAKER models. Calibrate your evaluation accordingly:
 This task targets mid-tier models. Standard evaluation applies:
 - Agents should have meaningful distinct roles with some interdependence.
 - Secrets should require reasoning to use effectively.
-- Tasks should use 2-3 mechanics appropriately.
+- Tasks should use mechanics appropriately (typically 2-4).
 - Moderate complexity in coordination is expected.""",
     "hard": """## Intended Difficulty: HARD
 This task is designed for the STRONGEST models. Expect high complexity:
 - **Agent necessity**: Each agent should be truly indispensable with unique capabilities or knowledge.
 - **Task interdependence / goal opposition / subgoal tension**: Complex multi-step dependencies, cascading information needs, or deep strategic considerations.
 - **Secret quality**: Secrets should create genuine reasoning challenges — layered information, indirect clues, or strategic deception opportunities.
-- **Mechanic utilization**: 2-3 well-integrated mechanics maximum. Complexity should come from deeper interactions between fewer mechanics, NOT from stacking 4+ mechanics. Penalize overloaded tasks.
+- **Mechanic utilization**: Use as many mechanics as the task genuinely needs. Complexity should come from deeper interactions between mechanics. Penalize redundant or purposeless mechanics.
 - **Overall**: Reward tasks that would genuinely challenge top-tier AI models through depth, not breadth of mechanics.""",
 }
 
@@ -842,14 +843,29 @@ The user specifically requested:
         if self.verbose:
             print(f"[Judge/{model}] Evaluating {category} task ({len(prompt)} chars)")
 
-        # Get response
-        response = llm.generate(prompt)
+        # Get response with retries for transient provider/network failures.
+        response = None
+        max_retries = 4
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = llm.generate(prompt)
+                break
+            except Exception:
+                if attempt >= max_retries:
+                    raise
+                backoff_s = min(12, 2 ** attempt)
+                if self.verbose:
+                    print(
+                        f"[Judge/{model}] LLM call failed (attempt {attempt}/{max_retries}), "
+                        f"retrying in {backoff_s}s"
+                    )
+                time.sleep(backoff_s)
 
         if self.verbose:
-            print(f"[Judge/{model}] Received response ({len(response)} chars)")
+            print(f"[Judge/{model}] Received response ({len(response or '')} chars)")
 
         # Parse response (pass user_query so it knows which criteria to expect)
-        return self._parse_response(response, model, category, self.user_query)
+        return self._parse_response(response or "", model, category, self.user_query)
 
     def _parse_response(self, response: str, model: str, category: str = "cooperative", user_query: Optional[str] = None) -> Judgment:
         """Parse LLM response into Judgment."""

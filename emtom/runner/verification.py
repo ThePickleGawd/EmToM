@@ -99,10 +99,17 @@ class VerificationRunner(EMTOMBaseRunner):
         """
         Evaluate task completion using PARTNR-style predicates.
 
-        If no success_condition is provided, derives from task's required subtasks.
+        Handles OR goals (competitive tasks) by evaluating the full PDDL
+        formula structure rather than flattening to a list of conjuncts.
         """
-        # Try to derive success_condition from task's required subtasks
+        # For tasks with a PDDL goal, use formula-level evaluation which
+        # correctly handles OR (competitive) goals.
         if success_condition is None and self.task:
+            goal_checker = self.task.get_pddl_goal_checker()
+            if goal_checker and self._has_or_goal(goal_checker):
+                    return self._evaluate_formula(goal_checker)
+
+            # Non-OR goals: derive flat success_condition as before
             effective_condition = self.task.get_effective_success_condition()
             if effective_condition:
                 success_condition = {
@@ -110,5 +117,83 @@ class VerificationRunner(EMTOMBaseRunner):
                     "required_states": effective_condition.required_states,
                 }
 
-        # Fall back to parent implementation
+        # Fall back to parent implementation (flat AND evaluation)
         return super().evaluate_task(success_condition)
+
+    @staticmethod
+    def _has_or_goal(goal_checker) -> bool:
+        """Check if the goal formula contains an OR node."""
+        from emtom.pddl.dsl import Or
+
+        def _walk(f) -> bool:
+            if isinstance(f, Or):
+                return True
+            for attr in ("operands",):
+                children = getattr(f, attr, None)
+                if children:
+                    for child in children:
+                        if _walk(child):
+                            return True
+            return False
+
+        return _walk(goal_checker.goal)
+
+    def _evaluate_formula(self, goal_checker) -> Dict[str, Any]:
+        """Evaluate PDDL formula directly against simulator state (handles OR)."""
+        from emtom.evaluation import _check_proposition
+        from emtom.pddl.dsl import Literal
+
+        sim = self.env_interface.sim
+        world_graph = getattr(self.env_interface, "full_world_graph", None)
+        if not world_graph and hasattr(self.env_interface, "world_graph"):
+            for uid in self.agents.keys():
+                if uid in self.env_interface.world_graph:
+                    world_graph = self.env_interface.world_graph[uid]
+                    break
+
+        # Build predicate check function for formula.evaluate()
+        ao_link_map = sim.get_ao_link_map() if hasattr(sim, "get_ao_link_map") else {}
+        region_ids = set()
+        room_name_map = {}
+        if world_graph:
+            for room in world_graph.get_all_rooms():
+                rname = room.name if hasattr(room, "name") else str(room)
+                room_name_map[rname] = room
+
+        def check_fn(predicate: str, args: tuple) -> bool:
+            """Check a single predicate against the simulator."""
+            prop = {"property": predicate}
+            if args:
+                prop["entity"] = args[0]
+            if len(args) > 1:
+                prop["target"] = args[1]
+            result = _check_proposition(
+                prop, sim, ao_link_map, region_ids, room_name_map,
+                world_graph=world_graph,
+            )
+            return result.is_satisfied
+
+        success = goal_checker.goal.evaluate(check_fn)
+
+        # Collect per-branch failure info for debugging
+        failure_explanations = []
+        if not success:
+            for lit in goal_checker.conjuncts:
+                if isinstance(lit, Literal):
+                    ok = check_fn(lit.predicate, lit.args)
+                    expected = not ok if lit.negated else ok
+                    if not expected:
+                        desc = f"{lit.args[0]} is not {lit.predicate}"
+                        if len(lit.args) > 1:
+                            desc += f" {lit.args[1]}"
+                        if lit.negated:
+                            desc = f"{lit.args[0]} should not be {lit.predicate}"
+                            if len(lit.args) > 1:
+                                desc += f" {lit.args[1]}"
+                        failure_explanations.append(desc)
+
+        return {
+            "percent_complete": 1.0 if success else 0.0,
+            "success": success,
+            "failure_explanations": failure_explanations,
+        }
