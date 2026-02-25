@@ -68,7 +68,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
             task_data = self._task_to_mechanics_dict(task)
 
         agent_actions = task.agent_actions if task else None
-        message_targets = task.message_targets if task else None
+        message_targets = self._resolve_message_targets(task)
 
         super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions, save_video=save_video, message_targets=message_targets)
 
@@ -88,6 +88,89 @@ class BenchmarkRunner(EMTOMBaseRunner):
         if self.human_agents:
             print(f"[BenchmarkRunner] Human agents: {self.human_agents}")
             print(f"[BenchmarkRunner] LLM agents: {set(f'agent_{uid}' for uid in llm_agent_uids)}")
+
+    @staticmethod
+    def _normalize_agent_id(raw_agent: Any) -> Optional[str]:
+        """Normalize mixed agent ID formats to canonical 'agent_<uid>'."""
+        if isinstance(raw_agent, int):
+            return f"agent_{raw_agent}"
+        if not isinstance(raw_agent, str):
+            return None
+
+        agent = raw_agent.strip()
+        if not agent:
+            return None
+        if agent.startswith("agent_"):
+            suffix = agent.split("_", 1)[1]
+            if suffix.isdigit():
+                return f"agent_{int(suffix)}"
+            return None
+        if agent.isdigit():
+            return f"agent_{int(agent)}"
+        return None
+
+    @classmethod
+    def _normalize_message_targets(
+        cls,
+        raw_targets: Any,
+        num_agents: int,
+    ) -> Dict[str, List[str]]:
+        """Normalize sender->recipients message target map."""
+        if not isinstance(raw_targets, dict):
+            return {}
+
+        valid_agents = {f"agent_{i}" for i in range(max(0, int(num_agents or 0)))}
+        normalized: Dict[str, List[str]] = {}
+
+        for raw_sender, raw_recipients in raw_targets.items():
+            sender = cls._normalize_agent_id(raw_sender)
+            if not sender or sender not in valid_agents:
+                continue
+            if not isinstance(raw_recipients, list):
+                continue
+
+            recipients: List[str] = []
+            for raw_recipient in raw_recipients:
+                recipient = cls._normalize_agent_id(raw_recipient)
+                if not recipient or recipient not in valid_agents:
+                    continue
+                if recipient == sender or recipient in recipients:
+                    continue
+                recipients.append(recipient)
+
+            normalized[sender] = recipients
+
+        return normalized
+
+    @classmethod
+    def _resolve_message_targets(
+        cls,
+        task: Optional["GeneratedTask"],
+    ) -> Optional[Dict[str, List[str]]]:
+        """
+        Resolve message targets for runtime communication enforcement.
+
+        Priority:
+        1) Explicit task.message_targets
+        2) restricted_communication mechanic_bindings.allowed_targets
+        """
+        if task is None:
+            return None
+
+        explicit = cls._normalize_message_targets(task.message_targets, task.num_agents)
+        if explicit:
+            return explicit
+
+        for binding in task.mechanic_bindings:
+            if binding.mechanic_type != "restricted_communication":
+                continue
+            derived = cls._normalize_message_targets(
+                binding.allowed_targets, task.num_agents
+            )
+            if derived:
+                return derived
+
+        return None
 
     def _task_to_mechanics_dict(self, task: "GeneratedTask") -> Dict[str, Any]:
         """Convert GeneratedTask to task data for GameStateManager."""
@@ -264,10 +347,89 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
             # Buffer messages sent during this turn - they should only be visible next turn
             message_buffer: List[tuple] = []
+            blocked_message_by_sender: Dict[int, str] = {}
             original_post_message = self.env_interface.post_agent_message
+            initial_sent_counts: Dict[str, int] = {}
+            if self.game_manager:
+                gs = self.game_manager.get_state()
+                initial_sent_counts = dict(getattr(gs, "messages_sent", {}) or {})
+            planned_sent_counts: Dict[str, int] = dict(initial_sent_counts)
+
+            def _allowed_recipients_for_sender(sender_uid: int) -> Optional[List[int]]:
+                sender_id = f"agent_{sender_uid}"
+                mapping = self._message_targets if isinstance(self._message_targets, dict) else {}
+                raw_allowed = mapping.get(sender_id)
+                if raw_allowed is None:
+                    return None
+                allowed_uids: List[int] = []
+                for raw in raw_allowed:
+                    normalized = self._normalize_agent_id(raw)
+                    if not normalized:
+                        continue
+                    try:
+                        uid = int(normalized.split("_", 1)[1])
+                    except (ValueError, IndexError):
+                        continue
+                    if uid not in allowed_uids:
+                        allowed_uids.append(uid)
+                return allowed_uids
+
+            def _enforce_message_policy(
+                sender_uid: int,
+                target_uids: Optional[List[int]],
+            ) -> Tuple[bool, Optional[List[int]], Optional[str]]:
+                """Return (allowed, effective_targets, reason_if_blocked)."""
+                sender_id = f"agent_{sender_uid}"
+                effective_targets = (
+                    list(target_uids) if isinstance(target_uids, list) else None
+                )
+
+                # Enforce recipient topology first.
+                allowed_recipients = _allowed_recipients_for_sender(sender_uid)
+                if allowed_recipients is not None:
+                    if effective_targets is None:
+                        effective_targets = [
+                            uid for uid in allowed_recipients if uid != sender_uid
+                        ]
+                    else:
+                        allowed_set = set(allowed_recipients)
+                        effective_targets = [
+                            uid for uid in effective_targets if uid in allowed_set
+                        ]
+                    if not effective_targets:
+                        return (
+                            False,
+                            [],
+                            "Message blocked: recipient is not allowed by restricted communication.",
+                        )
+
+                # Enforce message budget using turn-local counters.
+                if self.game_manager:
+                    gs = self.game_manager.get_state()
+                    limit = getattr(gs, "message_limits", {}).get(sender_id)
+                    if limit is not None:
+                        used = planned_sent_counts.get(
+                            sender_id, initial_sent_counts.get(sender_id, 0)
+                        )
+                        if used >= limit:
+                            return (
+                                False,
+                                effective_targets,
+                                f"Message blocked: {sender_id} has no messages remaining.",
+                            )
+                        planned_sent_counts[sender_id] = used + 1
+
+                return True, effective_targets, None
 
             def buffered_post_message(sender_uid: int, message: str, target_uids=None) -> None:
-                message_buffer.append((sender_uid, message, target_uids))
+                allowed, effective_targets, blocked_reason = _enforce_message_policy(
+                    sender_uid,
+                    target_uids,
+                )
+                if not allowed:
+                    blocked_message_by_sender[sender_uid] = blocked_reason or "Message blocked."
+                    return
+                message_buffer.append((sender_uid, message, effective_targets))
 
             self.env_interface.post_agent_message = buffered_post_message
 
@@ -324,6 +486,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                                 'mech_result': mech_result,
                                 'orig_action': orig_action_name,
                                 'orig_target': action_target,
+                                'skip_mechanic_apply': False,
                             }
                             continue
 
@@ -351,6 +514,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                                     'mech_result': mech_result,
                                     'orig_action': orig_action_name,
                                     'orig_target': action_target,
+                                    'skip_mechanic_apply': False,
                                 }
                                 continue
                             low_level_actions = {uid: low_level_action}
@@ -369,6 +533,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         'mech_result': mech_result,
                         'orig_action': orig_action_name,
                         'orig_target': action_target,
+                        'skip_mechanic_apply': False,
                     }
 
                     # Check if action already completed in first call
@@ -388,6 +553,13 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         llm_agent_state[uid]['response'] = response or "Executed."
                         llm_agent_state[uid]['action_done'] = True
 
+                    if orig_action_name == "Communicate":
+                        blocked_reason = blocked_message_by_sender.get(uid)
+                        if blocked_reason:
+                            llm_agent_state[uid]['response'] = blocked_reason
+                            llm_agent_state[uid]['action_done'] = True
+                            llm_agent_state[uid]['skip_mechanic_apply'] = True
+
                 except AssertionError as e:
                     if "Episode over" in str(e) or "call reset before calling step" in str(e):
                         print(f"\n[Benchmark] Episode ended at step {self._step_count}", flush=True)
@@ -401,7 +573,18 @@ class BenchmarkRunner(EMTOMBaseRunner):
             # Restore original post_message and flush buffered messages to queues
             # These messages will be consumed at the start of NEXT turn
             self.env_interface.post_agent_message = original_post_message
+            blocked_mechanic_senders = {
+                uid
+                for uid, state in llm_agent_state.items()
+                if state.get("orig_action") == "Communicate"
+                and state.get("mech_result") is not None
+                and getattr(state.get("mech_result"), "blocked", False)
+            }
             for sender_uid, message, target_uids in message_buffer:
+                if sender_uid in blocked_mechanic_senders:
+                    # Communicate failed at mechanic layer (e.g., unreliable_communication).
+                    # Drop buffered message so it never reaches recipients.
+                    continue
                 original_post_message(sender_uid, message, target_uids=target_uids)
 
             if self._episode_done:
@@ -500,7 +683,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
                 # Apply mechanic state changes after successful execution
                 mech_result = state.get('mech_result')
-                if self.game_manager and mech_result and not getattr(mech_result, "blocked", False):
+                if (
+                    self.game_manager
+                    and mech_result
+                    and not getattr(mech_result, "blocked", False)
+                    and not state.get("skip_mechanic_apply", False)
+                ):
                     obs_text = response or ""
                     habitat_failed = any(
                         fail_phrase in obs_text.lower()

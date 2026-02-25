@@ -92,7 +92,10 @@ def _derive_communicate_steps(
     from emtom.task_gen.task_generator import GeneratedTask
 
     if not HAS_UP:
-        return {"steps": [], "notes": ["unified-planning not installed; skipping communicate derivation"]}
+        raise RuntimeError(
+            "unified-planning is required for epistemic trajectory derivation "
+            "(install unified-planning and up-fast-downward)."
+        )
 
     scene_dict = scene_data if isinstance(scene_data, dict) else {}
 
@@ -102,7 +105,10 @@ def _derive_communicate_steps(
     obs = ObservabilityModel.from_task_with_scene(task, scene_dict)
 
     if not obs.object_rooms:
-        return {"steps": [], "notes": ["No object_rooms in observability model; skipping communicate derivation"]}
+        raise ValueError(
+            "Epistemic trajectory derivation requires scene object-room mapping "
+            "(missing observability.object_rooms)."
+        )
 
     # Parse the goal formula
     goal = parse_goal_string(pddl_goal)
@@ -110,19 +116,25 @@ def _derive_communicate_steps(
     # Run epistemic compilation to check if belief_depth > 0
     compilation = compile_epistemic(goal, EMTOM_DOMAIN, problem, obs)
     if compilation.belief_depth == 0:
-        return {"steps": [], "notes": ["belief_depth=0 (trivial K goals only); no communicate steps needed"]}
+        return {
+            "steps": [],
+            "notes": ["belief_depth=0 (trivial K goals only); no communicate steps needed"],
+            "communication_required": False,
+        }
 
     # Solve with FD to get the plan
     solver = FastDownwardSolver()
     result = solver._solve_epistemic(EMTOM_DOMAIN, problem, obs, timeout=30.0, start=0.0)
 
     if not result.solvable or not result.plan:
-        return {"steps": [], "notes": [f"FD epistemic solve failed: {result.error or 'no plan'}"]}
+        raise RuntimeError(f"FD epistemic solve failed: {result.error or 'no plan'}")
 
     # Parse inform actions from FD plan
     informs = parse_fd_inform_actions(result.plan)
     if not informs:
-        return {"steps": [], "notes": ["FD plan has no inform actions"]}
+        raise RuntimeError(
+            "FD epistemic plan has no inform actions despite non-trivial epistemic goal."
+        )
 
     # Build hash → formula maps
     k_goals = _collect_k_goals(goal, obs)
@@ -157,8 +169,10 @@ def _derive_communicate_steps(
                 inner_msg = goal_to_natural_language(leaf)
             message = f"{inner_agent} confirmed: {inner_msg}"
         else:
-            notes.append(f"Unknown fact_hash {inform.fact_hash} in inform action; skipping")
-            continue
+            raise RuntimeError(
+                f"Unknown fact_hash '{inform.fact_hash}' in inform action; "
+                "cannot derive deterministic Communicate step."
+            )
 
         # Build the parallel step: sender Communicates, others Wait
         step_actions: List[Dict[str, str]] = []
@@ -176,7 +190,25 @@ def _derive_communicate_steps(
                 })
         steps.append({"actions": step_actions})
 
-    return {"steps": steps, "notes": notes}
+    if not steps:
+        raise RuntimeError(
+            "Epistemic plan required communication but no Communicate steps were derived."
+        )
+
+    return {"steps": steps, "notes": notes, "communication_required": True}
+
+
+def _has_epistemic_goal(formula: Any) -> bool:
+    """Return True when goal formula contains K()/B() operators."""
+    from emtom.pddl.dsl import And, Or, Not, Knows, Believes
+
+    if isinstance(formula, (Knows, Believes)):
+        return True
+    if isinstance(formula, (And, Or)):
+        return any(_has_epistemic_goal(op) for op in formula.operands)
+    if isinstance(formula, Not) and formula.operand is not None:
+        return _has_epistemic_goal(formula.operand)
+    return False
 
 
 def canonical_json(value: Any) -> str:
@@ -276,6 +308,23 @@ def pick_agent_for_target(
     reduce trajectories where one agent does all work while others wait.
     """
     target_room = target_to_room.get(target_id)
+    if target_room is None and restrictions:
+        restricted_rooms = {
+            room
+            for rooms in restrictions.values()
+            for room in rooms
+            if isinstance(room, str)
+        }
+        if target_id in restricted_rooms:
+            target_room = target_id
+
+    if target_room is None and restrictions:
+        raise ValueError(
+            f"Cannot assign agent for target '{target_id}': missing room mapping "
+            "while room_restriction mechanics are active. Provide scene_data with "
+            "furniture/object room mappings."
+        )
+
     feasible: List[str] = []
     for i in range(max(1, num_agents)):
         agent_id = f"agent_{i}"
@@ -457,24 +506,14 @@ def generate_deterministic_trajectory(
                 pddl_goal = "(and " + " ".join(g.get("pddl", "") for g in goals) + ")"
 
     if not pddl_goal:
-        existing = task_data.get("golden_trajectory")
-        if isinstance(existing, list) and existing:
-            return {
-                "trajectory": existing,
-                "planned_literals": [],
-                "ignored_literals": [],
-                "planner_notes": ["No pddl_goal; preserved existing golden_trajectory."],
-            }
-        return {
-            "trajectory": [wrap_parallel_step(num_agents, "agent_0", "Wait[]")],
-            "planned_literals": [],
-            "ignored_literals": [],
-            "planner_notes": ["No pddl_goal; emitted single Wait[] step."],
-        }
+        raise ValueError(
+            "Cannot generate deterministic golden trajectory: no problem_pddl/goals/pddl_goal found."
+        )
 
     from emtom.pddl.dsl import parse_goal_string
 
     goal = parse_goal_string(pddl_goal)
+    has_epistemic_goal = _has_epistemic_goal(goal)
     literals = extract_plannable_literals(goal)
     literals = apply_literal_ordering(literals, task_data.get("pddl_ordering", []))
 
@@ -694,17 +733,13 @@ def generate_deterministic_trajectory(
     comm_notes: List[str] = []
     communication_derived = False
 
-    if "(K " in (pddl_goal or "") and scene_data:
-        try:
-            comm_result = _derive_communicate_steps(
-                task_data, scene_data, pddl_goal, num_agents
-            )
-            comm_steps = comm_result.get("steps", [])
-            comm_notes = comm_result.get("notes", [])
-            communication_derived = bool(comm_steps)
-        except Exception as e:
-            logger.warning("FD communication derivation failed: %s", e)
-            comm_notes = [f"FD communication derivation failed: {e}"]
+    if has_epistemic_goal:
+        comm_result = _derive_communicate_steps(
+            task_data, scene_data, pddl_goal, num_agents
+        )
+        comm_steps = comm_result.get("steps", [])
+        comm_notes = comm_result.get("notes", [])
+        communication_derived = bool(comm_steps)
 
     if comm_steps:
         trajectory.extend(comm_steps)
@@ -766,7 +801,7 @@ def regenerate_golden_trajectory(
 
     metadata.update({
         "planner": "deterministic_rule_based",
-        "planner_version": "v3_with_communicate",
+        "planner_version": "v4_strict_no_fallback",
         "source": source,
         "spec_hash": spec_hash,
         "trajectory_hash": trajectory_hash,

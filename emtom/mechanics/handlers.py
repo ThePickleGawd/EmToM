@@ -789,10 +789,111 @@ MECHANIC_HANDLERS: Dict[str, MechanicHandler] = {
     "unreliable_communication": handle_unreliable_communication,
 }
 
+# Deterministic composition order for communication constraints.
+# This avoids dependence on task mechanic_bindings ordering.
+COMMUNICATION_MECHANIC_ORDER = (
+    "restricted_communication",
+    "limited_bandwidth",
+    "unreliable_communication",
+)
+
 
 def get_handler(name: str) -> Optional[MechanicHandler]:
     """Get handler function for a mechanic."""
     return MECHANIC_HANDLERS.get(name)
+
+
+def _merge_handler_results(
+    results: list,
+    fallback_state: EMTOMGameState,
+) -> HandlerResult:
+    """Combine multiple mechanic handler results into one."""
+    if not results:
+        return no_effect(fallback_state)
+
+    final_state = results[-1].state
+    observations = [r.observation.strip() for r in results if r.observation]
+    effects: list = []
+    for r in results:
+        effects.extend(r.effects or [])
+
+    blocked = any(r.blocked for r in results)
+    success = not blocked and all(r.success for r in results)
+
+    surprise_trigger = None
+    for r in results:
+        if r.surprise_trigger:
+            surprise_trigger = r.surprise_trigger
+            break
+
+    actual_action = None
+    actual_target = None
+    for r in reversed(results):
+        if actual_action is None and r.actual_action is not None:
+            actual_action = r.actual_action
+        if actual_target is None and r.actual_target is not None:
+            actual_target = r.actual_target
+
+    if blocked:
+        blocking = next((r for r in results if r.blocked), results[-1])
+        observation = (blocking.observation or "").strip()
+        mechanic_type = blocking.mechanic_type
+    else:
+        observation = " ".join(observations).strip()
+        mechanic_type = ",".join(
+            [r.mechanic_type for r in results if r.mechanic_type]
+        ) or None
+
+    return HandlerResult(
+        applies=True,
+        state=final_state,
+        observation=observation,
+        success=success,
+        effects=effects,
+        surprise_trigger=surprise_trigger,
+        actual_action=actual_action,
+        actual_target=actual_target,
+        blocked=blocked,
+        mechanic_type=mechanic_type,
+    )
+
+
+def _apply_communication_mechanics(
+    action_name: str,
+    agent_id: str,
+    target: Optional[str],
+    state: EMTOMGameState,
+) -> HandlerResult:
+    """
+    Apply communication mechanics in deterministic order.
+
+    Order:
+    1) restricted_communication (recipient topology)
+    2) limited_bandwidth (budget)
+    3) unreliable_communication (delivery uncertainty)
+    """
+    active_mechanics = set(state.active_mechanics or [])
+    current_state = state
+    applied_results = []
+
+    for mech_name in COMMUNICATION_MECHANIC_ORDER:
+        if mech_name not in active_mechanics:
+            continue
+        handler = get_handler(mech_name)
+        if not handler:
+            continue
+
+        result = handler(action_name, agent_id, target, current_state)
+        if not result.applies:
+            continue
+
+        applied_results.append(result)
+        current_state = result.state
+
+        if result.blocked:
+            return _merge_handler_results(applied_results, state)
+
+    return _merge_handler_results(applied_results, state)
 
 
 def apply_mechanics(
@@ -806,6 +907,13 @@ def apply_mechanics(
 
     Returns the first mechanic that applies, or a default result.
     """
+    if action_name.lower() == "communicate":
+        comm_result = _apply_communication_mechanics(
+            action_name, agent_id, target, state
+        )
+        if comm_result.applies:
+            return comm_result
+
     for mech_name in state.active_mechanics:
         handler = get_handler(mech_name)
         if handler:

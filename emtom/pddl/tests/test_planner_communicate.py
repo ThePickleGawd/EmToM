@@ -236,13 +236,13 @@ class TestDeriveCommStepsUnit:
         assert any("belief_depth=0" in n for n in result["notes"])
 
     def test_no_scene_data_skips(self):
-        """No scene data → skip communication derivation."""
+        """No scene data should fail fast for epistemic derivation."""
         task_data = _make_k_task_data()
-        result = _derive_communicate_steps(
-            task_data, {},
-            "(K agent_0 (is_open cabinet_27))", 2,
-        )
-        assert len(result["steps"]) == 0
+        with pytest.raises(ValueError, match="object-room mapping"):
+            _derive_communicate_steps(
+                task_data, {},
+                "(K agent_0 (is_open cabinet_27))", 2,
+            )
 
     @pytest.mark.skipif(not HAS_UP, reason="unified-planning not installed")
     def test_communicate_message_is_nl(self):
@@ -361,6 +361,34 @@ class TestGenerateTrajectoryWithCommunicate:
         result = generate_deterministic_trajectory(task_data, scene_data)
         if result["communication_derived"]:
             assert any("Communicate" in n for n in result["planner_notes"])
+
+    def test_missing_goal_fails_fast(self):
+        task_data = {
+            "task_id": "test_missing_goal",
+            "title": "Missing Goal",
+            "category": "cooperative",
+            "num_agents": 2,
+            "mechanic_bindings": [],
+            "items": [],
+            "locked_containers": {},
+            "initial_states": {},
+        }
+        with pytest.raises(ValueError, match="no problem_pddl/goals/pddl_goal"):
+            generate_deterministic_trajectory(task_data, _make_scene_data())
+
+    def test_room_restriction_without_scene_mapping_fails_fast(self):
+        task_data = _make_k_task_data(
+            pddl_goal="(is_open cabinet_27)",
+            mechanics=[
+                {
+                    "mechanic_type": "room_restriction",
+                    "restricted_rooms": ["kitchen_1"],
+                    "for_agents": ["agent_0"],
+                }
+            ],
+        )
+        with pytest.raises(ValueError, match="missing room mapping"):
+            generate_deterministic_trajectory(task_data, scene_data=None)
 
 
 # ---------------------------------------------------------------------------
