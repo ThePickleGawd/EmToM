@@ -17,9 +17,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
-# All 3 task categories (round-robin across processes)
-CATEGORIES=("cooperative" "competitive" "mixed")
-
 # Defaults
 PER_GPU=3
 MODEL="gpt-5.2"
@@ -28,6 +25,7 @@ ITERATIONS_PER_TASK=300  # Max iterations per task (total = this * num-tasks)
 SUBTASKS_MIN=""
 SUBTASKS_MAX=""
 DRY_RUN=false
+CATEGORY_FILTER=""  # Empty = all 3 categories (round-robin)
 
 # Colors
 RED='\033[0;31m'
@@ -52,6 +50,7 @@ print_usage() {
     echo "  --iterations-per-task N  Max iterations per task (default: 100)"
     echo "  --subtasks-min N    Minimum subtasks per task"
     echo "  --subtasks-max N    Maximum subtasks per task"
+    echo "  --category CAT      Only generate this category (cooperative, competitive, mixed)"
     echo "  --dry-run           Show commands without executing"
     echo ""
     echo "Examples:"
@@ -87,6 +86,10 @@ while [[ $# -gt 0 ]]; do
             SUBTASKS_MAX=$2
             shift 2
             ;;
+        --category)
+            CATEGORY_FILTER=$2
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=true
             shift
@@ -102,6 +105,13 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Build category list
+if [ -n "$CATEGORY_FILTER" ]; then
+    CATEGORIES=("$CATEGORY_FILTER")
+else
+    CATEGORIES=("cooperative" "competitive" "mixed")
+fi
 
 # Detect GPUs
 NUM_GPUS=$(nvidia-smi --list-gpus | wc -l)

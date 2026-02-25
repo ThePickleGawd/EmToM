@@ -32,6 +32,8 @@ def main():
     parser.add_argument("--config-name", default=None, help="Hydra config name (auto-detected from task)")
     parser.add_argument("--max-turns", type=int, default=None, help="Max LLM turns (default: 5x golden trajectory)")
     parser.add_argument("--test-model", type=str, default=None, help="Override model for LLM agents")
+    parser.add_argument("--team-model-map", type=str, default=None,
+                        help="Team->model mapping for competitive tasks, e.g. team_0=gpt-5.2,team_1=sonnet")
     args = parser.parse_args()
 
     # Add project root to path
@@ -130,8 +132,34 @@ def main():
         fix_config(config)
         config = setup_config(config, seed=47668090)
 
-        # Override agent models if --test-model is specified
-        if args.test_model:
+        # Override agent models if --test-model or --team-model-map is specified
+        if args.team_model_map and task_data.get("category") == "competitive":
+            from emtom.examples.run_habitat_benchmark import (
+                apply_agent_llm_configs,
+                build_task_model_assignment,
+                parse_team_model_map,
+                resolve_model_spec,
+            )
+
+            raw_map = parse_team_model_map(args.team_model_map)
+            team_model_specs = {
+                team_id: resolve_model_spec(model_ref)
+                for team_id, model_ref in raw_map.items()
+            }
+            # Use first team's spec as default fallback
+            first_spec = next(iter(team_model_specs.values()))
+            assignment = build_task_model_assignment(
+                task=GeneratedTask.from_dict(task_data),
+                num_agents=num_agents,
+                default_model_spec=first_spec,
+                team_model_specs=team_model_specs,
+            )
+            apply_agent_llm_configs(config, assignment["agent_model_mapping"])
+            print(
+                f"Team model map: {args.team_model_map}",
+                file=sys.stderr,
+            )
+        elif args.test_model:
             from emtom.examples.run_habitat_benchmark import (
                 apply_agent_llm_configs,
                 detect_llm_provider,

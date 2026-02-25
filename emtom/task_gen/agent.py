@@ -1393,13 +1393,30 @@ SUMMARY:"""
         trajectory = self._build_trajectory(action_history)
 
         # Extract calibration data from results
+        evaluation = results.get("evaluation", {})
         calibration_entry = {
             "passed": results.get("done", False),
             "tested_at": datetime.now().isoformat(),
             "steps": results.get("steps", 0),
-            "percent_complete": results.get("evaluation", {}).get("percent_complete", 0.0),
+            "percent_complete": evaluation.get("percent_complete", 0.0),
             "trajectory": trajectory,
         }
+
+        # For competitive tasks, record per-team model mapping and winner
+        if task_data.get("category") == "competitive":
+            # "passed" = a team actually won (not just "done" which includes timeouts)
+            calibration_entry["passed"] = evaluation.get("winner") is not None
+            calibration_entry["team_models"] = {
+                "team_0": "gpt-5.2",
+                "team_1": "sonnet",
+            }
+            calibration_entry["winner"] = evaluation.get("winner")
+            if evaluation.get("team_status"):
+                calibration_entry["team_status"] = evaluation["team_status"]
+            if evaluation.get("team_progress"):
+                calibration_entry["team_progress"] = evaluation["team_progress"]
+            # Use matchup as the calibration key instead of single model name
+            model_name = "gpt-5.2_vs_sonnet"
 
         # Update task data with calibration results
         if "calibration" not in task_data:
@@ -1453,6 +1470,10 @@ SUMMARY:"""
         ]
         if self.test_model:
             cmd.extend(["--test-model", self.test_model])
+
+        # For competitive tasks, default to cross-model matchup (gpt-5.2 vs sonnet)
+        if task_data.get("category") == "competitive":
+            cmd.extend(["--team-model-map", "team_0=gpt-5.2,team_1=sonnet"])
 
         try:
             proc = subprocess.run(
