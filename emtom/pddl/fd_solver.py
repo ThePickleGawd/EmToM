@@ -39,7 +39,8 @@ logger = logging.getLogger(__name__)
 
 try:
     from unified_planning.io import PDDLReader
-    from unified_planning.shortcuts import OneshotPlanner
+    from unified_planning.shortcuts import OneshotPlanner, get_environment
+    get_environment().credits_stream = None
     HAS_UP = True
 except ImportError:
     HAS_UP = False
@@ -225,11 +226,11 @@ class FastDownwardSolver:
                 compilation.domain_pddl, compilation.problem_pddl, timeout
             )
         except Exception as e:
-            logger.error("Fast Downward planner error (epistemic): %s", e)
-            return SolverResult(
-                solvable=False,
-                solve_time=time.time() - start,
-                error=f"Planner error: {e}",
+            logger.error(
+                "Fast Downward planner error (epistemic): %s — falling back to PDKBSolver", e
+            )
+            return self._fallback.solve(
+                domain, problem, observability, max_belief_depth=3
             )
 
         if not result["solvable"]:
@@ -278,11 +279,9 @@ class FastDownwardSolver:
         try:
             result = self._run_planner(domain_pddl, problem_pddl, timeout)
         except Exception as e:
-            logger.error("Fast Downward planner error: %s", e)
-            return SolverResult(
-                solvable=False,
-                solve_time=time.time() - start,
-                error=f"Planner error: {e}",
+            logger.error("Fast Downward planner error: %s — falling back to PDKBSolver", e)
+            return self._fallback.solve(
+                domain, problem, observability, max_belief_depth
             )
 
         if not result["solvable"]:
@@ -331,15 +330,17 @@ class FastDownwardSolver:
             pf.write(problem_pddl)
             problem_path = pf.name
 
+        import os
         try:
             up_problem = reader.parse_problem(domain_path, problem_path)
         except Exception as e:
-            import os
+            # Dump PDDL for debugging before deleting temp files
+            logger.debug("PDDL parse failure — problem PDDL:\n%s", problem_pddl[:500])
+            logger.debug("PDDL parse failure — domain PDDL (first 200 chars):\n%s", domain_pddl[:200])
             os.unlink(domain_path)
             os.unlink(problem_path)
             raise RuntimeError(f"PDDL parse error: {e}") from e
 
-        import os
         os.unlink(domain_path)
         os.unlink(problem_path)
 

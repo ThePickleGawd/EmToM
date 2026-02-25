@@ -11,23 +11,9 @@
   },
   "initial_states": {},
   "active_mechanics": [],
-  "mechanic_bindings": [
-    {
-      "mechanic_type": "REPLACE_WITH_MECHANIC_TYPE",
-      "trigger_object": "REPLACE_WITH_OBJECT_ID",
-      "target_object": "REPLACE_WITH_TARGET_ID",
-      "target_state": "REPLACE_WITH_TARGET_STATE"
-    }
-  ],
-  "items": [
-    {
-      "item_id": "item_small_key_1|item_radio_1|etc",
-      "inside": "REPLACE_WITH_CONTAINER (for Open)"
-    }
-  ],
-  "locked_containers": {
-    "REPLACE_CONTAINER_ID": "REPLACE_ITEM_ID"
-  },
+  "mechanic_bindings": [],
+  "items": [],
+  "locked_containers": {},
   "agent_secrets": {
     "agent_0": ["REPLACE_WITH_SECRET_INFO"],
     "agent_1": ["REPLACE_WITH_SECRET_INFO"]

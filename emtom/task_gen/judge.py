@@ -272,12 +272,12 @@ CRITERIA_DESCRIPTIONS = {
     # Mixed-specific
     "subgoal_tension": {
         "name": "Subgoal Tension",
-        "description": "Do hidden subgoals create meaningful conflict with main goal or each other?",
-        "rubric": """0.0: Subgoals trivial or don't conflict with anything
-0.3: Subgoals exist but easily achieved without tension
-0.5: Minor tension that doesn't create real dilemmas
-0.7: Meaningful conflicts that require strategic choices
-1.0: Real dilemmas - pursuing subgoals risks main goal or conflicts with others' subgoals""",
+        "description": "Does every agent have a personal objective in `:goal-owners`, and do they create meaningful tension?",
+        "rubric": """0.0: No personal objectives in :goal-owners, or goals trivially satisfied
+0.3: Some agents have personal objectives but they don't conflict with anything
+0.5: Personal objectives exist for most agents with minor tension
+0.7: Every agent has a personal objective; meaningful conflicts require strategic choices
+1.0: Every agent has a personal objective; real dilemmas where pursuing them risks the main goal or conflicts with others""",
     },
     # User requirements (added dynamically when query is provided)
     "user_requirements_alignment": {
@@ -428,12 +428,12 @@ CATEGORY_PROMPT_DESCRIPTIONS = {
 - Balance matters: if teams are uneven in size, give smaller team easier objectives
 - Uses `teams` mapping and encodes opposition directly in `problem_pddl` (e.g., OR over team-winning conditions)
 - Public `task` must be symmetric; team-specific targets belong in secrets""",
-    "mixed": """**MIXED** - Cooperation with hidden conflicts
-- All agents share a main objective in `problem_pddl`
-- Hidden tension is induced by asymmetry/mechanics/epistemic conditions rather than legacy `required` tags
-- Tension: agents must cooperate on the main task while secretly pursuing conflicting interests
-- Subgoals should create interesting dilemmas, not make main goal impossible
-- Public `task` must not reveal secret subgoals or targets""",
+    "mixed": """**MIXED** - Cooperation with hidden personal objectives
+- All agents share a main objective in `problem_pddl :goal`
+- Each agent MUST have a personal objective in `:goal-owners` (supplementary, not part of :goal)
+- Personal objectives create tension: they may conflict with the main goal or with other agents' objectives
+- `agent_secrets` should hint at each agent's personal objective in natural language
+- Public `task` must describe ONLY the shared objective; personal objectives belong in secrets""",
 }
 
 

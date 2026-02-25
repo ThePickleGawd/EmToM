@@ -614,6 +614,13 @@ def validate_blocking_spec(
             # this is evaluated by the judge, not enforced as a hard error
             # here.  Hard-blocking was removed because it created a catch-22
             # with agent necessity in cooperative tasks.
+
+            # Mixed tasks must have per-agent personal objectives in :goal-owners
+            if category == "mixed" and not parsed_problem.owners:
+                errors.append(
+                    "mixed task problem_pddl is missing :goal-owners section. "
+                    "Each agent needs a personal objective for credit assignment."
+                )
         except Exception as e:
             errors.append(f"problem_pddl validation error: {e}")
 
@@ -707,12 +714,13 @@ def validate_blocking_spec(
                     )
 
             # Validate pddl_owners references valid goal conjuncts
+            # (mixed tasks allow supplementary goals not in :goal)
             pddl_owners = task_data.get("pddl_owners", {})
             if isinstance(pddl_owners, dict):
                 for literal_str, owner in pddl_owners.items():
                     if literal_str.startswith("_"):
                         continue  # Skip comment keys
-                    if literal_str not in conjunct_strs:
+                    if literal_str not in conjunct_strs and category != "mixed":
                         errors.append(
                             f"pddl_owners key '{literal_str}' is not a goal conjunct"
                         )

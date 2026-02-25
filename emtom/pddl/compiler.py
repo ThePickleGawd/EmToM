@@ -6,6 +6,7 @@ Converts a GeneratedTask + scene data into a PDDL Problem instance.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 from emtom.pddl.dsl import (
@@ -17,6 +18,9 @@ from emtom.pddl.problem_pddl import parse_problem_pddl
 
 if TYPE_CHECKING:
     from emtom.task_gen.task_generator import GeneratedTask
+
+# Valid PDDL identifiers: letters, digits, underscores, hyphens
+_VALID_PDDL_ID = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]*$')
 
 
 def _infer_object_types(formula: Formula, domain: Domain) -> Dict[str, str]:
@@ -125,7 +129,7 @@ def compile_task(
         for item_def in (task.items or []):
             if isinstance(item_def, dict):
                 item_id = item_def.get("item_id")
-                if isinstance(item_id, str) and item_id:
+                if isinstance(item_id, str) and item_id and _VALID_PDDL_ID.match(item_id):
                     problem.objects[item_id] = "item"
 
         # Ensure declared agent cardinality is reflected in objects.
@@ -171,7 +175,7 @@ def compile_task(
     for item_def in (task.items or []):
         if isinstance(item_def, dict):
             item_id = item_def.get("item_id")
-            if item_id:
+            if item_id and _VALID_PDDL_ID.match(item_id):
                 objects[item_id] = "item"
 
     # --- Init state ---
@@ -221,7 +225,9 @@ def compile_task(
         if isinstance(item_def, dict):
             item_id = item_def.get("item_id")
             container = item_def.get("inside") or item_def.get("hidden_in")
-            if item_id and container:
+            if (item_id and container
+                    and _VALID_PDDL_ID.match(item_id)
+                    and _VALID_PDDL_ID.match(container)):
                 init.append(Literal("is_inside", (item_id, container)))
 
     # Locked containers

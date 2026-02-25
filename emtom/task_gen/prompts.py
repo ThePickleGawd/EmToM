@@ -81,12 +81,13 @@ Assigned!
 - Keep the public `task` symmetric; do NOT reveal each team's target container
 - **Competitive PDDL goal MUST use `(or ...)` with exactly two branches** — see "Competitive OR Goals" section below
 
-**MIXED** - Cooperation with hidden conflicts
-- All agents share a main goal encoded in `problem_pddl`
-- Hidden tensions should be encoded via epistemic goals, asymmetric mechanics, and secret incentives
-- Tension: agents must cooperate on the main task while secretly pursuing conflicting interests
-- Subgoals should create interesting dilemmas, not make main goal impossible
-- Public `task` should not reveal secret subgoals or targets
+**MIXED** - Cooperation with hidden personal objectives
+- All agents share a main goal encoded in `:goal` of `problem_pddl`
+- **Each agent MUST also have a personal objective** encoded in `:goal-owners` (see "Goal Ownership" section)
+- Personal objectives are SEPARATE from the main `:goal` — they can conflict with it or with other agents' objectives
+- Personal objectives create tension: agents must cooperate on the shared task while secretly pursuing their own interests
+- `agent_secrets` should hint at each agent's personal objective in natural language (derived from the PDDL goals)
+- Public `task` describes ONLY the shared objective; do NOT reveal personal objectives
 
 ## Message Targeting
 `message_targets` is an optional field that restricts which agents each agent can message.
@@ -264,9 +265,8 @@ Use `problem_pddl` as the single goal source. It must contain a full PDDL proble
 For **competitive** and **mixed** tasks, use a `:goal-owners` section in `problem_pddl` to assign goals to teams or agents.
 - Placed after `:goal` in the problem definition
 - Each entry maps an owner to a PDDL goal literal
-- Unowned conjuncts in `:goal` are shared/cooperative goals
-- Competitive tasks: use `team_0`, `team_1` as owners
-- Mixed tasks: use `agent_0`, `agent_1` etc. for per-agent subgoals
+- Competitive tasks: use `team_0`, `team_1` as owners (goals reference conjuncts inside `:goal`)
+- Mixed tasks: use `agent_0`, `agent_1` etc. for personal objectives
 
 Example (competitive):
 ```
@@ -279,10 +279,15 @@ Here `(is_open safe_3)` is unowned = shared. Each team owns one `is_inside` goal
 
 Example (mixed):
 ```
-(:goal (and (is_on_top report_1 table_8) (K agent_0 (is_in_room gem_1 bedroom_0))))
+(:goal (and (is_on_top report_1 table_8) (is_closed fridge_5)))
 (:goal-owners
-  (agent_1 (K agent_0 (is_in_room gem_1 bedroom_0))))
+  (agent_0 (is_on_top gem_1 table_12))
+  (agent_1 (is_inside book_3 cabinet_8)))
 ```
+The `:goal` has the **shared objectives** only. Each agent's personal objective in `:goal-owners`
+is **supplementary** — it is NOT part of the main `:goal` and is evaluated per-agent for credit
+assignment. Personal objectives MAY conflict with the main goal or each other (this creates tension).
+The evaluator tracks: (1) shared goal progress, (2) which agents achieved their personal objective.
 
 Cooperative tasks do NOT need `:goal-owners` — all goals are shared by default.
 

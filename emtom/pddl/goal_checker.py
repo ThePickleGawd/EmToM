@@ -60,9 +60,19 @@ class PDDLGoalChecker:
         if owners:
             conjunct_strs = [c.to_pddl() for c in self.conjuncts]
             for literal_str, owner in owners.items():
+                matched = False
                 for idx, cs in enumerate(conjunct_strs):
                     if cs == literal_str:
                         self._owners[idx] = owner
+                        matched = True
+                        break
+                if not matched:
+                    # Supplementary goal (e.g. mixed-task personal objective
+                    # not in the main :goal block).  Parse and append.
+                    formula = parse_goal_string(literal_str)
+                    new_idx = len(self.conjuncts)
+                    self.conjuncts.append(formula)
+                    self._owners[new_idx] = owner
 
         # Belief tracker for proper K/B evaluation
         self._belief_tracker = belief_tracker

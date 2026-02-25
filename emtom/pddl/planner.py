@@ -19,8 +19,164 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class InformAction:
+    """A parsed inform action from an FD epistemic plan."""
+    receiver: str       # agent who receives knowledge
+    fact_hash: str      # 8-char hex hash of the leaf fact
+    sender: str         # agent who sends the information
+
+
+# Regex for FD inform action names:
+#   inform_knows_{receiver}_{hash}_from_{sender}[_tokN]
+_INFORM_RE = re.compile(
+    r"inform_knows_(agent_\d+)_([0-9a-f]{8})_from_(agent_\d+)(?:_tok\d+)?"
+)
+
+
+def parse_fd_inform_actions(fd_plan: List[str]) -> List[InformAction]:
+    """Parse inform actions from an FD plan, preserving plan order.
+
+    FD plan steps are strings like:
+        "inform_knows_agent_0_abc12345_from_agent_1"
+        "inform_knows_agent_0_abc12345_from_agent_1_tok1"
+
+    Returns InformActions in plan order (preserves relay chain ordering).
+    """
+    results: List[InformAction] = []
+    for step in fd_plan:
+        m = _INFORM_RE.search(step)
+        if m:
+            results.append(InformAction(
+                receiver=m.group(1),
+                fact_hash=m.group(2),
+                sender=m.group(3),
+            ))
+    return results
+
+
+def _derive_communicate_steps(
+    task_data: Dict[str, Any],
+    scene_data: Any,
+    pddl_goal: str,
+    num_agents: int,
+) -> Dict[str, Any]:
+    """Derive Communicate trajectory steps from FD epistemic plan.
+
+    Runs the epistemic compilation + FD solver pipeline, parses inform
+    actions from the plan, and converts them to Communicate[] steps.
+
+    Returns dict with "steps" (list of trajectory steps) and "notes" (list of str).
+    """
+    from emtom.pddl.describe import _literal_to_nl, goal_to_natural_language
+    from emtom.pddl.domain import EMTOM_DOMAIN
+    from emtom.pddl.dsl import Literal, Knows, Believes, parse_goal_string
+    from emtom.pddl.epistemic import ObservabilityModel
+    from emtom.pddl.epistemic_compiler import (
+        compile_epistemic,
+        _collect_k_goals,
+        _collect_leaf_facts,
+        _get_leaf_formula,
+    )
+    from emtom.pddl.compiler import compile_task
+    from emtom.pddl.fd_solver import FastDownwardSolver, HAS_UP
+    from emtom.task_gen.task_generator import GeneratedTask
+
+    if not HAS_UP:
+        return {"steps": [], "notes": ["unified-planning not installed; skipping communicate derivation"]}
+
+    scene_dict = scene_data if isinstance(scene_data, dict) else {}
+
+    # Build GeneratedTask + compile to PDDL Problem
+    task = GeneratedTask.from_dict(task_data)
+    problem = compile_task(task, scene_dict)
+    obs = ObservabilityModel.from_task_with_scene(task, scene_dict)
+
+    if not obs.object_rooms:
+        return {"steps": [], "notes": ["No object_rooms in observability model; skipping communicate derivation"]}
+
+    # Parse the goal formula
+    goal = parse_goal_string(pddl_goal)
+
+    # Run epistemic compilation to check if belief_depth > 0
+    compilation = compile_epistemic(goal, EMTOM_DOMAIN, problem, obs)
+    if compilation.belief_depth == 0:
+        return {"steps": [], "notes": ["belief_depth=0 (trivial K goals only); no communicate steps needed"]}
+
+    # Solve with FD to get the plan
+    solver = FastDownwardSolver()
+    result = solver._solve_epistemic(EMTOM_DOMAIN, problem, obs, timeout=30.0, start=0.0)
+
+    if not result.solvable or not result.plan:
+        return {"steps": [], "notes": [f"FD epistemic solve failed: {result.error or 'no plan'}"]}
+
+    # Parse inform actions from FD plan
+    informs = parse_fd_inform_actions(result.plan)
+    if not informs:
+        return {"steps": [], "notes": ["FD plan has no inform actions"]}
+
+    # Build hash → formula maps
+    k_goals = _collect_k_goals(goal, obs)
+    leaf_facts = _collect_leaf_facts(k_goals)  # hash → Formula
+
+    # Build nested K map: fact_id → (outer_agent, inner_agent, leaf_formula)
+    nested_k_map: Dict[str, tuple] = {}
+    for kg in k_goals:
+        if kg.depth >= 2 and isinstance(kg.inner, (Knows, Believes)):
+            inner_agent = kg.inner.agent
+            leaf = _get_leaf_formula(kg.inner.inner)
+            if leaf is not None:
+                nested_k_map[kg.fact_id] = (kg.agent, inner_agent, leaf)
+
+    # Convert each inform action to a Communicate step
+    steps: List[Dict[str, Any]] = []
+    notes: List[str] = []
+
+    for inform in informs:
+        formula = leaf_facts.get(inform.fact_hash)
+        nested = nested_k_map.get(inform.fact_hash)
+
+        if formula is not None and isinstance(formula, Literal):
+            message = _literal_to_nl(formula)
+        elif formula is not None:
+            message = goal_to_natural_language(formula)
+        elif nested is not None:
+            _outer_agent, inner_agent, leaf = nested
+            if isinstance(leaf, Literal):
+                inner_msg = _literal_to_nl(leaf)
+            else:
+                inner_msg = goal_to_natural_language(leaf)
+            message = f"{inner_agent} confirmed: {inner_msg}"
+        else:
+            notes.append(f"Unknown fact_hash {inform.fact_hash} in inform action; skipping")
+            continue
+
+        # Build the parallel step: sender Communicates, others Wait
+        step_actions: List[Dict[str, str]] = []
+        for i in range(max(1, num_agents)):
+            agent_id = f"agent_{i}"
+            if agent_id == inform.sender:
+                step_actions.append({
+                    "agent": agent_id,
+                    "action": f'Communicate["{message}", {inform.receiver}]',
+                })
+            else:
+                step_actions.append({
+                    "agent": agent_id,
+                    "action": "Wait[]",
+                })
+        steps.append({"actions": step_actions})
+
+    return {"steps": steps, "notes": notes}
 
 
 def canonical_json(value: Any) -> str:
@@ -533,14 +689,42 @@ def generate_deterministic_trajectory(
                 step_actions.append({"agent": agent_id, "action": action})
             trajectory.append({"actions": step_actions})
 
+    # --- Append Communicate steps from FD epistemic compilation ---
+    comm_steps: List[Dict[str, Any]] = []
+    comm_notes: List[str] = []
+    communication_derived = False
+
+    if "(K " in (pddl_goal or "") and scene_data:
+        try:
+            comm_result = _derive_communicate_steps(
+                task_data, scene_data, pddl_goal, num_agents
+            )
+            comm_steps = comm_result.get("steps", [])
+            comm_notes = comm_result.get("notes", [])
+            communication_derived = bool(comm_steps)
+        except Exception as e:
+            logger.warning("FD communication derivation failed: %s", e)
+            comm_notes = [f"FD communication derivation failed: {e}"]
+
+    if comm_steps:
+        trajectory.extend(comm_steps)
+
+    planner_notes = [
+        "Deterministic rule-based planner generated trajectory from pddl_goal.",
+        "Epistemic wrappers are unwrapped to world-state literals.",
+    ]
+    if communication_derived:
+        planner_notes.append(
+            f"Appended {len(comm_steps)} Communicate step(s) from FD epistemic plan."
+        )
+    planner_notes.extend(comm_notes)
+
     return {
         "trajectory": trajectory,
         "planned_literals": planned_literals,
         "ignored_literals": ignored_literals,
-        "planner_notes": [
-            "Deterministic rule-based planner generated trajectory from pddl_goal.",
-            "Epistemic wrappers are unwrapped to world-state literals.",
-        ],
+        "planner_notes": planner_notes,
+        "communication_derived": communication_derived,
     }
 
 
@@ -578,14 +762,17 @@ def regenerate_golden_trajectory(
     if not isinstance(metadata, dict):
         metadata = {}
 
+    communication_derived = plan_result.get("communication_derived", False)
+
     metadata.update({
         "planner": "deterministic_rule_based",
-        "planner_version": "v2_parallel_balanced",
+        "planner_version": "v3_with_communicate",
         "source": source,
         "spec_hash": spec_hash,
         "trajectory_hash": trajectory_hash,
         "generated_at": datetime.now().isoformat(),
         "num_steps": len(trajectory),
+        "communication_derived": communication_derived,
         "planned_literals": plan_result.get("planned_literals", []),
         "ignored_literals": plan_result.get("ignored_literals", []),
         "planner_notes": plan_result.get("planner_notes", []),
