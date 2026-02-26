@@ -319,7 +319,10 @@ def validate_blocking_spec(
     # ------------------------------------------------------------------
     # Template placeholder artifacts
     # ------------------------------------------------------------------
-    placeholder_hits = _collect_placeholder_hits(task_data)
+    # task_id is auto-generated at submit time, so exclude it from the check.
+    placeholder_hits = _collect_placeholder_hits(
+        {k: v for k, v in task_data.items() if k != "task_id"}
+    )
     if placeholder_hits:
         shown = placeholder_hits[:12]
         more = "" if len(placeholder_hits) <= 12 else f" (+{len(placeholder_hits)-12} more)"

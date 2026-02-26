@@ -134,10 +134,6 @@ class TaskGeneratorAgent:
         self.trajectories_dir = self.working_dir / "agent_trajectories"
         self.trajectories_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create reference_tasks directory with simple planning examples
-        self.reference_tasks_dir = self.working_dir / "reference_tasks"
-        self._sample_reference_tasks()
-
         # Track run count for trajectory folders (reset per task)
         self._test_run_count = 0
 
@@ -223,22 +219,6 @@ class TaskGeneratorAgent:
             # Patching
             "apply_patch",
         ]
-
-    def _sample_reference_tasks(self) -> None:
-        """Sample simple planning tasks for reference into reference_tasks directory."""
-        from emtom.task_gen.sample_partnr import sample_planning_tasks_to_directory
-
-        # Only sample if directory doesn't exist or is empty
-        if self.reference_tasks_dir.exists() and any(self.reference_tasks_dir.iterdir()):
-            return
-
-        sample_planning_tasks_to_directory(
-            output_dir=self.reference_tasks_dir,
-            num_samples=10,
-            seed=42,
-            dataset='train',
-            verbose=self.verbose,
-        )
 
     def _get_model_context_limit(self) -> int:
         """
@@ -456,6 +436,83 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
             else:
                 calibration_section += f"No calibration data yet for {model}. Generate tasks of varied difficulty.\n"
 
+        # Build ToM ratio calibration guidance (independent of difficulty mode).
+        tom_calibration_section = ""
+        if self.calibration_stats:
+            tom_target = self.calibration_stats.get("tom_target", {})
+            tom_tolerance = self.calibration_stats.get("tom_tolerance", 0.08)
+            tom_counts = self.calibration_stats.get("tom_counts", {})
+            tom_total = self.calibration_stats.get("tom_total", 0)
+            tom_unknown = self.calibration_stats.get("tom_unknown", 0)
+
+            if isinstance(tom_target, dict) and any(level in tom_target for level in (1, 2, 3)):
+                t1 = float(tom_target.get(1, 0.0))
+                t2 = float(tom_target.get(2, 0.0))
+                t3 = float(tom_target.get(3, 0.0))
+                tol = float(tom_tolerance)
+
+                tom_calibration_section = (
+                    "\n## ToM Ratio Calibration\n"
+                    f"Target ToM mix: level 1 = {t1:.0%}, level 2 = {t2:.0%}, level 3 = {t3:.0%}\n"
+                    f"Tolerance: +/-{tol:.0%}\n\n"
+                )
+
+                if tom_total > 0:
+                    current_ratios = {
+                        1: float(tom_counts.get(1, 0)) / tom_total,
+                        2: float(tom_counts.get(2, 0)) / tom_total,
+                        3: float(tom_counts.get(3, 0)) / tom_total,
+                    }
+                    tom_calibration_section += (
+                        "Current ToM mix (computed from dataset):\n"
+                        f"- Level 1: {int(tom_counts.get(1, 0))}/{tom_total} ({current_ratios[1]:.1%})\n"
+                        f"- Level 2: {int(tom_counts.get(2, 0))}/{tom_total} ({current_ratios[2]:.1%})\n"
+                        f"- Level 3: {int(tom_counts.get(3, 0))}/{tom_total} ({current_ratios[3]:.1%})\n"
+                    )
+                    if tom_unknown:
+                        tom_calibration_section += f"- Unknown/failed ToM inference: {tom_unknown}\n"
+
+                    deficits = []
+                    surpluses = []
+                    for level, target in ((1, t1), (2, t2), (3, t3)):
+                        current = current_ratios[level]
+                        delta = current - target
+                        if delta < -tol:
+                            deficits.append((level, -delta))
+                        elif delta > tol:
+                            surpluses.append((level, delta))
+
+                    if deficits:
+                        deficits.sort(key=lambda x: x[1], reverse=True)
+                        primary_level = deficits[0][0]
+                        delta_pp = deficits[0][1] * 100
+                        tom_calibration_section += (
+                            f"\n**Guidance**: ToM level {primary_level} is most under target "
+                            f"({delta_pp:.1f} percentage points). Prioritize generating level "
+                            f"{primary_level} tasks until distribution rebalances.\n"
+                            "Use `verify_pddl[]` while authoring to confirm computed tom_level.\n"
+                        )
+                    elif surpluses:
+                        surpluses.sort(key=lambda x: x[1], reverse=True)
+                        primary_level = surpluses[0][0]
+                        delta_pp = surpluses[0][1] * 100
+                        tom_calibration_section += (
+                            f"\n**Guidance**: ToM level {primary_level} is over target "
+                            f"({delta_pp:.1f} percentage points). De-emphasize level {primary_level} "
+                            "and focus on underrepresented levels.\n"
+                        )
+                    else:
+                        tom_calibration_section += (
+                            "\n**Guidance**: Current ToM mix is within tolerance. "
+                            "Maintain diversity while keeping the ratio balanced.\n"
+                        )
+                else:
+                    tom_calibration_section += (
+                        "No ToM-calibrated tasks yet. Start building toward the target mix.\n"
+                        "- Generate a balanced seed set spanning ToM levels 1, 2, and 3.\n"
+                        "- Use nested epistemic goals for higher levels and confirm with `verify_pddl[]`.\n"
+                    )
+
         # Build seed task section if using a seed
         seed_section = ""
         if self.seed_task:
@@ -468,7 +525,13 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
 """
 
         # Build extra sections string and persist for context resets
-        extra_sections = query_section + seed_section + verification_section + calibration_section
+        extra_sections = (
+            query_section
+            + seed_section
+            + verification_section
+            + calibration_section
+            + tom_calibration_section
+        )
         self._extra_sections = extra_sections
 
         # Initial user message - use template from prompts.py
@@ -667,7 +730,7 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
                 for i in range(num_agents)
             }
 
-        # Clear task_id so a new one gets assigned on submit
+        # Clear task_id — canonical ID is generated at submit time.
         task["task_id"] = "REPLACE_WITH_UNIQUE_ID"
 
         # Write to working_task.json

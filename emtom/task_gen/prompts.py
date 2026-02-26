@@ -47,7 +47,7 @@ Assigned!
 
 ## Workflow
 1. `new_scene[N]` → load scene with N agents
-2. Read `sampled_tasks/` for examples
+2. **Before first edit**, inspect examples in `{working_dir}/sampled_tasks/` (recent dataset examples + calibration signals)
 3. Edit `{task_file}` — define goals in `problem_pddl` (inline full problem file)
 4. `verify_pddl[]` → check solvability + ToM depth
 5. `judge[]` → fix → repeat until pass

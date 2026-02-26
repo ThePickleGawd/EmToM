@@ -70,6 +70,47 @@ def _ensure_domain_pddl_file(domain_name: str) -> Path:
     return domain_path
 
 
+def _compute_tom_metadata(
+    task_data: Dict[str, Any],
+    scene_data: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Compute authoritative ToM metadata from canonical problem_pddl.
+
+    Returns a dict with at least:
+      - tom_level (int, clamped to >= 1 for benchmark compatibility)
+      - tom_reasoning (optional str)
+    """
+    from emtom.pddl.compiler import compile_task
+    from emtom.pddl.domain import EMTOM_DOMAIN
+    from emtom.pddl.epistemic import ObservabilityModel
+    from emtom.pddl.fd_solver import FastDownwardSolver
+    from emtom.pddl.tom_verifier import explain_tom_depth
+    from emtom.task_gen.task_generator import GeneratedTask
+
+    generated = GeneratedTask.from_dict(task_data)
+    problem = compile_task(generated, scene_data=scene_data)
+    observability = ObservabilityModel.from_task_with_scene(generated, scene_data)
+
+    solver = FastDownwardSolver()
+    solver_result = solver.solve(EMTOM_DOMAIN, problem, observability)
+    if not solver_result.solvable:
+        raise ValueError(f"PDDL goal is not solvable: {solver_result.error or 'unknown reason'}")
+
+    tom_info = explain_tom_depth(generated, scene_data, solver_result=solver_result)
+    tom_level = tom_info.get("tom_level")
+    if not isinstance(tom_level, int):
+        raise ValueError(f"Invalid computed tom_level: {tom_level!r}")
+
+    result: Dict[str, Any] = {
+        "tom_level": max(tom_level, 1),
+    }
+    tom_reasoning = tom_info.get("tom_reasoning")
+    if isinstance(tom_reasoning, str) and tom_reasoning.strip():
+        result["tom_reasoning"] = tom_reasoning
+    return result
+
+
 def run(
     task_file: str,
     output_dir: str,
@@ -131,6 +172,17 @@ def run(
         with open(task_path, "w") as f:
             json.dump(task_data, f, indent=2)
             f.write("\n")
+
+    # Compute and persist ToM metadata from canonical PDDL at submit time.
+    try:
+        tom_meta = _compute_tom_metadata(task_data, scene_data=scene_data)
+        task_data["tom_level"] = tom_meta["tom_level"]
+        if "tom_reasoning" in tom_meta:
+            task_data["tom_reasoning"] = tom_meta["tom_reasoning"]
+        else:
+            task_data.pop("tom_reasoning", None)
+    except Exception as e:
+        return failure(f"Failed to compute tom_level during submit: {e}")
 
     # Always regenerate golden trajectory from authoritative task spec.
     try:

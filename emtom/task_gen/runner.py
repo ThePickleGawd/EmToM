@@ -15,11 +15,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import random
 import shutil
 import sys
 import tempfile
 import uuid
 from pathlib import Path
+from typing import Optional
 
 # Suppress httpx logging (OpenAI client HTTP requests)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -60,6 +62,14 @@ def parse_extra_args():
                         help="Difficulty level for judge context (easy/medium/hard)")
     parser.add_argument("--test-model", type=str, default=None,
                         help="Override model used for test_task calibration (e.g. gpt-5-mini)")
+    parser.add_argument("--tom-target-l1", type=float, default=0.40,
+                        help="Target ratio for ToM level 1 tasks (default: 0.40)")
+    parser.add_argument("--tom-target-l2", type=float, default=0.40,
+                        help="Target ratio for ToM level 2 tasks (default: 0.40)")
+    parser.add_argument("--tom-target-l3", type=float, default=0.20,
+                        help="Target ratio for ToM level 3 tasks (default: 0.20)")
+    parser.add_argument("--tom-ratio-tolerance", type=float, default=0.08,
+                        help="Tolerance for ToM ratio calibration guidance (default: 0.08)")
 
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
@@ -67,11 +77,98 @@ def parse_extra_args():
     return args
 
 
+def _infer_task_tom_level(task_data: dict) -> Optional[int]:
+    """Infer tom_level from stored field or computed PDDL semantics."""
+    stored = task_data.get("tom_level")
+    if isinstance(stored, int) and 1 <= stored <= 3:
+        return stored
+
+    # Fallback for historical tasks missing persisted tom_level.
+    try:
+        from emtom.task_gen.task_generator import GeneratedTask
+
+        task = GeneratedTask.from_dict(task_data)
+        level = task.compute_tom_level(scene_data=None)
+        if isinstance(level, int):
+            # Keep calibration focused on levels 1-3.
+            return min(max(level, 1), 3)
+    except Exception:
+        return None
+    return None
+
+
+def _is_task_like_json(path: Path) -> bool:
+    """Return True when a JSON file looks like an EMTOM task spec."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    # Minimal structural check.
+    required = ("title", "task", "agent_actions")
+    return all(k in data for k in required)
+
+
+def populate_sampled_tasks_dir(
+    sampled_tasks_dir: Path,
+    primary_output_dir: str,
+    sample_count: int = 10,
+) -> tuple[Optional[Path], int]:
+    """
+    Populate sampled_tasks from the best available source.
+
+    Priority order:
+    1) current output_dir (when it already has tasks)
+    2) canonical curated tasks dir
+    3) historical fallback curated dir
+    """
+    candidate_dirs = [
+        Path(primary_output_dir),
+        Path("data/emtom/tasks"),
+        Path("data/emtom/very_old_tasks/old_calibration_format_2_25_26"),
+    ]
+
+    # Dedupe while preserving order.
+    seen = set()
+    ordered_candidates = []
+    for d in candidate_dirs:
+        key = str(d.resolve()) if d.exists() else str(d)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered_candidates.append(d)
+
+    for source_dir in ordered_candidates:
+        if not source_dir.exists():
+            continue
+        task_files = [p for p in source_dir.glob("*.json") if _is_task_like_json(p)]
+        if not task_files:
+            continue
+        selected = random.sample(task_files, min(sample_count, len(task_files)))
+        for i, task_path in enumerate(selected, 1):
+            dest = sampled_tasks_dir / f"task_{i}.json"
+            shutil.copy(task_path, dest)
+        return source_dir, len(selected)
+
+    return None, 0
+
+
 def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
-    """Compute pass rate statistics for a given model from existing tasks."""
+    """Compute pass-rate and ToM-ratio stats from existing tasks."""
     from emtom.evolve.benchmark_wrapper import find_calibration_entry
 
-    stats = {"passed": 0, "failed": 0, "untested": 0, "model": model}
+    stats = {
+        "passed": 0,
+        "failed": 0,
+        "untested": 0,
+        "model": model,
+        "tom_counts": {1: 0, 2: 0, 3: 0},
+        "tom_total": 0,
+        "tom_unknown": 0,
+        "tom_ratios": {1: None, 2: None, 3: None},
+    }
     tasks_path = Path(tasks_dir)
 
     if not tasks_path.exists():
@@ -83,6 +180,14 @@ def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
         try:
             with open(task_file) as f:
                 task = json.load(f)
+
+            tom_level = _infer_task_tom_level(task)
+            if tom_level in (1, 2, 3):
+                stats["tom_counts"][tom_level] += 1
+                stats["tom_total"] += 1
+            else:
+                stats["tom_unknown"] += 1
+
             cal = find_calibration_entry(task.get("calibration", []), model=model)
             if cal is None:
                 stats["untested"] += 1
@@ -95,6 +200,9 @@ def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
 
     stats["total"] = stats["passed"] + stats["failed"]
     stats["rate"] = stats["passed"] / stats["total"] if stats["total"] > 0 else None
+    if stats["tom_total"] > 0:
+        for level in (1, 2, 3):
+            stats["tom_ratios"][level] = stats["tom_counts"][level] / stats["tom_total"]
     return stats
 
 
@@ -141,6 +249,21 @@ def main(config: DictConfig) -> None:
     judge_threshold = extra_args.judge_threshold if extra_args else None
     difficulty = extra_args.difficulty if extra_args else None
     test_model = extra_args.test_model if extra_args else None
+    tom_target_l1 = extra_args.tom_target_l1 if extra_args else 0.40
+    tom_target_l2 = extra_args.tom_target_l2 if extra_args else 0.40
+    tom_target_l3 = extra_args.tom_target_l3 if extra_args else 0.20
+    tom_ratio_tolerance = extra_args.tom_ratio_tolerance if extra_args else 0.08
+
+    tom_target_sum = tom_target_l1 + tom_target_l2 + tom_target_l3
+    if abs(tom_target_sum - 1.0) > 1e-6:
+        cprint(
+            f"Error: --tom-target-l1/2/3 must sum to 1.0, got {tom_target_sum:.6f}",
+            "red",
+        )
+        sys.exit(1)
+    if tom_ratio_tolerance < 0:
+        cprint("Error: --tom-ratio-tolerance must be non-negative", "red")
+        sys.exit(1)
 
     # Validate seed task path
     if seed_task:
@@ -183,8 +306,7 @@ def main(config: DictConfig) -> None:
     working_dir = Path(tempfile.gettempdir()) / f"emtom_taskgen_{instance_id}"
     working_dir.mkdir(parents=True, exist_ok=True)
 
-    # Sample reference tasks from existing pool for agent inspiration
-    import random
+    # Sample example tasks for agent inspiration
     sampled_tasks_dir = working_dir / "sampled_tasks"
     sampled_tasks_dir.mkdir(parents=True, exist_ok=True)
 
@@ -193,23 +315,40 @@ def main(config: DictConfig) -> None:
     if sampled_tasks_override:
         override_path = Path(sampled_tasks_override)
         if override_path.exists():
-            for f in override_path.glob("*.json"):
-                shutil.copy(f, sampled_tasks_dir / f.name)
-            cprint(f"Using pre-built sampled_tasks: {override_path} ({len(list(override_path.glob('*.json')))} files)", "green")
+            override_files = [p for p in override_path.glob("*.json") if _is_task_like_json(p)]
+            if override_files:
+                for f in override_files:
+                    shutil.copy(f, sampled_tasks_dir / f.name)
+                cprint(
+                    f"Using pre-built sampled_tasks: {override_path} "
+                    f"({len(override_files)} files)",
+                    "green",
+                )
+            else:
+                cprint(
+                    f"WARNING: --sampled-tasks-dir has no task JSONs: {override_path}, "
+                    "falling back to defaults",
+                    "yellow",
+                )
+                sampled_tasks_override = None
         else:
             cprint(f"WARNING: --sampled-tasks-dir not found: {override_path}, falling back to random", "yellow")
             sampled_tasks_override = None
 
     if not sampled_tasks_override:
-        tasks_source = Path(output_dir)
-        if tasks_source.exists():
-            existing_tasks = list(tasks_source.glob("*.json"))
-            if existing_tasks:
-                sample_count = min(10, len(existing_tasks))
-                sampled = random.sample(existing_tasks, sample_count)
-                for i, task_path in enumerate(sampled, 1):
-                    dest = sampled_tasks_dir / f"task_{i}.json"
-                    shutil.copy(task_path, dest)
+        source_dir, count = populate_sampled_tasks_dir(
+            sampled_tasks_dir=sampled_tasks_dir,
+            primary_output_dir=output_dir,
+            sample_count=10,
+        )
+        if source_dir is not None:
+            cprint(f"Sampled {count} task examples from: {source_dir}", "green")
+        else:
+            cprint(
+                "WARNING: No task examples found for sampled_tasks/. "
+                "Generation will proceed without examples.",
+                "yellow",
+            )
 
     # Sample exploration trajectories for agent inspiration
     sampled_trajectories_dir = working_dir / "sampled_trajectories"
@@ -232,6 +371,12 @@ def main(config: DictConfig) -> None:
     # Compute calibration stats from existing dataset
     calibration_stats = compute_calibration_stats(output_dir, calibration_model)
     calibration_stats["target_rate"] = target_pass_rate
+    calibration_stats["tom_target"] = {
+        1: tom_target_l1,
+        2: tom_target_l2,
+        3: tom_target_l3,
+    }
+    calibration_stats["tom_tolerance"] = tom_ratio_tolerance
 
     cprint("=" * 60, "blue")
     cprint("EMTOM Task Generator (Live Scene Mode)", "blue")
@@ -252,6 +397,27 @@ def main(config: DictConfig) -> None:
         cprint(f"  Current rate: {calibration_stats['rate']:.1%} ({calibration_stats['passed']}/{calibration_stats['total']})", "yellow")
     else:
         cprint(f"  No calibration data yet (untested: {calibration_stats['untested']})", "yellow")
+    cprint(
+        "ToM target mix: "
+        f"L1 {tom_target_l1:.0%}, L2 {tom_target_l2:.0%}, L3 {tom_target_l3:.0%} "
+        f"(tol +/-{tom_ratio_tolerance:.0%})",
+        "blue",
+    )
+    if calibration_stats["tom_total"] > 0:
+        cprint(
+            "  Current ToM mix: "
+            f"L1 {calibration_stats['tom_counts'][1]}/{calibration_stats['tom_total']} "
+            f"({calibration_stats['tom_ratios'][1]:.1%}), "
+            f"L2 {calibration_stats['tom_counts'][2]}/{calibration_stats['tom_total']} "
+            f"({calibration_stats['tom_ratios'][2]:.1%}), "
+            f"L3 {calibration_stats['tom_counts'][3]}/{calibration_stats['tom_total']} "
+            f"({calibration_stats['tom_ratios'][3]:.1%})",
+            "yellow",
+        )
+        if calibration_stats["tom_unknown"] > 0:
+            cprint(f"  ToM unknown: {calibration_stats['tom_unknown']}", "yellow")
+    else:
+        cprint("  No ToM-labeled tasks yet for ratio calibration", "yellow")
     cprint("=" * 60, "blue")
     print()
 

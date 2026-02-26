@@ -176,6 +176,117 @@ class TestSubmitTask:
         assert result["success"] is False
         assert "not found" in result["error"]
 
+    def test_submit_persists_computed_tom_fields(self):
+        from emtom.cli.submit_task import run
+
+        task = {
+            "task_id": "draft_task",
+            "title": "Submission ToM Persistence Test",
+            "category": "cooperative",
+            "task": "This is a sufficiently long task description for submit testing.",
+            "scene_id": "scene_test",
+            "episode_id": "episode_test",
+            "num_agents": 2,
+            "active_mechanics": [],
+            "mechanic_bindings": [],
+            "agent_secrets": {"agent_0": ["s0"], "agent_1": ["s1"]},
+            "agent_actions": {"agent_0": ["Wait"], "agent_1": ["Wait"]},
+            "items": [],
+            "locked_containers": {},
+            "initial_states": {},
+            "message_targets": {},
+            "teams": {},
+            "team_secrets": {},
+            "pddl_domain": "emtom",
+            "problem_pddl": (
+                "(define (problem t_submit)"
+                " (:domain emtom)"
+                " (:objects agent_0 agent_1 - agent cup_1 - object table_1 - furniture)"
+                " (:init (is_on_top cup_1 table_1))"
+                " (:goal (is_on_top cup_1 table_1)))"
+            ),
+        }
+
+        with tempfile.TemporaryDirectory() as td:
+            task_path = Path(td) / "task.json"
+            out_dir = Path(td) / "out"
+            with open(task_path, "w") as f:
+                json.dump(task, f)
+
+            with patch("emtom.cli.validate_task.run", return_value=success({"valid": True})), \
+                 patch("emtom.cli.submit_task._compute_tom_metadata", return_value={"tom_level": 2, "tom_reasoning": "computed"}), \
+                 patch("emtom.pddl.planner.regenerate_golden_trajectory", return_value={}), \
+                 patch("emtom.cli.submit_task._ensure_domain_pddl_file", return_value=Path(td) / "domain.pddl"):
+                result = run(
+                    str(task_path),
+                    output_dir=str(out_dir),
+                    subtasks_min=1,
+                    subtasks_max=20,
+                )
+
+            assert result["success"] is True
+            output_path = Path(result["data"]["output_path"])
+            assert output_path.exists()
+
+            with open(output_path) as f:
+                submitted = json.load(f)
+            assert submitted["tom_level"] == 2
+            assert submitted["tom_reasoning"] == "computed"
+
+            with open(task_path) as f:
+                working = json.load(f)
+            assert working["tom_level"] == 2
+            assert working["tom_reasoning"] == "computed"
+
+    def test_submit_fails_when_tom_computation_fails(self):
+        from emtom.cli.submit_task import run
+
+        task = {
+            "task_id": "draft_task",
+            "title": "Submission ToM Failure Test",
+            "category": "cooperative",
+            "task": "This is a sufficiently long task description for submit testing.",
+            "scene_id": "scene_test",
+            "episode_id": "episode_test",
+            "num_agents": 2,
+            "active_mechanics": [],
+            "mechanic_bindings": [],
+            "agent_secrets": {"agent_0": ["s0"], "agent_1": ["s1"]},
+            "agent_actions": {"agent_0": ["Wait"], "agent_1": ["Wait"]},
+            "items": [],
+            "locked_containers": {},
+            "initial_states": {},
+            "message_targets": {},
+            "teams": {},
+            "team_secrets": {},
+            "pddl_domain": "emtom",
+            "problem_pddl": (
+                "(define (problem t_submit)"
+                " (:domain emtom)"
+                " (:objects agent_0 agent_1 - agent cup_1 - object table_1 - furniture)"
+                " (:init (is_on_top cup_1 table_1))"
+                " (:goal (is_on_top cup_1 table_1)))"
+            ),
+        }
+
+        with tempfile.TemporaryDirectory() as td:
+            task_path = Path(td) / "task.json"
+            out_dir = Path(td) / "out"
+            with open(task_path, "w") as f:
+                json.dump(task, f)
+
+            with patch("emtom.cli.validate_task.run", return_value=success({"valid": True})), \
+                 patch("emtom.cli.submit_task._compute_tom_metadata", side_effect=ValueError("boom")):
+                result = run(
+                    str(task_path),
+                    output_dir=str(out_dir),
+                    subtasks_min=1,
+                    subtasks_max=20,
+                )
+
+            assert result["success"] is False
+            assert "Failed to compute tom_level" in result["error"]
+
 
 # ---------------------------------------------------------------------------
 # judge_task tests

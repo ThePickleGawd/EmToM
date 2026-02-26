@@ -97,7 +97,13 @@ def _derive_communicate_steps(
             "(install unified-planning and up-fast-downward)."
         )
 
-    scene_dict = scene_data if isinstance(scene_data, dict) else {}
+    # Convert SceneData to dict if needed
+    if isinstance(scene_data, dict):
+        scene_dict = scene_data
+    elif hasattr(scene_data, "to_dict"):
+        scene_dict = scene_data.to_dict()
+    else:
+        scene_dict = {}
 
     # Build GeneratedTask + compile to PDDL Problem
     task = GeneratedTask.from_dict(task_data)
@@ -294,6 +300,51 @@ def build_target_to_room_map(scene_data: Optional[Any]) -> Dict[str, str]:
     return target_to_room
 
 
+def _agent_sort_key(agent_id: str, agent_loads: Dict[str, int]) -> tuple:
+    """Stable deterministic tie-breaker: (load, numeric agent index)."""
+    try:
+        idx = int(agent_id.split("_", 1)[1])
+    except Exception:
+        idx = 0
+    return (agent_loads.get(agent_id, 0), idx)
+
+
+def _resolve_target_room(
+    target_id: str,
+    target_to_room: Dict[str, str],
+    restrictions: Dict[str, set],
+) -> Optional[str]:
+    """Resolve target_id to its room, checking restriction maps as fallback."""
+    room = target_to_room.get(target_id)
+    if room is not None:
+        return room
+    if restrictions:
+        restricted_rooms = {
+            r for rooms in restrictions.values() for r in rooms if isinstance(r, str)
+        }
+        if target_id in restricted_rooms:
+            return target_id
+    return None
+
+
+def _feasible_agents(
+    target_rooms: List[Optional[str]],
+    num_agents: int,
+    restrictions: Dict[str, set],
+) -> List[str]:
+    """Return agents that can reach ALL of the given rooms."""
+    feasible: List[str] = []
+    for i in range(max(1, num_agents)):
+        agent_id = f"agent_{i}"
+        agent_restricted = restrictions.get(agent_id, set())
+        if all(
+            room is None or room not in agent_restricted
+            for room in target_rooms
+        ):
+            feasible.append(agent_id)
+    return feasible
+
+
 def pick_agent_for_target(
     target_id: str,
     num_agents: int,
@@ -307,16 +358,7 @@ def pick_agent_for_target(
     When agent_loads is provided, prefers the least-loaded feasible agent to
     reduce trajectories where one agent does all work while others wait.
     """
-    target_room = target_to_room.get(target_id)
-    if target_room is None and restrictions:
-        restricted_rooms = {
-            room
-            for rooms in restrictions.values()
-            for room in rooms
-            if isinstance(room, str)
-        }
-        if target_id in restricted_rooms:
-            target_room = target_id
+    target_room = _resolve_target_room(target_id, target_to_room, restrictions)
 
     if target_room is None and restrictions:
         raise ValueError(
@@ -325,12 +367,7 @@ def pick_agent_for_target(
             "furniture/object room mappings."
         )
 
-    feasible: List[str] = []
-    for i in range(max(1, num_agents)):
-        agent_id = f"agent_{i}"
-        if target_room and target_room in restrictions.get(agent_id, set()):
-            continue
-        feasible.append(agent_id)
+    feasible = _feasible_agents([target_room], num_agents, restrictions)
 
     if not feasible:
         raise ValueError(
@@ -340,16 +377,62 @@ def pick_agent_for_target(
     if not agent_loads:
         return feasible[0]
 
-    # Stable deterministic tie-breaker: (load, numeric agent index)
-    def _sort_key(agent_id: str) -> tuple:
-        try:
-            idx = int(agent_id.split("_", 1)[1])
-        except Exception:
-            idx = 0
-        return (agent_loads.get(agent_id, 0), idx)
-
-    feasible.sort(key=_sort_key)
+    feasible.sort(key=lambda a: _agent_sort_key(a, agent_loads))
     return feasible[0]
+
+
+def pick_agent_for_targets(
+    target_ids: List[str],
+    num_agents: int,
+    target_to_room: Dict[str, str],
+    restrictions: Dict[str, set],
+    agent_loads: Optional[Dict[str, int]] = None,
+) -> Optional[str]:
+    """Pick an agent that can reach ALL targets. Returns None if impossible."""
+    target_rooms = [
+        _resolve_target_room(tid, target_to_room, restrictions)
+        for tid in target_ids
+    ]
+    feasible = _feasible_agents(target_rooms, num_agents, restrictions)
+    if not feasible:
+        return None
+    if not agent_loads:
+        return feasible[0]
+    feasible.sort(key=lambda a: _agent_sort_key(a, agent_loads))
+    return feasible[0]
+
+
+def find_handoff_furniture(
+    agent_a: str,
+    agent_b: str,
+    restrictions: Dict[str, set],
+    scene_data: Optional[Any],
+) -> Optional[str]:
+    """Find a furniture item in a room accessible by both agents for handoff.
+
+    Returns the first furniture item in a shared room, or None if no shared
+    room exists.
+    """
+    if not scene_data:
+        return None
+
+    if hasattr(scene_data, "furniture_in_rooms"):
+        fir = scene_data.furniture_in_rooms
+    elif isinstance(scene_data, dict):
+        fir = scene_data.get("furniture_in_rooms", {})
+    else:
+        return None
+
+    a_restricted = restrictions.get(agent_a, set())
+    b_restricted = restrictions.get(agent_b, set())
+
+    for room in sorted(fir.keys()):
+        if room in a_restricted or room in b_restricted:
+            continue
+        furns = fir.get(room, [])
+        if furns:
+            return furns[0]
+    return None
 
 
 def wrap_parallel_step(num_agents: int, acting_agent: str, action: str) -> Dict[str, Any]:
@@ -662,17 +745,70 @@ def generate_deterministic_trajectory(
                 # Items are inventory-only in this benchmark variant.
                 ignored_literals.append(lit_str)
                 continue
-            agent_id = get_agent_for_literal(lit, obj)
-            add_action(agent_id, f"Navigate[{obj}]")
-            add_action(agent_id, f"Pick[{obj}]")
-            add_action(agent_id, f"Navigate[{receptacle}]")
             relation = "within" if pred == "is_inside" else "on"
-            add_action(agent_id, f"Place[{obj}, {relation}, {receptacle}, None, None]")
+
+            # Check owner override first
+            owner = literal_owner.get(lit.to_pddl().strip())
+            if owner and owner.startswith("agent_"):
+                add_action(owner, f"Navigate[{obj}]")
+                add_action(owner, f"Pick[{obj}]")
+                add_action(owner, f"Navigate[{receptacle}]")
+                add_action(owner, f"Place[{obj}, {relation}, {receptacle}, None, None]")
+                planned_literals.append(lit_str)
+                continue
+
+            # Try to find a single agent that can reach BOTH obj and receptacle
+            single = pick_agent_for_targets(
+                [obj, receptacle], num_agents, target_to_room,
+                restrictions, agent_loads=agent_loads,
+            )
+            if single is not None:
+                add_action(single, f"Navigate[{obj}]")
+                add_action(single, f"Pick[{obj}]")
+                add_action(single, f"Navigate[{receptacle}]")
+                add_action(single, f"Place[{obj}, {relation}, {receptacle}, None, None]")
+                planned_literals.append(lit_str)
+                continue
+
+            # No single agent can reach both — use handoff via shared room
+            picker = pick_agent_for_target(
+                obj, num_agents, target_to_room, restrictions,
+                agent_loads=agent_loads,
+            )
+            placer = pick_agent_for_target(
+                receptacle, num_agents, target_to_room, restrictions,
+                agent_loads=agent_loads,
+            )
+            handoff_furn = find_handoff_furniture(
+                picker, placer, restrictions, scene_data,
+            )
+            if handoff_furn is None:
+                raise ValueError(
+                    f"Cannot plan {lit_str}: no agent can reach both "
+                    f"'{obj}' and '{receptacle}', and no shared room exists "
+                    "for handoff. Redesign room restrictions or goal."
+                )
+            # Picker: pick obj and place on handoff furniture
+            add_action(picker, f"Navigate[{obj}]")
+            add_action(picker, f"Pick[{obj}]")
+            add_action(picker, f"Navigate[{handoff_furn}]")
+            add_action(picker, f"Place[{obj}, on, {handoff_furn}, None, None]")
+            # Placer: pick from handoff and place on final receptacle
+            add_action(placer, f"Navigate[{handoff_furn}]")
+            add_action(placer, f"Pick[{obj}]")
+            add_action(placer, f"Navigate[{receptacle}]")
+            add_action(placer, f"Place[{obj}, {relation}, {receptacle}, None, None]")
             planned_literals.append(lit_str)
             continue
 
         if pred == "agent_in_room" and len(args) >= 2 and not lit.negated:
             agent_str, room = args[0], args[1]
+            # Verify agent is not restricted from this room
+            if room in restrictions.get(agent_str, set()):
+                raise ValueError(
+                    f"Cannot plan {lit_str}: {agent_str} is restricted from "
+                    f"{room}. Fix room_restriction bindings or goal."
+                )
             # Navigate agent to a furniture item in the target room
             nav_target = room
             if isinstance(scene_data, dict):
@@ -690,6 +826,14 @@ def generate_deterministic_trajectory(
 
         if pred == "is_held_by" and len(args) >= 2 and not lit.negated:
             obj, agent_str = args[0], args[1]
+            # Verify agent can reach the object's room
+            obj_room = target_to_room.get(obj)
+            if obj_room and obj_room in restrictions.get(agent_str, set()):
+                raise ValueError(
+                    f"Cannot plan {lit_str}: {agent_str} is restricted from "
+                    f"{obj_room} (where '{obj}' is). Fix room_restriction "
+                    "bindings or goal."
+                )
             add_action(agent_str, f"Navigate[{obj}]")
             add_action(agent_str, f"Pick[{obj}]")
             planned_literals.append(lit_str)

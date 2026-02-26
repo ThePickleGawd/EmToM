@@ -119,6 +119,10 @@ OUTPUT_DIR=""  # Override output directory for generate/benchmark
 SCENE_DATA_FILE=""  # Optional scene data JSON for static verification
 DIFFICULTY=""  # Difficulty level for judge context: easy, medium, hard
 TEST_MODEL=""  # Override model used for test_task calibration (evolve pipeline)
+TOM_TARGET_L1=0.4  # Target ratio for ToM level 1 tasks
+TOM_TARGET_L2=0.4  # Target ratio for ToM level 2 tasks
+TOM_TARGET_L3=0.2  # Target ratio for ToM level 3 tasks
+TOM_RATIO_TOLERANCE=0.08  # Allowed drift from target before guidance kicks in
 STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
 REPORT_FILE=""  # Optional JSON report output path for static verification
 NO_CALIBRATION=false  # Don't write benchmark results back into source task JSONs
@@ -191,6 +195,10 @@ print_usage() {
     echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
     echo "  --seed-task FILE     Use existing task JSON as seed instead of blank template"
     echo "  --sampled-tasks-dir DIR  Pre-built sampled_tasks directory (skips random sampling)"
+    echo "  --tom-target-l1 R    Target ratio for ToM level 1 (default: $TOM_TARGET_L1)"
+    echo "  --tom-target-l2 R    Target ratio for ToM level 2 (default: $TOM_TARGET_L2)"
+    echo "  --tom-target-l3 R    Target ratio for ToM level 3 (default: $TOM_TARGET_L3)"
+    echo "  --tom-ratio-tolerance R  ToM ratio tolerance (default: $TOM_RATIO_TOLERANCE)"
     echo "  --output-dir DIR     Override output directory (used by generate and benchmark)"
     echo ""
     echo -e "${BOLD}Benchmark Options:${NC}"
@@ -364,6 +372,7 @@ run_generate() {
     echo "Category: ${CATEGORY:-random}"
     echo "Subtasks: $SUBTASKS_MIN - $SUBTASKS_MAX"
     echo "Iterations per task: $ITERATIONS_PER_TASK"
+    echo "ToM target mix: L1=$TOM_TARGET_L1 L2=$TOM_TARGET_L2 L3=$TOM_TARGET_L3 (tol=$TOM_RATIO_TOLERANCE)"
     if [ -n "$QUERY" ]; then
         echo "Query: $QUERY"
     fi
@@ -403,6 +412,10 @@ run_generate() {
     if [ -n "$TEST_MODEL" ]; then
         EXTRA_ARGS+=(--test-model "$TEST_MODEL")
     fi
+    EXTRA_ARGS+=(--tom-target-l1 "$TOM_TARGET_L1")
+    EXTRA_ARGS+=(--tom-target-l2 "$TOM_TARGET_L2")
+    EXTRA_ARGS+=(--tom-target-l3 "$TOM_TARGET_L3")
+    EXTRA_ARGS+=(--tom-ratio-tolerance "$TOM_RATIO_TOLERANCE")
 
     # Use Hydra config system with custom overrides
     # Scene is loaded live from PARTNR dataset - no trajectories needed
@@ -1043,6 +1056,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --test-model)
             TEST_MODEL=$2
+            shift 2
+            ;;
+        --tom-target-l1)
+            TOM_TARGET_L1=$2
+            shift 2
+            ;;
+        --tom-target-l2)
+            TOM_TARGET_L2=$2
+            shift 2
+            ;;
+        --tom-target-l3)
+            TOM_TARGET_L3=$2
+            shift 2
+            ;;
+        --tom-ratio-tolerance)
+            TOM_RATIO_TOLERANCE=$2
             shift 2
             ;;
         --no-video)
