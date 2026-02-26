@@ -2,7 +2,7 @@
 Verify PDDL goal solvability and compute ToM depth.
 
 Checks:
-1. `problem_pddl` / goal syntax is valid
+1. `problem_pddl` syntax is valid
 2. Goal compiles against scene objects
 3. Goal is structurally solvable by PDKBSolver
 4. Computes ToM depth from epistemic structure
@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -49,53 +50,47 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     except json.JSONDecodeError as e:
         return failure(f"Invalid JSON: {e}")
 
-    # Build GoalSpec from inline problem_pddl, goals array, or legacy fields
+    # Build GoalSpec from canonical inline problem_pddl.
     from emtom.pddl.goal_spec import GoalSpec
     from emtom.pddl.domain import EMTOM_DOMAIN
     from emtom.pddl.problem_pddl import parse_problem_pddl
 
     problem_pddl = task_data.get("problem_pddl")
-    goals_array = task_data.get("goals")
-    pddl_goal = task_data.get("pddl_goal")
+    legacy_goal_fields = [k for k in ("goals", "pddl_goal", "pddl_ordering", "pddl_owners") if k in task_data]
     parsed_problem = None
 
     parse_start = time.perf_counter()
-    if isinstance(problem_pddl, str) and problem_pddl.strip():
-        try:
-            parsed_problem = parse_problem_pddl(problem_pddl)
-        except ValueError as e:
-            return failure(f"Invalid problem_pddl: {e}")
+    if not isinstance(problem_pddl, str) or not problem_pddl.strip():
+        return failure("Task must define non-empty 'problem_pddl'.")
+    if legacy_goal_fields:
+        return failure(
+            "Legacy goal fields are not supported. "
+            f"Remove {legacy_goal_fields} and encode goals in problem_pddl only."
+        )
+    try:
+        parsed_problem = parse_problem_pddl(problem_pddl)
+    except ValueError as e:
+        return failure(f"Invalid problem_pddl: {e}")
 
-        declared_domain = task_data.get("pddl_domain")
-        if isinstance(declared_domain, str) and declared_domain:
-            if parsed_problem.domain_name != declared_domain:
-                return failure(
-                    "problem_pddl domain mismatch: "
-                    f":domain is '{parsed_problem.domain_name}' but pddl_domain is '{declared_domain}'"
-                )
-        if parsed_problem.domain_name != EMTOM_DOMAIN.name:
+    declared_domain = task_data.get("pddl_domain")
+    if isinstance(declared_domain, str) and declared_domain:
+        if parsed_problem.domain_name != declared_domain:
             return failure(
-                f"Unsupported problem domain '{parsed_problem.domain_name}'. "
-                f"Expected '{EMTOM_DOMAIN.name}'."
+                "problem_pddl domain mismatch: "
+                f":domain is '{parsed_problem.domain_name}' but pddl_domain is '{declared_domain}'"
             )
+    if parsed_problem.domain_name != EMTOM_DOMAIN.name:
+        return failure(
+            f"Unsupported problem domain '{parsed_problem.domain_name}'. "
+            f"Expected '{EMTOM_DOMAIN.name}'."
+        )
+    if re.search(r"\bteam_[a-zA-Z0-9_]+\b", parsed_problem.goal_pddl):
+        return failure(
+            "Invalid problem_pddl :goal: found team_* identifier(s). "
+            "Use world-state predicates in :goal and put ownership in :goal-owners."
+        )
 
-        goal_spec = GoalSpec.from_legacy(parsed_problem.goal_pddl, [], {})
-    elif goals_array:
-        try:
-            goal_spec = GoalSpec.from_goals_array(goals_array)
-        except ValueError as e:
-            return failure(f"Invalid goals array: {e}")
-    elif pddl_goal:
-        try:
-            goal_spec = GoalSpec.from_legacy(
-                pddl_goal,
-                task_data.get("pddl_ordering", []),
-                task_data.get("pddl_owners", {}),
-            )
-        except Exception as e:
-            return failure(f"Invalid PDDL goal syntax: {e}")
-    else:
-        return failure("No problem_pddl, goals array, or pddl_goal field in task.")
+    goal_spec = GoalSpec.from_legacy(parsed_problem.goal_pddl, [], {})
     parse_time_s = time.perf_counter() - parse_start
 
     # Validate goal spec against domain

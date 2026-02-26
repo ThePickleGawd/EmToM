@@ -82,43 +82,44 @@ def validate(
     # golden_trajectory is a derived artifact and may be stale/missing before
     # verify_golden_trajectory. Static trajectory checks run separately.
 
-    # Validate problem_pddl (canonical goal format)
-    has_problem_pddl = bool(task_data.get("problem_pddl"))
-    has_pddl_goal = bool(task_data.get("pddl_goal"))
-    has_goals_array = bool(task_data.get("goals"))
+    # Validate problem_pddl (canonical goal format, required).
+    has_problem_pddl = isinstance(task_data.get("problem_pddl"), str) and bool(task_data.get("problem_pddl").strip())
+    legacy_goal_fields = [k for k in ("goals", "pddl_goal", "pddl_ordering", "pddl_owners") if k in task_data]
 
-    if not has_problem_pddl and not has_pddl_goal and not has_goals_array:
+    if not has_problem_pddl:
+        return failure("Task must have non-empty 'problem_pddl'.")
+    if legacy_goal_fields:
         return failure(
-            "Task must have 'problem_pddl', 'goals', or 'pddl_goal'"
+            "Legacy goal fields are not supported. "
+            f"Remove {legacy_goal_fields} and encode goals in problem_pddl only."
         )
 
-    if has_problem_pddl:
-        try:
-            from emtom.pddl.problem_pddl import parse_problem_pddl
-            from emtom.pddl.domain import EMTOM_DOMAIN
-            from emtom.pddl.dsl import validate_goal_predicates
+    try:
+        from emtom.pddl.problem_pddl import parse_problem_pddl
+        from emtom.pddl.domain import EMTOM_DOMAIN
+        from emtom.pddl.dsl import validate_goal_predicates
 
-            parsed = parse_problem_pddl(task_data["problem_pddl"])
-            declared_domain = task_data.get("pddl_domain", "")
-            if declared_domain and parsed.domain_name != declared_domain:
-                return failure(
-                    "problem_pddl domain mismatch: "
-                    f":domain is '{parsed.domain_name}' but pddl_domain is '{declared_domain}'"
-                )
-            if parsed.domain_name != EMTOM_DOMAIN.name:
-                return failure(
-                    f"Unsupported problem domain '{parsed.domain_name}'. "
-                    f"Expected '{EMTOM_DOMAIN.name}'."
-                )
+        parsed = parse_problem_pddl(task_data["problem_pddl"])
+        declared_domain = task_data.get("pddl_domain", "")
+        if declared_domain and parsed.domain_name != declared_domain:
+            return failure(
+                "problem_pddl domain mismatch: "
+                f":domain is '{parsed.domain_name}' but pddl_domain is '{declared_domain}'"
+            )
+        if parsed.domain_name != EMTOM_DOMAIN.name:
+            return failure(
+                f"Unsupported problem domain '{parsed.domain_name}'. "
+                f"Expected '{EMTOM_DOMAIN.name}'."
+            )
 
-            pred_errors = validate_goal_predicates(parsed.goal_formula, EMTOM_DOMAIN)
-            if pred_errors:
-                return failure(
-                    "problem_pddl goal predicate validation failed: "
-                    + "; ".join(pred_errors)
-                )
-        except Exception as e:
-            return failure(f"Invalid problem_pddl: {e}")
+        pred_errors = validate_goal_predicates(parsed.goal_formula, EMTOM_DOMAIN)
+        if pred_errors:
+            return failure(
+                "problem_pddl goal predicate validation failed: "
+                + "; ".join(pred_errors)
+            )
+    except Exception as e:
+        return failure(f"Invalid problem_pddl: {e}")
 
     # Validate locked_containers references
     locked_containers = task_data.get("locked_containers", {})

@@ -137,11 +137,7 @@ class GeneratedTask:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "GeneratedTask":
-        """Create task from dictionary.
-
-        Handles migration from legacy formats (goals array, pddl_goal triple)
-        by converting to problem_pddl on load.
-        """
+        """Create task from dictionary."""
         # Parse mechanic bindings
         bindings = []
         raw_bindings = data.get("mechanic_bindings", [])
@@ -181,13 +177,14 @@ class GeneratedTask:
         teams = data.get("teams") if isinstance(data.get("teams"), dict) else None
         team_secrets = data.get("team_secrets") if isinstance(data.get("team_secrets"), dict) else None
 
-        # Parse PDDL — canonical problem_pddl, with one-time migration from legacy
+        # Parse canonical PDDL payload (required end-to-end).
         pddl_domain = data.get("pddl_domain", "emtom")
         problem_pddl = data.get("problem_pddl") if isinstance(data.get("problem_pddl"), str) else None
-
         if not (problem_pddl and problem_pddl.strip()):
-            # Migrate from legacy formats to problem_pddl
-            problem_pddl = _migrate_legacy_to_problem_pddl(data)
+            raise ValueError(
+                "Task must define non-empty 'problem_pddl'. "
+                "Legacy goal fields are no longer supported."
+            )
 
         # Parse agent config
         agent_secrets = data.get("agent_secrets", {})
@@ -263,87 +260,3 @@ class GeneratedTask:
     def get_agent_pddl_propositions(self, agent_id: str) -> List[Dict[str, Any]]:
         """Get propositions owned by an agent."""
         return [p for p in self.get_pddl_propositions() if p.get("required") == agent_id]
-
-
-def _migrate_legacy_to_problem_pddl(data: Dict[str, Any]) -> Optional[str]:
-    """One-time migration: convert legacy goal formats to problem_pddl string.
-
-    Handles goals array, pddl_goal triple, and subtask-based tasks.
-    Returns None if no goal format is found.
-    """
-    pddl_goal_str = None
-
-    # Try goals array
-    raw_goals = data.get("goals")
-    if isinstance(raw_goals, list) and raw_goals:
-        pddl_strings = [e.get("pddl", "") for e in raw_goals if isinstance(e, dict)]
-        if len(pddl_strings) == 1:
-            pddl_goal_str = pddl_strings[0]
-        elif pddl_strings:
-            pddl_goal_str = "(and " + " ".join(pddl_strings) + ")"
-
-    # Try legacy pddl_goal
-    if not pddl_goal_str:
-        raw_pddl_goal = data.get("pddl_goal")
-        if isinstance(raw_pddl_goal, str) and raw_pddl_goal.strip():
-            pddl_goal_str = raw_pddl_goal
-
-    # Try subtask-based tasks
-    if not pddl_goal_str:
-        raw_subtasks = data.get("subtasks")
-        if isinstance(raw_subtasks, list) and raw_subtasks:
-            literals = []
-            owners = {}  # literal_str -> owner
-            for st in raw_subtasks:
-                if not isinstance(st, dict):
-                    continue
-                sc = st.get("success_condition")
-                if not isinstance(sc, dict):
-                    continue
-                entity = sc.get("entity", "")
-                prop = sc.get("property", "")
-                target = sc.get("target", "")
-                if not entity or not prop:
-                    continue
-                if target:
-                    literal = f"({prop} {entity} {target})"
-                else:
-                    literal = f"({prop} {entity})"
-                literals.append(literal)
-                # Map owner from required field
-                req = st.get("required")
-                if isinstance(req, str) and req:
-                    owners[literal] = req
-            if literals:
-                if len(literals) == 1:
-                    pddl_goal_str = literals[0]
-                else:
-                    pddl_goal_str = "(and " + " ".join(literals) + ")"
-                # Inject owners into pddl_owners for the builder below
-                if owners and not data.get("pddl_owners"):
-                    data["pddl_owners"] = owners
-
-    if not pddl_goal_str:
-        return None
-
-    # Build a minimal problem_pddl string
-    domain_name = data.get("pddl_domain", "emtom")
-    task_id = data.get("task_id", "migrated")
-
-    # Migrate legacy pddl_owners to :goal-owners section
-    goal_owners_section = ""
-    pddl_owners = data.get("pddl_owners")
-    if isinstance(pddl_owners, dict) and pddl_owners:
-        entries = []
-        for literal_str, owner in pddl_owners.items():
-            entries.append(f"    ({owner} {literal_str})")
-        goal_owners_section = "\n  (:goal-owners\n" + "\n".join(entries) + ")\n"
-
-    return (
-        f"(define (problem {task_id})\n"
-        f"  (:domain {domain_name})\n"
-        f"  (:init)\n"
-        f"  (:goal {pddl_goal_str})\n"
-        f"{goal_owners_section}"
-        f")"
-    )

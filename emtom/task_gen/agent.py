@@ -1304,6 +1304,38 @@ SUMMARY:"""
                 cwd=str(self.working_dir)  # Run from working directory for safety
             )
             output = result.stdout + result.stderr
+
+            # LLMs often emit python -c payloads with literal "\n" escapes:
+            # python3 -c "import json\nx=1". Python treats "\n" as backslash+n,
+            # which triggers SyntaxError. Convert those literal escapes to real
+            # newlines and retry once.
+            if (
+                result.returncode != 0
+                and "SyntaxError: unexpected character after line continuation character" in output
+            ):
+                repaired_command = self._repair_python_c_newlines(command)
+                if repaired_command != command:
+                    self._log(
+                        "Retrying bash command after converting literal \\n in python -c payload."
+                    )
+                    retry = subprocess.run(
+                        repaired_command,
+                        shell=True,
+                        executable="/bin/bash",
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        cwd=str(self.working_dir),
+                    )
+                    retry_output = retry.stdout + retry.stderr
+                    # Prefer retried output if it succeeded or removed the same syntax error.
+                    if retry.returncode == 0 or (
+                        "SyntaxError: unexpected character after line continuation character"
+                        not in retry_output
+                    ):
+                        result = retry
+                        output = retry_output
+
             if not output.strip():
                 output = "(no output)"
             # Log full output to file, but truncate for LLM context
@@ -1316,6 +1348,25 @@ SUMMARY:"""
             return "Command timed out after 30 seconds"
         except Exception as e:
             return f"Command failed: {e}"
+
+    def _repair_python_c_newlines(self, command: str) -> str:
+        """Convert literal '\\n' escapes inside python -c strings to real newlines."""
+        pattern = re.compile(
+            r"(\bpython(?:3)?\s+-c\s+)(['\"])((?:\\.|(?!\2).)*)\2",
+            flags=re.DOTALL,
+        )
+
+        def _repl(match: re.Match[str]) -> str:
+            prefix = match.group(1)
+            quote = match.group(2)
+            code = match.group(3)
+            # Only unescape single-backslash \n (keep \\n literals intact).
+            repaired = re.sub(r"(?<!\\)\\n", "\n", code)
+            if repaired == code:
+                return match.group(0)
+            return f"{prefix}{quote}{repaired}{quote}"
+
+        return pattern.sub(_repl, command)
 
     def _test_task(self) -> str:
         """
@@ -1462,33 +1513,46 @@ SUMMARY:"""
         action_history = results.get("action_history", [])
         trajectory = self._build_trajectory(action_history)
 
-        # Extract calibration data from results
+        # Build structured results block per category
         evaluation = results.get("evaluation", {})
-        calibration_entry = {
-            "tested_at": datetime.now().isoformat(),
-            "agent_models": agent_models,
-            "passed": results.get("done", False),
-            "steps": results.get("steps", 0),
-            "percent_complete": evaluation.get("percent_complete", 0.0),
-            "trajectory": trajectory,
-        }
-
-        # Category-specific fields
         category = task_data.get("category", "")
 
         if category == "competitive":
-            calibration_entry["passed"] = evaluation.get("winner") is not None
-            calibration_entry["winner"] = evaluation.get("winner")
-            if evaluation.get("team_status"):
-                calibration_entry["team_status"] = evaluation["team_status"]
-            if evaluation.get("team_progress"):
-                calibration_entry["team_progress"] = evaluation["team_progress"]
+            teams: Dict[str, Any] = {}
+            for team_id, prog in evaluation.get("team_progress", {}).items():
+                teams[team_id] = {"progress": prog}
+            for team_id, status in evaluation.get("team_status", {}).items():
+                teams.setdefault(team_id, {})["passed"] = status
+            results_block = {"winner": evaluation.get("winner"), "teams": teams}
 
         elif category == "mixed":
-            if "main_goal_success" in evaluation:
-                calibration_entry["main_goal_success"] = evaluation["main_goal_success"]
-            if "agent_subgoal_status" in evaluation:
-                calibration_entry["agent_subgoal_status"] = evaluation["agent_subgoal_status"]
+            agents = {
+                aid: {"subgoal_passed": passed}
+                for aid, passed in evaluation.get("agent_subgoal_status", {}).items()
+            }
+            results_block = {
+                "main_goal": {
+                    "passed": evaluation.get("main_goal_success", False),
+                    "progress": evaluation.get("main_goal_progress",
+                                               evaluation.get("percent_complete", 0.0)),
+                },
+                "agents": agents,
+            }
+
+        else:
+            # Cooperative / default
+            results_block = {
+                "passed": results.get("done", False),
+                "progress": evaluation.get("percent_complete", 0.0),
+            }
+
+        calibration_entry = {
+            "tested_at": datetime.now().isoformat(),
+            "agent_models": agent_models,
+            "steps": results.get("steps", 0),
+            "results": results_block,
+            "trajectory": trajectory,
+        }
 
         # Migrate legacy dict format and write as array
         raw_cal = task_data.get("calibration", [])
@@ -1510,7 +1574,7 @@ SUMMARY:"""
         try:
             with open(self.task_file, 'w') as f:
                 json.dump(task_data, f, indent=2)
-            self._log(f"[Calibration] Saved result: passed={calibration_entry['passed']}, agents={agent_models}")
+            self._log(f"[Calibration] Saved result: {calibration_entry['results']}, agents={agent_models}")
         except Exception as e:
             self._log(f"[Calibration] Warning: Failed to save calibration result: {e}")
 
@@ -2061,10 +2125,10 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                 agent_spawns=scene_dict.get("agent_spawns", {}),
             )
 
-            # Reject scenes where objects have no known locations (world graph
-            # didn't map them to furniture).  Also reject scenes with orphaned
-            # furniture (mapped to unknown rooms).
-            min_objects = 3
+            # Reject sparse scenes that routinely fail novelty/necessity checks.
+            min_objects = 5
+            if self.category == "competitive":
+                min_objects = 4
             if len(candidate.objects) < min_objects:
                 last_error = (
                     f"Scene {candidate.scene_id} (ep {candidate.episode_id}) "
@@ -2075,6 +2139,38 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                 if attempt < max_scene_retries:
                     continue
                 return f"Error loading new scene after {max_scene_retries} attempts. Last error: {last_error}"
+
+            # Require object distribution across at least 2 rooms when possible.
+            furniture_to_room: Dict[str, str] = {}
+            for room_id, room_furniture in (candidate.furniture_in_rooms or {}).items():
+                if not isinstance(room_id, str) or not isinstance(room_furniture, list):
+                    continue
+                for furn_id in room_furniture:
+                    if isinstance(furn_id, str):
+                        furniture_to_room[furn_id] = room_id
+            if furniture_to_room:
+                rooms_with_objects = set()
+                for furn_id, objects_on_furn in (candidate.objects_on_furniture or {}).items():
+                    if not isinstance(furn_id, str) or not isinstance(objects_on_furn, list):
+                        continue
+                    if not objects_on_furn:
+                        continue
+                    room_id = furniture_to_room.get(furn_id)
+                    if room_id:
+                        rooms_with_objects.add(room_id)
+                if len(rooms_with_objects) < 2:
+                    last_error = (
+                        f"Scene {candidate.scene_id} (ep {candidate.episode_id}) "
+                        f"has objects concentrated in {len(rooms_with_objects)} room(s) "
+                        "(need >= 2 for robust multi-agent coordination). Retrying..."
+                    )
+                    self._log(last_error)
+                    if attempt < max_scene_retries:
+                        continue
+                    return (
+                        f"Error loading new scene after {max_scene_retries} attempts. "
+                        f"Last error: {last_error}"
+                    )
 
             self.scene_data = candidate
 

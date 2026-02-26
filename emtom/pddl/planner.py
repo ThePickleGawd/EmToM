@@ -546,87 +546,40 @@ def generate_deterministic_trajectory(
     This is a rule-based, non-LLM planner: same spec -> same trajectory.
 
     Args:
-        task_data: Parsed task dict with pddl_goal, mechanic_bindings, etc.
+        task_data: Parsed task dict with problem_pddl, mechanic_bindings, etc.
         scene_data: SceneData object or dict with rooms/furniture/objects.
 
     Returns:
         Dict with keys: trajectory, planned_literals, ignored_literals, planner_notes.
     """
     num_agents = int(task_data.get("num_agents", 2) or 2)
-    pddl_goal = None
     init_positive_literals = set()
 
     problem_pddl = task_data.get("problem_pddl")
-    if isinstance(problem_pddl, str) and problem_pddl.strip():
-        try:
-            from emtom.pddl.problem_pddl import extract_goal_from_problem_pddl
-
-            pddl_goal = extract_goal_from_problem_pddl(problem_pddl)
-        except Exception:
-            pddl_goal = None
-        try:
-            from emtom.pddl.problem_pddl import parse_problem_pddl
-
-            parsed_problem = parse_problem_pddl(problem_pddl)
-            for init_lit in parsed_problem.init_literals:
-                if not getattr(init_lit, "negated", False):
-                    init_positive_literals.add(
-                        (init_lit.predicate, tuple(init_lit.args))
-                    )
-        except Exception:
-            pass
-
-    if not pddl_goal:
-        pddl_goal = task_data.get("pddl_goal")
-
-    # Support new goals format
-    if not pddl_goal:
-        goals = task_data.get("goals")
-        if isinstance(goals, list) and goals:
-            if len(goals) == 1:
-                pddl_goal = goals[0].get("pddl", "")
-            else:
-                pddl_goal = "(and " + " ".join(g.get("pddl", "") for g in goals) + ")"
-
-    if not pddl_goal:
+    if not isinstance(problem_pddl, str) or not problem_pddl.strip():
         raise ValueError(
-            "Cannot generate deterministic golden trajectory: no problem_pddl/goals/pddl_goal found."
+            "Cannot generate deterministic golden trajectory: missing problem_pddl."
         )
+    from emtom.pddl.problem_pddl import parse_problem_pddl
 
-    from emtom.pddl.dsl import parse_goal_string
+    parsed_problem = parse_problem_pddl(problem_pddl)
+    pddl_goal = parsed_problem.goal_pddl
+    for init_lit in parsed_problem.init_literals:
+        if not getattr(init_lit, "negated", False):
+            init_positive_literals.add(
+                (init_lit.predicate, tuple(init_lit.args))
+            )
 
-    goal = parse_goal_string(pddl_goal)
+    goal = parsed_problem.goal_formula
     has_epistemic_goal = _has_epistemic_goal(goal)
     literals = extract_plannable_literals(goal)
-    literals = apply_literal_ordering(literals, task_data.get("pddl_ordering", []))
-
-    # If goals array provides index-based ordering, apply it
-    goals_array = task_data.get("goals")
-    if isinstance(goals_array, list) and goals_array and not task_data.get("pddl_ordering"):
-        # Build ordering from goals[].after
-        index_ordering = []
-        pddl_by_id = {g["id"]: g["pddl"] for g in goals_array if "id" in g and "pddl" in g}
-        for g in goals_array:
-            for dep_id in g.get("after", []):
-                dep_pddl = pddl_by_id.get(dep_id)
-                if dep_pddl:
-                    index_ordering.append({"before": dep_pddl, "after": g["pddl"]})
-        if index_ordering:
-            literals = apply_literal_ordering(literals, index_ordering)
 
     restrictions = extract_room_restrictions(task_data)
     target_to_room = build_target_to_room_map(scene_data)
 
-    # Build literal-pddl -> owner mapping from goals array
+    # Build literal-pddl -> owner mapping from :goal-owners.
     literal_owner: Dict[str, str] = {}
-    if isinstance(goals_array, list):
-        for g in goals_array:
-            owner = g.get("owner")
-            pddl_str = g.get("pddl", "")
-            if owner and pddl_str:
-                literal_owner[pddl_str.strip()] = owner
-    # Also from legacy pddl_owners
-    for lit_str, owner in (task_data.get("pddl_owners") or {}).items():
+    for lit_str, owner in (parsed_problem.owners or {}).items():
         if isinstance(owner, str) and isinstance(lit_str, str):
             literal_owner[lit_str.strip()] = owner
 
@@ -889,7 +842,7 @@ def generate_deterministic_trajectory(
         trajectory.extend(comm_steps)
 
     planner_notes = [
-        "Deterministic rule-based planner generated trajectory from pddl_goal.",
+        "Deterministic rule-based planner generated trajectory from problem_pddl.",
         "Epistemic wrappers are unwrapped to world-state literals.",
     ]
     if communication_derived:

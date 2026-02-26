@@ -17,6 +17,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
+mkdir -p outputs
+LOCK_FILE="outputs/.bulk_generate.lock"
+
+cleanup_lock() {
+    rm -f "$LOCK_FILE"
+}
+
+if [ -f "$LOCK_FILE" ]; then
+    existing_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+    if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
+        echo -e "${RED}Error: bulk generation already running (pid=$existing_pid).${NC}"
+        echo "If that process is stale, stop it and remove $LOCK_FILE."
+        exit 1
+    fi
+    rm -f "$LOCK_FILE"
+fi
+
+echo "$$" > "$LOCK_FILE"
+trap cleanup_lock EXIT INT TERM
+
 # Defaults
 PER_GPU=3
 MODEL="gpt-5.2"
@@ -26,6 +46,7 @@ SUBTASKS_MIN=""
 SUBTASKS_MAX=""
 DRY_RUN=false
 CATEGORY_FILTER=""  # Empty = all 3 categories (round-robin)
+OUTPUT_DIR="data/emtom/tasks"
 
 # Colors
 RED='\033[0;31m'
@@ -46,11 +67,12 @@ print_usage() {
     echo "Options:"
     echo "  --per-gpu N         Processes per GPU (default: 3, one per category)"
     echo "  --model MODEL       LLM model (default: gpt-5.2)"
-    echo "  --num-tasks N       Tasks per process (default: 1)"
-    echo "  --iterations-per-task N  Max iterations per task (default: 100)"
+    echo "  --num-tasks N       Tasks per process (default: 3)"
+    echo "  --iterations-per-task N  Max iterations per task (default: 300)"
     echo "  --subtasks-min N    Minimum subtasks per task"
     echo "  --subtasks-max N    Maximum subtasks per task"
     echo "  --category CAT      Only generate this category (cooperative, competitive, mixed)"
+    echo "  --output-dir DIR    Output directory for submitted tasks (default: data/emtom/tasks)"
     echo "  --dry-run           Show commands without executing"
     echo ""
     echo "Examples:"
@@ -90,6 +112,10 @@ while [[ $# -gt 0 ]]; do
             CATEGORY_FILTER=$2
             shift 2
             ;;
+        --output-dir)
+            OUTPUT_DIR=$2
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=true
             shift
@@ -126,7 +152,7 @@ TOTAL_PROCESSES=$((NUM_GPUS * PER_GPU))
 # Create log and task directories
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
 LOG_DIR="outputs/bulk_gen_logs/${TIMESTAMP}-bulk-generate"
-TASK_DIR="outputs/bulk_gen_tasks/${TIMESTAMP}"
+TASK_DIR="$OUTPUT_DIR"
 mkdir -p "$LOG_DIR"
 mkdir -p "$TASK_DIR"
 

@@ -157,21 +157,14 @@ def run(
     if not validation["success"]:
         return validation
 
-    # Canonicalize to inline problem_pddl when missing.
     if not isinstance(task_data.get("problem_pddl"), str) or not task_data.get("problem_pddl", "").strip():
-        from emtom.pddl.compiler import compile_task
-        from emtom.task_gen.task_generator import GeneratedTask
-
-        generated = GeneratedTask.from_dict(task_data)
-        compiled = compile_task(generated, scene_data=scene_data)
-        task_data["problem_pddl"] = compiled.to_pddl()
-        task_data["pddl_domain"] = compiled.domain_name
-
-        # Persist canonicalized artifact back to working file so follow-up tools
-        # operate on the same spec.
-        with open(task_path, "w") as f:
-            json.dump(task_data, f, indent=2)
-            f.write("\n")
+        return failure("Task must define non-empty problem_pddl before submit.")
+    legacy_goal_fields = [k for k in ("goals", "pddl_goal", "pddl_ordering", "pddl_owners") if k in task_data]
+    if legacy_goal_fields:
+        return failure(
+            "Legacy goal fields are not supported. "
+            f"Remove {legacy_goal_fields} and encode goals in problem_pddl only."
+        )
 
     # Compute and persist ToM metadata from canonical PDDL at submit time.
     try:

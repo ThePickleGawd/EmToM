@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
-from emtom.pddl.dsl import Formula, Literal, And, Or, Not, Knows, Believes, parse_goal_string
+from emtom.pddl.dsl import Formula, Literal, And, Or, Not, Knows, Believes
+from emtom.pddl.problem_pddl import parse_problem_pddl
 from emtom.pddl.tom_verifier import compute_tom_depth, explain_tom_depth
 
 if TYPE_CHECKING:
@@ -110,7 +111,7 @@ def describe_task(
     No redundant storage — always computed from the PDDL source of truth.
 
     Args:
-        task: The generated task with pddl_goal
+        task: The generated task with problem_pddl
         scene_data: Optional scene data for context
 
     Returns:
@@ -125,10 +126,10 @@ def describe_task(
     result["information_gaps"] = tom_info["information_gaps"]
     result["communication_required"] = tom_info["communication_required"]
 
-    # Generate description from PDDL goal
-    pddl_goal = getattr(task, 'pddl_goal', None)
-    if pddl_goal:
-        goal = parse_goal_string(pddl_goal)
-        result["generated_description"] = goal_to_natural_language(goal)
+    # Generate description from problem_pddl goal.
+    problem_pddl = getattr(task, "problem_pddl", None)
+    if isinstance(problem_pddl, str) and problem_pddl.strip():
+        parsed_problem = parse_problem_pddl(problem_pddl)
+        result["generated_description"] = goal_to_natural_language(parsed_problem.goal_formula)
 
     return result

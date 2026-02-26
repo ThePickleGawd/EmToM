@@ -103,29 +103,99 @@ def _build_trajectory_from_log(results_dir: str) -> List[Dict[str, Any]]:
     return trajectory
 
 
-def _migrate_legacy_calibration(calibration: Any) -> list:
-    """Convert legacy dict-format calibration to list format.
+def _migrate_entry_to_results(entry: dict) -> dict:
+    """Convert a flat calibration entry to the structured results format.
 
-    Old format: {"model_name": {passed, tested_at, ...}, ...}
-    New format: [{agent_models: {...}, passed, tested_at, ...}, ...]
+    Old flat fields (passed, percent_complete, winner, team_status, etc.)
+    are consolidated into a single ``results`` key, structured per category.
     """
-    if isinstance(calibration, list):
-        return calibration
-    if not isinstance(calibration, dict):
+    if "results" in entry:
+        return entry  # Already in new format
+
+    # Separate known flat fields from the rest
+    _FLAT = {
+        "passed", "percent_complete", "winner", "team_status",
+        "team_progress", "main_goal_success", "agent_subgoal_status",
+    }
+    new = {k: v for k, v in entry.items() if k not in _FLAT}
+
+    if "winner" in entry or "team_status" in entry:
+        # Competitive
+        teams: Dict[str, Any] = {}
+        for team_id, prog in entry.get("team_progress", {}).items():
+            teams[team_id] = {"progress": prog}
+        for team_id, status in entry.get("team_status", {}).items():
+            teams.setdefault(team_id, {})["passed"] = status
+        new["results"] = {"winner": entry.get("winner"), "teams": teams}
+
+    elif "main_goal_success" in entry or "agent_subgoal_status" in entry:
+        # Mixed
+        agents = {
+            aid: {"subgoal_passed": passed}
+            for aid, passed in entry.get("agent_subgoal_status", {}).items()
+        }
+        new["results"] = {
+            "main_goal": {
+                "passed": entry.get("main_goal_success", False),
+                "progress": entry.get("percent_complete", 0.0),
+            },
+            "agents": agents,
+        }
+
+    else:
+        # Cooperative (or unknown)
+        new["results"] = {
+            "passed": entry.get("passed", False),
+            "progress": entry.get("percent_complete", 0.0),
+        }
+
+    return new
+
+
+def _migrate_legacy_calibration(calibration: Any) -> list:
+    """Convert legacy calibration formats to the current list+results format.
+
+    Handles:
+    - Legacy dict format: {"model_name": {passed, ...}} -> list of entries
+    - Flat array entries (no ``results`` key) -> entries with ``results``
+    """
+    if isinstance(calibration, dict):
+        entries = []
+        for key, entry in calibration.items():
+            if not isinstance(entry, dict):
+                continue
+            new_entry = dict(entry)
+            new_entry["_legacy_key"] = key
+            if "agent_models" not in new_entry:
+                new_entry["agent_models"] = {}
+            entries.append(new_entry)
+    elif isinstance(calibration, list):
+        entries = list(calibration)
+    else:
         return []
 
-    migrated = []
-    for key, entry in calibration.items():
-        if not isinstance(entry, dict):
-            continue
-        new_entry = dict(entry)
-        # Preserve original key for reference
-        new_entry["_legacy_key"] = key
-        # If no agent_models set, infer: all agents use this model
-        if "agent_models" not in new_entry:
-            new_entry["agent_models"] = {}  # unknown agents, but key preserved
-        migrated.append(new_entry)
-    return migrated
+    return [_migrate_entry_to_results(e) for e in entries]
+
+
+def cal_passed(entry: dict) -> bool:
+    """Extract passed status from a calibration entry (any category)."""
+    results = entry.get("results", {})
+    if "main_goal" in results:
+        return results["main_goal"].get("passed", False)
+    if "winner" in results:
+        return results["winner"] is not None
+    return results.get("passed", False)
+
+
+def cal_progress(entry: dict) -> float:
+    """Extract overall progress from a calibration entry (any category)."""
+    results = entry.get("results", {})
+    if "main_goal" in results:
+        return results["main_goal"].get("progress", 0.0)
+    if "teams" in results:
+        progs = [t.get("progress", 0.0) for t in results["teams"].values()]
+        return max(progs) if progs else 0.0
+    return results.get("progress", 0.0)
 
 
 @dataclass
@@ -612,32 +682,44 @@ def update_calibration_from_benchmark(
             result, model, team_model_map, task_data
         )
 
-        # Build calibration entry
-        entry: Dict[str, Any] = {
-            "tested_at": datetime.now().isoformat(),
-            "agent_models": agent_models,
-            "passed": result.success,
-            "steps": result.steps,
-            "percent_complete": result.percent_complete,
-        }
-
-        # Category-specific fields
+        # Build calibration entry with structured results
         evaluation = result.evaluation
         category = result.category or task_data.get("category", "")
 
         if category == "competitive":
-            entry["passed"] = evaluation.get("winner") is not None
-            entry["winner"] = evaluation.get("winner")
-            if evaluation.get("team_status"):
-                entry["team_status"] = evaluation["team_status"]
-            if evaluation.get("team_progress"):
-                entry["team_progress"] = evaluation["team_progress"]
+            teams: Dict[str, Any] = {}
+            for team_id, prog in evaluation.get("team_progress", {}).items():
+                teams[team_id] = {"progress": prog}
+            for team_id, status in evaluation.get("team_status", {}).items():
+                teams.setdefault(team_id, {})["passed"] = status
+            results_block = {"winner": evaluation.get("winner"), "teams": teams}
 
         elif category == "mixed":
-            if "main_goal_success" in evaluation:
-                entry["main_goal_success"] = evaluation["main_goal_success"]
-            if "agent_subgoal_status" in evaluation:
-                entry["agent_subgoal_status"] = evaluation["agent_subgoal_status"]
+            agents = {
+                aid: {"subgoal_passed": passed}
+                for aid, passed in evaluation.get("agent_subgoal_status", {}).items()
+            }
+            results_block = {
+                "main_goal": {
+                    "passed": evaluation.get("main_goal_success", False),
+                    "progress": evaluation.get("main_goal_progress", result.percent_complete),
+                },
+                "agents": agents,
+            }
+
+        else:
+            # Cooperative / default
+            results_block = {
+                "passed": result.success,
+                "progress": result.percent_complete,
+            }
+
+        entry: Dict[str, Any] = {
+            "tested_at": datetime.now().isoformat(),
+            "agent_models": agent_models,
+            "steps": result.steps,
+            "results": results_block,
+        }
 
         # Build trajectory from planner logs if available
         if result.results_dir:

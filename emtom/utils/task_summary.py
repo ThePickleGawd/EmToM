@@ -9,9 +9,15 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from emtom.evolve.benchmark_wrapper import (
+    _migrate_legacy_calibration,
+    cal_passed,
+    cal_progress,
+)
+
 
 def _load_tasks(tasks_dir: str) -> list:
-    """Load all task JSONs, normalizing calibration to list format."""
+    """Load all task JSONs, normalizing calibration to current format."""
     tasks_path = Path(tasks_dir)
     if not tasks_path.exists():
         print(f"Directory not found: {tasks_dir}")
@@ -24,10 +30,7 @@ def _load_tasks(tasks_dir: str) -> list:
                 d = json.load(fh)
         except Exception:
             continue
-        cal = d.get("calibration", [])
-        if isinstance(cal, dict):
-            cal = [{**v, "_legacy_key": k} for k, v in cal.items() if isinstance(v, dict)]
-            d["calibration"] = cal
+        d["calibration"] = _migrate_legacy_calibration(d.get("calibration", []))
         tasks.append(d)
     return tasks
 
@@ -39,10 +42,7 @@ def _model_label(agent_models: dict) -> str:
 
 
 def _matchup_label(entry: dict, task: dict) -> str:
-    """Derive a directed matchup label like 'gpt-5.2 vs sonnet' (team_0 vs team_1).
-
-    For same-model runs returns just the model name.
-    """
+    """Derive a directed matchup label like 'gpt-5.2 vs sonnet' (team_0 vs team_1)."""
     am = entry.get("agent_models", {})
     teams = task.get("teams", {})
     if not am or not teams:
@@ -54,7 +54,7 @@ def _matchup_label(entry: dict, task: dict) -> str:
         models = set(am.get(a, "?") for a in agents)
         team_models[team_id] = models.pop() if len(models) == 1 else "mixed"
 
-    unique = list(dict.fromkeys(team_models.values()))  # preserve order, dedup
+    unique = list(dict.fromkeys(team_models.values()))
     if len(unique) == 1:
         return unique[0]
     return " vs ".join(team_models[t] for t in sorted(team_models))
@@ -92,8 +92,8 @@ def aggregate_tasks(tasks_dir: str) -> None:
             models = set(am.values()) if am else set()
             model = models.pop() if len(models) == 1 else _model_label(am)
             coop[model]["total"] += 1
-            coop[model]["pcts"].append(entry.get("percent_complete", 0.0))
-            if entry.get("passed"):
+            coop[model]["pcts"].append(cal_progress(entry))
+            if cal_passed(entry):
                 coop[model]["pass"] += 1
 
     # Competitive: h2h matrix + progress
@@ -108,7 +108,8 @@ def aggregate_tasks(tasks_dir: str) -> None:
                 continue
             n_cross += 1
             tm = _resolve_team_models(entry, t)
-            winner_team = entry.get("winner")
+            results = entry.get("results", {})
+            winner_team = results.get("winner")
             winner_model = None
             if winner_team and teams:
                 wa = teams.get(winner_team, [])
@@ -123,29 +124,37 @@ def aggregate_tasks(tasks_dir: str) -> None:
                     h2h[(m0, m1)]["wins"] += 1
                 elif winner_model == m1:
                     h2h[(m1, m0)]["wins"] += 1
-            for team_id, prog in entry.get("team_progress", {}).items():
+            for team_id, team_data in results.get("teams", {}).items():
+                prog = team_data.get("progress", 0.0)
                 comp_progress[tm.get(team_id, "?")].append(prog)
 
-    # Mixed: task pass + per-agent subgoal, both keyed by model
-    mixed_task_pass = defaultdict(lambda: {"pass": 0, "total": 0})
+    # Mixed: main goal pass + per-agent subgoal, both keyed by model
+    mixed_main = defaultdict(lambda: {"pass": 0, "total": 0})
     mixed_subgoal = defaultdict(lambda: {"pass": 0, "total": 0})
     for t in by_cat.get("mixed", []):
         for entry in t.get("calibration", []):
             am = entry.get("agent_models", {})
-            # Task-level pass (one per run, attributed to all models in the run)
+            results = entry.get("results", {})
             run_models = set(am.values()) if am else set()
+
+            # Main goal pass (one per run)
+            main_passed = results.get("main_goal", {}).get("passed", False)
             for model in run_models:
-                mixed_task_pass[model]["total"] += 1
-                if entry.get("passed"):
-                    mixed_task_pass[model]["pass"] += 1
+                mixed_main[model]["total"] += 1
+                if main_passed:
+                    mixed_main[model]["pass"] += 1
+
             # Per-agent subgoal
-            for agent_id, passed in entry.get("agent_subgoal_status", {}).items():
+            for agent_id, agent_res in results.get("agents", {}).items():
                 model = am.get(agent_id, "?")
                 mixed_subgoal[model]["total"] += 1
-                if passed:
+                if agent_res.get("subgoal_passed"):
                     mixed_subgoal[model]["pass"] += 1
 
-    all_models = sorted(set(coop) | set(m for p in h2h for m in p) | set(mixed_subgoal) | set(mixed_task_pass))
+    all_models = sorted(
+        set(coop) | set(m for p in h2h for m in p)
+        | set(mixed_subgoal) | set(mixed_main)
+    )
     comp_models = sorted(set(m for p in h2h for m in p))
 
     # ── Print ──
@@ -215,15 +224,15 @@ def aggregate_tasks(tasks_dir: str) -> None:
 
     # ── Mixed ──
     if n_mixed:
-        mixed_models = sorted(set(mixed_task_pass) | set(mixed_subgoal))
+        mixed_models = sorted(set(mixed_main) | set(mixed_subgoal))
         print(f"\n{'─'*W}")
-        print(f"  Mixed (n={n_mixed}) — Shared Goal + Private Goal Rate")
+        print(f"  Mixed (n={n_mixed}) — Main Goal + Private Subgoal Rate")
         print(f"{'─'*W}")
-        if mixed_models and (mixed_task_pass or mixed_subgoal):
-            print(f"  {'Model':<16} {'Shared Goal':>12} {'Private Goal':>14}")
+        if mixed_models and (mixed_main or mixed_subgoal):
+            print(f"  {'Model':<16} {'Main Goal':>12} {'Subgoal':>14}")
             print(f"  {'─'*16} {'─'*12} {'─'*14}")
             for m in sorted(mixed_models, key=lambda m: -(mixed_subgoal[m]["pass"] / mixed_subgoal[m]["total"] if mixed_subgoal[m]["total"] else 0)):
-                tp = mixed_task_pass[m]
+                tp = mixed_main[m]
                 sg = mixed_subgoal[m]
                 tp_str = f"{tp['pass']}/{tp['total']} ({_pct(tp['pass'], tp['total'])}%)" if tp["total"] else "—"
                 sg_str = f"{sg['pass']}/{sg['total']} ({_pct(sg['pass'], sg['total'])}%)" if sg["total"] else "—"
@@ -252,6 +261,39 @@ def aggregate_tasks(tasks_dir: str) -> None:
     print()
 
 
+def _cal_summary(entry: dict, task: dict) -> str:
+    """One-line calibration summary for the per-task table."""
+    label = _model_label(entry.get("agent_models", {}))
+    results = entry.get("results", {})
+    category = task.get("category", "")
+
+    if category == "competitive":
+        winner = results.get("winner")
+        if winner:
+            teams = task.get("teams", {})
+            am = entry.get("agent_models", {})
+            wa = teams.get(winner, [])
+            wm = set(am.get(a, "?") for a in wa)
+            winner_model = wm.pop() if len(wm) == 1 else winner
+            return f"{label}: {winner_model} wins"
+        return f"{label}: draw"
+
+    if category == "mixed":
+        main = results.get("main_goal", {})
+        agents = results.get("agents", {})
+        main_str = "main:Y" if main.get("passed") else f"main:{main.get('progress', 0):.0%}"
+        agent_parts = []
+        for aid in sorted(agents):
+            agent_parts.append("Y" if agents[aid].get("subgoal_passed") else "N")
+        sub_str = ",".join(agent_parts) if agent_parts else "?"
+        return f"{label}: {main_str} sub:[{sub_str}]"
+
+    # Cooperative
+    if results.get("passed"):
+        return f"{label}: PASS"
+    return f"{label}: {results.get('progress', 0):.0%}"
+
+
 def summarize_tasks(tasks_dir: str) -> None:
     all_tasks = _load_tasks(tasks_dir)
 
@@ -262,14 +304,7 @@ def summarize_tasks(tasks_dir: str) -> None:
         title = d.get("title", "Untitled")
         mechanics = d.get("active_mechanics", [])
 
-        cal_parts = []
-        for entry in d.get("calibration", []):
-            label = _model_label(entry.get("agent_models", {}))
-            passed = entry.get("passed", False)
-            pct = entry.get("percent_complete", 0.0)
-            symbol = "PASS" if passed else f"{pct:.0%}"
-            cal_parts.append(f"{label}: {symbol}")
-
+        cal_parts = [_cal_summary(entry, d) for entry in d.get("calibration", [])]
         cal_str = " | ".join(cal_parts) if cal_parts else "-"
 
         cat_short = {"cooperative": "coop", "competitive": "comp", "mixed": "mixed"}.get(
@@ -292,7 +327,7 @@ def summarize_tasks(tasks_dir: str) -> None:
     pass_count = 0
     for r in rows:
         cats[r["cat"]] = cats.get(r["cat"], 0) + 1
-        if "PASS" in r["cal"]:
+        if "PASS" in r["cal"] or "main:Y" in r["cal"] or "wins" in r["cal"]:
             pass_count += 1
 
     # Print header

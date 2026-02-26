@@ -23,6 +23,7 @@ def load_task_data():
                 calibration = [
                     {**v, "_legacy_key": k} for k, v in calibration.items() if isinstance(v, dict)
                 ]
+            from emtom.evolve.benchmark_wrapper import cal_passed, cal_progress
             for entry in calibration:
                 # Derive a model label from agent_models (e.g. "gpt-5.2" or "gpt-5.2_vs_sonnet")
                 agent_models = entry.get("agent_models", {})
@@ -39,8 +40,8 @@ def load_task_data():
                     "num_agents": data.get("num_agents"),
                     "num_subtasks": len(data.get("subtasks", [])),
                     "model": model_label,
-                    "passed": entry.get("passed", False),
-                    "percent_complete": entry.get("percent_complete", 0),
+                    "passed": cal_passed(entry),
+                    "percent_complete": cal_progress(entry),
                 })
     return tasks
 

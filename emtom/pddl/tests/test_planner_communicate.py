@@ -373,7 +373,7 @@ class TestGenerateTrajectoryWithCommunicate:
             "locked_containers": {},
             "initial_states": {},
         }
-        with pytest.raises(ValueError, match="no problem_pddl/goals/pddl_goal"):
+        with pytest.raises(ValueError, match="missing problem_pddl"):
             generate_deterministic_trajectory(task_data, _make_scene_data())
 
     def test_room_restriction_without_scene_mapping_fails_fast(self):

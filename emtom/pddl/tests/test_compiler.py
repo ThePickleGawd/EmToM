@@ -369,8 +369,8 @@ class TestCompiler:
 
     def test_no_goal(self):
         task = self._make_task(pddl_goal=None)
-        problem = compile_task(task)
-        assert problem.goal is None
+        with pytest.raises(ValueError, match="problem_pddl"):
+            compile_task(task)
 
 
 # ---------------------------------------------------------------------------

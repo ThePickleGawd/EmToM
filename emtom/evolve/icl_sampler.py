@@ -7,7 +7,7 @@ import random
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from emtom.evolve.benchmark_wrapper import find_calibration_entry
+from emtom.evolve.benchmark_wrapper import find_calibration_entry, cal_passed, cal_progress
 
 
 def prepare_sampled_tasks_dir_from_calibration(
@@ -47,8 +47,8 @@ def prepare_sampled_tasks_dir_from_calibration(
             cal = find_calibration_entry(task_data.get("calibration", []), model=model)
             if cal is None:
                 continue
-            pct = cal.get("percent_complete", 0.0)
-            if cal.get("passed"):
+            pct = cal_progress(cal)
+            if cal_passed(cal):
                 passed.append((task_file, task_data, pct))
             else:
                 failed.append((task_file, task_data, pct))
@@ -108,7 +108,7 @@ def compute_pass_rate_from_calibration(tasks_dir: str, model: str) -> Dict[str, 
             cal = find_calibration_entry(task_data.get("calibration", []), model=model)
             if cal is None:
                 untested += 1
-            elif cal.get("passed"):
+            elif cal_passed(cal):
                 passed += 1
             else:
                 failed += 1

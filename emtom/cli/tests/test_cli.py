@@ -57,12 +57,19 @@ def _make_minimal_task(**overrides) -> dict:
         "num_agents": 2,
         "mechanic_bindings": [],
         "agent_secrets": {"agent_0": ["secret0"], "agent_1": ["secret1"]},
-        "agent_actions": {"agent_0": ["Navigate"], "agent_1": ["Navigate"]},
-        "pddl_goal": "(and (is_on_top cup_1 table_2))",
+        "agent_actions": {"agent_0": ["Navigate", "Wait"], "agent_1": ["Navigate", "Wait"]},
+        "pddl_domain": "emtom",
+        "problem_pddl": (
+            "(define (problem test_001) "
+            "(:domain emtom) "
+            "(:objects agent_0 agent_1 - agent cup_1 - object table_2 - furniture) "
+            "(:init) "
+            "(:goal (and (is_on_top cup_1 table_2))))"
+        ),
         "golden_trajectory": [
             {"actions": [
                 {"agent": "agent_0", "action": "Navigate[table_1]"},
-                {"agent": "agent_1", "action": "Wait[]"},
+                {"agent": "agent_1", "action": "Navigate[table_2]"},
             ]},
         ],
     }
@@ -137,7 +144,7 @@ class TestVerifyPddl:
         assert result["success"] is False
         assert "not found" in result["error"]
 
-    def test_no_pddl_goal(self):
+    def test_no_problem_pddl(self):
         from emtom.cli.verify_pddl import run
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
@@ -146,7 +153,7 @@ class TestVerifyPddl:
         try:
             result = run(tmp)
             assert result["success"] is False
-            assert "pddl_goal" in result["error"].lower()
+            assert "problem_pddl" in result["error"].lower()
         finally:
             os.unlink(tmp)
 

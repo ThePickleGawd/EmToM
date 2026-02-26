@@ -540,29 +540,24 @@ def validate_blocking_spec(
             )
 
     # ------------------------------------------------------------------
-    # PDDL validation (single-format + transitional formats)
+    # PDDL validation (problem_pddl only)
     # ------------------------------------------------------------------
     problem_pddl = task_data.get("problem_pddl")
-    goals = task_data.get("goals")
-    pddl_goal = task_data.get("pddl_goal")
     has_problem_pddl = isinstance(problem_pddl, str) and bool(problem_pddl.strip())
-    has_goals = isinstance(goals, list) and bool(goals)
-    has_pddl_goal = isinstance(pddl_goal, str) and bool(pddl_goal)
-    parsed_problem = None
+    legacy_goal_fields = [
+        k for k in ("goals", "pddl_goal", "pddl_ordering", "pddl_owners")
+        if k in task_data
+    ]
+
+    if not has_problem_pddl:
+        errors.append("Task must define non-empty problem_pddl.")
+    if legacy_goal_fields:
+        errors.append(
+            "Legacy goal fields are not supported. "
+            f"Remove {legacy_goal_fields} and encode goals in problem_pddl only."
+        )
 
     if has_problem_pddl:
-        # Canonical format should not be mixed with legacy goal fields.
-        mixed_fields = []
-        if has_goals:
-            mixed_fields.append("goals")
-        if has_pddl_goal:
-            mixed_fields.append("pddl_goal")
-        if mixed_fields:
-            errors.append(
-                "problem_pddl cannot be combined with legacy goal fields: "
-                f"{mixed_fields}"
-            )
-
         try:
             from emtom.pddl.domain import EMTOM_DOMAIN
             from emtom.pddl.goal_spec import GoalSpec
@@ -583,15 +578,21 @@ def validate_blocking_spec(
                 )
 
             spec = GoalSpec.from_legacy(parsed_problem.goal_pddl, [], {})
-            spec_errors = spec.validate(EMTOM_DOMAIN, valid_agent_ids)
-            errors.extend(spec_errors)
+            errors.extend(spec.validate(EMTOM_DOMAIN, valid_agent_ids))
 
-            # Category-level structural lint for competitive goals.
             goal_lower = parsed_problem.goal_pddl.lower()
-            has_or = any(n.__class__.__name__ == "Or" for n in _iter_formula_nodes(parsed_problem.goal_formula))
+            has_or = any(
+                n.__class__.__name__ == "Or"
+                for n in _iter_formula_nodes(parsed_problem.goal_formula)
+            )
             has_not = "(not" in goal_lower
 
-            # has_most/has_at_least are not fully modeled in deterministic PDDL planning.
+            if re.search(r"\bteam_[a-z0-9_]+\b", goal_lower):
+                errors.append(
+                    "problem_pddl :goal contains team_* identifiers. "
+                    "Use world-state literals in :goal and encode team ownership in :goal-owners."
+                )
+
             if "has_most" in goal_lower or "has_at_least" in goal_lower:
                 errors.append(
                     "problem_pddl goal uses has_most/has_at_least, which are not supported for "
@@ -603,8 +604,9 @@ def validate_blocking_spec(
                 if not has_or:
                     errors.append(
                         "competitive problem_pddl goal must encode opposed win branches "
-                        "(e.g., (or (and team_0_win (not team_1_win)) "
-                        "(and team_1_win (not team_0_win))))."
+                        "(e.g., (or "
+                        "(and (is_on_top bottle_1 table_10) (not (is_on_top bottle_1 table_20))) "
+                        "(and (is_on_top bottle_1 table_20) (not (is_on_top bottle_1 table_10)))))."
                     )
                 if has_or and not has_not:
                     errors.append(
@@ -612,13 +614,6 @@ def validate_blocking_spec(
                         "so exactly one team can satisfy a winning branch."
                     )
 
-            # Epistemic-goal backing: K/B goals benefit from observation
-            # barriers (room_restriction, communication mechanics, etc.) but
-            # this is evaluated by the judge, not enforced as a hard error
-            # here.  Hard-blocking was removed because it created a catch-22
-            # with agent necessity in cooperative tasks.
-
-            # Mixed tasks must have per-agent personal objectives in :goal-owners
             if category == "mixed" and not parsed_problem.owners:
                 errors.append(
                     "mixed task problem_pddl is missing :goal-owners section. "
@@ -626,120 +621,6 @@ def validate_blocking_spec(
                 )
         except Exception as e:
             errors.append(f"problem_pddl validation error: {e}")
-
-    elif has_goals:
-        try:
-            from emtom.pddl.goal_spec import GoalSpec
-            from emtom.pddl.domain import EMTOM_DOMAIN
-            spec = GoalSpec.from_goals_array(goals)
-
-            # Validate against domain and agents
-            spec_errors = spec.validate(EMTOM_DOMAIN, valid_agent_ids)
-            errors.extend(spec_errors)
-
-            # Warn if ordering is empty with multi-goal specs
-            if len(spec.entries) > 1 and all(not e.after for e in spec.entries):
-                errors.append(
-                    "goals: All entries have empty 'after' but there are multiple goals. "
-                    "Add ordering constraints to define dependencies between goals."
-                )
-
-            # Warn if owners empty for competitive/mixed tasks
-            if isinstance(category, str) and category in ("competitive", "mixed"):
-                has_owners = any(e.owner for e in spec.entries)
-                if not has_owners:
-                    errors.append(
-                        f"goals: No entries have 'owner' set for {category} task. "
-                        f"Assign goals to teams/agents via the 'owner' field."
-                    )
-        except ValueError as e:
-            errors.append(f"Invalid goals array: {e}")
-        except Exception as e:
-            errors.append(f"Goals validation error: {e}")
-
-    elif has_pddl_goal:
-        try:
-            from emtom.pddl.dsl import parse_goal_string, validate_goal_predicates, Knows, Believes, collect_leaf_literals
-            from emtom.pddl.domain import EMTOM_DOMAIN
-            goal = parse_goal_string(pddl_goal)
-            leaf_literals = collect_leaf_literals(goal)
-            if not leaf_literals:
-                errors.append("pddl_goal parsed but contains no goal conjuncts")
-
-            # Validate predicate arities against domain
-            arity_errors = validate_goal_predicates(goal, EMTOM_DOMAIN)
-            errors.extend(arity_errors)
-
-            # Validate K/B agent names reference valid agent IDs
-            def _check_epistemic_agents(formula, path="pddl_goal"):
-                if isinstance(formula, (Knows, Believes)):
-                    if formula.agent not in valid_agent_ids:
-                        errors.append(
-                            f"{path}: epistemic operator references invalid agent '{formula.agent}'. "
-                            f"Valid IDs: {sorted(valid_agent_ids)}"
-                        )
-                    _check_epistemic_agents(formula.inner, path)
-                elif hasattr(formula, 'operands'):
-                    for op in formula.operands:
-                        _check_epistemic_agents(op, path)
-                elif hasattr(formula, 'operand') and formula.operand is not None:
-                    _check_epistemic_agents(formula.operand, path)
-            _check_epistemic_agents(goal)
-
-            # Validate ordering references valid goal conjuncts
-            conjunct_strs = {c.to_pddl() for c in conjuncts}
-            pddl_ordering = task_data.get("pddl_ordering", [])
-            if isinstance(pddl_ordering, list):
-                for i, constraint in enumerate(pddl_ordering):
-                    if not isinstance(constraint, dict):
-                        errors.append(f"pddl_ordering[{i}] must be an object")
-                        continue
-                    for key in ("before", "after"):
-                        ref = constraint.get(key)
-                        if ref and ref not in conjunct_strs:
-                            errors.append(
-                                f"pddl_ordering[{i}].{key} references '{ref}' "
-                                f"which is not a goal conjunct"
-                            )
-
-                # Check for cycles in ordering
-                if pddl_ordering and _has_ordering_cycle(pddl_ordering):
-                    errors.append(
-                        "pddl_ordering contains a cycle. "
-                        "Ordering constraints must form a DAG."
-                    )
-
-                # Warn if ordering is empty with multi-conjunct goals
-                if len(conjuncts) > 1 and not pddl_ordering:
-                    errors.append(
-                        "pddl_ordering is empty but goal has multiple conjuncts. "
-                        "Add ordering constraints to define dependencies between goals."
-                    )
-
-            # Validate pddl_owners references valid goal conjuncts
-            # (mixed tasks allow supplementary goals not in :goal)
-            pddl_owners = task_data.get("pddl_owners", {})
-            if isinstance(pddl_owners, dict):
-                for literal_str, owner in pddl_owners.items():
-                    if literal_str.startswith("_"):
-                        continue  # Skip comment keys
-                    if literal_str not in conjunct_strs and category != "mixed":
-                        errors.append(
-                            f"pddl_owners key '{literal_str}' is not a goal conjunct"
-                        )
-
-            # Warn if owners empty for competitive/mixed tasks
-            if isinstance(category, str) and category in ("competitive", "mixed"):
-                real_owners = {k: v for k, v in (pddl_owners or {}).items()
-                              if not k.startswith("_")}
-                if not real_owners:
-                    errors.append(
-                        f"pddl_owners is empty for {category} task. "
-                        f"Assign goals to teams/agents via pddl_owners."
-                    )
-
-        except Exception as e:
-            errors.append(f"Invalid pddl_goal syntax: {e}")
 
     # ------------------------------------------------------------------
     # Golden trajectory structural checks (optional derived artifact)

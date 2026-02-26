@@ -111,6 +111,12 @@ def _is_task_like_json(path: Path) -> bool:
     return all(k in data for k in required)
 
 
+def _copy_sample_with_aliases(src_path: Path, sampled_tasks_dir: Path, index: int) -> None:
+    """Copy sampled task with both unpadded and zero-padded filenames."""
+    shutil.copy(src_path, sampled_tasks_dir / f"task_{index}.json")
+    shutil.copy(src_path, sampled_tasks_dir / f"task_{index:03d}.json")
+
+
 def populate_sampled_tasks_dir(
     sampled_tasks_dir: Path,
     primary_output_dir: str,
@@ -148,8 +154,7 @@ def populate_sampled_tasks_dir(
             continue
         selected = random.sample(task_files, min(sample_count, len(task_files)))
         for i, task_path in enumerate(selected, 1):
-            dest = sampled_tasks_dir / f"task_{i}.json"
-            shutil.copy(task_path, dest)
+            _copy_sample_with_aliases(task_path, sampled_tasks_dir, i)
         return source_dir, len(selected)
 
     return None, 0
@@ -157,7 +162,7 @@ def populate_sampled_tasks_dir(
 
 def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
     """Compute pass-rate and ToM-ratio stats from existing tasks."""
-    from emtom.evolve.benchmark_wrapper import find_calibration_entry
+    from emtom.evolve.benchmark_wrapper import find_calibration_entry, cal_passed
 
     stats = {
         "passed": 0,
@@ -191,7 +196,7 @@ def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
             cal = find_calibration_entry(task.get("calibration", []), model=model)
             if cal is None:
                 stats["untested"] += 1
-            elif cal.get("passed"):
+            elif cal_passed(cal):
                 stats["passed"] += 1
             else:
                 stats["failed"] += 1
@@ -317,8 +322,10 @@ def main(config: DictConfig) -> None:
         if override_path.exists():
             override_files = [p for p in override_path.glob("*.json") if _is_task_like_json(p)]
             if override_files:
-                for f in override_files:
+                selected = sorted(override_files)[:10]
+                for i, f in enumerate(selected, 1):
                     shutil.copy(f, sampled_tasks_dir / f.name)
+                    _copy_sample_with_aliases(f, sampled_tasks_dir, i)
                 cprint(
                     f"Using pre-built sampled_tasks: {override_path} "
                     f"({len(override_files)} files)",

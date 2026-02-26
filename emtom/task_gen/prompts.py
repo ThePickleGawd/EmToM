@@ -21,11 +21,18 @@ Action: bash[ls {working_dir}/sampled_tasks/]
 Assigned!
 
 Thought: I'll read an example to understand the format.
-Action: bash[cat {working_dir}/sampled_tasks/task_001.json]
+Action: bash[cat {working_dir}/sampled_tasks/task_1.json]
 Assigned!
 
 Thought: Now I'll edit the working task to add my task description.
-Action: bash[python3 -c "import json; t=json.load(open('{task_file}')); t['task']='Find the hidden key and unlock the cabinet'; json.dump(t, open('{task_file}','w'), indent=2)"]
+Action: bash[python3 - <<'PY'
+import json
+p = '{task_file}'
+t = json.load(open(p))
+t['task'] = 'Find the hidden key and unlock the cabinet'
+json.dump(t, open(p, 'w'), indent=2)
+print('patched')
+PY]
 Assigned!
 
 Thought: Task is ready. Let me run the judge to check quality.
@@ -111,7 +118,8 @@ Assigned!
 - Do NOT use positive `is_inside` goals unless the object is already inside in `:init` and meant to remain there. Prefer `is_on_top` for movable-placement goals.
 - Do NOT use `has_most` or `has_at_least` in `problem_pddl` goals; they are not part of deterministic PDDL solvability checks in this pipeline.
 - Before running `judge[]`, ensure `verify_pddl[]` passes and no goal references unknown scene IDs.
-- Avoid escaped `\\n` heredoc one-liners in `bash[...]`; prefer safe `python3 -c "..."` JSON edits for reliability.
+- Avoid `python3 -c "..."` commands that include literal `\\n` escapes.
+- For multi-line JSON edits, prefer heredocs (e.g., `python3 - <<'PY' ... PY`) or `apply_patch`.
 
 ## Mechanic Usage Guidelines
 

@@ -122,3 +122,6 @@ dmypy.json
 # ignore cached navmeshes
 */navmeshes/*.navmesh
 
+# Fast Downward planner artifacts
+output.sas
+sas_plan*
