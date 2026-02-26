@@ -512,43 +512,51 @@ run_benchmark() {
         exit 1
     fi
 
-    # Find all unique agent counts in tasks
-    AGENT_COUNTS=$(python3 -c "
+    # Find unique agent counts (filtered by category if set)
+    TASK_SCAN=$(python3 -c "
 import json
 from pathlib import Path
+category_filter = '$CATEGORY' or None
 counts = set()
+total = 0
 for f in Path('$TASK_DIR').glob('*.json'):
     try:
         data = json.load(open(f))
-        if 'tasks' in data:
-            for t in data['tasks']:
-                counts.add(t.get('num_agents', 2))
-        elif 'task_id' in data:
-            counts.add(data.get('num_agents', 2))
+        if category_filter and data.get('category') != category_filter:
+            continue
+        counts.add(data.get('num_agents', 2))
+        total += 1
     except: pass
-print(' '.join(map(str, sorted(counts))))
+print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
 " 2>/dev/null)
 
-    if [ -z "$AGENT_COUNTS" ]; then
+    TASK_COUNT=$(echo "$TASK_SCAN" | cut -d'|' -f1)
+    AGENT_COUNTS=$(echo "$TASK_SCAN" | cut -d'|' -f2)
+
+    if [ -z "$AGENT_COUNTS" ] || [ "$TASK_COUNT" = "0" ]; then
         echo -e "${RED}ERROR: No valid tasks found in $TASK_DIR${NC}"
+        if [ -n "$CATEGORY" ]; then
+            echo "  (category filter: $CATEGORY)"
+        fi
         exit 1
     fi
 
     echo "=============================================="
-    echo "Running EMTOM Habitat Benchmark (All Tasks)"
+    echo "Running EMTOM Habitat Benchmark"
     echo "=============================================="
     echo "LLM: $LLM_PROVIDER ($MODEL)"
-    echo "Task source: $TASK_DIR"
-    echo "Agent counts found: $AGENT_COUNTS"
-    echo "Max simulation steps: $MAX_SIM_STEPS"
+    echo "Task source: $TASK_DIR ($TASK_COUNT tasks)"
+    echo "Agent counts: $AGENT_COUNTS"
     if [ -n "$CATEGORY" ]; then
-        echo "Category filter: $CATEGORY"
+        echo "Category: $CATEGORY"
     fi
     if [ -n "$TEAM_MODEL_MAP" ]; then
         echo "Team model map: $TEAM_MODEL_MAP"
     fi
     if [ -n "$MAX_WORKERS" ]; then
-        echo "Parallel mode: max_workers=$MAX_WORKERS"
+        echo "Mode: parallel (max_workers=$MAX_WORKERS)"
+    else
+        echo "Mode: sequential"
     fi
     echo "=============================================="
 

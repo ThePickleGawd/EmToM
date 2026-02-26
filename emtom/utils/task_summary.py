@@ -60,242 +60,176 @@ def _matchup_label(entry: dict, task: dict) -> str:
     return " vs ".join(team_models[t] for t in sorted(team_models))
 
 
+def _resolve_team_models(entry: dict, task: dict) -> dict:
+    """Map team_id -> model name from agent_models + teams."""
+    am = entry.get("agent_models", {})
+    teams = task.get("teams", {})
+    tm = {}
+    for team_id in sorted(teams):
+        agents = teams[team_id]
+        models = set(am.get(a, "?") for a in agents)
+        tm[team_id] = models.pop() if len(models) == 1 else "mixed"
+    return tm
+
+
 def aggregate_tasks(tasks_dir: str) -> None:
     tasks = _load_tasks(tasks_dir)
     if not tasks:
         print("No tasks found.")
         return
 
-    # ── Flatten: one record per (task, calibration entry) ──
-    # Also keep per-task "best run" for task-level stats
-    by_cat_tasks = defaultdict(list)   # category -> [task_dict]
-    by_cat_runs = defaultdict(list)    # category -> [flat record]
-
+    by_cat = defaultdict(list)
     for t in tasks:
-        category = t.get("category", "?")
-        by_cat_tasks[category].append(t)
+        by_cat[t.get("category", "?")].append(t)
+
+    # ── Gather per-model stats for each category ──
+
+    # Cooperative: model -> {pass, total, pcts}
+    coop = defaultdict(lambda: {"pass": 0, "total": 0, "pcts": []})
+    for t in by_cat.get("cooperative", []):
+        for entry in t.get("calibration", []):
+            am = entry.get("agent_models", {})
+            models = set(am.values()) if am else set()
+            model = models.pop() if len(models) == 1 else _model_label(am)
+            coop[model]["total"] += 1
+            coop[model]["pcts"].append(entry.get("percent_complete", 0.0))
+            if entry.get("passed"):
+                coop[model]["pass"] += 1
+
+    # Competitive: h2h matrix + progress
+    h2h = defaultdict(lambda: {"wins": 0, "games": 0})
+    comp_progress = defaultdict(list)
+    n_cross = 0
+    for t in by_cat.get("competitive", []):
         teams = t.get("teams", {})
         for entry in t.get("calibration", []):
             am = entry.get("agent_models", {})
-            matchup = _matchup_label(entry, t)
-
-            # Resolve winner team_id to model name
-            winner_model = None
+            if len(set(am.values())) <= 1 if am else True:
+                continue
+            n_cross += 1
+            tm = _resolve_team_models(entry, t)
             winner_team = entry.get("winner")
+            winner_model = None
             if winner_team and teams:
-                winner_agents = teams.get(winner_team, [])
-                winner_models = set(am.get(a, "?") for a in winner_agents)
-                winner_model = winner_models.pop() if len(winner_models) == 1 else None
+                wa = teams.get(winner_team, [])
+                wm = set(am.get(a, "?") for a in wa)
+                winner_model = wm.pop() if len(wm) == 1 else None
+            if len(tm) == 2:
+                t0, t1 = sorted(tm)
+                m0, m1 = tm[t0], tm[t1]
+                h2h[(m0, m1)]["games"] += 1
+                h2h[(m1, m0)]["games"] += 1
+                if winner_model == m0:
+                    h2h[(m0, m1)]["wins"] += 1
+                elif winner_model == m1:
+                    h2h[(m1, m0)]["wins"] += 1
+            for team_id, prog in entry.get("team_progress", {}).items():
+                comp_progress[tm.get(team_id, "?")].append(prog)
 
-            by_cat_runs[category].append({
-                "task": t,
-                "entry": entry,
-                "matchup": matchup,
-                "is_cross_model": len(set(am.values())) > 1 if am else False,
-                "passed": entry.get("passed", False),
-                "pct": entry.get("percent_complete", 0.0),
-                "winner_model": winner_model,
-            })
+    # Mixed: task pass + per-agent subgoal, both keyed by model
+    mixed_task_pass = defaultdict(lambda: {"pass": 0, "total": 0})
+    mixed_subgoal = defaultdict(lambda: {"pass": 0, "total": 0})
+    for t in by_cat.get("mixed", []):
+        for entry in t.get("calibration", []):
+            am = entry.get("agent_models", {})
+            # Task-level pass (one per run, attributed to all models in the run)
+            run_models = set(am.values()) if am else set()
+            for model in run_models:
+                mixed_task_pass[model]["total"] += 1
+                if entry.get("passed"):
+                    mixed_task_pass[model]["pass"] += 1
+            # Per-agent subgoal
+            for agent_id, passed in entry.get("agent_subgoal_status", {}).items():
+                model = am.get(agent_id, "?")
+                mixed_subgoal[model]["total"] += 1
+                if passed:
+                    mixed_subgoal[model]["pass"] += 1
 
-    W = 72
-    SEP = "─" * W
+    all_models = sorted(set(coop) | set(m for p in h2h for m in p) | set(mixed_subgoal) | set(mixed_task_pass))
+    comp_models = sorted(set(m for p in h2h for m in p))
 
-    # ── Overview ──
-    all_runs = [r for runs in by_cat_runs.values() for r in runs]
-    total_pass = sum(1 for r in all_runs if r["passed"])
-    avg_pct = sum(r["pct"] for r in all_runs) / len(all_runs) if all_runs else 0
-    print(f"\n{'TASK DATASET STATS':^{W}}")
-    print(SEP)
-    print(f"  Tasks: {len(tasks)}   Calibration runs: {len(all_runs)}")
+    # ── Print ──
+    def _pct(n, d):
+        return f"{n/d*100:.1f}" if d else "—"
+
+    cat_short = {"cooperative": "coop", "competitive": "comp", "mixed": "mixed"}
     cat_counts = ", ".join(
-        f"{len(by_cat_tasks.get(c, []))} {c}" for c in ["cooperative", "competitive", "mixed"]
+        f"{len(by_cat.get(c, []))} {cat_short.get(c, c)}"
+        for c in ["cooperative", "competitive", "mixed"]
+        if by_cat.get(c)
     )
-    print(f"  Categories: {cat_counts}")
-    print(f"  Overall: {total_pass}/{len(all_runs)} runs passed ({total_pass/len(all_runs)*100:.1f}%)   Avg completion: {avg_pct:.1%}")
+    n_coop = len(by_cat.get("cooperative", []))
+    n_comp = len(by_cat.get("competitive", []))
+    n_mixed = len(by_cat.get("mixed", []))
 
-    # ═══════════════════════════════════════════════════════
-    # COOPERATIVE
-    # ═══════════════════════════════════════════════════════
-    coop_tasks = by_cat_tasks.get("cooperative", [])
-    coop_runs = by_cat_runs.get("cooperative", [])
-    if coop_tasks:
-        print(f"\n{'═'*W}")
-        print(f"  COOPERATIVE ({len(coop_tasks)} tasks, {len(coop_runs)} runs)")
-        print(f"{'═'*W}")
+    W = 60
 
-        n_pass = sum(1 for r in coop_runs if r["passed"])
-        avg = sum(r["pct"] for r in coop_runs) / len(coop_runs) if coop_runs else 0
-        avg_steps = sum(r["entry"].get("steps", 0) for r in coop_runs) / len(coop_runs) if coop_runs else 0
-        print(f"  Pass rate:      {n_pass}/{len(coop_runs)} ({n_pass/len(coop_runs)*100:.1f}%)")
-        print(f"  Avg completion: {avg:.1%}")
-        print(f"  Avg steps:      {avg_steps:.0f}")
+    print(f"\n{'EMTOM BENCHMARK RESULTS':^{W}}")
+    print("═" * W)
+    print(f"  {len(tasks)} tasks ({cat_counts})")
 
-        # By model
-        by_model = defaultdict(list)
-        for r in coop_runs:
-            by_model[r["matchup"]].append(r)
-        if len(by_model) > 1:
-            print(f"\n  {'Model':<24} {'Runs':>5} {'Pass':>5} {'Rate':>7} {'Avg%':>7}")
-            print(f"  {'─'*24} {'─'*5} {'─'*5} {'─'*7} {'─'*7}")
-            for label in sorted(by_model, key=lambda k: -len(by_model[k])):
-                recs = by_model[label]
-                p = sum(1 for r in recs if r["passed"])
-                a = sum(r["pct"] for r in recs) / len(recs)
-                print(f"  {label:<24} {len(recs):>5} {p:>5} {p/len(recs)*100:>6.1f}% {a:>6.1%}")
+    # ── Cooperative ──
+    if n_coop:
+        print(f"\n{'─'*W}")
+        print(f"  Cooperative (n={n_coop}) — Task Pass Rate")
+        print(f"{'─'*W}")
+        print(f"  {'Model':<16} {'Pass/N':>8} {'Rate':>7} {'Avg%':>7}")
+        print(f"  {'─'*16} {'─'*8} {'─'*7} {'─'*7}")
+        for m in sorted(coop, key=lambda m: -coop[m]["pass"]):
+            s = coop[m]
+            avg = sum(s["pcts"]) / len(s["pcts"]) * 100 if s["pcts"] else 0
+            print(f"  {m:<16} {s['pass']:>3}/{s['total']:<4} {_pct(s['pass'], s['total']):>6}% {avg:>6.1f}%")
 
-        # By agent count
-        by_agents = defaultdict(list)
-        for r in coop_runs:
-            by_agents[r["task"].get("num_agents", 0)].append(r)
-        if len(by_agents) > 1:
-            print(f"\n  {'Agents':>8} {'Runs':>5} {'Pass':>5} {'Rate':>7} {'Avg%':>7}")
-            print(f"  {'─'*8} {'─'*5} {'─'*5} {'─'*7} {'─'*7}")
-            for na in sorted(by_agents):
-                recs = by_agents[na]
-                p = sum(1 for r in recs if r["passed"])
-                a = sum(r["pct"] for r in recs) / len(recs)
-                print(f"  {na:>8} {len(recs):>5} {p:>5} {p/len(recs)*100:>6.1f}% {a:>6.1%}")
+    # ── Competitive ──
+    if n_comp:
+        print(f"\n{'─'*W}")
+        print(f"  Competitive (n={n_comp}) — Head-to-Head Win Rate")
+        print(f"{'─'*W}")
+        if len(comp_models) > 1:
+            col_w = max(len(m) for m in comp_models) + 1
+            col_w = max(col_w, 9)
+            print(f"  {'':<{col_w}}" + "".join(f"{m:>{col_w}}" for m in comp_models))
+            print(f"  {'─'*col_w}" + "".join(f" {'─'*(col_w-1)}" for _ in comp_models))
+            for row_m in comp_models:
+                cells = []
+                for col_m in comp_models:
+                    if row_m == col_m:
+                        cells.append(f"{'—':>{col_w}}")
+                    else:
+                        rec = h2h.get((row_m, col_m))
+                        if rec and rec["games"]:
+                            pct = rec["wins"] / rec["games"] * 100
+                            cells.append(f"{f'{pct:.1f}%':>{col_w}}")
+                        else:
+                            cells.append(f"{'—':>{col_w}}")
+                print(f"  {row_m:<{col_w}}" + "".join(cells))
+            if comp_progress:
+                print()
+                print(f"  Avg progress: " + ", ".join(
+                    f"{m} {sum(v)/len(v)*100:.1f}%"
+                    for m, v in sorted(comp_progress.items(),
+                                       key=lambda x: -sum(x[1])/len(x[1]))
+                ))
+        else:
+            print(f"  No cross-model matchups yet.")
 
-    # ═══════════════════════════════════════════════════════
-    # COMPETITIVE
-    # ═══════════════════════════════════════════════════════
-    comp_tasks = by_cat_tasks.get("competitive", [])
-    comp_runs = by_cat_runs.get("competitive", [])
-    if comp_tasks:
-        print(f"\n{'═'*W}")
-        print(f"  COMPETITIVE ({len(comp_tasks)} tasks, {len(comp_runs)} runs)")
-        print(f"{'═'*W}")
-
-        n_decisive = sum(1 for r in comp_runs if r["passed"])
-        avg_pct_c = sum(r["pct"] for r in comp_runs) / len(comp_runs) if comp_runs else 0
-        avg_steps = sum(r["entry"].get("steps", 0) for r in comp_runs) / len(comp_runs) if comp_runs else 0
-        print(f"  Decisive (a team won): {n_decisive}/{len(comp_runs)} ({n_decisive/len(comp_runs)*100:.1f}%)")
-        print(f"  Avg completion:        {avg_pct_c:.1%}")
-        print(f"  Avg steps:             {avg_steps:.0f}")
-
-        # Group by directed matchup (e.g. "gpt-5.2 vs sonnet", "gpt-5.2")
-        by_matchup = defaultdict(list)
-        for r in comp_runs:
-            by_matchup[r["matchup"]].append(r)
-
-        print(f"\n  {'Matchup':<28} {'Runs':>5} {'Won':>4} {'Draw':>5} {'Avg%':>7}")
-        print(f"  {'─'*28} {'─'*5} {'─'*4} {'─'*5} {'─'*7}")
-        for matchup in sorted(by_matchup, key=lambda k: -len(by_matchup[k])):
-            recs = by_matchup[matchup]
-            n_won = sum(1 for r in recs if r["passed"])
-            n_draw = len(recs) - n_won
-            a = sum(r["pct"] for r in recs) / len(recs)
-            print(f"  {matchup:<28} {len(recs):>5} {n_won:>4} {n_draw:>5} {a:>6.1%}")
-
-        # Cross-model details: winner model distribution + team progress
-        cross = [r for r in comp_runs if r["is_cross_model"]]
-        if cross:
-            # Winner by model name
-            model_wins = defaultdict(int)
-            draws = 0
-            for r in cross:
-                if r["winner_model"]:
-                    model_wins[r["winner_model"]] += 1
-                else:
-                    draws += 1
-
-            print(f"\n  Cross-model winner breakdown ({len(cross)} runs):")
-            for model, count in sorted(model_wins.items(), key=lambda x: -x[1]):
-                print(f"    {model:<20} {count} wins")
-            if draws:
-                print(f"    {'draw/timeout':<20} {draws}")
-
-            # Avg team progress by model
-            model_progress = defaultdict(list)
-            for r in cross:
-                teams = r["task"].get("teams", {})
-                am = r["entry"].get("agent_models", {})
-                tp = r["entry"].get("team_progress", {})
-                for team_id, prog in tp.items():
-                    agents = teams.get(team_id, [])
-                    models = set(am.get(a, "?") for a in agents)
-                    model = models.pop() if len(models) == 1 else "mixed"
-                    model_progress[model].append(prog)
-            if model_progress:
-                parts = [
-                    f"{m}: {sum(v)/len(v):.1%}"
-                    for m, v in sorted(model_progress.items())
-                ]
-                print(f"    Avg progress by model: {' | '.join(parts)}")
-
-    # ═══════════════════════════════════════════════════════
-    # MIXED
-    # ═══════════════════════════════════════════════════════
-    mixed_tasks = by_cat_tasks.get("mixed", [])
-    mixed_runs = by_cat_runs.get("mixed", [])
-    if mixed_tasks:
-        print(f"\n{'═'*W}")
-        print(f"  MIXED ({len(mixed_tasks)} tasks, {len(mixed_runs)} runs)")
-        print(f"{'═'*W}")
-
-        n_pass = sum(1 for r in mixed_runs if r["passed"])
-        avg = sum(r["pct"] for r in mixed_runs) / len(mixed_runs) if mixed_runs else 0
-        avg_steps = sum(r["entry"].get("steps", 0) for r in mixed_runs) / len(mixed_runs) if mixed_runs else 0
-        print(f"  Overall pass:   {n_pass}/{len(mixed_runs)} ({n_pass/len(mixed_runs)*100:.1f}%)")
-        print(f"  Avg completion: {avg:.1%}")
-        print(f"  Avg steps:      {avg_steps:.0f}")
-
-        # Main goal vs agent subgoal breakdown (from calibration data when available)
-        main_runs = [r for r in mixed_runs if "main_goal_success" in r["entry"]]
-        if main_runs:
-            n_main = sum(1 for r in main_runs if r["entry"]["main_goal_success"])
-            print(f"\n  Main goal success: {n_main}/{len(main_runs)} ({n_main/len(main_runs)*100:.1f}%)")
-
-        # Per-agent subgoal breakdown
-        subgoal_runs = [r for r in mixed_runs if "agent_subgoal_status" in r["entry"]]
-        if subgoal_runs:
-            # Aggregate by agent_id
-            per_agent = defaultdict(lambda: {"pass": 0, "total": 0})
-            for r in subgoal_runs:
-                for agent_id, passed in r["entry"]["agent_subgoal_status"].items():
-                    per_agent[agent_id]["total"] += 1
-                    if passed:
-                        per_agent[agent_id]["pass"] += 1
-
-            all_pass = sum(v["pass"] for v in per_agent.values())
-            all_total = sum(v["total"] for v in per_agent.values())
-            print(f"  Agent subgoal success: {all_pass}/{all_total} ({all_pass/all_total*100:.1f}%)")
-
-            print(f"\n  {'Agent':<12} {'Pass':>5} {'Total':>6} {'Rate':>7}")
-            print(f"  {'─'*12} {'─'*5} {'─'*6} {'─'*7}")
-            for agent_id in sorted(per_agent):
-                s = per_agent[agent_id]
-                rate = s["pass"] / s["total"] * 100 if s["total"] else 0
-                print(f"  {agent_id:<12} {s['pass']:>5} {s['total']:>6} {rate:>6.1f}%")
-
-        # Count agents with private goals from :goal-owners in problem_pddl
-        agents_with_private = 0
-        agents_total = 0
-        for t in mixed_tasks:
-            na = t.get("num_agents", 0)
-            agents_total += na
-            pddl = t.get("problem_pddl", "")
-            if ":goal-owners" in pddl:
-                # Count distinct agent_N owners
-                import re
-                owners = set(re.findall(r"\(agent_\d+", pddl.split(":goal-owners")[1]))
-                agents_with_private += len(owners)
-        if agents_total:
-            print(f"\n  Agents with private goals: {agents_with_private}/{agents_total} "
-                  f"(from :goal-owners in PDDL)")
-
-        # By agent count
-        by_agents = defaultdict(list)
-        for r in mixed_runs:
-            by_agents[r["task"].get("num_agents", 0)].append(r)
-        if len(by_agents) > 1:
-            print(f"\n  {'Agents':>8} {'Runs':>5} {'Pass':>5} {'Rate':>7} {'Avg%':>7}")
-            print(f"  {'─'*8} {'─'*5} {'─'*5} {'─'*7} {'─'*7}")
-            for na in sorted(by_agents):
-                recs = by_agents[na]
-                p = sum(1 for r in recs if r["passed"])
-                a = sum(r["pct"] for r in recs) / len(recs)
-                print(f"  {na:>8} {len(recs):>5} {p:>5} {p/len(recs)*100:>6.1f}% {a:>6.1%}")
+    # ── Mixed ──
+    if n_mixed:
+        mixed_models = sorted(set(mixed_task_pass) | set(mixed_subgoal))
+        print(f"\n{'─'*W}")
+        print(f"  Mixed (n={n_mixed}) — Shared Goal + Private Goal Rate")
+        print(f"{'─'*W}")
+        if mixed_models and (mixed_task_pass or mixed_subgoal):
+            print(f"  {'Model':<16} {'Shared Goal':>12} {'Private Goal':>14}")
+            print(f"  {'─'*16} {'─'*12} {'─'*14}")
+            for m in sorted(mixed_models, key=lambda m: -(mixed_subgoal[m]["pass"] / mixed_subgoal[m]["total"] if mixed_subgoal[m]["total"] else 0)):
+                tp = mixed_task_pass[m]
+                sg = mixed_subgoal[m]
+                tp_str = f"{tp['pass']}/{tp['total']} ({_pct(tp['pass'], tp['total'])}%)" if tp["total"] else "—"
+                sg_str = f"{sg['pass']}/{sg['total']} ({_pct(sg['pass'], sg['total'])}%)" if sg["total"] else "—"
+                print(f"  {m:<16} {tp_str:>12} {sg_str:>14}")
+        else:
+            print(f"  No subgoal data yet (needs re-benchmark).")
 
     print()
 

@@ -1,8 +1,8 @@
 """CLI entry point for parallel benchmark execution.
 
 Called by run_emtom.sh when --max-workers is specified.
-Runs one benchmark subprocess per task JSON with GPU round-robin,
-then optionally writes calibration back to source task files.
+Runs one benchmark subprocess per task JSON with GPU round-robin.
+Calibration is written per-task as each subprocess completes.
 
 Usage:
     python -m emtom.scripts.run_benchmark_parallel \
@@ -21,12 +21,8 @@ Usage:
 """
 
 import argparse
-import sys
 
-from emtom.evolve.benchmark_wrapper import (
-    run_benchmark_parallel,
-    update_calibration_from_benchmark,
-)
+from emtom.evolve.benchmark_wrapper import run_benchmark_parallel
 
 
 def main():
@@ -52,26 +48,14 @@ def main():
         no_video=args.no_video,
         category=args.category,
         team_model_map=args.team_model_map,
+        write_calibration=not args.no_calibration,
     )
 
     print(
-        f"[parallel] Benchmark complete: {results.total} tasks "
+        f"[parallel] Done: {results.total} tasks "
         f"({results.passed} passed, {results.failed} failed, "
-        f"pass_rate={results.pass_rate:.1f}%)"
+        f"{results.pass_rate:.1f}%)"
     )
-
-    if not args.no_calibration:
-        team_model_map = None
-        if args.team_model_map:
-            team_model_map = {}
-            for pair in args.team_model_map.split(","):
-                k, v = pair.strip().split("=", 1)
-                team_model_map[k.strip()] = v.strip()
-
-        update_calibration_from_benchmark(
-            results, args.tasks_dir, team_model_map=team_model_map
-        )
-        print(f"[parallel] Calibration updated in {args.tasks_dir}")
 
 
 if __name__ == "__main__":

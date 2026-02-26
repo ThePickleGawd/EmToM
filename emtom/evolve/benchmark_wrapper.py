@@ -302,6 +302,7 @@ def run_benchmark_parallel(
     category: Optional[str] = None,
     team_model_map: Optional[str] = None,
     extra_args: Optional[List[str]] = None,
+    write_calibration: bool = True,
 ) -> BenchmarkResults:
     """Run benchmark in parallel — one process per task JSON.
 
@@ -321,6 +322,7 @@ def run_benchmark_parallel(
         category: Optional category filter.
         team_model_map: Optional team→model mapping string (e.g. "team_0=gpt-5.2,team_1=sonnet").
         extra_args: Additional args forwarded to each subprocess benchmark call.
+        write_calibration: Write calibration to source task JSONs as each task completes.
 
     Returns:
         Merged BenchmarkResults across all tasks.
@@ -335,6 +337,22 @@ def run_benchmark_parallel(
     if not task_files:
         print(f"[evolve] WARNING: no task files in {tasks_dir}", file=sys.stderr)
         return BenchmarkResults(model=model, total=0, passed=0, failed=0, pass_rate=0.0)
+
+    # Pre-filter by category so we don't spawn unnecessary subprocesses
+    if category:
+        filtered = []
+        for tf in task_files:
+            try:
+                with open(tf) as f:
+                    task_data = json.load(f)
+                if task_data.get("category") == category:
+                    filtered.append(tf)
+            except Exception:
+                filtered.append(tf)  # include on error, let subprocess handle it
+        task_files = filtered
+        if not task_files:
+            print(f"[evolve] WARNING: no {category} tasks in {tasks_dir}", file=sys.stderr)
+            return BenchmarkResults(model=model, total=0, passed=0, failed=0, pass_rate=0.0)
 
     # Detect GPUs for round-robin distribution
     gpu_ids = _detect_gpu_ids()
@@ -364,6 +382,14 @@ def run_benchmark_parallel(
     print(f"[evolve] Benchmark output dir: {out_path.resolve()}")
     print(f"[evolve] Benchmark logs: {log_dir.resolve()}")
 
+    # Parse team_model_map string -> dict for calibration updates
+    _team_model_dict: Optional[Dict[str, str]] = None
+    if team_model_map:
+        _team_model_dict = {}
+        for pair in team_model_map.split(","):
+            k, v = pair.strip().split("=", 1)
+            _team_model_dict[k.strip()] = v.strip()
+
     try:
         while True:
             # Reap finished processes
@@ -378,6 +404,20 @@ def run_benchmark_parallel(
                             f"[evolve] WARNING: benchmark for {stem} exited with code {proc.returncode}",
                             file=sys.stderr,
                         )
+                    elif write_calibration:
+                        # Write calibration to original tasks dir immediately
+                        try:
+                            per_task = parse_benchmark_results(bench_out, model)
+                            update_calibration_from_benchmark(
+                                per_task, str(tasks_path), team_model_map=_team_model_dict
+                            )
+                        except FileNotFoundError:
+                            pass  # task produced no results (skipped)
+                        except Exception as e:
+                            print(
+                                f"[evolve] WARNING: calibration failed for {stem}: {e}",
+                                file=sys.stderr,
+                            )
                 else:
                     still_active.append((stem, bench_out, proc, fh))
             active = still_active
@@ -454,16 +494,29 @@ def run_benchmark_parallel(
     total_passed = 0
     total_failed = 0
 
+    skipped_stems: List[str] = []
     for stem, task_input, bench_out in jobs:
         try:
             per_task = parse_benchmark_results(bench_out, model)
+        except FileNotFoundError:
+            # Task was skipped (e.g. category mismatch) or produced no results
+            skipped_stems.append(stem)
+            continue
         except Exception as e:
-            raise RuntimeError(
-                f"Failed parsing benchmark output for task '{stem}' at '{bench_out}': {e}"
-            ) from e
+            print(
+                f"[evolve] WARNING: failed parsing results for '{stem}': {e}",
+                file=sys.stderr,
+            )
+            skipped_stems.append(stem)
+            continue
         all_task_results.extend(per_task.results)
         total_passed += per_task.passed
         total_failed += per_task.failed
+
+    if skipped_stems:
+        print(
+            f"[evolve] {len(skipped_stems)} task(s) produced no results (skipped or failed)"
+        )
 
     total = total_passed + total_failed
     pass_rate = (total_passed / total * 100) if total > 0 else 0.0
