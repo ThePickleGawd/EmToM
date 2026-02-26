@@ -231,6 +231,24 @@ def aggregate_tasks(tasks_dir: str) -> None:
         else:
             print(f"  No subgoal data yet (needs re-benchmark).")
 
+    # ── ToM Order Distribution ──
+    tom_counts = defaultdict(int)
+    for t in tasks:
+        tom_counts[t.get("tom_level")] += 1
+    labeled = {k: v for k, v in tom_counts.items() if k is not None}
+    if labeled:
+        print(f"\n{'─'*W}")
+        print(f"  ToM Order Distribution")
+        print(f"{'─'*W}")
+        print(f"  {'Order':<10} {'Tasks':>6} {'%':>7}")
+        print(f"  {'─'*10} {'─'*6} {'─'*7}")
+        for level in sorted(labeled):
+            pct = labeled[level] / len(tasks) * 100
+            print(f"  {level:<10} {labeled[level]:>6} {pct:>6.1f}%")
+        unlabeled = tom_counts.get(None, 0)
+        if unlabeled:
+            print(f"  {'unlabeled':<10} {unlabeled:>6}")
+
     print()
 
 
