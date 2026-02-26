@@ -30,6 +30,8 @@ print_usage() {
     echo "  prompt <task.json>     Show the built prompt for each agent"
     echo "  dag <task.json>        Visualize the PDDL goal DAG as a PNG graph"
     echo "  summarize <output_dir> Summarize benchmark results from a run directory"
+    echo "  task-summary [dir]     Summary table of tasks with calibration status"
+    echo "  task-stats [dir]       Aggregate stats by category, model, agent count"
     echo "  list-tasks             List all curated task files"
     echo ""
     echo -e "${YELLOW}DAG Options:${NC}"
@@ -40,6 +42,9 @@ print_usage() {
     echo "  ./emtom/run_util.sh dag data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_util.sh dag my_task.json -o dag.png"
     echo "  ./emtom/run_util.sh summarize outputs/emtom/2025-01-05_12-00-00-benchmark"
+    echo "  ./emtom/run_util.sh task-summary"
+    echo "  ./emtom/run_util.sh task-stats"
+    echo "  ./emtom/run_util.sh task-stats data/emtom/tasks"
     echo "  ./emtom/run_util.sh list-tasks"
 }
 
@@ -92,6 +97,16 @@ run_dag() {
     fi
 
     python -m emtom.cli.visualize_task $ARGS
+}
+
+run_task_summary() {
+    TASKS_DIR="${TASK_DIR:-data/emtom/tasks}"
+    python -m emtom.utils.task_summary "$TASKS_DIR"
+}
+
+run_task_stats() {
+    TASKS_DIR="${TASK_DIR:-data/emtom/tasks}"
+    python -m emtom.utils.task_summary --stats "$TASKS_DIR"
 }
 
 run_list_tasks() {
@@ -156,6 +171,22 @@ while [[ $# -gt 0 ]]; do
                 shift
             fi
             ;;
+        task-summary)
+            COMMAND="task-summary"
+            shift
+            if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then
+                TASK_DIR=$1
+                shift
+            fi
+            ;;
+        task-stats)
+            COMMAND="task-stats"
+            shift
+            if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then
+                TASK_DIR=$1
+                shift
+            fi
+            ;;
         list-tasks)
             COMMAND="list-tasks"
             shift
@@ -196,6 +227,12 @@ case $COMMAND in
         ;;
     dag)
         run_dag
+        ;;
+    task-summary)
+        run_task_summary
+        ;;
+    task-stats)
+        run_task_stats
         ;;
     list-tasks)
         run_list_tasks

@@ -110,7 +110,8 @@ RETRY_VERIFICATION=""  # Path to failed ToM verification file
 NO_AUTO_RETRY=false  # Disable automatic retry on judge failure
 CATEGORY=""  # Task category: cooperative, competitive, or mixed
 SEED_TASK=""  # Path to existing task to use as seed
-NO_VIDEO=false  # Disable video saving
+NO_VIDEO=true  # Disable video saving (default: true for speed)
+MAX_WORKERS=""  # Parallel benchmark: max concurrent processes (empty = sequential)
 TASKS_DIR=""  # Custom tasks directory for benchmark
 TEAM_MODEL_MAP=""  # Optional team -> model mapping for benchmark competitive tasks
 SAMPLED_TASKS_DIR=""  # Pre-built sampled_tasks directory (skips random sampling)
@@ -200,7 +201,8 @@ print_usage() {
     echo "  --tasks-dir DIR      Custom tasks directory (default: data/emtom/tasks)"
     echo "  --team-model-map MAP Team->model mapping for competitive tasks"
     echo "                       Format: team_0=sonnet,team_1=gpt-5"
-    echo "  --no-video           Disable video recording (faster)"
+    echo "  --max-workers N      Run benchmark in parallel (N concurrent processes, GPU round-robin)"
+    echo "  --no-video           Disable video recording (default: on)"
     echo "  --no-calibration     Don't write results back into source task JSONs"
     echo ""
     echo -e "${BOLD}Test Options:${NC}"
@@ -545,63 +547,90 @@ print(' '.join(map(str, sorted(counts))))
     if [ -n "$TEAM_MODEL_MAP" ]; then
         echo "Team model map: $TEAM_MODEL_MAP"
     fi
+    if [ -n "$MAX_WORKERS" ]; then
+        echo "Parallel mode: max_workers=$MAX_WORKERS"
+    fi
     echo "=============================================="
 
     # Create timestamp for this benchmark run
     TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
     OUTPUT_BASE="${OUTPUT_DIR:-./outputs/emtom/${TIMESTAMP}-benchmark}"
 
-    # Run benchmark for each agent count
-    for NUM_AGENTS in $AGENT_COUNTS; do
-        echo ""
-        echo -e "${CYAN}========================================${NC}"
-        echo -e "${CYAN}Running tasks with $NUM_AGENTS agents${NC}"
-        echo -e "${CYAN}========================================${NC}"
+    if [ -n "$MAX_WORKERS" ]; then
+        # ── Parallel mode: one process per task with GPU round-robin ──
+        echo -e "${CYAN}Running parallel benchmark (max_workers=$MAX_WORKERS)${NC}"
 
-        CONFIG_NAME=$(get_agent_config $NUM_AGENTS $AGENT_TYPE)
-
-        # Build optional overrides
-        MAX_TURNS_OVERRIDE=""
-        REPLANNING_OVERRIDES=""
-        if [ -n "$MAX_LLM_CALLS" ]; then
-            MAX_TURNS_OVERRIDE="+max_turns=$MAX_LLM_CALLS"
-            for ((i=0; i<NUM_AGENTS; i++)); do
-                REPLANNING_OVERRIDES="$REPLANNING_OVERRIDES ++evaluation.agents.agent_${i}.planner.plan_config.replanning_threshold=$MAX_LLM_CALLS"
-            done
-        fi
-
-        EMTOM_TEAM_MODEL_MAP="$TEAM_MODEL_MAP" python emtom/examples/run_habitat_benchmark.py \
-            --config-name $CONFIG_NAME \
-            habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
-            $MAX_TURNS_OVERRIDE \
-            $REPLANNING_OVERRIDES \
-            $SAVE_VIDEO_OVERRIDE \
-            $CATEGORY_OVERRIDE \
-            +num_agents_filter=$NUM_AGENTS \
-            +task_dir=$TASK_DIR \
-            +model=$MODEL \
-            +llm_provider=$LLM_PROVIDER \
-            "hydra.run.dir=${OUTPUT_BASE}-${NUM_AGENTS}agents"
-    done
-
-    echo ""
-    echo -e "${GREEN}=============================================="
-    echo "All benchmark runs complete!"
-    echo "Results in: $OUTPUT_BASE-*"
-    echo -e "==============================================${NC}"
-
-    # Write calibration data back into source task files
-    if [ "$NO_CALIBRATION" != true ]; then
-        echo ""
-        echo "Writing calibration data back to task files..."
-        CALIBRATION_CMD="python -m emtom.scripts.update_calibration \
+        PARALLEL_CMD="python -m emtom.scripts.run_benchmark_parallel \
             --tasks-dir $TASK_DIR \
-            --benchmark-output-base $OUTPUT_BASE \
-            --model $MODEL_SHORT"
-        if [ -n "$TEAM_MODEL_MAP" ]; then
-            CALIBRATION_CMD="$CALIBRATION_CMD --team-model-map $TEAM_MODEL_MAP"
+            --model $MODEL_SHORT \
+            --output-dir $OUTPUT_BASE \
+            --max-workers $MAX_WORKERS"
+        if [ "$NO_VIDEO" = true ]; then
+            PARALLEL_CMD="$PARALLEL_CMD --no-video"
         fi
-        eval $CALIBRATION_CMD
+        if [ -n "$CATEGORY" ]; then
+            PARALLEL_CMD="$PARALLEL_CMD --category $CATEGORY"
+        fi
+        if [ -n "$TEAM_MODEL_MAP" ]; then
+            PARALLEL_CMD="$PARALLEL_CMD --team-model-map $TEAM_MODEL_MAP"
+        fi
+        if [ "$NO_CALIBRATION" = true ]; then
+            PARALLEL_CMD="$PARALLEL_CMD --no-calibration"
+        fi
+        eval $PARALLEL_CMD
+    else
+        # ── Sequential mode: one run_habitat_benchmark.py per agent-count group ──
+        for NUM_AGENTS in $AGENT_COUNTS; do
+            echo ""
+            echo -e "${CYAN}========================================${NC}"
+            echo -e "${CYAN}Running tasks with $NUM_AGENTS agents${NC}"
+            echo -e "${CYAN}========================================${NC}"
+
+            CONFIG_NAME=$(get_agent_config $NUM_AGENTS $AGENT_TYPE)
+
+            # Build optional overrides
+            MAX_TURNS_OVERRIDE=""
+            REPLANNING_OVERRIDES=""
+            if [ -n "$MAX_LLM_CALLS" ]; then
+                MAX_TURNS_OVERRIDE="+max_turns=$MAX_LLM_CALLS"
+                for ((i=0; i<NUM_AGENTS; i++)); do
+                    REPLANNING_OVERRIDES="$REPLANNING_OVERRIDES ++evaluation.agents.agent_${i}.planner.plan_config.replanning_threshold=$MAX_LLM_CALLS"
+                done
+            fi
+
+            EMTOM_TEAM_MODEL_MAP="$TEAM_MODEL_MAP" python emtom/examples/run_habitat_benchmark.py \
+                --config-name $CONFIG_NAME \
+                habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
+                $MAX_TURNS_OVERRIDE \
+                $REPLANNING_OVERRIDES \
+                $SAVE_VIDEO_OVERRIDE \
+                $CATEGORY_OVERRIDE \
+                +num_agents_filter=$NUM_AGENTS \
+                +task_dir=$TASK_DIR \
+                +model=$MODEL \
+                +llm_provider=$LLM_PROVIDER \
+                "hydra.run.dir=${OUTPUT_BASE}-${NUM_AGENTS}agents"
+        done
+
+        echo ""
+        echo -e "${GREEN}=============================================="
+        echo "All benchmark runs complete!"
+        echo "Results in: $OUTPUT_BASE-*"
+        echo -e "==============================================${NC}"
+
+        # Write calibration data back into source task files
+        if [ "$NO_CALIBRATION" != true ]; then
+            echo ""
+            echo "Writing calibration data back to task files..."
+            CALIBRATION_CMD="python -m emtom.scripts.update_calibration \
+                --tasks-dir $TASK_DIR \
+                --benchmark-output-base $OUTPUT_BASE \
+                --model $MODEL_SHORT"
+            if [ -n "$TEAM_MODEL_MAP" ]; then
+                CALIBRATION_CMD="$CALIBRATION_CMD --team-model-map $TEAM_MODEL_MAP"
+            fi
+            eval $CALIBRATION_CMD
+        fi
     fi
 }
 
@@ -1012,9 +1041,17 @@ while [[ $# -gt 0 ]]; do
             NO_VIDEO=true
             shift
             ;;
+        --video)
+            NO_VIDEO=false
+            shift
+            ;;
         --no-calibration)
             NO_CALIBRATION=true
             shift
+            ;;
+        --max-workers)
+            MAX_WORKERS=$2
+            shift 2
             ;;
         --llm-agents)
             # Collect all agents until next flag or end

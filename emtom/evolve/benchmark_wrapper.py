@@ -300,6 +300,8 @@ def run_benchmark_parallel(
     max_workers: int = 50,
     no_video: bool = True,
     category: Optional[str] = None,
+    team_model_map: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
 ) -> BenchmarkResults:
     """Run benchmark in parallel — one process per task JSON.
 
@@ -317,6 +319,8 @@ def run_benchmark_parallel(
         max_workers: Maximum concurrent benchmark processes.
         no_video: Disable video recording.
         category: Optional category filter.
+        team_model_map: Optional team→model mapping string (e.g. "team_0=gpt-5.2,team_1=sonnet").
+        extra_args: Additional args forwarded to each subprocess benchmark call.
 
     Returns:
         Merged BenchmarkResults across all tasks.
@@ -386,11 +390,16 @@ def run_benchmark_parallel(
                     "--tasks-dir", task_input,
                     "--model", model,
                     "--output-dir", bench_out,
+                    "--no-calibration",
                 ]
                 if no_video:
                     cmd.append("--no-video")
                 if category:
                     cmd.extend(["--category", category])
+                if team_model_map:
+                    cmd.extend(["--team-model-map", team_model_map])
+                if extra_args:
+                    cmd.extend(extra_args)
 
                 # Round-robin GPU assignment
                 gpu_id = gpu_ids[job_idx % len(gpu_ids)]
