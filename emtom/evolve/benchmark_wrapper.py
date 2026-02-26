@@ -11,7 +11,121 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+
+
+def find_calibration_entry(
+    calibration: list,
+    model: Optional[str] = None,
+    agent_models: Optional[dict] = None,
+) -> Optional[dict]:
+    """Find a calibration entry matching the given criteria.
+
+    If agent_models is provided, find exact match on agent_models dict.
+    If only model is provided, find entry where ALL agents use that model.
+    Returns the most recent match (last in list).
+    """
+    if not calibration:
+        return None
+
+    best = None
+    for entry in calibration:
+        entry_agent_models = entry.get("agent_models", {})
+
+        if agent_models is not None:
+            if entry_agent_models == agent_models:
+                best = entry
+        elif model is not None:
+            if entry_agent_models and all(
+                v == model for v in entry_agent_models.values()
+            ):
+                best = entry
+            elif entry.get("_legacy_key") == model:
+                # Match migrated legacy entries by their original dict key
+                best = entry
+    return best
+
+
+def _build_trajectory_from_log(results_dir: str) -> List[Dict[str, Any]]:
+    """Build trajectory from planner log files in a benchmark results directory.
+
+    Reads planner-log-*.json files, extracts action_history, and groups by turn.
+    Same logic as agent.py:_build_trajectory.
+    """
+    from collections import defaultdict
+
+    results_path = Path(results_dir)
+    log_files = sorted(results_path.glob("planner-log-*.json"))
+    if not log_files:
+        return []
+
+    # Merge action_history from all planner logs
+    all_actions: List[Dict[str, Any]] = []
+    for log_file in log_files:
+        try:
+            with open(log_file) as f:
+                log_data = json.load(f)
+            all_actions.extend(log_data.get("action_history", []))
+        except Exception:
+            continue
+
+    if not all_actions:
+        return []
+
+    # Group by turn
+    turns: Dict[int, Dict[str, Any]] = defaultdict(lambda: {
+        "agents": {},
+        "subtasks_completed": []
+    })
+
+    for record in all_actions:
+        turn = record.get("turn", 0)
+        if record.get("type") == "subtask_completion":
+            turns[turn]["subtasks_completed"].extend(
+                record.get("subtasks_completed", [])
+            )
+        else:
+            agent_id = record.get("agent", "unknown")
+            turns[turn]["agents"][agent_id] = {
+                "action": record.get("action", ""),
+                "observation": record.get("result", ""),
+            }
+
+    trajectory = []
+    for turn_num in sorted(turns.keys()):
+        entry = turns[turn_num]
+        trajectory.append({
+            "turn": turn_num,
+            "agents": entry["agents"],
+            "subtasks_completed": entry["subtasks_completed"],
+        })
+
+    return trajectory
+
+
+def _migrate_legacy_calibration(calibration: Any) -> list:
+    """Convert legacy dict-format calibration to list format.
+
+    Old format: {"model_name": {passed, tested_at, ...}, ...}
+    New format: [{agent_models: {...}, passed, tested_at, ...}, ...]
+    """
+    if isinstance(calibration, list):
+        return calibration
+    if not isinstance(calibration, dict):
+        return []
+
+    migrated = []
+    for key, entry in calibration.items():
+        if not isinstance(entry, dict):
+            continue
+        new_entry = dict(entry)
+        # Preserve original key for reference
+        new_entry["_legacy_key"] = key
+        # If no agent_models set, infer: all agents use this model
+        if "agent_models" not in new_entry:
+            new_entry["agent_models"] = {}  # unknown agents, but key preserved
+        migrated.append(new_entry)
+    return migrated
 
 
 @dataclass
@@ -26,6 +140,10 @@ class TaskResult:
     skipped: bool
     error: Optional[str]
     evaluation: dict
+    category: str = ""
+    team_model_mapping: Optional[dict] = None
+    agent_model_mapping: Optional[dict] = None
+    results_dir: str = ""
 
 
 @dataclass
@@ -109,14 +227,18 @@ def parse_benchmark_results(output_dir: str, model: str) -> BenchmarkResults:
         with open(sf) as f:
             summary = json.load(f)
 
+        # Derive results directory from the summary file location
+        results_base_dir = str(sf.parent)
+
         for r in summary.get("results", []):
             if r.get("skipped", False):
                 total_skipped += 1
                 continue
 
             evaluation = r.get("evaluation", {})
+            task_id = r.get("task_id", "")
             task_result = TaskResult(
-                task_id=r.get("task_id", ""),
+                task_id=task_id,
                 title=r.get("title", ""),
                 task_path=r.get("task_id", ""),  # Will be resolved later
                 success=r.get("success", False),
@@ -126,6 +248,10 @@ def parse_benchmark_results(output_dir: str, model: str) -> BenchmarkResults:
                 skipped=False,
                 error=r.get("error"),
                 evaluation=evaluation,
+                category=r.get("category", ""),
+                team_model_mapping=r.get("team_model_mapping"),
+                agent_model_mapping=r.get("agent_model_mapping"),
+                results_dir=f"{results_base_dir}/{task_id}" if task_id else "",
             )
             all_task_results.append(task_result)
 
@@ -343,15 +469,57 @@ def run_benchmark_parallel(
     )
 
 
+def _build_agent_models_from_result(
+    result: TaskResult,
+    model: str,
+    team_model_map: Optional[Dict[str, str]] = None,
+    task_data: Optional[dict] = None,
+) -> Dict[str, str]:
+    """Build per-agent model mapping from a TaskResult.
+
+    Priority:
+    1. result.agent_model_mapping (from benchmark_summary.json)
+    2. Expand team_model_map using task's team_assignment
+    3. Fall back to all agents using `model`
+    """
+    # 1. Direct agent_model_mapping from benchmark results
+    if result.agent_model_mapping:
+        return {
+            agent_id: info.get("model", model)
+            for agent_id, info in result.agent_model_mapping.items()
+        }
+
+    # 2. Expand team_model_map via task's team_assignment
+    if team_model_map and task_data:
+        team_assignment = task_data.get("team_assignment", {})
+        agent_models = {}
+        for team_id, agents in team_assignment.items():
+            team_model = team_model_map.get(team_id, model)
+            for agent_id in agents:
+                agent_models[agent_id] = team_model
+        if agent_models:
+            return agent_models
+
+    # 3. All agents use the same model
+    num_agents = task_data.get("num_agents", 2) if task_data else 2
+    return {f"agent_{i}": model for i in range(num_agents)}
+
+
 def update_calibration_from_benchmark(
     benchmark_results: BenchmarkResults,
     tasks_dir: str,
+    team_model_map: Optional[Dict[str, str]] = None,
 ) -> None:
     """Write benchmark results back into task JSONs as calibration entries.
 
-    After running a separate benchmark (e.g. on model upgrade), this merges
-    the results into each task's calibration dict so subsequent logic can
-    read pass/fail from the task JSON itself.
+    Uses the unified array-based calibration format. Each entry records
+    per-agent model mappings, category-specific fields, and trajectory.
+    Deduplicates by agent_models (replaces existing entry with same matchup).
+
+    Args:
+        benchmark_results: Parsed benchmark results.
+        tasks_dir: Directory containing source task JSONs.
+        team_model_map: Optional team->model mapping (e.g. {"team_0": "gpt-5.2", "team_1": "sonnet"}).
     """
     tasks_path = Path(tasks_dir)
     model = benchmark_results.model
@@ -359,6 +527,7 @@ def update_calibration_from_benchmark(
     # Build lookup: task_id -> TaskResult
     result_map = {r.task_id: r for r in benchmark_results.results}
 
+    updated = 0
     for task_file in tasks_path.glob("*.json"):
         try:
             with open(task_file) as f:
@@ -372,17 +541,62 @@ def update_calibration_from_benchmark(
         if result is None:
             continue
 
-        if "calibration" not in task_data:
-            task_data["calibration"] = {}
+        # Migrate legacy dict format to list
+        raw_cal = task_data.get("calibration", [])
+        calibration = _migrate_legacy_calibration(raw_cal)
 
-        task_data["calibration"][model] = {
-            "passed": result.success,
+        # Build per-agent model mapping
+        agent_models = _build_agent_models_from_result(
+            result, model, team_model_map, task_data
+        )
+
+        # Build calibration entry
+        entry: Dict[str, Any] = {
             "tested_at": datetime.now().isoformat(),
+            "agent_models": agent_models,
+            "passed": result.success,
             "steps": result.steps,
             "percent_complete": result.percent_complete,
         }
 
+        # Category-specific fields
+        evaluation = result.evaluation
+        category = result.category or task_data.get("category", "")
+
+        if category == "competitive":
+            entry["passed"] = evaluation.get("winner") is not None
+            entry["winner"] = evaluation.get("winner")
+            if evaluation.get("team_status"):
+                entry["team_status"] = evaluation["team_status"]
+            if evaluation.get("team_progress"):
+                entry["team_progress"] = evaluation["team_progress"]
+
+        elif category == "mixed":
+            if "main_goal_success" in evaluation:
+                entry["main_goal_success"] = evaluation["main_goal_success"]
+            if "agent_subgoal_status" in evaluation:
+                entry["agent_subgoal_status"] = evaluation["agent_subgoal_status"]
+
+        # Build trajectory from planner logs if available
+        if result.results_dir:
+            trajectory = _build_trajectory_from_log(result.results_dir)
+            if trajectory:
+                entry["trajectory"] = trajectory
+
+        # Deduplicate: replace existing entry with same agent_models, else append
+        replaced = False
+        for i, existing in enumerate(calibration):
+            if existing.get("agent_models") == agent_models:
+                calibration[i] = entry
+                replaced = True
+                break
+        if not replaced:
+            calibration.append(entry)
+
+        task_data["calibration"] = calibration
+
         with open(task_file, "w") as f:
             json.dump(task_data, f, indent=2)
+        updated += 1
 
-    print(f"[calibration] Updated calibration in {tasks_dir} for model {model}")
+    print(f"[calibration] Updated {updated} task(s) in {tasks_dir} for model {model}")

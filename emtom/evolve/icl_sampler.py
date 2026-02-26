@@ -7,6 +7,8 @@ import random
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from emtom.evolve.benchmark_wrapper import find_calibration_entry
+
 
 def prepare_sampled_tasks_dir_from_calibration(
     tasks_dir: str,
@@ -42,7 +44,7 @@ def prepare_sampled_tasks_dir_from_calibration(
         try:
             with open(task_file) as f:
                 task_data = json.load(f)
-            cal = task_data.get("calibration", {}).get(model)
+            cal = find_calibration_entry(task_data.get("calibration", []), model=model)
             if cal is None:
                 continue
             pct = cal.get("percent_complete", 0.0)
@@ -61,7 +63,7 @@ def prepare_sampled_tasks_dir_from_calibration(
 
     for i, (_, task_data, pct) in enumerate(selected_failed, 1):
         annotated = dict(task_data)
-        cal = task_data["calibration"][model]
+        cal = find_calibration_entry(task_data.get("calibration", []), model=model)
         annotated["_benchmark_result"] = {
             "model": model,
             "outcome": "FAILED",
@@ -103,7 +105,7 @@ def compute_pass_rate_from_calibration(tasks_dir: str, model: str) -> Dict[str, 
         try:
             with open(task_file) as f:
                 task_data = json.load(f)
-            cal = task_data.get("calibration", {}).get(model)
+            cal = find_calibration_entry(task_data.get("calibration", []), model=model)
             if cal is None:
                 untested += 1
             elif cal.get("passed"):
@@ -133,7 +135,7 @@ def find_tasks_without_calibration(tasks_dir: str, model: str) -> List[Path]:
         try:
             with open(task_file) as f:
                 task_data = json.load(f)
-            cal = task_data.get("calibration", {}).get(model)
+            cal = find_calibration_entry(task_data.get("calibration", []), model=model)
             if cal is None:
                 missing.append(task_file)
         except Exception:

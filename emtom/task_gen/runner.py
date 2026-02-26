@@ -69,6 +69,8 @@ def parse_extra_args():
 
 def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
     """Compute pass rate statistics for a given model from existing tasks."""
+    from emtom.evolve.benchmark_wrapper import find_calibration_entry
+
     stats = {"passed": 0, "failed": 0, "untested": 0, "model": model}
     tasks_path = Path(tasks_dir)
 
@@ -81,7 +83,7 @@ def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
         try:
             with open(task_file) as f:
                 task = json.load(f)
-            cal = task.get("calibration", {}).get(model)
+            cal = find_calibration_entry(task.get("calibration", []), model=model)
             if cal is None:
                 stats["untested"] += 1
             elif cal.get("passed"):

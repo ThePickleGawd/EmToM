@@ -594,10 +594,14 @@ print(' '.join(map(str, sorted(counts))))
     if [ "$NO_CALIBRATION" != true ]; then
         echo ""
         echo "Writing calibration data back to task files..."
-        python -m emtom.scripts.update_calibration \
-            --tasks-dir "$TASK_DIR" \
-            --benchmark-output-base "$OUTPUT_BASE" \
-            --model "$MODEL_SHORT"
+        CALIBRATION_CMD="python -m emtom.scripts.update_calibration \
+            --tasks-dir $TASK_DIR \
+            --benchmark-output-base $OUTPUT_BASE \
+            --model $MODEL_SHORT"
+        if [ -n "$TEAM_MODEL_MAP" ]; then
+            CALIBRATION_CMD="$CALIBRATION_CMD --team-model-map $TEAM_MODEL_MAP"
+        fi
+        eval $CALIBRATION_CMD
     fi
 }
 

@@ -1374,19 +1374,26 @@ SUMMARY:"""
         return trajectory
 
     def _save_calibration_result(self, task_data: Dict[str, Any], results: Dict[str, Any]) -> None:
-        """Save calibration results to task JSON for dataset pass rate tracking."""
-        from datetime import datetime
+        """Save calibration results to task JSON for dataset pass rate tracking.
 
-        # Use test_model as calibration key if set (evolve pipeline), otherwise use generator model
-        if self.test_model:
-            model_name = self.test_model
-        else:
-            model_name = "unknown"
-            if hasattr(self.llm, 'llm_conf'):
-                params = self.llm.llm_conf.get('generation_params', {})
-                model_name = params.get('model', 'unknown')
-            elif hasattr(self.llm, 'generation_params'):
-                model_name = getattr(self.llm.generation_params, 'model', 'unknown')
+        Uses the unified array-based calibration format with per-agent model info.
+        """
+        from datetime import datetime
+        from emtom.evolve.benchmark_wrapper import _migrate_legacy_calibration
+
+        # Build per-agent model mapping from the last benchmark run
+        agent_models = getattr(self, "_last_agent_models", None)
+        if not agent_models:
+            # Fallback: derive from test_model or generator model
+            model_name = self.test_model or "unknown"
+            if not self.test_model:
+                if hasattr(self.llm, 'llm_conf'):
+                    params = self.llm.llm_conf.get('generation_params', {})
+                    model_name = params.get('model', 'unknown')
+                elif hasattr(self.llm, 'generation_params'):
+                    model_name = getattr(self.llm.generation_params, 'model', 'unknown')
+            num_agents = task_data.get("num_agents", 2)
+            agent_models = {f"agent_{i}": model_name for i in range(num_agents)}
 
         # Build trajectory from action history
         action_history = results.get("action_history", [])
@@ -1395,39 +1402,52 @@ SUMMARY:"""
         # Extract calibration data from results
         evaluation = results.get("evaluation", {})
         calibration_entry = {
-            "passed": results.get("done", False),
             "tested_at": datetime.now().isoformat(),
+            "agent_models": agent_models,
+            "passed": results.get("done", False),
             "steps": results.get("steps", 0),
             "percent_complete": evaluation.get("percent_complete", 0.0),
             "trajectory": trajectory,
         }
 
-        # For competitive tasks, record per-team model mapping and winner
-        if task_data.get("category") == "competitive":
-            # "passed" = a team actually won (not just "done" which includes timeouts)
+        # Category-specific fields
+        category = task_data.get("category", "")
+
+        if category == "competitive":
             calibration_entry["passed"] = evaluation.get("winner") is not None
-            calibration_entry["team_models"] = {
-                "team_0": "gpt-5.2",
-                "team_1": "sonnet",
-            }
             calibration_entry["winner"] = evaluation.get("winner")
             if evaluation.get("team_status"):
                 calibration_entry["team_status"] = evaluation["team_status"]
             if evaluation.get("team_progress"):
                 calibration_entry["team_progress"] = evaluation["team_progress"]
-            # Use matchup as the calibration key instead of single model name
-            model_name = "gpt-5.2_vs_sonnet"
 
-        # Update task data with calibration results
-        if "calibration" not in task_data:
-            task_data["calibration"] = {}
-        task_data["calibration"][model_name] = calibration_entry
+        elif category == "mixed":
+            if "main_goal_success" in evaluation:
+                calibration_entry["main_goal_success"] = evaluation["main_goal_success"]
+            if "agent_subgoal_status" in evaluation:
+                calibration_entry["agent_subgoal_status"] = evaluation["agent_subgoal_status"]
+
+        # Migrate legacy dict format and write as array
+        raw_cal = task_data.get("calibration", [])
+        calibration = _migrate_legacy_calibration(raw_cal)
+
+        # Deduplicate: replace existing entry with same agent_models, else append
+        replaced = False
+        for i, existing in enumerate(calibration):
+            if existing.get("agent_models") == agent_models:
+                calibration[i] = calibration_entry
+                replaced = True
+                break
+        if not replaced:
+            calibration.append(calibration_entry)
+
+        task_data["calibration"] = calibration
 
         # Write back to working_task.json
         try:
             with open(self.task_file, 'w') as f:
                 json.dump(task_data, f, indent=2)
-            self._log(f"[Calibration] Saved result for {model_name}: passed={calibration_entry['passed']}")
+            self._log(f"[Calibration] Saved result: passed={calibration_entry['passed']}, agents={agent_models}")
         except Exception as e:
             self._log(f"[Calibration] Warning: Failed to save calibration result: {e}")
 
@@ -1471,9 +1491,32 @@ SUMMARY:"""
         if self.test_model:
             cmd.extend(["--test-model", self.test_model])
 
-        # For competitive tasks, default to cross-model matchup (gpt-5.2 vs sonnet)
+        # For competitive tasks, build cross-model matchup from test_model
         if task_data.get("category") == "competitive":
-            cmd.extend(["--team-model-map", "team_0=gpt-5.2,team_1=sonnet"])
+            base_model = self.test_model or "gpt-5.2"
+            opponent = "sonnet" if base_model != "sonnet" else "gpt-5.2"
+            team_model_map_str = f"team_0={base_model},team_1={opponent}"
+            cmd.extend(["--team-model-map", team_model_map_str])
+
+            # Store per-agent model mapping for _save_calibration_result
+            team_assignment = task_data.get("team_assignment", {})
+            agent_models = {}
+            team_models = {"team_0": base_model, "team_1": opponent}
+            for team_id, agents in team_assignment.items():
+                model = team_models.get(team_id, base_model)
+                for agent_id in agents:
+                    agent_models[agent_id] = model
+            if not agent_models:
+                # Fallback if no team_assignment
+                for i in range(num_agents):
+                    agent_models[f"agent_{i}"] = base_model
+            self._last_agent_models = agent_models
+        else:
+            # Non-competitive: all agents use the same model
+            model_name = self.test_model or "gpt-5.2"
+            self._last_agent_models = {
+                f"agent_{i}": model_name for i in range(num_agents)
+            }
 
         try:
             proc = subprocess.run(

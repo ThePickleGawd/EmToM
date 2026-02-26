@@ -16,15 +16,31 @@ def load_task_data():
     for json_file in TASKS_DIR.glob("*.json"):
         with open(json_file) as f:
             data = json.load(f)
-            # Extract calibration results (may have multiple models tested)
-            for model, result in data.get("calibration", {}).items():
+            # Extract calibration results (array format, each entry is a benchmark run)
+            calibration = data.get("calibration", [])
+            if isinstance(calibration, dict):
+                # Legacy dict format — convert on the fly
+                calibration = [
+                    {**v, "_legacy_key": k} for k, v in calibration.items() if isinstance(v, dict)
+                ]
+            for entry in calibration:
+                # Derive a model label from agent_models (e.g. "gpt-5.2" or "gpt-5.2_vs_sonnet")
+                agent_models = entry.get("agent_models", {})
+                unique_models = sorted(set(agent_models.values())) if agent_models else []
+                if len(unique_models) == 1:
+                    model_label = unique_models[0]
+                elif len(unique_models) > 1:
+                    model_label = "_vs_".join(unique_models)
+                else:
+                    model_label = entry.get("_legacy_key", "unknown")
+
                 tasks.append({
                     "task_id": data.get("task_id"),
                     "num_agents": data.get("num_agents"),
                     "num_subtasks": len(data.get("subtasks", [])),
-                    "model": model,
-                    "passed": result.get("passed", False),
-                    "percent_complete": result.get("percent_complete", 0),
+                    "model": model_label,
+                    "passed": entry.get("passed", False),
+                    "percent_complete": entry.get("percent_complete", 0),
                 })
     return tasks
 
