@@ -285,25 +285,12 @@ def verify_task(
 
     if isinstance(problem_pddl, str) and problem_pddl.strip():
         try:
-            from emtom.pddl.dsl import Literal, EpistemicFormula
+            from emtom.pddl.dsl import Literal, EpistemicFormula, collect_leaf_literals
             from emtom.pddl.problem_pddl import parse_problem_pddl
 
             parsed_problem = parse_problem_pddl(problem_pddl)
             goal = parsed_problem.goal_formula
-            conjuncts = goal.flatten()
-
-            # Extract inner Literal nodes from conjuncts (unwrap K/B wrappers)
-            def _extract_literals(formula):
-                """Unwrap epistemic layers to get leaf Literal nodes."""
-                if isinstance(formula, Literal):
-                    return [formula]
-                if isinstance(formula, EpistemicFormula):
-                    return _extract_literals(formula.inner)
-                return []
-
-            literals = []
-            for c in conjuncts:
-                literals.extend(_extract_literals(c))
+            literals = collect_leaf_literals(goal)
 
             # Check goal predicate names are valid
             from emtom.evaluation import PARTNR_PREDICATES, EMTOM_PREDICATES
@@ -336,22 +323,9 @@ def verify_task(
 
     elif isinstance(pddl_goal, str) and pddl_goal:
         try:
-            from emtom.pddl.dsl import parse_goal_string, Literal, EpistemicFormula
+            from emtom.pddl.dsl import parse_goal_string, Literal, EpistemicFormula, collect_leaf_literals
             goal = parse_goal_string(pddl_goal)
-            conjuncts = goal.flatten()
-
-            # Extract inner Literal nodes from conjuncts (unwrap K/B wrappers)
-            def _extract_literals(formula):
-                """Unwrap epistemic layers to get leaf Literal nodes."""
-                if isinstance(formula, Literal):
-                    return [formula]
-                if isinstance(formula, EpistemicFormula):
-                    return _extract_literals(formula.inner)
-                return []
-
-            literals = []
-            for c in conjuncts:
-                literals.extend(_extract_literals(c))
+            literals = collect_leaf_literals(goal)
 
             # Check goal predicate names are valid
             from emtom.evaluation import PARTNR_PREDICATES, EMTOM_PREDICATES

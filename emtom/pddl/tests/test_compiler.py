@@ -770,3 +770,347 @@ class TestPDDLOrderingCycle:
     def test_single_constraint(self):
         ordering = [{"before": "(is_open a)", "after": "(is_open b)"}]
         assert not _has_ordering_cycle(ordering)
+
+
+# ---------------------------------------------------------------------------
+# Not.flatten() negation preservation tests
+# ---------------------------------------------------------------------------
+
+class TestNotFlatten:
+    def test_not_literal_preserves_negation(self):
+        """Not(Literal) should flatten to Literal(negated=True)."""
+        f = Not(operand=Literal("is_open", ("cabinet_27",)))
+        flat = f.flatten()
+        assert len(flat) == 1
+        assert isinstance(flat[0], Literal)
+        assert flat[0].negated is True
+        assert flat[0].predicate == "is_open"
+        assert flat[0].args == ("cabinet_27",)
+
+    def test_not_literal_evaluates_correctly(self):
+        """Flattened negated literal should evaluate as negation."""
+        f = Not(operand=Literal("is_open", ("cabinet_27",)))
+        flat = f.flatten()
+        negated_lit = flat[0]
+        # is_open is True in state, negated should be False
+        assert not negated_lit.evaluate(lambda p, a: True)
+        # is_open is False in state, negated should be True
+        assert negated_lit.evaluate(lambda p, a: False)
+
+    def test_not_literal_pddl_roundtrip(self):
+        """Negated literal from Not.flatten() should serialize correctly."""
+        f = Not(operand=Literal("is_open", ("cabinet_27",)))
+        flat = f.flatten()
+        assert flat[0].to_pddl() == "(not (is_open cabinet_27))"
+
+    def test_not_complex_returns_self(self):
+        """Not(And(...)) should return [self], not decompose."""
+        inner = And(operands=(
+            Literal("is_open", ("a",)),
+            Literal("is_open", ("b",)),
+        ))
+        f = Not(operand=inner)
+        flat = f.flatten()
+        assert len(flat) == 1
+        assert isinstance(flat[0], Not)
+
+    def test_double_negation(self):
+        """Not(Literal(negated=True)) should flatten to Literal(negated=False)."""
+        f = Not(operand=Literal("is_open", ("cabinet_27",), negated=True))
+        flat = f.flatten()
+        assert len(flat) == 1
+        assert isinstance(flat[0], Literal)
+        assert flat[0].negated is False
+
+
+# ---------------------------------------------------------------------------
+# Or.flatten() tests
+# ---------------------------------------------------------------------------
+
+class TestOrFlatten:
+    def test_or_flatten_returns_self(self):
+        """Or.flatten() should return [self], not merge branches."""
+        f = Or(operands=(
+            Literal("is_open", ("a",)),
+            Literal("is_open", ("b",)),
+        ))
+        flat = f.flatten()
+        assert len(flat) == 1
+        assert isinstance(flat[0], Or)
+
+    def test_or_evaluate_still_works(self):
+        """Or.evaluate() should still work correctly."""
+        f = Or(operands=(
+            Literal("is_open", ("a",)),
+            Literal("is_open", ("b",)),
+        ))
+        state = {"a": False, "b": True}
+        assert f.evaluate(lambda p, a: state.get(a[0], False))
+        assert not f.evaluate(lambda p, a: False)
+
+
+# ---------------------------------------------------------------------------
+# collect_leaf_literals() tests
+# ---------------------------------------------------------------------------
+
+from emtom.pddl.dsl import collect_leaf_literals
+
+
+class TestCollectLeafLiterals:
+    def test_simple_literal(self):
+        lit = Literal("is_open", ("a",))
+        assert len(collect_leaf_literals(lit)) == 1
+
+    def test_and(self):
+        f = And(operands=(
+            Literal("is_open", ("a",)),
+            Literal("is_open", ("b",)),
+        ))
+        assert len(collect_leaf_literals(f)) == 2
+
+    def test_or(self):
+        f = Or(operands=(
+            Literal("is_open", ("a",)),
+            Literal("is_open", ("b",)),
+        ))
+        # collect_leaf_literals traverses into Or branches
+        assert len(collect_leaf_literals(f)) == 2
+
+    def test_not(self):
+        f = Not(operand=Literal("is_open", ("a",)))
+        result = collect_leaf_literals(f)
+        assert len(result) == 1
+        assert result[0].predicate == "is_open"
+
+    def test_epistemic(self):
+        f = Knows(agent="agent_0", inner=Literal("is_open", ("a",)))
+        result = collect_leaf_literals(f)
+        assert len(result) == 1
+
+    def test_complex_competitive_goal(self):
+        """A realistic competitive goal with Or branches."""
+        goal = Or(operands=(
+            And(operands=(
+                Literal("is_inside", ("trophy_1", "cabinet_10")),
+                Not(operand=Literal("is_inside", ("trophy_1", "cabinet_20"))),
+            )),
+            And(operands=(
+                Literal("is_inside", ("trophy_1", "cabinet_20")),
+                Not(operand=Literal("is_inside", ("trophy_1", "cabinet_10"))),
+            )),
+        ))
+        result = collect_leaf_literals(goal)
+        assert len(result) == 4  # 2 literals x 2 branches
+
+
+# ---------------------------------------------------------------------------
+# Competitive Or-branch goal checker tests
+# ---------------------------------------------------------------------------
+
+class TestCompetitiveGoalChecker:
+    def _make_competitive_goal(self):
+        """Create a typical competitive Or-branched goal."""
+        return Or(operands=(
+            And(operands=(
+                Literal("is_inside", ("trophy_1", "cabinet_10")),
+                Literal("is_closed", ("cabinet_10",)),
+            )),
+            And(operands=(
+                Literal("is_inside", ("trophy_1", "cabinet_20")),
+                Literal("is_closed", ("cabinet_20",)),
+            )),
+        ))
+
+    def _make_competitive_owners(self):
+        return {
+            "(is_inside trophy_1 cabinet_10)": "team_0",
+            "(is_closed cabinet_10)": "team_0",
+            "(is_inside trophy_1 cabinet_20)": "team_1",
+            "(is_closed cabinet_20)": "team_1",
+        }
+
+    def test_or_goal_detected(self):
+        goal = self._make_competitive_goal()
+        checker = PDDLGoalChecker(goal, owners=self._make_competitive_owners())
+        assert checker.is_or_goal
+        assert checker.num_branches == 2
+
+    def test_branch_conjuncts(self):
+        goal = self._make_competitive_goal()
+        checker = PDDLGoalChecker(goal, owners=self._make_competitive_owners())
+        assert len(checker.get_branch_conjuncts(0)) == 2
+        assert len(checker.get_branch_conjuncts(1)) == 2
+        assert len(checker.conjuncts) == 4
+
+    def test_branch_for_team(self):
+        goal = self._make_competitive_goal()
+        checker = PDDLGoalChecker(goal, owners=self._make_competitive_owners())
+        assert checker.get_branch_for_team("team_0") == 0
+        assert checker.get_branch_for_team("team_1") == 1
+        assert checker.get_branch_for_team("team_99") is None
+
+    def test_no_winner_initially(self):
+        goal = self._make_competitive_goal()
+        checker = PDDLGoalChecker(goal, owners=self._make_competitive_owners())
+        result = checker.update(lambda p, a: False)
+        assert not result["all_complete"]
+        assert result["percent_complete"] == 0.0
+        assert result.get("winning_branch") is None
+
+    def test_partial_progress(self):
+        """One conjunct of team_0 satisfied."""
+        goal = self._make_competitive_goal()
+        checker = PDDLGoalChecker(goal, owners=self._make_competitive_owners())
+        state = {("is_inside", ("trophy_1", "cabinet_10")): True}
+        result = checker.update(lambda p, a: state.get((p, a), False))
+        assert result["percent_complete"] == 0.5
+        assert not result["all_complete"]
+
+    def test_team_0_wins(self):
+        """team_0 branch fully satisfied."""
+        goal = self._make_competitive_goal()
+        checker = PDDLGoalChecker(goal, owners=self._make_competitive_owners())
+        state = {
+            ("is_inside", ("trophy_1", "cabinet_10")): True,
+            ("is_closed", ("cabinet_10",)): True,
+        }
+        result = checker.update(lambda p, a: state.get((p, a), False))
+        assert result["all_complete"]
+        assert result["winning_branch"] == 0
+
+    def test_team_1_wins(self):
+        """team_1 branch fully satisfied."""
+        goal = self._make_competitive_goal()
+        checker = PDDLGoalChecker(goal, owners=self._make_competitive_owners())
+        state = {
+            ("is_inside", ("trophy_1", "cabinet_20")): True,
+            ("is_closed", ("cabinet_20",)): True,
+        }
+        result = checker.update(lambda p, a: state.get((p, a), False))
+        assert result["all_complete"]
+        assert result["winning_branch"] == 1
+
+    def test_live_state_no_latching(self):
+        """Competitive goals should NOT latch — progress can go backwards."""
+        goal = self._make_competitive_goal()
+        checker = PDDLGoalChecker(goal, owners=self._make_competitive_owners())
+
+        # Step 1: trophy in cabinet_10
+        state1 = {("is_inside", ("trophy_1", "cabinet_10")): True}
+        result1 = checker.update(lambda p, a: state1.get((p, a), False))
+        assert result1["percent_complete"] == 0.5
+
+        # Step 2: trophy moved out — progress should go back to 0
+        result2 = checker.update(lambda p, a: False)
+        assert result2["percent_complete"] == 0.0
+        assert len(checker.completed) == 0
+
+    def test_branch_progress(self):
+        goal = self._make_competitive_goal()
+        checker = PDDLGoalChecker(goal, owners=self._make_competitive_owners())
+        state = {("is_inside", ("trophy_1", "cabinet_10")): True}
+        checker.update(lambda p, a: state.get((p, a), False))
+        assert checker.get_branch_progress(0) == 0.5
+        assert checker.get_branch_progress(1) == 0.0
+        assert not checker.is_branch_complete(0)
+
+    def test_cooperative_goal_not_or(self):
+        """Cooperative goal (And) should not be detected as Or."""
+        goal = And(operands=(
+            Literal("is_open", ("cabinet_27",)),
+            Literal("is_on_top", ("bottle_4", "table_13")),
+        ))
+        checker = PDDLGoalChecker(goal)
+        assert not checker.is_or_goal
+        assert checker.num_branches == 0
+
+    def test_cooperative_still_latches(self):
+        """Cooperative goals should still latch."""
+        goal = And(operands=(
+            Literal("is_open", ("cabinet_27",)),
+            Literal("is_on_top", ("bottle_4", "table_13")),
+        ))
+        checker = PDDLGoalChecker(goal)
+
+        # Step 1: first conjunct true
+        state1 = {("is_open", ("cabinet_27",)): True}
+        checker.update(lambda p, a: state1.get((p, a), False))
+        assert checker.is_conjunct_completed(0)
+
+        # Step 2: first goes false — should stay latched
+        checker.update(lambda p, a: False)
+        assert checker.is_conjunct_completed(0)  # Still latched!
+
+    def test_get_owner(self):
+        goal = self._make_competitive_goal()
+        checker = PDDLGoalChecker(goal, owners=self._make_competitive_owners())
+        assert checker.get_owner(0) == "team_0"
+        assert checker.get_owner(1) == "team_0"
+        assert checker.get_owner(2) == "team_1"
+        assert checker.get_owner(3) == "team_1"
+
+
+# ---------------------------------------------------------------------------
+# Owner decomposition tests
+# ---------------------------------------------------------------------------
+
+class TestOwnerDecomposition:
+    def test_compound_owner_decomposed(self):
+        """(and A B) owned by team_0 should map each literal to team_0."""
+        from emtom.pddl.problem_pddl import _parse_goal_owners
+
+        pddl = (
+            "(define (problem test)\n"
+            "  (:domain emtom)\n"
+            "  (:init)\n"
+            "  (:goal (or (and (is_inside trophy_1 cabinet_10) (is_closed cabinet_10))"
+            "            (and (is_inside trophy_1 cabinet_20) (is_closed cabinet_20))))\n"
+            "  (:goal-owners\n"
+            "    (team_0 (and (is_inside trophy_1 cabinet_10) (is_closed cabinet_10)))\n"
+            "    (team_1 (and (is_inside trophy_1 cabinet_20) (is_closed cabinet_20))))\n"
+            ")"
+        )
+        owners = _parse_goal_owners(pddl)
+        assert owners.get("(is_inside trophy_1 cabinet_10)") == "team_0"
+        assert owners.get("(is_closed cabinet_10)") == "team_0"
+        assert owners.get("(is_inside trophy_1 cabinet_20)") == "team_1"
+        assert owners.get("(is_closed cabinet_20)") == "team_1"
+
+    def test_simple_owner_still_works(self):
+        """Single literal ownership still maps correctly."""
+        from emtom.pddl.problem_pddl import _parse_goal_owners
+
+        pddl = (
+            "(define (problem test)\n"
+            "  (:domain emtom)\n"
+            "  (:init)\n"
+            "  (:goal (is_open cabinet_27))\n"
+            "  (:goal-owners\n"
+            "    (team_0 (is_open cabinet_27)))\n"
+            ")"
+        )
+        owners = _parse_goal_owners(pddl)
+        assert owners.get("(is_open cabinet_27)") == "team_0"
+
+    def test_from_task_data_competitive(self):
+        """Full round-trip: task_data → PDDLGoalChecker with Or branches and owners."""
+        task_data = {
+            "problem_pddl": (
+                "(define (problem test)\n"
+                "  (:domain emtom)\n"
+                "  (:init)\n"
+                "  (:goal (or (and (is_inside trophy_1 cabinet_10) (is_closed cabinet_10))"
+                "            (and (is_inside trophy_1 cabinet_20) (is_closed cabinet_20))))\n"
+                "  (:goal-owners\n"
+                "    (team_0 (and (is_inside trophy_1 cabinet_10) (is_closed cabinet_10)))\n"
+                "    (team_1 (and (is_inside trophy_1 cabinet_20) (is_closed cabinet_20))))\n"
+                ")"
+            ),
+        }
+        checker = PDDLGoalChecker.from_task_data(task_data)
+        assert checker is not None
+        assert checker.is_or_goal
+        assert checker.num_branches == 2
+        assert checker.get_branch_for_team("team_0") == 0
+        assert checker.get_branch_for_team("team_1") == 1
+        assert len(checker.conjuncts) == 4

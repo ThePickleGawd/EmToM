@@ -934,18 +934,44 @@ class BenchmarkRunner(EMTOMBaseRunner):
             print("No PDDL goals defined.")
             return
 
-        total = len(checker.conjuncts)
-        completed = len(checker.completed)
-        print(f"\n{'='*50}")
-        print(f"PDDL GOALS ({completed}/{total})")
-        print(f"{'='*50}")
+        category = getattr(self.task, "category", "cooperative")
 
-        for i, conjunct in enumerate(checker.conjuncts):
-            done = checker.is_conjunct_completed(i)
-            status = "✓" if done else "○"
-            owner = checker.get_owner(i) if hasattr(checker, 'get_owner') else ""
-            owner_str = f" [{owner}]" if owner else ""
-            print(f"  {status} {conjunct}{owner_str}")
+        if checker.is_or_goal and category == "competitive":
+            # Group goals by branch/team for competitive display
+            teams = checker.get_all_teams()
+            print(f"\n{'='*50}")
+            print(f"PDDL GOALS (competitive)")
+            print(f"{'='*50}")
+
+            for branch_idx in range(checker.num_branches):
+                indices = checker.get_branch_conjunct_indices(branch_idx)
+                branch_done = sum(1 for i in indices if checker.is_conjunct_completed(i))
+                branch_total = len(indices)
+                # Find team for this branch
+                team_label = None
+                for team_id in teams:
+                    if checker.get_branch_for_team(team_id) == branch_idx:
+                        team_label = team_id
+                        break
+                label = team_label or f"branch_{branch_idx}"
+                print(f"  {label} ({branch_done}/{branch_total}):")
+                for i in indices:
+                    done = checker.is_conjunct_completed(i)
+                    status = "✓" if done else "○"
+                    print(f"    {status} {checker.conjuncts[i].to_pddl()}")
+        else:
+            total = len(checker.conjuncts)
+            completed = len(checker.completed)
+            print(f"\n{'='*50}")
+            print(f"PDDL GOALS ({completed}/{total})")
+            print(f"{'='*50}")
+
+            for i, conjunct in enumerate(checker.conjuncts):
+                done = checker.is_conjunct_completed(i)
+                status = "✓" if done else "○"
+                owner = checker.get_owner(i)
+                owner_str = f" [{owner}]" if owner else ""
+                print(f"  {status} {conjunct.to_pddl()}{owner_str}")
 
     def _print_mechanics(self) -> None:
         """Print active mechanics."""
@@ -1080,42 +1106,53 @@ class BenchmarkRunner(EMTOMBaseRunner):
         category = getattr(self.task, "category", "cooperative")
 
         if category == "competitive":
-            # Check team-owned conjuncts
+            # Use branch-aware methods for competitive Or-goals
             teams = checker.get_all_teams()
             team_status = {}
             team_progress = {}
             winner = None
 
-            # Check shared (required) first
-            required = checker.get_required_conjuncts()
-            shared_ok = all(
-                checker.is_conjunct_completed(checker.conjuncts.index(c))
-                for c in required
-            ) if required else True
+            if checker.is_or_goal:
+                # Map each team to its Or-branch and use branch progress
+                for team_id in teams:
+                    branch_idx = checker.get_branch_for_team(team_id)
+                    if branch_idx is not None:
+                        progress = checker.get_branch_progress(branch_idx)
+                        complete = checker.is_branch_complete(branch_idx)
+                    else:
+                        progress = 0.0
+                        complete = False
+                    team_progress[team_id] = progress
+                    team_status[team_id] = complete
+                    if complete and winner is None:
+                        winner = team_id
 
-            for team_id in teams:
-                team_conj = checker.get_team_conjuncts(team_id)
-                if not team_conj:
-                    team_status[team_id] = shared_ok
-                    team_progress[team_id] = 1.0 if shared_ok else 0.0
-                    continue
-                done = sum(1 for c in team_conj if checker.is_conjunct_completed(checker.conjuncts.index(c)))
-                progress = done / len(team_conj)
-                team_progress[team_id] = progress
-                team_status[team_id] = shared_ok and (progress == 1.0)
-                if team_status[team_id] and winner is None:
-                    winner = team_id
+                # Best branch progress as overall percent
+                best_progress = max(team_progress.values()) if team_progress else 0.0
+            else:
+                # Fallback for competitive tasks without Or-structure
+                for team_id in teams:
+                    team_conj = checker.get_team_conjuncts(team_id)
+                    if not team_conj:
+                        team_status[team_id] = False
+                        team_progress[team_id] = 0.0
+                        continue
+                    done = sum(1 for c in team_conj if checker.is_conjunct_completed(checker.conjuncts.index(c)))
+                    progress = done / len(team_conj)
+                    team_progress[team_id] = progress
+                    team_status[team_id] = progress == 1.0
+                    if team_status[team_id] and winner is None:
+                        winner = team_id
+                best_progress = max(team_progress.values()) if team_progress else 0.0
 
-            total = len(checker.conjuncts)
-            completed = len(checker.completed)
             return {
                 "success": winner is not None,
                 "winner": winner,
                 "team_status": team_status,
                 "team_progress": team_progress,
                 "completed_subtasks": list(checker.completed),
-                "total_subtasks": total,
-                "percent_complete": completed / total if total else 0.0,
+                "total_subtasks": len(checker.conjuncts),
+                "percent_complete": best_progress,
             }
 
         elif category == "mixed":
@@ -1309,17 +1346,44 @@ class BenchmarkRunner(EMTOMBaseRunner):
             result = self.evaluate_task({"required_states": [prop]})
             return result and result.get("success", False)
 
-        result = self._pddl_checker.update(check_predicate)
+        checker = self._pddl_checker
+        result = checker.update(check_predicate)
         newly_completed = result.get("newly_completed", [])
 
         if newly_completed:
-            total = len(self._pddl_checker.conjuncts)
-            done = len(self._pddl_checker.completed)
+            category = getattr(self.task, "category", "cooperative")
             for goal_str in newly_completed:
                 self._completed_subtasks.add(goal_str)
                 print(f"\n{'─'*50}", flush=True)
-                print(f"✓ GOAL COMPLETE: {goal_str}", flush=True)
-                print(f"  Progress: {done}/{total}", flush=True)
+
+                if checker.is_or_goal and category == "competitive":
+                    # Show team attribution for competitive goals
+                    # Find which team owns this goal
+                    team_label = ""
+                    for i, c in enumerate(checker.conjuncts):
+                        if c.to_pddl() == goal_str:
+                            owner = checker.get_owner(i)
+                            if owner:
+                                team_label = f" [{owner}]"
+                            break
+                    print(f"✓ GOAL COMPLETE: {goal_str}{team_label}", flush=True)
+                    # Show per-team progress
+                    teams = checker.get_all_teams()
+                    parts = []
+                    for team_id in teams:
+                        branch_idx = checker.get_branch_for_team(team_id)
+                        if branch_idx is not None:
+                            indices = checker.get_branch_conjunct_indices(branch_idx)
+                            done = sum(1 for idx in indices if checker.is_conjunct_completed(idx))
+                            parts.append(f"{team_id}: {done}/{len(indices)}")
+                    if parts:
+                        print(f"  {' | '.join(parts)}", flush=True)
+                else:
+                    total = len(checker.conjuncts)
+                    done = len(checker.completed)
+                    print(f"✓ GOAL COMPLETE: {goal_str}", flush=True)
+                    print(f"  Progress: {done}/{total}", flush=True)
+
                 print(f"{'─'*50}", flush=True)
 
         return newly_completed

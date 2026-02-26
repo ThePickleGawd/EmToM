@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple, Union
 
 from emtom.pddl.dsl import (
+    And,
     Believes,
     EpistemicFormula,
     Formula,
@@ -319,10 +320,16 @@ def _parse_goal_owners(text: str) -> Dict[str, str]:
             continue
         owner_id = parts[0]
         formula_str = parts[1].strip()
-        # Normalize the formula via parse+serialize for consistent keys
+        # Normalize the formula via parse+serialize for consistent keys.
+        # If formula is compound (and A B C), decompose into individual
+        # literals so each one maps to the owner separately.
         try:
             formula = parse_goal_string(formula_str)
-            owners[formula.to_pddl()] = owner_id
+            if isinstance(formula, And):
+                for operand in formula.operands:
+                    owners[operand.to_pddl()] = owner_id
+            else:
+                owners[formula.to_pddl()] = owner_id
         except ValueError:
             # Best-effort: use raw string
             owners[formula_str] = owner_id

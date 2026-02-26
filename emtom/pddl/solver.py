@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-from emtom.pddl.dsl import Domain, Problem, Literal, And, Or, Not, Knows, Believes, EpistemicFormula, Formula
+from emtom.pddl.dsl import Domain, Problem, Literal, And, Or, Not, Knows, Believes, EpistemicFormula, Formula, collect_leaf_literals
 from emtom.pddl.epistemic import ObservabilityModel
 
 
@@ -69,15 +69,8 @@ class PDKBSolver:
                 solve_time=time.time() - start,
             )
 
-        # Extract leaf literals from goal (unwrap K/B wrappers)
-        goal_conjuncts = problem.goal.flatten()
-        goal_literals = []
-        for c in goal_conjuncts:
-            node = c
-            while isinstance(node, EpistemicFormula):
-                node = node.inner
-            if isinstance(node, Literal):
-                goal_literals.append(node)
+        # Extract leaf literals from goal (unwrap K/B/Or/Not wrappers)
+        goal_literals = collect_leaf_literals(problem.goal)
 
         # Check 1: All goal predicates must be achievable
         domain_predicate_names = {p.name for p in domain.predicates}
@@ -232,10 +225,7 @@ class PDKBSolver:
         # Collect non-trivial K() goals that require communication
         required_transfers: Dict[str, int] = {}  # receiver_agent -> count of K() goals needing info
 
-        for conjunct in problem.goal.flatten():
-            if not isinstance(conjunct, (Knows, Believes)):
-                continue
-
+        for conjunct in _collect_epistemic_goals(problem.goal):
             receiver = conjunct.agent
             inner = conjunct.inner
 
@@ -288,6 +278,22 @@ class PDKBSolver:
         if warnings:
             return "Communication budget may be insufficient: " + "; ".join(warnings)
         return None
+
+
+def _collect_epistemic_goals(formula: Optional[Formula]) -> List:
+    """Recursively collect all Knows/Believes nodes from a formula tree."""
+    if formula is None:
+        return []
+    if isinstance(formula, (Knows, Believes)):
+        return [formula]
+    if isinstance(formula, (And, Or)):
+        result = []
+        for op in formula.operands:
+            result.extend(_collect_epistemic_goals(op))
+        return result
+    if isinstance(formula, Not) and formula.operand is not None:
+        return _collect_epistemic_goals(formula.operand)
+    return []
 
 
 def _max_epistemic_depth(formula: Optional[Formula]) -> int:

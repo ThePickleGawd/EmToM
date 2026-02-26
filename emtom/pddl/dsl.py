@@ -156,11 +156,8 @@ class Or(Formula):
         return f"(or {inner})"
 
     def flatten(self) -> List["Formula"]:
-        # For Or, we can't simply flatten — return all children
-        result = []
-        for op in self.operands:
-            result.extend(op.flatten())
-        return result
+        # Or is a disjunction — cannot be decomposed into conjuncts.
+        return [self]
 
     def evaluate(self, check_fn) -> bool:
         return any(op.evaluate(check_fn) for op in self.operands)
@@ -175,7 +172,10 @@ class Not(Formula):
         return f"(not {self.operand.to_pddl()})"
 
     def flatten(self) -> List["Formula"]:
-        return self.operand.flatten()
+        if isinstance(self.operand, Literal):
+            lit = self.operand
+            return [Literal(predicate=lit.predicate, args=lit.args, negated=not lit.negated)]
+        return [self]
 
     def evaluate(self, check_fn) -> bool:
         return not self.operand.evaluate(check_fn)
@@ -579,6 +579,31 @@ def validate_goal_predicates(goal: Formula, domain: Domain) -> List[str]:
 
     _walk(goal)
     return errors
+
+
+def collect_leaf_literals(formula: Formula) -> List[Literal]:
+    """Recursively collect all Literal nodes from a formula tree.
+
+    Unlike ``flatten()``, this traverses through Or, Not, And, and epistemic
+    wrappers to return every referenced Literal regardless of logical structure.
+    Useful for callers that need to enumerate referenced predicates/objects
+    without caring about the evaluation semantics.
+    """
+    results: List[Literal] = []
+
+    def _walk(node: Formula) -> None:
+        if isinstance(node, Literal):
+            results.append(node)
+        elif isinstance(node, EpistemicFormula):
+            _walk(node.inner)
+        elif isinstance(node, (And, Or)):
+            for op in node.operands:
+                _walk(op)
+        elif isinstance(node, Not) and node.operand is not None:
+            _walk(node.operand)
+
+    _walk(formula)
+    return results
 
 
 def goal_to_string(goal: Formula) -> str:

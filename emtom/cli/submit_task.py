@@ -148,10 +148,11 @@ def run(
     # Validate goal count from canonical problem_pddl.
     if task_data.get("problem_pddl"):
         from emtom.pddl.problem_pddl import parse_problem_pddl
+        from emtom.pddl.dsl import collect_leaf_literals
 
         try:
             parsed_problem = parse_problem_pddl(task_data["problem_pddl"])
-            num_goals = len(parsed_problem.goal_formula.flatten())
+            num_goals = len(collect_leaf_literals(parsed_problem.goal_formula))
         except Exception:
             num_goals = 0
         if num_goals < subtasks_min:

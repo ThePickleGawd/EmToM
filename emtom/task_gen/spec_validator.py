@@ -656,11 +656,11 @@ def validate_blocking_spec(
 
     elif has_pddl_goal:
         try:
-            from emtom.pddl.dsl import parse_goal_string, validate_goal_predicates, Knows, Believes
+            from emtom.pddl.dsl import parse_goal_string, validate_goal_predicates, Knows, Believes, collect_leaf_literals
             from emtom.pddl.domain import EMTOM_DOMAIN
             goal = parse_goal_string(pddl_goal)
-            conjuncts = goal.flatten()
-            if not conjuncts:
+            leaf_literals = collect_leaf_literals(goal)
+            if not leaf_literals:
                 errors.append("pddl_goal parsed but contains no goal conjuncts")
 
             # Validate predicate arities against domain
