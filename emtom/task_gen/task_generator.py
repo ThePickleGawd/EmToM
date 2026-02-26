@@ -288,6 +288,41 @@ def _migrate_legacy_to_problem_pddl(data: Dict[str, Any]) -> Optional[str]:
         if isinstance(raw_pddl_goal, str) and raw_pddl_goal.strip():
             pddl_goal_str = raw_pddl_goal
 
+    # Try subtask-based tasks
+    if not pddl_goal_str:
+        raw_subtasks = data.get("subtasks")
+        if isinstance(raw_subtasks, list) and raw_subtasks:
+            literals = []
+            owners = {}  # literal_str -> owner
+            for st in raw_subtasks:
+                if not isinstance(st, dict):
+                    continue
+                sc = st.get("success_condition")
+                if not isinstance(sc, dict):
+                    continue
+                entity = sc.get("entity", "")
+                prop = sc.get("property", "")
+                target = sc.get("target", "")
+                if not entity or not prop:
+                    continue
+                if target:
+                    literal = f"({prop} {entity} {target})"
+                else:
+                    literal = f"({prop} {entity})"
+                literals.append(literal)
+                # Map owner from required field
+                req = st.get("required")
+                if isinstance(req, str) and req:
+                    owners[literal] = req
+            if literals:
+                if len(literals) == 1:
+                    pddl_goal_str = literals[0]
+                else:
+                    pddl_goal_str = "(and " + " ".join(literals) + ")"
+                # Inject owners into pddl_owners for the builder below
+                if owners and not data.get("pddl_owners"):
+                    data["pddl_owners"] = owners
+
     if not pddl_goal_str:
         return None
 

@@ -1070,7 +1070,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
             self._pddl_checker = checker
 
         if checker is None:
-            return {"success": False, "error": "No PDDL goal"}
+            return {"success": False, "error": "No PDDL goal",
+                    "total_subtasks": 0, "percent_complete": 0.0}
 
         # Guard against empty conjuncts (vacuous success)
         if not checker.conjuncts:
