@@ -12,6 +12,13 @@ DEFAULT_MODEL_LADDER = [
     "gpt-5.2",
 ]
 
+DEFAULT_EVOLVE_FOCUS = "either"
+DEFAULT_EVOLVE_CATEGORY = "cooperative"
+DEFAULT_EVOLVE_TOM_TARGET_L1 = 0.30
+DEFAULT_EVOLVE_TOM_TARGET_L2 = 0.45
+DEFAULT_EVOLVE_TOM_TARGET_L3 = 0.25
+DEFAULT_EVOLVE_TOM_TOLERANCE = 0.08
+
 
 @dataclass
 class EvolutionConfig:
@@ -20,7 +27,8 @@ class EvolutionConfig:
     tasks_per_round: int = 20
     icl_failure_ratio: float = 0.9
     icl_total_examples: int = 10
-    output_dir: str = "outputs/evolve"
+    # Destination directory for evolved task JSONs.
+    output_dir: str = "data/emtom/tasks"
     max_workers: int = 50
     # Match run_emtom.sh default judge threshold.
     judge_threshold: float = 0.7
@@ -30,3 +38,15 @@ class EvolutionConfig:
     seed_tasks_dir: Optional[str] = "data/emtom/tasks"
     # Minimum seed pool size — generate extra if copied tasks < this.
     seed_pool_size: int = 30
+    # What to optimize when creating upgraded tasks.
+    # difficulty = lower benchmark pass rate
+    # tom = higher-order ToM distribution
+    # either = both (default)
+    focus: str = DEFAULT_EVOLVE_FOCUS
+    # Category for newly generated upgrades.
+    category: str = DEFAULT_EVOLVE_CATEGORY
+    # ToM ratio guidance passed to task generation.
+    tom_target_l1: float = DEFAULT_EVOLVE_TOM_TARGET_L1
+    tom_target_l2: float = DEFAULT_EVOLVE_TOM_TARGET_L2
+    tom_target_l3: float = DEFAULT_EVOLVE_TOM_TARGET_L3
+    tom_ratio_tolerance: float = DEFAULT_EVOLVE_TOM_TOLERANCE

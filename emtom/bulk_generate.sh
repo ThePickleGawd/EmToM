@@ -47,6 +47,7 @@ SUBTASKS_MAX=""
 DRY_RUN=false
 CATEGORY_FILTER=""  # Empty = all 3 categories (round-robin)
 OUTPUT_DIR="data/emtom/tasks"
+DIFFICULTY=""
 
 # Colors
 RED='\033[0;31m'
@@ -72,6 +73,7 @@ print_usage() {
     echo "  --subtasks-min N    Minimum subtasks per task"
     echo "  --subtasks-max N    Maximum subtasks per task"
     echo "  --category CAT      Only generate this category (cooperative, competitive, mixed)"
+    echo "  --difficulty LEVEL  Difficulty for generation (easy, medium, hard)"
     echo "  --output-dir DIR    Output directory for submitted tasks (default: data/emtom/tasks)"
     echo "  --dry-run           Show commands without executing"
     echo ""
@@ -110,6 +112,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --category)
             CATEGORY_FILTER=$2
+            shift 2
+            ;;
+        --difficulty)
+            DIFFICULTY=$2
+            if [[ "$DIFFICULTY" != "easy" && "$DIFFICULTY" != "medium" && "$DIFFICULTY" != "hard" ]]; then
+                echo "Error: --difficulty must be 'easy', 'medium', or 'hard'"
+                exit 1
+            fi
             shift 2
             ;;
         --output-dir)
@@ -164,6 +174,7 @@ echo -e "Processes per GPU:  ${GREEN}$PER_GPU${NC}"
 echo -e "Total processes:    ${GREEN}$TOTAL_PROCESSES${NC}"
 echo -e "Categories:         ${GREEN}${CATEGORIES[*]}${NC} (all 3)"
 echo -e "Model:              ${GREEN}$MODEL${NC}"
+[ -n "$DIFFICULTY" ] && echo -e "Difficulty:         ${GREEN}$DIFFICULTY${NC}"
 echo -e "Tasks per process:  ${GREEN}$NUM_TASKS${NC}"
 echo -e "Iterations/task:    ${GREEN}$ITERATIONS_PER_TASK${NC}"
 [ -n "$SUBTASKS_MIN" ] && echo -e "Subtasks min:       ${GREEN}$SUBTASKS_MIN${NC}"
@@ -191,10 +202,12 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
         SUBTASK_FLAGS=""
         [ -n "$SUBTASKS_MIN" ] && SUBTASK_FLAGS="$SUBTASK_FLAGS --subtasks-min $SUBTASKS_MIN"
         [ -n "$SUBTASKS_MAX" ] && SUBTASK_FLAGS="$SUBTASK_FLAGS --subtasks-max $SUBTASKS_MAX"
+        DIFFICULTY_FLAGS=""
+        [ -n "$DIFFICULTY" ] && DIFFICULTY_FLAGS="$DIFFICULTY_FLAGS --difficulty $DIFFICULTY"
 
         if [ "$DRY_RUN" = true ]; then
             echo -e "${YELLOW}[DRY-RUN]${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}"
-            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --iterations-per-task $ITERATIONS_PER_TASK --category $category --output-dir $TASK_DIR$SUBTASK_FLAGS"
+            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --iterations-per-task $ITERATIONS_PER_TASK --category $category --output-dir $TASK_DIR$SUBTASK_FLAGS$DIFFICULTY_FLAGS"
         else
             echo -e "${GREEN}Starting${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC} -> $log_file"
 
@@ -205,6 +218,7 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
                 --category "$category" \
                 --output-dir "$TASK_DIR" \
                 $SUBTASK_FLAGS \
+                $DIFFICULTY_FLAGS \
                 > "$log_file" 2>&1 &
 
             pid=$!

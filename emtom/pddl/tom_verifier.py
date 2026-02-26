@@ -9,6 +9,7 @@ Inspired by DAEDALUS (Bolander et al., 2025) iterative deepening approach.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from emtom.pddl.compiler import compile_task
@@ -154,3 +155,116 @@ def explain_tom_depth(
         "communication_required": comm_required,
         "trivial_k_goals": trivial_goals,
     }
+
+
+def generate_tom_reasoning(
+    task_data: dict,
+    tom_level: int,
+    information_gaps: list[str],
+    model: str = "gpt-5.2",
+) -> str:
+    """
+    Use an LLM to generate a clear explanation of why a task requires its ToM level.
+
+    The tom_level is computed programmatically (unchanged); this function only
+    explains *why* that level is needed, naming specific agents, facts, and rooms.
+
+    Args:
+        task_data: Full task JSON dict.
+        tom_level: Programmatically computed ToM level (1-3).
+        information_gaps: List of observability asymmetries from explain_tom_depth().
+        model: LLM model name (default "gpt-5.2").
+
+    Returns:
+        LLM-generated explanation string.
+
+    Raises:
+        RuntimeError: If the LLM call fails or returns an unusable response.
+    """
+    # Build context for the LLM
+    task_desc = task_data.get("task", "")
+    problem_pddl = task_data.get("problem_pddl", "")
+    agent_secrets = task_data.get("agent_secrets", {})
+    mechanic_bindings = task_data.get("mechanic_bindings", [])
+    message_targets = task_data.get("message_targets")
+    category = task_data.get("category", "cooperative")
+    num_agents = task_data.get("num_agents", 2)
+
+    # Build mechanic summary
+    mechanic_lines = []
+    for b in mechanic_bindings:
+        mtype = b.get("mechanic_type", "unknown")
+        agents = b.get("for_agents", [])
+        if mtype == "room_restriction":
+            rooms = b.get("restricted_rooms", [])
+            mechanic_lines.append(f"- {', '.join(agents)} cannot enter: {', '.join(rooms)}")
+        elif mtype == "limited_bandwidth":
+            limit = b.get("message_limit", "?")
+            mechanic_lines.append(f"- {', '.join(agents)} limited to {limit} message(s)")
+        elif mtype == "restricted_communication":
+            mechanic_lines.append(f"- {', '.join(agents)} have restricted communication targets")
+        else:
+            mechanic_lines.append(f"- {mtype} applies to {', '.join(agents)}")
+
+    # Build secrets summary
+    secrets_lines = []
+    for agent, secrets in agent_secrets.items():
+        if isinstance(secrets, list):
+            secrets_lines.append(f"- {agent}: {'; '.join(secrets)}")
+
+    # Communication graph
+    comm_graph = ""
+    if message_targets:
+        comm_graph = f"\nCommunication graph: {json.dumps(message_targets)}"
+
+    prompt = f"""You are analyzing a multi-agent Theory of Mind (ToM) task. The task's ToM level has been computed as {tom_level}.
+
+ToM levels:
+- Level 1: An agent must reason about what another agent knows or doesn't know. ("I know that agent_1 can't see the kitchen, so I need to tell them what's there.")
+- Level 2: An agent must reason about what another agent THINKS a third agent knows. ("Agent_0 needs agent_1 to know that agent_2 has seen the object.")
+- Level 3: Third-order nested beliefs about others' models of others.
+
+## Task
+Category: {category}
+Agents: {num_agents}
+Description: {task_desc}
+
+## PDDL Goals
+{problem_pddl}
+
+## Agent Secrets
+{chr(10).join(secrets_lines) if secrets_lines else "None"}
+
+## Mechanics
+{chr(10).join(mechanic_lines) if mechanic_lines else "None"}{comm_graph}
+
+## Information Gaps
+{chr(10).join('- ' + g for g in information_gaps) if information_gaps else "None"}
+
+## Instructions
+Explain in 2-3 sentences WHY this task requires ToM level {tom_level}. Be specific: name the agents, the key facts they need, and the rooms involved. Explain the belief chain — who needs to know what, and why they can't get that knowledge directly.
+
+Do NOT start with "This task requires ToM level N because..." — just explain the reasoning directly."""
+
+    from habitat_llm.llm import instantiate_llm
+
+    if model.startswith("gpt"):
+        provider = "openai_chat"
+    elif model in ("opus", "sonnet", "haiku"):
+        provider = "bedrock_claude"
+    else:
+        provider = "openai_chat"
+
+    llm = instantiate_llm(
+        provider,
+        generation_params={
+            "model": model,
+            "temperature": 0.0,
+            "max_tokens": 300,
+        },
+    )
+
+    response = llm.generate(prompt).strip()
+    if not response or len(response) < 20:
+        raise RuntimeError(f"LLM returned unusable tom_reasoning: {response!r}")
+    return response

@@ -8,7 +8,7 @@ from emtom.pddl.domain import EMTOM_DOMAIN
 from emtom.pddl.solver import PDKBSolver, _max_epistemic_depth, SolverResult
 from emtom.pddl.dsl import Knows, Believes
 from emtom.pddl.epistemic import ObservabilityModel
-from emtom.pddl.tom_verifier import compute_tom_depth, explain_tom_depth
+from emtom.pddl.tom_verifier import compute_tom_depth, explain_tom_depth, generate_tom_reasoning
 
 
 class TestSolver:
@@ -314,3 +314,69 @@ class TestCommunicationBudget:
         )
         warning = PDKBSolver().check_communication_budget(problem, obs)
         assert warning is None  # Trivial K() doesn't need communication
+
+
+class TestGenerateTomReasoning:
+    """Tests for LLM-generated tom_reasoning."""
+
+    SAMPLE_TASK_DATA = {
+        "task": "Move the cushion to the kitchen table.",
+        "category": "cooperative",
+        "num_agents": 2,
+        "problem_pddl": "(define (problem test)\n  (:domain emtom)\n  (:objects agent_0 agent_1 - agent kitchen_1 - room cabinet_27 - furniture)\n  (:init)\n  (:goal (is_on_top cushion_0 cabinet_27)))",
+        "agent_secrets": {
+            "agent_0": ["You cannot enter kitchen_1."],
+            "agent_1": ["You can enter all rooms."],
+        },
+        "mechanic_bindings": [
+            {"mechanic_type": "room_restriction", "restricted_rooms": ["kitchen_1"], "for_agents": ["agent_0"]},
+        ],
+        "message_targets": None,
+    }
+
+    def test_success_returns_llm_response(self):
+        """When LLM succeeds, returns its response."""
+        from unittest.mock import patch, MagicMock
+
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = (
+            "Agent_0 cannot enter kitchen_1 where cabinet_27 is located, "
+            "so agent_0 must rely on agent_1 to place the cushion there."
+        )
+
+        with patch("habitat_llm.llm.instantiate_llm", return_value=mock_llm, create=True):
+            result = generate_tom_reasoning(
+                self.SAMPLE_TASK_DATA,
+                tom_level=1,
+                information_gaps=["agent_0 cannot see rooms: ['kitchen_1']"],
+            )
+
+        assert "agent_0" in result.lower() or "agent_1" in result.lower()
+        assert len(result) > 20
+
+    def test_raises_on_import_error(self):
+        """When habitat_llm is not available, raises instead of falling back."""
+        from unittest.mock import patch
+
+        with patch.dict("sys.modules", {"habitat_llm": None, "habitat_llm.llm": None}):
+            with pytest.raises(Exception):
+                generate_tom_reasoning(
+                    self.SAMPLE_TASK_DATA,
+                    tom_level=1,
+                    information_gaps=["agent_0 cannot see rooms: ['kitchen_1']"],
+                )
+
+    def test_raises_on_short_response(self):
+        """When LLM returns too-short response, raises RuntimeError."""
+        from unittest.mock import patch, MagicMock
+
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = "OK"
+
+        with patch("habitat_llm.llm.instantiate_llm", return_value=mock_llm, create=True):
+            with pytest.raises(RuntimeError, match="unusable"):
+                generate_tom_reasoning(
+                    self.SAMPLE_TASK_DATA,
+                    tom_level=1,
+                    information_gaps=["agent_0 cannot see rooms: ['kitchen_1']"],
+                )

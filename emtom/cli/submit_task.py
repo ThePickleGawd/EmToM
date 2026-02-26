@@ -85,7 +85,7 @@ def _compute_tom_metadata(
     from emtom.pddl.domain import EMTOM_DOMAIN
     from emtom.pddl.epistemic import ObservabilityModel
     from emtom.pddl.fd_solver import FastDownwardSolver
-    from emtom.pddl.tom_verifier import explain_tom_depth
+    from emtom.pddl.tom_verifier import explain_tom_depth, generate_tom_reasoning
     from emtom.task_gen.task_generator import GeneratedTask
 
     generated = GeneratedTask.from_dict(task_data)
@@ -102,10 +102,19 @@ def _compute_tom_metadata(
     if not isinstance(tom_level, int):
         raise ValueError(f"Invalid computed tom_level: {tom_level!r}")
 
+    clamped_level = max(tom_level, 1)
+
+    # Generate LLM-based reasoning (falls back to template on failure)
+    information_gaps = tom_info.get("information_gaps", [])
+    tom_reasoning = generate_tom_reasoning(
+        task_data,
+        tom_level=clamped_level,
+        information_gaps=information_gaps,
+    )
+
     result: Dict[str, Any] = {
-        "tom_level": max(tom_level, 1),
+        "tom_level": clamped_level,
     }
-    tom_reasoning = tom_info.get("tom_reasoning")
     if isinstance(tom_reasoning, str) and tom_reasoning.strip():
         result["tom_reasoning"] = tom_reasoning
     return result
