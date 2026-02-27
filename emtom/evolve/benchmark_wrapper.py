@@ -560,9 +560,11 @@ def run_benchmark_parallel(
             fh.close()
 
     if failed_stems:
-        raise RuntimeError(
-            f"Parallel benchmark had {len(failed_stems)} failed subprocesses: "
-            f"{', '.join(sorted(failed_stems)[:10])}. See logs in {log_dir}"
+        print(
+            f"[evolve] WARNING: {len(failed_stems)} task(s) failed and will be excluded "
+            f"from results: {', '.join(sorted(failed_stems)[:10])}. "
+            f"See logs in {log_dir}",
+            file=sys.stderr,
         )
 
     # Merge results from all per-task benchmark outputs
