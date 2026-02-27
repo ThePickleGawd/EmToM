@@ -602,15 +602,28 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
         seed_start = time.time()
         # Copy existing tasks from seed directory
         copied = 0
+        skipped_legacy = 0
         if config.seed_tasks_dir:
             source = Path(config.seed_tasks_dir)
             if source.exists():
                 for task_file in source.glob("*.json"):
                     dest = all_tasks_dir / task_file.name
                     if not dest.exists():
+                        # Skip legacy tasks without problem_pddl
+                        try:
+                            with open(task_file) as f:
+                                td = json.load(f)
+                            pddl = td.get("problem_pddl", "")
+                            if not (pddl and isinstance(pddl, str) and pddl.strip()):
+                                skipped_legacy += 1
+                                continue
+                        except Exception:
+                            continue
                         shutil.copy2(task_file, dest)
                         copied += 1
                 print(f"[evolve] Seeded {copied} tasks from {source}")
+                if skipped_legacy:
+                    print(f"[evolve] Skipped {skipped_legacy} legacy tasks (no problem_pddl)")
             else:
                 print(f"[evolve] Seed tasks dir does not exist: {source}")
 

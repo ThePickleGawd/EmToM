@@ -226,7 +226,7 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
             PROCESS_INFO+=("GPU$gpu:$category:$pid")
         fi
 
-        ((++process_idx))
+        process_idx=$((process_idx + 1))
     done
 done
 
@@ -235,6 +235,8 @@ if [ "$DRY_RUN" = true ]; then
     echo -e "${YELLOW}Dry run complete. No processes started.${NC}"
     exit 0
 fi
+
+BULK_START_EPOCH=$(date +%s)
 
 echo ""
 echo "=============================================="
@@ -260,36 +262,40 @@ for i in "${!PIDS[@]}"; do
 
     if wait $pid; then
         echo -e "${GREEN}[DONE]${NC} $info"
-        ((succeeded++))
+        succeeded=$((succeeded + 1))
     else
         echo -e "${RED}[FAIL]${NC} $info"
-        ((failed++))
+        failed=$((failed + 1))
     fi
 done
 
+BULK_END_EPOCH=$(date +%s)
+WALL_CLOCK=$((BULK_END_EPOCH - BULK_START_EPOCH))
+
 echo ""
 echo "=============================================="
-echo -e "${BOLD}Summary${NC}"
+echo -e "${BOLD}Processes complete${NC} (${succeeded} ok, ${failed} failed)"
 echo "=============================================="
-echo -e "Succeeded: ${GREEN}$succeeded${NC}"
-echo -e "Failed:    ${RED}$failed${NC}"
-echo -e "Logs:      $LOG_DIR/"
-echo -e "Tasks:     $TASK_DIR/"
-echo "=============================================="
+echo ""
 
-# Count saved task files in the output directory
-task_count=$(find "$TASK_DIR" -name '*.json' 2>/dev/null | wc -l)
-
-if [ "$task_count" -gt 0 ]; then
-    echo ""
-    echo -e "${BOLD}${GREEN}=============================================="
-    echo -e "Saved Tasks ($task_count)"
-    echo -e "==============================================${NC}"
-    for path in "$TASK_DIR"/*.json; do
-        echo -e "  ${CYAN}${BOLD}$path${NC}"
-    done
-    echo -e "${BOLD}${GREEN}==============================================${NC}"
+# Accumulate log dirs for multi-run reports.
+# When running bulk_generate.sh multiple times in series (e.g., from a wrapper
+# or loop), set BULK_LOG_DIRS=dir1:dir2:... to get a combined report at the end.
+# The last invocation's report will include ALL accumulated dirs.
+if [ -n "$BULK_LOG_DIRS" ]; then
+    export BULK_LOG_DIRS="${BULK_LOG_DIRS}:${LOG_DIR}"
 else
-    echo ""
-    echo -e "${YELLOW}No tasks were saved during this run.${NC}"
+    export BULK_LOG_DIRS="$LOG_DIR"
 fi
+
+# Build the log dir args for the report
+IFS=':' read -ra LOG_DIR_ARGS <<< "$BULK_LOG_DIRS"
+
+# Use accumulated wall clock from wrapper, or just this run's duration
+if [ -n "$BULK_WALL_CLOCK" ]; then
+    REPORT_WALL_CLOCK="$BULK_WALL_CLOCK"
+else
+    REPORT_WALL_CLOCK="$WALL_CLOCK"
+fi
+
+python -m emtom.bulk_report "${LOG_DIR_ARGS[@]}" --wall-clock "$REPORT_WALL_CLOCK"

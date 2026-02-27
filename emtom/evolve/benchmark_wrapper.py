@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 
 def find_calibration_entry(
-    calibration: list,
+    calibration,
     model: Optional[str] = None,
     agent_models: Optional[dict] = None,
 ) -> Optional[dict]:
@@ -24,9 +24,15 @@ def find_calibration_entry(
     If agent_models is provided, find exact match on agent_models dict.
     If only model is provided, find entry where ALL agents use that model.
     Returns the most recent match (last in list).
+
+    Accepts both the current list format and legacy dict format.
     """
     if not calibration:
         return None
+
+    # Migrate legacy dict format ({"model_name": {...}}) to list on-the-fly
+    if isinstance(calibration, dict):
+        calibration = _migrate_legacy_calibration(calibration)
 
     best = None
     for entry in calibration:
