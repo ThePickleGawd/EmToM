@@ -657,6 +657,17 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
                 if self.scene_data and self.scene_data.agent_spawns:
                     task_data["agent_spawns"] = self.scene_data.agent_spawns
 
+                # Compute and inject tom_level from PDDL if not already set
+                if task_data.get("problem_pddl") and "tom_level" not in task_data:
+                    try:
+                        from emtom.cli.submit_task import _compute_tom_metadata
+                        tom_meta = _compute_tom_metadata(task_data, scene_data=None)
+                        task_data["tom_level"] = tom_meta["tom_level"]
+                        if "tom_reasoning" in tom_meta:
+                            task_data["tom_reasoning"] = tom_meta["tom_reasoning"]
+                    except Exception:
+                        pass
+
                 # Save to log directory
                 dest = self.log_dir / "working_task_final.json"
                 with open(dest, "w") as f:
