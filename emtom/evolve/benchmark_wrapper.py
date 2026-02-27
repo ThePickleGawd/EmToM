@@ -676,6 +676,9 @@ def update_calibration_from_benchmark(
             continue
 
         task_id = task_data.get("task_id", "")
+        # Skip placeholder IDs — they are shared across many tasks and would corrupt calibration
+        if task_id == "REPLACE_WITH_UNIQUE_ID":
+            task_id = ""
         # Try matching by task_id or by filename stem
         result = result_map.get(task_id) or result_map.get(task_file.stem)
         if result is None:
