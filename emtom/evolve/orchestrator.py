@@ -55,6 +55,37 @@ TIER_SUBTASK_RANGES = [
     (5, 20),  # tier 6+: hardest models — full range
 ]
 
+VALID_TASK_CATEGORIES = ("cooperative", "competitive", "mixed")
+
+
+def resolve_categories(category_spec: str) -> List[str]:
+    """Normalize category selector into one or more concrete categories."""
+    if not category_spec:
+        return list(VALID_TASK_CATEGORIES)
+
+    raw = category_spec.strip().lower()
+    if raw in {"any", "all", "*"}:
+        return list(VALID_TASK_CATEGORIES)
+
+    categories = [c.strip().lower() for c in raw.split(",") if c.strip()]
+    if not categories:
+        return list(VALID_TASK_CATEGORIES)
+
+    invalid = [c for c in categories if c not in VALID_TASK_CATEGORIES]
+    if invalid:
+        valid = ", ".join(VALID_TASK_CATEGORIES)
+        bad = ", ".join(invalid)
+        raise ValueError(f"Invalid category value(s): {bad}. Valid: {valid}, any, all")
+
+    # Deduplicate while preserving user order.
+    seen = set()
+    ordered: List[str] = []
+    for c in categories:
+        if c not in seen:
+            ordered.append(c)
+            seen.add(c)
+    return ordered
+
 
 def get_difficulty_for_tier(tier_idx: int, total_tiers: int) -> str:
     """Map tier index to difficulty label for the judge.
@@ -127,9 +158,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--category",
         type=str,
-        choices=["cooperative", "competitive", "mixed"],
         default=DEFAULT_EVOLVE_CATEGORY,
-        help="Category for generated upgrade tasks (default: cooperative)",
+        help=(
+            "Generated task categories: single value, comma list, or any/all. "
+            "Examples: cooperative | cooperative,mixed | all"
+        ),
     )
     parser.add_argument(
         "--tom-target-l1",
@@ -179,7 +212,7 @@ def run_generate(
     output_dir: str,
     test_model: Optional[str] = None,
     query: Optional[str] = None,
-    category: str = "cooperative",
+    category: str = "any",
     sampled_tasks_dir: Optional[str] = None,
     judge_threshold: Optional[float] = None,
     subtasks_min: Optional[int] = None,
@@ -195,11 +228,19 @@ def run_generate(
     Returns:
         Path to the output directory containing generated tasks.
     """
+    categories = resolve_categories(category)
+    selected_category = categories[0]
+    if len(categories) > 1:
+        print(
+            "[evolve] run_generate received multiple categories; "
+            f"using first category only: {selected_category}"
+        )
+
     cmd = [
         "./emtom/run_emtom.sh", "generate",
         "--model", model,
         "--num-tasks", str(num_tasks),
-        "--category", category,
+        "--category", selected_category,
         "--output-dir", output_dir,
     ]
     if test_model:
@@ -237,10 +278,11 @@ def run_generate_parallel(
     model: str,
     num_tasks: int,
     output_dir: str,
+    worker_log_dir: Optional[str] = None,
     max_workers: int = 50,
     test_model: Optional[str] = None,
     query: Optional[str] = None,
-    category: str = "cooperative",
+    category: str = "any",
     sampled_tasks_dir: Optional[str] = None,
     judge_threshold: Optional[float] = None,
     subtasks_min: Optional[int] = None,
@@ -259,18 +301,22 @@ def run_generate_parallel(
 
     Returns:
         Path to output_dir containing generated tasks.
+
+    Args:
+        worker_log_dir: Optional directory for per-worker stdout/stderr logs.
+            Defaults to <output_dir>/logs when not provided.
     """
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    log_dir = out / "logs"
+    log_dir = Path(worker_log_dir) if worker_log_dir else (out / "logs")
     log_dir.mkdir(exist_ok=True)
+    categories = resolve_categories(category)
 
     # Build base command (each process generates 1 task)
     base_cmd = [
         "./emtom/run_emtom.sh", "generate",
         "--model", model,
         "--num-tasks", "1",
-        "--category", category,
         "--output-dir", output_dir,
     ]
     if test_model:
@@ -323,7 +369,11 @@ def run_generate_parallel(
     spinner_idx = 0
     last_status = None
 
-    print(f"[evolve] Parallel generation: target={num_tasks} new tasks (baseline={baseline_count}), max_workers={max_workers}")
+    print(
+        f"[evolve] Parallel generation: target={num_tasks} new tasks "
+        f"(baseline={baseline_count}), max_workers={max_workers}, "
+        f"categories={','.join(categories)}"
+    )
     print(f"[evolve] Output tasks dir: {out.resolve()}")
     print(f"[evolve] Generation logs: {log_dir.resolve()}")
 
@@ -371,9 +421,12 @@ def run_generate_parallel(
                 # Re-check in case tasks appeared while spawning
                 if _count_valid_tasks() >= target_count:
                     break
-                log_file = log_dir / f"gen_{existing_logs + total_spawned}.log"
+                chosen_category = categories[total_spawned % len(categories)]
+                log_file = log_dir / f"gen_{existing_logs + total_spawned}_{chosen_category}.log"
                 fh = open(log_file, "w")
-                proc = subprocess.Popen(base_cmd, stdout=fh, stderr=fh)
+                cmd = list(base_cmd)
+                cmd.extend(["--category", chosen_category])
+                proc = subprocess.Popen(cmd, stdout=fh, stderr=fh)
                 active.append((proc, fh))
                 total_spawned += 1
 
@@ -496,6 +549,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
                 model=config.generator_model,
                 num_tasks=shortfall,
                 output_dir=str(all_tasks_dir),
+                worker_log_dir=str(run_dir / "seed_generation_logs"),
                 max_workers=config.max_workers,
                 test_model=config.model_ladder[0],
                 category=config.category,
@@ -605,9 +659,9 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
                     "that are mechanically grounded and non-trivial."
                 )
 
-            # Generate tasks one-by-one (or in small parallel batches),
-            # re-checking pass rate after each batch
-            batch_size = min(config.max_workers, 5)  # Small batches for tighter feedback
+            # Generate tasks in parallel batches up to max_workers,
+            # re-checking pass rate after each batch.
+            batch_size = max(1, config.max_workers)
             while pass_rate > config.target_pass_rate and generated_this_tier < config.tasks_per_round:
                 remaining = min(batch_size, config.tasks_per_round - generated_this_tier)
 
@@ -615,6 +669,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
                     model=config.generator_model,
                     num_tasks=remaining,
                     output_dir=str(all_tasks_dir),
+                    worker_log_dir=str(tier_dir / "generation_logs"),
                     max_workers=config.max_workers,
                     test_model=model,  # Test against current tier's model
                     query=evolution_query,
@@ -695,6 +750,11 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
 
 def main():
     args = parse_args()
+    try:
+        resolve_categories(args.category)
+    except ValueError as e:
+        raise SystemExit(str(e))
+
     tom_target_sum = args.tom_target_l1 + args.tom_target_l2 + args.tom_target_l3
     if abs(tom_target_sum - 1.0) > 1e-6:
         raise SystemExit(

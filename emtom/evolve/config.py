@@ -13,7 +13,7 @@ DEFAULT_MODEL_LADDER = [
 ]
 
 DEFAULT_EVOLVE_FOCUS = "either"
-DEFAULT_EVOLVE_CATEGORY = "cooperative"
+DEFAULT_EVOLVE_CATEGORY = "any"
 DEFAULT_EVOLVE_TOM_TARGET_L1 = 0.30
 DEFAULT_EVOLVE_TOM_TARGET_L2 = 0.45
 DEFAULT_EVOLVE_TOM_TARGET_L3 = 0.25
@@ -43,7 +43,8 @@ class EvolutionConfig:
     # tom = higher-order ToM distribution
     # either = both (default)
     focus: str = DEFAULT_EVOLVE_FOCUS
-    # Category for newly generated upgrades.
+    # Category selection for newly generated upgrades.
+    # Supports single category, comma-separated list, or "any"/"all".
     category: str = DEFAULT_EVOLVE_CATEGORY
     # ToM ratio guidance passed to task generation.
     tom_target_l1: float = DEFAULT_EVOLVE_TOM_TARGET_L1

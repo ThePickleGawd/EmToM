@@ -36,6 +36,18 @@ Use more parallel workers:
 ./emtom/run_emtom.sh evolve --max-workers 24
 ```
 
+Use all categories (balanced round-robin across workers):
+
+```bash
+./emtom/run_emtom.sh evolve --category all
+```
+
+Use a subset of categories:
+
+```bash
+./emtom/run_emtom.sh evolve --category cooperative,mixed
+```
+
 Resume an interrupted run:
 
 ```bash
@@ -45,7 +57,7 @@ Resume an interrupted run:
 ## Important Defaults
 
 - `--focus either`
-- `--category cooperative`
+- `--category any`
 - `--tom-target-l1 0.30`
 - `--tom-target-l2 0.45`
 - `--tom-target-l3 0.25`
@@ -56,6 +68,6 @@ Resume an interrupted run:
 ## Notes
 
 - Generated tasks are written to `data/emtom/tasks` by default.
-- Run metadata (tier metrics, benchmark logs, summary) is written under `outputs/evolve/<timestamp>`.
+- Run metadata (tier metrics, benchmark logs, generation worker logs, summary) is written under `outputs/evolve/<timestamp>`.
 - Benchmark calibration is updated during evolution so each tier adapts to current pool difficulty.
 - ToM targets are guidance to generation; they are not hard accept/reject constraints.
