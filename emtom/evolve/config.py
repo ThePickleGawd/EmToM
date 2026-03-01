@@ -14,10 +14,6 @@ DEFAULT_MODEL_LADDER = [
 
 DEFAULT_EVOLVE_FOCUS = "either"
 DEFAULT_EVOLVE_CATEGORY = "any"
-DEFAULT_EVOLVE_TOM_TARGET_L1 = 0.30
-DEFAULT_EVOLVE_TOM_TARGET_L2 = 0.45
-DEFAULT_EVOLVE_TOM_TARGET_L3 = 0.25
-DEFAULT_EVOLVE_TOM_TOLERANCE = 0.08
 
 
 @dataclass
@@ -46,8 +42,5 @@ class EvolutionConfig:
     # Category selection for newly generated upgrades.
     # Supports single category, comma-separated list, or "any"/"all".
     category: str = DEFAULT_EVOLVE_CATEGORY
-    # ToM ratio guidance passed to task generation.
-    tom_target_l1: float = DEFAULT_EVOLVE_TOM_TARGET_L1
-    tom_target_l2: float = DEFAULT_EVOLVE_TOM_TARGET_L2
-    tom_target_l3: float = DEFAULT_EVOLVE_TOM_TARGET_L3
-    tom_ratio_tolerance: float = DEFAULT_EVOLVE_TOM_TOLERANCE
+    # Allowed k-levels for task generation (None = random per task).
+    k_levels: Optional[List[int]] = None

@@ -25,10 +25,6 @@ from emtom.evolve.config import (
     DEFAULT_MODEL_LADDER,
     DEFAULT_EVOLVE_FOCUS,
     DEFAULT_EVOLVE_CATEGORY,
-    DEFAULT_EVOLVE_TOM_TARGET_L1,
-    DEFAULT_EVOLVE_TOM_TARGET_L2,
-    DEFAULT_EVOLVE_TOM_TARGET_L3,
-    DEFAULT_EVOLVE_TOM_TOLERANCE,
 )
 from emtom.evolve.benchmark_wrapper import (
     run_benchmark_parallel,
@@ -165,28 +161,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--tom-target-l1",
-        type=float,
-        default=DEFAULT_EVOLVE_TOM_TARGET_L1,
-        help=f"Target ratio for ToM level 1 (default: {DEFAULT_EVOLVE_TOM_TARGET_L1})",
-    )
-    parser.add_argument(
-        "--tom-target-l2",
-        type=float,
-        default=DEFAULT_EVOLVE_TOM_TARGET_L2,
-        help=f"Target ratio for ToM level 2 (default: {DEFAULT_EVOLVE_TOM_TARGET_L2})",
-    )
-    parser.add_argument(
-        "--tom-target-l3",
-        type=float,
-        default=DEFAULT_EVOLVE_TOM_TARGET_L3,
-        help=f"Target ratio for ToM level 3 (default: {DEFAULT_EVOLVE_TOM_TARGET_L3})",
-    )
-    parser.add_argument(
-        "--tom-ratio-tolerance",
-        type=float,
-        default=DEFAULT_EVOLVE_TOM_TOLERANCE,
-        help=f"ToM ratio tolerance (default: {DEFAULT_EVOLVE_TOM_TOLERANCE})",
+        "--k-level",
+        type=int,
+        nargs="*",
+        default=None,
+        help="Allowed k-levels, e.g. --k-level 2 3 (default: random per task)",
     )
     return parser.parse_args()
 
@@ -218,10 +197,7 @@ def run_generate(
     subtasks_min: Optional[int] = None,
     subtasks_max: Optional[int] = None,
     difficulty: Optional[str] = None,
-    tom_target_l1: Optional[float] = None,
-    tom_target_l2: Optional[float] = None,
-    tom_target_l3: Optional[float] = None,
-    tom_ratio_tolerance: Optional[float] = None,
+    k_levels: Optional[List[int]] = None,
 ) -> Path:
     """Run task generation via run_emtom.sh generate.
 
@@ -257,14 +233,8 @@ def run_generate(
         cmd.extend(["--subtasks-max", str(subtasks_max)])
     if difficulty:
         cmd.extend(["--difficulty", difficulty])
-    if tom_target_l1 is not None:
-        cmd.extend(["--tom-target-l1", str(tom_target_l1)])
-    if tom_target_l2 is not None:
-        cmd.extend(["--tom-target-l2", str(tom_target_l2)])
-    if tom_target_l3 is not None:
-        cmd.extend(["--tom-target-l3", str(tom_target_l3)])
-    if tom_ratio_tolerance is not None:
-        cmd.extend(["--tom-ratio-tolerance", str(tom_ratio_tolerance)])
+    if k_levels:
+        cmd.extend(["--k-level"] + [str(k) for k in k_levels])
 
     print(f"[evolve] Running generation: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=False)
@@ -288,10 +258,7 @@ def run_generate_parallel(
     subtasks_min: Optional[int] = None,
     subtasks_max: Optional[int] = None,
     difficulty: Optional[str] = None,
-    tom_target_l1: Optional[float] = None,
-    tom_target_l2: Optional[float] = None,
-    tom_target_l3: Optional[float] = None,
-    tom_ratio_tolerance: Optional[float] = None,
+    k_levels: Optional[List[int]] = None,
 ) -> Path:
     """Run task generation in parallel via N independent processes.
 
@@ -333,14 +300,8 @@ def run_generate_parallel(
         base_cmd.extend(["--subtasks-max", str(subtasks_max)])
     if difficulty:
         base_cmd.extend(["--difficulty", difficulty])
-    if tom_target_l1 is not None:
-        base_cmd.extend(["--tom-target-l1", str(tom_target_l1)])
-    if tom_target_l2 is not None:
-        base_cmd.extend(["--tom-target-l2", str(tom_target_l2)])
-    if tom_target_l3 is not None:
-        base_cmd.extend(["--tom-target-l3", str(tom_target_l3)])
-    if tom_ratio_tolerance is not None:
-        base_cmd.extend(["--tom-ratio-tolerance", str(tom_ratio_tolerance)])
+    if k_levels:
+        base_cmd.extend(["--k-level"] + [str(k) for k in k_levels])
 
     max_spawns = num_tasks * 5
     total_spawned = 0
@@ -631,7 +592,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
     print(
         "[evolve] Defaults: "
         f"focus={config.focus}, category={config.category}, "
-        f"tom_target=({config.tom_target_l1:.0%}, {config.tom_target_l2:.0%}, {config.tom_target_l3:.0%}), "
+        f"k_levels={config.k_levels or 'random'}, "
         f"workers={config.max_workers}"
     )
 
@@ -702,10 +663,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
                 subtasks_min=seed_sub_min,
                 subtasks_max=seed_sub_max,
                 difficulty="easy",
-                tom_target_l1=config.tom_target_l1,
-                tom_target_l2=config.tom_target_l2,
-                tom_target_l3=config.tom_target_l3,
-                tom_ratio_tolerance=config.tom_ratio_tolerance,
+                k_levels=config.k_levels,
             )
         else:
             print(f"[evolve] Seed pool sufficient ({existing} tasks >= {config.seed_pool_size})")
@@ -834,10 +792,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
                     subtasks_min=tier_sub_min,
                     subtasks_max=tier_sub_max,
                     difficulty=tier_difficulty,
-                    tom_target_l1=config.tom_target_l1,
-                    tom_target_l2=config.tom_target_l2,
-                    tom_target_l3=config.tom_target_l3,
-                    tom_ratio_tolerance=config.tom_ratio_tolerance,
+                    k_levels=config.k_levels,
                 )
 
                 generated_this_tier += remaining
@@ -922,13 +877,12 @@ def main():
     except ValueError as e:
         raise SystemExit(str(e))
 
-    tom_target_sum = args.tom_target_l1 + args.tom_target_l2 + args.tom_target_l3
-    if abs(tom_target_sum - 1.0) > 1e-6:
-        raise SystemExit(
-            f"--tom-target-l1/2/3 must sum to 1.0, got {tom_target_sum:.6f}"
-        )
-    if args.tom_ratio_tolerance < 0:
-        raise SystemExit("--tom-ratio-tolerance must be non-negative")
+    k_levels = args.k_level
+    if k_levels is not None:
+        invalid = [k for k in k_levels if k not in (1, 2, 3)]
+        if invalid:
+            raise SystemExit(f"--k-level values must be 1, 2, or 3 (got {invalid})")
+        k_levels = sorted(set(k_levels))
 
     config = EvolutionConfig(
         model_ladder=args.model_ladder.split(","),
@@ -944,10 +898,7 @@ def main():
         max_workers=args.max_workers,
         focus=args.focus,
         category=args.category,
-        tom_target_l1=args.tom_target_l1,
-        tom_target_l2=args.tom_target_l2,
-        tom_target_l3=args.tom_target_l3,
-        tom_ratio_tolerance=args.tom_ratio_tolerance,
+        k_levels=k_levels,
     )
 
     run_evolution(config, resume_dir=args.resume)

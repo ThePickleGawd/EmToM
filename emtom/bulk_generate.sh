@@ -48,9 +48,7 @@ DRY_RUN=false
 CATEGORY_FILTER=""  # Empty = all 3 categories (round-robin)
 OUTPUT_DIR="data/emtom/tasks"
 DIFFICULTY=""
-TOM_TARGET_L1=""
-TOM_TARGET_L2=""
-TOM_TARGET_L3=""
+K_LEVEL=""  # Allowed k-levels (e.g. "2 3"). Empty = random per task.
 
 # Colors
 RED='\033[0;31m'
@@ -77,9 +75,7 @@ print_usage() {
     echo "  --subtasks-max N    Maximum subtasks per task"
     echo "  --category CAT      Only generate this category (cooperative, competitive, mixed)"
     echo "  --difficulty LEVEL  Difficulty for generation (easy, medium, hard)"
-    echo "  --tom-target-l1 R   Target ratio for ToM level 1 (0.0 to exclude k=1)"
-    echo "  --tom-target-l2 R   Target ratio for ToM level 2"
-    echo "  --tom-target-l3 R   Target ratio for ToM level 3"
+    echo "  --k-level L [L ...] Allowed k-levels, e.g. --k-level 2 3 (default: random per task)"
     echo "  --output-dir DIR    Output directory for submitted tasks (default: data/emtom/tasks)"
     echo "  --dry-run           Show commands without executing"
     echo ""
@@ -128,17 +124,18 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2
             ;;
-        --tom-target-l1)
-            TOM_TARGET_L1=$2
-            shift 2
-            ;;
-        --tom-target-l2)
-            TOM_TARGET_L2=$2
-            shift 2
-            ;;
-        --tom-target-l3)
-            TOM_TARGET_L3=$2
-            shift 2
+        --k-level)
+            shift
+            K_LEVEL=""
+            while [[ $# -gt 0 && "$1" =~ ^[0-9]+$ ]]; do
+                K_LEVEL="$K_LEVEL $1"
+                shift
+            done
+            K_LEVEL="${K_LEVEL# }"
+            if [ -z "$K_LEVEL" ]; then
+                echo "Error: --k-level requires at least one integer (1, 2, or 3)"
+                exit 1
+            fi
             ;;
         --output-dir)
             OUTPUT_DIR=$2
@@ -193,9 +190,7 @@ echo -e "Total processes:    ${GREEN}$TOTAL_PROCESSES${NC}"
 echo -e "Categories:         ${GREEN}${CATEGORIES[*]}${NC} (all 3)"
 echo -e "Model:              ${GREEN}$MODEL${NC}"
 [ -n "$DIFFICULTY" ] && echo -e "Difficulty:         ${GREEN}$DIFFICULTY${NC}"
-[ -n "$TOM_TARGET_L1" ] && echo -e "ToM L1 target:      ${GREEN}$TOM_TARGET_L1${NC}"
-[ -n "$TOM_TARGET_L2" ] && echo -e "ToM L2 target:      ${GREEN}$TOM_TARGET_L2${NC}"
-[ -n "$TOM_TARGET_L3" ] && echo -e "ToM L3 target:      ${GREEN}$TOM_TARGET_L3${NC}"
+[ -n "$K_LEVEL" ] && echo -e "K-level:            ${GREEN}${K_LEVEL}${NC}" || echo -e "K-level:            ${GREEN}random per task${NC}"
 echo -e "Tasks per process:  ${GREEN}$NUM_TASKS${NC}"
 echo -e "Iterations/task:    ${GREEN}$ITERATIONS_PER_TASK${NC}"
 [ -n "$SUBTASKS_MIN" ] && echo -e "Subtasks min:       ${GREEN}$SUBTASKS_MIN${NC}"
@@ -225,14 +220,12 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
         [ -n "$SUBTASKS_MAX" ] && SUBTASK_FLAGS="$SUBTASK_FLAGS --subtasks-max $SUBTASKS_MAX"
         DIFFICULTY_FLAGS=""
         [ -n "$DIFFICULTY" ] && DIFFICULTY_FLAGS="$DIFFICULTY_FLAGS --difficulty $DIFFICULTY"
-        TOM_FLAGS=""
-        [ -n "$TOM_TARGET_L1" ] && TOM_FLAGS="$TOM_FLAGS --tom-target-l1 $TOM_TARGET_L1"
-        [ -n "$TOM_TARGET_L2" ] && TOM_FLAGS="$TOM_FLAGS --tom-target-l2 $TOM_TARGET_L2"
-        [ -n "$TOM_TARGET_L3" ] && TOM_FLAGS="$TOM_FLAGS --tom-target-l3 $TOM_TARGET_L3"
+        K_LEVEL_FLAGS=""
+        [ -n "$K_LEVEL" ] && K_LEVEL_FLAGS="--k-level $K_LEVEL"
 
         if [ "$DRY_RUN" = true ]; then
             echo -e "${YELLOW}[DRY-RUN]${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}"
-            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --iterations-per-task $ITERATIONS_PER_TASK --category $category --output-dir $TASK_DIR$SUBTASK_FLAGS$DIFFICULTY_FLAGS$TOM_FLAGS"
+            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --iterations-per-task $ITERATIONS_PER_TASK --category $category --output-dir $TASK_DIR$SUBTASK_FLAGS$DIFFICULTY_FLAGS$K_LEVEL_FLAGS"
         else
             echo -e "${GREEN}Starting${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC} -> $log_file"
 
@@ -244,7 +237,7 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
                 --output-dir "$TASK_DIR" \
                 $SUBTASK_FLAGS \
                 $DIFFICULTY_FLAGS \
-                $TOM_FLAGS \
+                $K_LEVEL_FLAGS \
                 > "$log_file" 2>&1 &
 
             pid=$!
