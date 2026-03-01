@@ -62,14 +62,8 @@ def parse_extra_args():
                         help="Difficulty level for judge context (easy/medium/hard)")
     parser.add_argument("--test-model", type=str, default=None,
                         help="Override model used for test_task calibration (e.g. gpt-5-mini)")
-    parser.add_argument("--tom-target-l1", type=float, default=0.40,
-                        help="Target ratio for ToM level 1 tasks (default: 0.40)")
-    parser.add_argument("--tom-target-l2", type=float, default=0.40,
-                        help="Target ratio for ToM level 2 tasks (default: 0.40)")
-    parser.add_argument("--tom-target-l3", type=float, default=0.20,
-                        help="Target ratio for ToM level 3 tasks (default: 0.20)")
-    parser.add_argument("--tom-ratio-tolerance", type=float, default=0.08,
-                        help="Tolerance for ToM ratio calibration guidance (default: 0.08)")
+    parser.add_argument("--k-level", type=int, nargs="*", default=None,
+                        help="Allowed k-levels (e.g. --k-level 2 3). Default: random per task.")
 
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
@@ -254,21 +248,13 @@ def main(config: DictConfig) -> None:
     judge_threshold = extra_args.judge_threshold if extra_args else None
     difficulty = extra_args.difficulty if extra_args else None
     test_model = extra_args.test_model if extra_args else None
-    tom_target_l1 = extra_args.tom_target_l1 if extra_args else 0.40
-    tom_target_l2 = extra_args.tom_target_l2 if extra_args else 0.40
-    tom_target_l3 = extra_args.tom_target_l3 if extra_args else 0.20
-    tom_ratio_tolerance = extra_args.tom_ratio_tolerance if extra_args else 0.08
-
-    tom_target_sum = tom_target_l1 + tom_target_l2 + tom_target_l3
-    if abs(tom_target_sum - 1.0) > 1e-6:
-        cprint(
-            f"Error: --tom-target-l1/2/3 must sum to 1.0, got {tom_target_sum:.6f}",
-            "red",
-        )
-        sys.exit(1)
-    if tom_ratio_tolerance < 0:
-        cprint("Error: --tom-ratio-tolerance must be non-negative", "red")
-        sys.exit(1)
+    k_levels = extra_args.k_level if extra_args else None
+    if k_levels is not None:
+        invalid = [k for k in k_levels if k not in (1, 2, 3)]
+        if invalid:
+            cprint(f"Error: --k-level values must be 1, 2, or 3 (got {invalid})", "red")
+            sys.exit(1)
+        k_levels = sorted(set(k_levels))
 
     # Validate seed task path
     if seed_task:
@@ -378,12 +364,8 @@ def main(config: DictConfig) -> None:
     # Compute calibration stats from existing dataset
     calibration_stats = compute_calibration_stats(output_dir, calibration_model)
     calibration_stats["target_rate"] = target_pass_rate
-    calibration_stats["tom_target"] = {
-        1: tom_target_l1,
-        2: tom_target_l2,
-        3: tom_target_l3,
-    }
-    calibration_stats["tom_tolerance"] = tom_ratio_tolerance
+    # k_levels=None means random per task; otherwise only listed levels allowed.
+    calibration_stats["k_levels"] = k_levels
 
     cprint("=" * 60, "blue")
     cprint("EMTOM Task Generator (Live Scene Mode)", "blue")
@@ -404,12 +386,10 @@ def main(config: DictConfig) -> None:
         cprint(f"  Current rate: {calibration_stats['rate']:.1%} ({calibration_stats['passed']}/{calibration_stats['total']})", "yellow")
     else:
         cprint(f"  No calibration data yet (untested: {calibration_stats['untested']})", "yellow")
-    cprint(
-        "ToM target mix: "
-        f"L1 {tom_target_l1:.0%}, L2 {tom_target_l2:.0%}, L3 {tom_target_l3:.0%} "
-        f"(tol +/-{tom_ratio_tolerance:.0%})",
-        "blue",
-    )
+    if k_levels:
+        cprint(f"K-level filter: {k_levels} (only these levels accepted)", "blue")
+    else:
+        cprint("K-level: random per task (1, 2, or 3 assigned each round)", "blue")
     if calibration_stats["tom_total"] > 0:
         cprint(
             "  Current ToM mix: "
