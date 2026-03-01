@@ -599,12 +599,11 @@ def _replace_epistemic_in_goal(
     formula: Formula,
     k_goal_map: Dict[str, KGoalNode],
 ) -> Formula:
-    """Replace K(a, phi) in goal with knows_a_HASH predicate.
+    """Replace K(a, phi) in goal with And(phi_stripped, knows_a_HASH).
 
-    Only the knowledge predicate is required in the goal — the physical
-    fact is enforced via observe-action preconditions (the fact must be
-    true for any agent to observe it). Embedding the physical fact here
-    caused contradictions when the goal also contained (not phi).
+    The physical part (phi stripped of K/B) must still hold at end-state,
+    AND the knowledge predicate must be achieved. K() goals must reference
+    stable facts that remain true throughout the episode.
     """
     if isinstance(formula, (Knows, Believes)):
         key = _k_goal_key_from_formula(formula)
@@ -612,7 +611,13 @@ def _replace_epistemic_in_goal(
         if kg:
             pred_name = f"knows_{kg.agent}_{kg.fact_id}"
             knowledge_lit = Literal(pred_name)
-            return knowledge_lit
+
+            # Recursively replace any nested K/B in the inner formula
+            replaced_inner = _replace_epistemic_in_goal(formula.inner, k_goal_map)
+            # Also strip epistemic from inner for physical requirements
+            physical_inner = _strip_epistemic_formula(replaced_inner)
+
+            return And((physical_inner, knowledge_lit))
         # Fallback: strip epistemic
         return _strip_epistemic_formula(formula)
 

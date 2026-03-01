@@ -380,7 +380,7 @@ class TestBudgetTokens:
 # ---------------------------------------------------------------------------
 
 class TestGoalReplacement:
-    def test_k_replaced_with_knowledge_predicate_only(self):
+    def test_k_replaced_with_and_physical_knowledge(self):
         goal = Knows("agent_0", Literal("is_open", ("cabinet_27",)))
         obs = _make_obs(
             restricted={"agent_0": {"kitchen_1"}},
@@ -390,10 +390,8 @@ class TestGoalReplacement:
         k_map = {f"{n.agent}:{n.inner.to_pddl()}": n for n in nodes}
         result = _replace_epistemic_in_goal(goal, k_map)
         pddl = result.to_pddl()
-        # Only the knowledge predicate in the goal — physical fact is
-        # enforced via observe-action preconditions, not the goal itself.
+        assert "(is_open cabinet_27)" in pddl
         assert "knows_agent_0_" in pddl
-        assert "(is_open cabinet_27)" not in pddl
 
     def test_literal_unchanged(self):
         goal = Literal("is_open", ("cabinet_27",))
