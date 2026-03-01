@@ -1917,6 +1917,15 @@ SUMMARY:"""
             })
 
         from emtom.cli.submit_task import run
+
+        # Derive allowed ToM levels from calibration targets: only levels
+        # with target > 0 are accepted.  This rejects tasks whose computed
+        # k-level doesn't match what the user asked for.
+        allowed_tom_levels = None
+        tom_target = self.calibration_stats.get("tom_target", {})
+        if tom_target:
+            allowed_tom_levels = [lvl for lvl, ratio in tom_target.items() if ratio > 0]
+
         result = run(
             str(self.task_file),
             output_dir=str(self.output_dir),
@@ -1926,6 +1935,7 @@ SUMMARY:"""
             subtasks_max=self.subtasks_max,
             agents_min=self.agents_min,
             agents_max=self.agents_max,
+            allowed_tom_levels=allowed_tom_levels,
         )
         if not result["success"]:
             return json.dumps({"error": result["error"]}, indent=2)
