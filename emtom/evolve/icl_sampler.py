@@ -10,6 +10,12 @@ from typing import Dict, List, Optional, Tuple
 from emtom.evolve.benchmark_wrapper import find_calibration_entry, cal_passed, cal_progress
 
 
+def _has_problem_pddl(task_data: dict) -> bool:
+    """Return True if the task has a non-empty problem_pddl field (not a legacy task)."""
+    pddl = task_data.get("problem_pddl", "")
+    return bool(pddl and isinstance(pddl, str) and pddl.strip())
+
+
 def prepare_sampled_tasks_dir_from_calibration(
     tasks_dir: str,
     model: str,
@@ -44,6 +50,8 @@ def prepare_sampled_tasks_dir_from_calibration(
         try:
             with open(task_file) as f:
                 task_data = json.load(f)
+            if not _has_problem_pddl(task_data):
+                continue  # skip legacy tasks without problem_pddl
             cal = find_calibration_entry(task_data.get("calibration", []), model=model)
             if cal is None:
                 continue
@@ -105,6 +113,8 @@ def compute_pass_rate_from_calibration(tasks_dir: str, model: str) -> Dict[str, 
         try:
             with open(task_file) as f:
                 task_data = json.load(f)
+            if not _has_problem_pddl(task_data):
+                continue  # skip legacy tasks without problem_pddl
             cal = find_calibration_entry(task_data.get("calibration", []), model=model)
             if cal is None:
                 untested += 1
@@ -135,6 +145,8 @@ def find_tasks_without_calibration(tasks_dir: str, model: str) -> List[Path]:
         try:
             with open(task_file) as f:
                 task_data = json.load(f)
+            if not _has_problem_pddl(task_data):
+                continue  # skip legacy tasks without problem_pddl
             cal = find_calibration_entry(task_data.get("calibration", []), model=model)
             if cal is None:
                 missing.append(task_file)

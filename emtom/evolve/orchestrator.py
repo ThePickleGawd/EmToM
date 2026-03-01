@@ -475,6 +475,130 @@ def run_generate_parallel(
     return out
 
 
+def _fmt_duration(seconds: float) -> str:
+    """Format seconds into a human-readable duration string."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes = seconds / 60
+    if minutes < 60:
+        return f"{minutes:.1f}m"
+    hours = int(minutes // 60)
+    remaining_min = int(minutes % 60)
+    return f"{hours}h {remaining_min}m"
+
+
+def _scan_tom_distribution(tasks_dir: str) -> Dict[int, int]:
+    """Scan task JSONs for tom_level distribution. Returns {level: count}."""
+    counts: Dict[int, int] = {1: 0, 2: 0, 3: 0}
+    tasks_path = Path(tasks_dir)
+    for task_file in tasks_path.glob("*.json"):
+        try:
+            with open(task_file) as f:
+                data = json.load(f)
+            level = data.get("tom_level")
+            if isinstance(level, int) and level in counts:
+                counts[level] += 1
+        except Exception:
+            continue
+    return counts
+
+
+def print_summary_table(
+    pipeline_start: float,
+    seed_duration: Optional[float],
+    seed_tasks_generated: int,
+    tier_metrics: List[dict],
+    all_tasks_dir: str,
+    config: EvolutionConfig,
+) -> None:
+    """Print a formatted terminal summary table for the evolution run."""
+    total_duration = time.time() - pipeline_start
+
+    # ── Header ──
+    print()
+    print("=" * 80)
+    print("  EVOLUTION PIPELINE SUMMARY")
+    print("=" * 80)
+    print()
+
+    # ── Config ──
+    print(f"  Generator model : {config.generator_model}")
+    print(f"  Model ladder    : {' -> '.join(config.model_ladder)}")
+    print(f"  Focus           : {config.focus}")
+    print(f"  Category        : {config.category}")
+    print(f"  Target pass rate: {config.target_pass_rate:.0f}%")
+    print(f"  Total duration  : {_fmt_duration(total_duration)}")
+    print()
+
+    # ── Seed phase ──
+    if seed_duration is not None:
+        print(f"  Seed phase: {seed_tasks_generated} tasks generated in {_fmt_duration(seed_duration)}")
+    else:
+        print(f"  Seed phase: skipped (resumed)")
+    print()
+
+    # ── Tier table ──
+    #   Tier | Model | Bench Time | Gen Time | +Tasks | Pass Rate (before->after) | Difficulty
+    header = (
+        f"  {'Tier':<6} {'Model':<14} {'Bench':>8} {'Gen':>8} "
+        f"{'New':>5} {'Pass Rate':>18} {'Difficulty':<10}"
+    )
+    separator = "  " + "-" * (len(header) - 2)
+    print(header)
+    print(separator)
+
+    for tm in tier_metrics:
+        tier_label = f"T{tm['tier_idx']}"
+        model = tm["model"]
+        bench_time = _fmt_duration(tm["benchmark_seconds"]) if tm["benchmark_seconds"] > 0 else "-"
+        gen_time = _fmt_duration(tm["generation_seconds"]) if tm["generation_seconds"] > 0 else "-"
+        new_tasks = str(tm["generated"]) if tm["generated"] > 0 else "-"
+        pr_before = tm["pass_rate_before"]
+        pr_after = tm["pass_rate_after"]
+        pass_col = f"{pr_before:.1f}% -> {pr_after:.1f}%"
+        difficulty = tm["difficulty"]
+        print(
+            f"  {tier_label:<6} {model:<14} {bench_time:>8} {gen_time:>8} "
+            f"{new_tasks:>5} {pass_col:>18} {difficulty:<10}"
+        )
+
+    print(separator)
+    print()
+
+    # ── ToM distribution ──
+    tom = _scan_tom_distribution(all_tasks_dir)
+    tom_total = sum(tom.values())
+    print("  ToM Distribution:")
+    if tom_total > 0:
+        for level in (1, 2, 3):
+            count = tom[level]
+            pct = count / tom_total * 100
+            bar = "#" * int(pct / 2)
+            print(f"    K({level}): {count:>4} ({pct:5.1f}%)  {bar}")
+    else:
+        print("    (no tom_level data in task JSONs)")
+    print()
+
+    # ── Final model pass rates ──
+    total_tasks = len(list(Path(all_tasks_dir).glob("*.json")))
+    print(f"  Total tasks in pool: {total_tasks}")
+    print()
+    pr_header = f"  {'Model':<14} {'Passed':>8} {'Failed':>8} {'Untested':>10} {'Pass Rate':>10}"
+    print(pr_header)
+    print("  " + "-" * (len(pr_header) - 2))
+    for model in config.model_ladder:
+        stats = compute_pass_rate_from_calibration(all_tasks_dir, model)
+        print(
+            f"  {model:<14} {stats['passed']:>8} {stats['failed']:>8} "
+            f"{stats['untested']:>10} {stats['pass_rate']:>9.1f}%"
+        )
+    print()
+
+    print(f"  Tasks directory : {Path(all_tasks_dir).resolve()}")
+    print("=" * 80)
+    print()
+
+
 def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> None:
     """Main evolutionary loop.
 
@@ -484,6 +608,8 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
     - On model upgrade: benchmark only tasks missing calibration for the new model.
     - Stay in tier generating until pass rate drops to target, then advance.
     """
+    pipeline_start = time.time()
+
     # Setup run metadata directory and task output directory.
     if resume_dir:
         run_dir = Path(resume_dir)
@@ -518,20 +644,39 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
     completed_tiers = set(state.get("completed_tiers", []))
     start_tier_idx = state.get("current_tier_idx", 0)
 
+    # Tracking for summary table
+    seed_duration: Optional[float] = None
+    seed_tasks_generated = 0
+    tier_metrics_list: List[dict] = []
+
     # ---- PHASE 1: Seed from existing tasks ----
     seed_tier = "seed"
     if seed_tier not in completed_tiers:
+        seed_start = time.time()
         # Copy existing tasks from seed directory
         copied = 0
+        skipped_legacy = 0
         if config.seed_tasks_dir:
             source = Path(config.seed_tasks_dir)
             if source.exists():
                 for task_file in source.glob("*.json"):
                     dest = all_tasks_dir / task_file.name
                     if not dest.exists():
+                        # Skip legacy tasks without problem_pddl
+                        try:
+                            with open(task_file) as f:
+                                td = json.load(f)
+                            pddl = td.get("problem_pddl", "")
+                            if not (pddl and isinstance(pddl, str) and pddl.strip()):
+                                skipped_legacy += 1
+                                continue
+                        except Exception:
+                            continue
                         shutil.copy2(task_file, dest)
                         copied += 1
                 print(f"[evolve] Seeded {copied} tasks from {source}")
+                if skipped_legacy:
+                    print(f"[evolve] Skipped {skipped_legacy} legacy tasks (no problem_pddl)")
             else:
                 print(f"[evolve] Seed tasks dir does not exist: {source}")
 
@@ -565,6 +710,9 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
         else:
             print(f"[evolve] Seed pool sufficient ({existing} tasks >= {config.seed_pool_size})")
 
+        seed_duration = time.time() - seed_start
+        seed_tasks_generated = max(0, shortfall) if shortfall > 0 else 0
+
         completed_tiers.add(seed_tier)
         state["completed_tiers"] = list(completed_tiers)
         state["current_tier_idx"] = 0
@@ -587,6 +735,9 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
         print(f"TIER {tier_idx + 1}: {model}")
         print(f"{'='*60}\n")
 
+        tier_benchmark_seconds = 0.0
+        tier_generation_seconds = 0.0
+
         # a. Benchmark tasks missing calibration for this model
         missing = find_tasks_without_calibration(str(all_tasks_dir), model)
         if missing:
@@ -598,6 +749,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
                 shutil.copy2(task_path, missing_dir / task_path.name)
 
             benchmark_output = str(tier_dir / "benchmark")
+            bench_start = time.time()
             results = run_benchmark_parallel(
                 tasks_dir=str(missing_dir),
                 model=model,
@@ -605,6 +757,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
                 max_workers=config.max_workers,
                 no_video=True,
             )
+            tier_benchmark_seconds = time.time() - bench_start
 
             # Write benchmark results back into the task JSONs in all_tasks_dir
             update_calibration_from_benchmark(results, str(all_tasks_dir))
@@ -615,6 +768,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
         # b. Compute pass rate across ALL tasks
         stats = compute_pass_rate_from_calibration(str(all_tasks_dir), model)
         pass_rate = stats["pass_rate"]
+        pass_rate_before = pass_rate
         print(f"[evolve] {model}: {stats['passed']}/{stats['total']} passed ({pass_rate:.1f}%)")
         print(f"[evolve]   untested: {stats['untested']}")
 
@@ -661,6 +815,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
 
             # Generate tasks in parallel batches up to max_workers,
             # re-checking pass rate after each batch.
+            gen_start = time.time()
             batch_size = max(1, config.max_workers)
             while pass_rate > config.target_pass_rate and generated_this_tier < config.tasks_per_round:
                 remaining = min(batch_size, config.tasks_per_round - generated_this_tier)
@@ -694,6 +849,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
                     f"[evolve] After generating {generated_this_tier} tasks: "
                     f"{stats['passed']}/{stats['total']} passed ({pass_rate:.1f}%)"
                 )
+            tier_generation_seconds = time.time() - gen_start
         else:
             print(
                 f"[evolve] Pass rate ({pass_rate:.1f}%) <= target ({config.target_pass_rate:.1f}%) "
@@ -711,6 +867,18 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
                 **final_stats,
             }, f, indent=2)
 
+        # Collect metrics for summary table
+        tier_metrics_list.append({
+            "tier_idx": tier_idx + 1,
+            "model": model,
+            "benchmark_seconds": tier_benchmark_seconds,
+            "generation_seconds": tier_generation_seconds,
+            "generated": generated_this_tier,
+            "pass_rate_before": pass_rate_before,
+            "pass_rate_after": final_stats["pass_rate"],
+            "difficulty": tier_difficulty,
+        })
+
         # Checkpoint
         completed_tiers.add(tier_name)
         state["completed_tiers"] = list(completed_tiers)
@@ -718,26 +886,15 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
         save_state(run_dir, state)
 
     # ---- Final summary ----
-    print(f"\n{'='*60}")
-    print("Evolution Complete!")
-    print(f"{'='*60}\n")
-
     total_tasks = len(list(all_tasks_dir.glob("*.json")))
-    print(f"Total tasks in pool: {total_tasks}")
-    print(f"Tasks directory: {all_tasks_dir.resolve()}")
 
-    for model in config.model_ladder:
-        stats = compute_pass_rate_from_calibration(str(all_tasks_dir), model)
-        print(
-            f"  {model}: {stats['passed']}/{stats['total']} passed "
-            f"({stats['pass_rate']:.1f}%), untested: {stats['untested']}"
-        )
-
-    # Write final summary
+    # Write machine-readable summary
     summary = {
         "total_tasks": total_tasks,
         "tasks_dir": str(all_tasks_dir.resolve()),
+        "total_duration_seconds": time.time() - pipeline_start,
         "model_stats": {},
+        "tier_metrics": tier_metrics_list,
     }
     for model in config.model_ladder:
         summary["model_stats"][model] = compute_pass_rate_from_calibration(str(all_tasks_dir), model)
@@ -745,7 +902,17 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
     with open(run_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
-    print(f"\n[evolve] Run metadata in {run_dir}")
+    # Print human-readable terminal table
+    print_summary_table(
+        pipeline_start=pipeline_start,
+        seed_duration=seed_duration,
+        seed_tasks_generated=seed_tasks_generated,
+        tier_metrics=tier_metrics_list,
+        all_tasks_dir=str(all_tasks_dir),
+        config=config,
+    )
+
+    print(f"  Run metadata in {run_dir}")
 
 
 def main():

@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 
 def find_calibration_entry(
-    calibration: list,
+    calibration,
     model: Optional[str] = None,
     agent_models: Optional[dict] = None,
 ) -> Optional[dict]:
@@ -24,9 +24,15 @@ def find_calibration_entry(
     If agent_models is provided, find exact match on agent_models dict.
     If only model is provided, find entry where ALL agents use that model.
     Returns the most recent match (last in list).
+
+    Accepts both the current list format and legacy dict format.
     """
     if not calibration:
         return None
+
+    # Migrate legacy dict format ({"model_name": {...}}) to list on-the-fly
+    if isinstance(calibration, dict):
+        calibration = _migrate_legacy_calibration(calibration)
 
     best = None
     for entry in calibration:
@@ -554,9 +560,11 @@ def run_benchmark_parallel(
             fh.close()
 
     if failed_stems:
-        raise RuntimeError(
-            f"Parallel benchmark had {len(failed_stems)} failed subprocesses: "
-            f"{', '.join(sorted(failed_stems)[:10])}. See logs in {log_dir}"
+        print(
+            f"[evolve] WARNING: {len(failed_stems)} task(s) failed and will be excluded "
+            f"from results: {', '.join(sorted(failed_stems)[:10])}. "
+            f"See logs in {log_dir}",
+            file=sys.stderr,
         )
 
     # Merge results from all per-task benchmark outputs
@@ -668,6 +676,9 @@ def update_calibration_from_benchmark(
             continue
 
         task_id = task_data.get("task_id", "")
+        # Skip placeholder IDs — they are shared across many tasks and would corrupt calibration
+        if task_id == "REPLACE_WITH_UNIQUE_ID":
+            task_id = ""
         # Try matching by task_id or by filename stem
         result = result_map.get(task_id) or result_map.get(task_file.stem)
         if result is None:

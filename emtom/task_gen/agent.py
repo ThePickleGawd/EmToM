@@ -657,6 +657,32 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
                 if self.scene_data and self.scene_data.agent_spawns:
                     task_data["agent_spawns"] = self.scene_data.agent_spawns
 
+                # Generate canonical task_id if still a placeholder
+                if task_data.get("task_id") == "REPLACE_WITH_UNIQUE_ID":
+                    try:
+                        import hashlib, re
+                        title_slug = re.sub(r"[^a-z0-9]+", "-", str(task_data.get("title", "untitled")).lower()).strip("-")[:40] or "untitled"
+                        category = str(task_data.get("category", "cooperative")).lower()
+                        scene_id = str(task_data.get("scene_id", "scene"))
+                        episode_id = str(task_data.get("episode_id", "episode"))
+                        problem_hash = hashlib.sha256(
+                            (task_data.get("problem_pddl", "") + "|" + category + "|" + scene_id + "|" + episode_id).encode("utf-8")
+                        ).hexdigest()[:8]
+                        task_data["task_id"] = f"emtom-{scene_id}-{episode_id}-{category}-{title_slug}-{problem_hash}"
+                    except Exception:
+                        pass
+
+                # Compute and inject tom_level from PDDL if not already set
+                if task_data.get("problem_pddl") and "tom_level" not in task_data:
+                    try:
+                        from emtom.cli.submit_task import _compute_tom_metadata
+                        tom_meta = _compute_tom_metadata(task_data, scene_data=None)
+                        task_data["tom_level"] = tom_meta["tom_level"]
+                        if "tom_reasoning" in tom_meta:
+                            task_data["tom_reasoning"] = tom_meta["tom_reasoning"]
+                    except Exception:
+                        pass
+
                 # Save to log directory
                 dest = self.log_dir / "working_task_final.json"
                 with open(dest, "w") as f:
