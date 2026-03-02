@@ -411,6 +411,32 @@ class TestGoalReplacement:
         assert "(is_on_top bottle_4 table_13)" in pddl
         assert "knows_agent_0_" in pddl
 
+    def test_nested_k_no_inner_knows_leak(self):
+        """K(a0, K(a1, phi)) should NOT leak knows_a1_hash into the goal.
+
+        The outer K expansion should produce And(phi, knows_a0_hash).
+        The inner K, when it appears as a separate conjunct, gets its own
+        expansion to And(phi, knows_a1_hash).
+        """
+        inner_lit = Literal("is_open", ("cabinet_27",))
+        inner_k = Knows("agent_1", inner_lit)
+        outer_k = Knows("agent_0", inner_k)
+        obs = _make_obs(
+            restricted={"agent_0": {"kitchen_1"}},
+            object_rooms={"cabinet_27": "kitchen_1"},
+        )
+        nodes = _collect_k_goals(outer_k, obs)
+        k_map = {f"{n.agent}:{n.inner.to_pddl()}": n for n in nodes}
+        result = _replace_epistemic_in_goal(outer_k, k_map)
+        pddl = result.to_pddl()
+        # Should have the physical fact and outer agent's knowledge predicate
+        assert "(is_open cabinet_27)" in pddl
+        assert "knows_agent_0_" in pddl
+        # Should NOT contain inner agent's leaf-fact knowledge predicate
+        # (that would be a leaked inner knows_hash)
+        inner_leaf_hash = _leaf_fact_hash(inner_lit)
+        assert f"knows_agent_1_{inner_leaf_hash}" not in pddl
+
 
 # ---------------------------------------------------------------------------
 # Inference actions (nested K)

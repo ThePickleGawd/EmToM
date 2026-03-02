@@ -128,15 +128,20 @@ def _derive_communicate_steps(
             "communication_required": False,
         }
 
-    # Solve with FD to get the plan
+    # Solve with FD using the already-compiled epistemic PDDL
+    # (avoids double-compilation inconsistency with problem.goal)
     solver = FastDownwardSolver()
-    result = solver._solve_epistemic(EMTOM_DOMAIN, problem, obs, timeout=30.0, start=0.0)
-
-    if not result.solvable or not result.plan:
-        raise RuntimeError(f"FD epistemic solve failed: {result.error or 'no plan'}")
+    fd_result = solver._run_planner(
+        compilation.domain_pddl, compilation.problem_pddl, timeout=30.0
+    )
+    if not fd_result["solvable"]:
+        raise RuntimeError(
+            f"FD epistemic solve failed: {fd_result.get('error', 'no plan')}"
+        )
+    plan = fd_result.get("plan", [])
 
     # Parse inform actions from FD plan
-    informs = parse_fd_inform_actions(result.plan)
+    informs = parse_fd_inform_actions(plan)
     if not informs:
         # FD solved with observe+infer only (all agents can observe the fact).
         # This is valid — no communication steps needed.

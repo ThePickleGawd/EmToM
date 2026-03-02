@@ -133,8 +133,40 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     solve_wall_time_s = time.perf_counter() - solve_start
 
     if not result.solvable:
+        diagnostic = result.error or "unknown"
+        # When epistemic goals are present, diagnose whether the physical
+        # layer or the epistemic layer is the root cause.
+        from emtom.pddl.fd_solver import _has_epistemic_goals, _strip_epistemic, _deduplicate_conjuncts
+        if _has_epistemic_goals(problem.goal):
+            try:
+                physical_goal = _deduplicate_conjuncts(_strip_epistemic(problem.goal))
+                phys_problem = Problem(
+                    name=problem.name,
+                    domain_name=problem.domain_name,
+                    objects=problem.objects,
+                    init=problem.init,
+                    goal=physical_goal,
+                )
+                from emtom.pddl.fd_solver import _problem_to_pddl
+                domain_pddl = EMTOM_DOMAIN.to_planning_pddl()
+                problem_pddl = _problem_to_pddl(phys_problem, domain_pddl)
+                phys_result = solver._run_planner(domain_pddl, problem_pddl, timeout=15.0)
+                if not phys_result["solvable"]:
+                    diagnostic += (
+                        "\n  Diagnostic: Physical goals are not achievable from "
+                        "initial state (check room restrictions, object placement, "
+                        "and action preconditions)"
+                    )
+                else:
+                    diagnostic += (
+                        "\n  Diagnostic: Physical goals are achievable but "
+                        "epistemic K() requirements are unsatisfiable (check "
+                        "communication paths, observability, and K() goal structure)"
+                    )
+            except Exception:
+                pass  # Diagnostic is best-effort
         return failure(
-            f"PDDL goal is not solvable: {result.error}",
+            f"PDDL goal is not solvable: {diagnostic}",
             data={"valid": False, "pddl_goal": goal_spec.to_pddl_string()},
         )
 
