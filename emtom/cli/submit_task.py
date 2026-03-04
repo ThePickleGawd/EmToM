@@ -130,6 +130,7 @@ def run(
     subtasks_max: int = 20,
     agents_min: int = 2,
     agents_max: int = 10,
+    allowed_tom_levels: Optional[list] = None,
 ) -> CLIResult:
     """
     Submit a task to the output directory.
@@ -144,6 +145,8 @@ def run(
         subtasks_max: Maximum PDDL conjuncts or subtasks.
         agents_min: Minimum agent count.
         agents_max: Maximum agent count.
+        allowed_tom_levels: If set, only tasks with a computed tom_level
+            in this list are accepted. E.g. [2, 3] rejects k=1 tasks.
 
     Returns:
         CLIResult with data keys: output_path, filename, submitted_path.
@@ -185,6 +188,15 @@ def run(
             task_data.pop("tom_reasoning", None)
     except Exception as e:
         return failure(f"Failed to compute tom_level during submit: {e}")
+
+    # Enforce allowed ToM levels when specified.
+    if allowed_tom_levels and task_data["tom_level"] not in allowed_tom_levels:
+        allowed_str = ", ".join(str(l) for l in sorted(allowed_tom_levels))
+        return failure(
+            f"Task tom_level is {task_data['tom_level']} but only levels [{allowed_str}] "
+            f"are allowed. Redesign the task to require deeper Theory-of-Mind reasoning.",
+            data={"computed_tom_level": task_data["tom_level"], "allowed": allowed_tom_levels},
+        )
 
     # Always regenerate golden trajectory from authoritative task spec.
     try:

@@ -601,8 +601,9 @@ def _replace_epistemic_in_goal(
 ) -> Formula:
     """Replace K(a, phi) in goal with And(phi_stripped, knows_a_HASH).
 
-    The physical part (phi stripped of K/B) must still hold, AND the
-    knowledge predicate must be achieved.
+    The physical part (phi stripped of K/B) must still hold at end-state,
+    AND the knowledge predicate must be achieved. K() goals must reference
+    stable facts that remain true throughout the episode.
     """
     if isinstance(formula, (Knows, Believes)):
         key = _k_goal_key_from_formula(formula)
@@ -611,10 +612,11 @@ def _replace_epistemic_in_goal(
             pred_name = f"knows_{kg.agent}_{kg.fact_id}"
             knowledge_lit = Literal(pred_name)
 
-            # Recursively replace any nested K/B in the inner formula
-            replaced_inner = _replace_epistemic_in_goal(formula.inner, k_goal_map)
-            # Also strip epistemic from inner for physical requirements
-            physical_inner = _strip_epistemic_formula(replaced_inner)
+            # Strip K/B directly from inner formula for physical requirements.
+            # For K(a0, K(a1, phi)) this produces And(phi, knows_a0_hash).
+            # The inner K(a1, phi), when it appears as a separate conjunct in
+            # the top-level goal, gets its own expansion.
+            physical_inner = _strip_epistemic_formula(formula.inner)
 
             return And((physical_inner, knowledge_lit))
         # Fallback: strip epistemic

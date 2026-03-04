@@ -47,6 +47,8 @@ DRY_RUN=false
 CATEGORY_FILTER=""  # Empty = all 3 categories (round-robin)
 OUTPUT_DIR="data/emtom/tasks"
 EXTRA_ARGS=()  # Extra args forwarded verbatim to run_emtom.sh generate
+DIFFICULTY=""
+K_LEVEL=""  # Allowed k-levels (e.g. "2 3"). Empty = random per task.
 
 # Colors
 RED='\033[0;31m'
@@ -69,6 +71,8 @@ print_usage() {
     echo "  --model MODEL       LLM model (default: gpt-5.2)"
     echo "  --num-tasks N       Tasks per process (default: 3)"
     echo "  --category CAT      Only generate this category (cooperative, competitive, mixed)"
+    echo "  --difficulty LEVEL  Difficulty for generation (easy, medium, hard)"
+    echo "  --k-level L [L ...] Allowed k-levels, e.g. --k-level 2 3 (default: random per task)"
     echo "  --output-dir DIR    Output directory for submitted tasks (default: data/emtom/tasks)"
     echo "  --dry-run           Show commands without executing"
     echo ""
@@ -106,6 +110,27 @@ while [[ $# -gt 0 ]]; do
         --category)
             CATEGORY_FILTER=$2
             shift 2
+            ;;
+        --difficulty)
+            DIFFICULTY=$2
+            if [[ "$DIFFICULTY" != "easy" && "$DIFFICULTY" != "medium" && "$DIFFICULTY" != "hard" ]]; then
+                echo "Error: --difficulty must be 'easy', 'medium', or 'hard'"
+                exit 1
+            fi
+            shift 2
+            ;;
+        --k-level)
+            shift
+            K_LEVEL=""
+            while [[ $# -gt 0 && "$1" =~ ^[0-9]+$ ]]; do
+                K_LEVEL="$K_LEVEL $1"
+                shift
+            done
+            K_LEVEL="${K_LEVEL# }"
+            if [ -z "$K_LEVEL" ]; then
+                echo "Error: --k-level requires at least one integer (1, 2, or 3)"
+                exit 1
+            fi
             ;;
         --output-dir)
             OUTPUT_DIR=$2
@@ -159,6 +184,8 @@ echo -e "Processes per GPU:  ${GREEN}$PER_GPU${NC}"
 echo -e "Total processes:    ${GREEN}$TOTAL_PROCESSES${NC}"
 echo -e "Categories:         ${GREEN}${CATEGORIES[*]}${NC}"
 echo -e "Model:              ${GREEN}$MODEL${NC}"
+[ -n "$DIFFICULTY" ] && echo -e "Difficulty:         ${GREEN}$DIFFICULTY${NC}"
+[ -n "$K_LEVEL" ] && echo -e "K-level:            ${GREEN}${K_LEVEL}${NC}" || echo -e "K-level:            ${GREEN}random per task${NC}"
 echo -e "Tasks per process:  ${GREEN}$NUM_TASKS${NC}"
 if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
     echo -e "Extra args:         ${GREEN}${EXTRA_ARGS[*]}${NC}"
@@ -182,9 +209,15 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
 
         log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}.log"
 
+        # Build flags for first-class options
+        DIFFICULTY_FLAGS=""
+        [ -n "$DIFFICULTY" ] && DIFFICULTY_FLAGS="--difficulty $DIFFICULTY"
+        K_LEVEL_FLAGS=""
+        [ -n "$K_LEVEL" ] && K_LEVEL_FLAGS="--k-level $K_LEVEL"
+
         if [ "$DRY_RUN" = true ]; then
             echo -e "${YELLOW}[DRY-RUN]${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}"
-            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --category $category --output-dir $TASK_DIR ${EXTRA_ARGS[*]}"
+            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --category $category --output-dir $TASK_DIR $DIFFICULTY_FLAGS $K_LEVEL_FLAGS ${EXTRA_ARGS[*]}"
         else
             echo -e "${GREEN}Starting${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC} -> $log_file"
 
@@ -193,6 +226,8 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
                 --num-tasks "$NUM_TASKS" \
                 --category "$category" \
                 --output-dir "$TASK_DIR" \
+                $DIFFICULTY_FLAGS \
+                $K_LEVEL_FLAGS \
                 "${EXTRA_ARGS[@]}" \
                 > "$log_file" 2>&1 &
 

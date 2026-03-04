@@ -226,6 +226,22 @@ class FastDownwardSolver:
                 compilation.domain_pddl, compilation.problem_pddl, timeout
             )
         except Exception as e:
+            err_str = str(e)
+            if "expression false" in err_str.lower():
+                # Contradictory goal (e.g. physical (not X) + epistemic K(a, X))
+                # Do NOT fall back — the problem is genuinely unsolvable.
+                logger.error(
+                    "Fast Downward detected contradictory goal (expression false): %s", e
+                )
+                return SolverResult(
+                    solvable=False,
+                    solve_time=time.time() - start,
+                    error=(
+                        "Contradictory goal: epistemic K() fact conflicts with "
+                        "a negated physical goal. Ensure K() inner facts are "
+                        "consistent with physical goal literals."
+                    ),
+                )
             logger.error(
                 "Fast Downward planner error (epistemic): %s — falling back to PDKBSolver", e
             )
