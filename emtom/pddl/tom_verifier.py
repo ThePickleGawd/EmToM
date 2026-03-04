@@ -10,6 +10,8 @@ Inspired by DAEDALUS (Bolander et al., 2025) iterative deepening approach.
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from emtom.pddl.compiler import compile_task
@@ -19,6 +21,49 @@ from emtom.pddl.solver import PDKBSolver, SolverResult
 
 if TYPE_CHECKING:
     from emtom.task_gen.task_generator import GeneratedTask
+
+
+def _detect_provider_for_model(model: str) -> str:
+    """Detect provider for ad hoc ToM explanation calls."""
+    normalized = (model or "").strip().lower()
+
+    if normalized.startswith("gpt"):
+        return "openai_chat"
+
+    if normalized.startswith("us.anthropic.claude-"):
+        return "bedrock_claude"
+
+    if normalized.startswith("claude-"):
+        return "anthropic_claude"
+
+    if normalized in {
+        "sonnet",
+        "sonnet-4.5",
+        "sonnet4.5",
+        "haiku",
+        "haiku-4.5",
+        "haiku4.5",
+        "opus",
+        "opus-4.5",
+        "opus4.5",
+    }:
+        if os.getenv("ANTHROPIC_API_KEY", "").strip():
+            return "anthropic_claude"
+        env_path = Path(__file__).resolve().parents[2] / ".env"
+        if env_path.exists():
+            try:
+                for line in env_path.read_text().splitlines():
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#") or "=" not in stripped:
+                        continue
+                    key, value = stripped.split("=", 1)
+                    if key.strip() == "ANTHROPIC_API_KEY" and value.strip().strip('"').strip("'"):
+                        return "anthropic_claude"
+            except Exception:
+                pass
+        return "bedrock_claude"
+
+    return "openai_chat"
 
 
 def compute_tom_depth(
@@ -248,12 +293,7 @@ Do NOT start with "This task requires ToM level N because..." — just explain t
 
     from habitat_llm.llm import instantiate_llm
 
-    if model.startswith("gpt"):
-        provider = "openai_chat"
-    elif model in ("opus", "sonnet", "haiku"):
-        provider = "bedrock_claude"
-    else:
-        provider = "openai_chat"
+    provider = _detect_provider_for_model(model)
 
     llm = instantiate_llm(
         provider,

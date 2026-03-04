@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -52,6 +53,49 @@ class Colors:
     YELLOW = "\033[93m"
     BOLD = "\033[1m"
     RESET = "\033[0m"
+
+
+def _detect_provider_for_model(model: str) -> str:
+    """Detect provider for judge-side ad hoc LLM calls."""
+    normalized = (model or "").strip().lower()
+
+    if normalized.startswith("gpt"):
+        return "openai_chat"
+
+    if normalized.startswith("us.anthropic.claude-"):
+        return "bedrock_claude"
+
+    if normalized.startswith("claude-"):
+        return "anthropic_claude"
+
+    if normalized in {
+        "sonnet",
+        "sonnet-4.5",
+        "sonnet4.5",
+        "haiku",
+        "haiku-4.5",
+        "haiku4.5",
+        "opus",
+        "opus-4.5",
+        "opus4.5",
+    }:
+        if os.getenv("ANTHROPIC_API_KEY", "").strip():
+            return "anthropic_claude"
+        env_path = Path(__file__).resolve().parents[2] / ".env"
+        if env_path.exists():
+            try:
+                for line in env_path.read_text().splitlines():
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#") or "=" not in stripped:
+                        continue
+                    key, value = stripped.split("=", 1)
+                    if key.strip() == "ANTHROPIC_API_KEY" and value.strip().strip('"').strip("'"):
+                        return "anthropic_claude"
+            except Exception:
+                pass
+        return "bedrock_claude"
+
+    return "openai_chat"
 
 
 @dataclass
@@ -557,14 +601,7 @@ class Judge:
         if model not in self._llm_clients:
             from habitat_llm.llm import instantiate_llm
 
-            # Determine provider from model name
-            if model in ["opus", "sonnet", "haiku"]:
-                provider = "bedrock_claude"
-            elif model.startswith("gpt"):
-                provider = "openai_chat"
-            else:
-                # Default to openai
-                provider = "openai_chat"
+            provider = _detect_provider_for_model(model)
 
             self._llm_clients[model] = instantiate_llm(
                 provider,

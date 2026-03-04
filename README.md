@@ -12,13 +12,13 @@ See [INSTALLATION.md](INSTALLATION.md) for conda setup.
 # Explore the environment using GPT-5
 ./emtom/run_emtom.sh explore --steps 30 --model gpt-5
 
-# Explore using Claude Sonnet (AWS Bedrock)
+# Explore using Claude Sonnet (Anthropic API or AWS Bedrock)
 ./emtom/run_emtom.sh explore --steps 30 --model sonnet
 
 # Generate a task using OpenAI
 ./emtom/run_emtom.sh generate --model gpt-5.2
 
-# Generate a task using Claude (AWS Bedrock)
+# Generate a task using Claude
 ./emtom/run_emtom.sh generate --model sonnet
 
 # Run benchmark on generated tasks
@@ -41,6 +41,9 @@ Create a `.env` file in the project root with your API keys:
 ```bash
 # For OpenAI
 OPENAI_API_KEY=your-openai-key
+
+# For Anthropic Claude (preferred for sonnet/haiku/opus when set)
+ANTHROPIC_API_KEY=your-anthropic-key
 
 # For AWS Bedrock Claude
 AWS_ACCESS_KEY_ID=your-access-key
@@ -101,7 +104,7 @@ Create benchmark tasks using an LLM agent that iteratively designs and tests tas
 
 ```bash
 ./emtom/run_emtom.sh generate --llm openai_chat --model gpt-5.2
-./emtom/run_emtom.sh generate --llm bedrock_claude --model sonnet --num-tasks 5
+./emtom/run_emtom.sh generate --llm anthropic_claude --model sonnet --num-tasks 5
 ./emtom/run_emtom.sh generate --llm openai_chat --model gpt-5 --query "A task using the radio"
 ```
 
@@ -128,11 +131,21 @@ Create benchmark tasks using an LLM agent that iteratively designs and tests tas
 | GPT-5.1 | `gpt-5.1`, `gpt5.1` | `gpt-5.1` |
 | GPT-5.2 | `gpt-5.2`, `gpt5.2` | `gpt-5.2` |
 
-*AWS Bedrock (provider: `bedrock_claude`, requires `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`):*
+*Anthropic API (provider: `anthropic_claude`, requires `ANTHROPIC_API_KEY`):*
 
 | Model | Aliases | Model ID |
 |-------|---------|----------|
-| **Claude (Anthropic)** | | |
+| Claude Sonnet 4.5 | `sonnet`, `sonnet-4.5`, `sonnet4.5` | `claude-sonnet-4-5-20250929` |
+| Claude Haiku 4.5 | `haiku`, `haiku-4.5`, `haiku4.5` | `claude-haiku-4-5-20251001` |
+| Claude Opus 4.5 | `opus`, `opus-4.5`, `opus4.5` | `claude-opus-4-5-20251101` |
+
+*AWS Bedrock (provider: `bedrock_claude`, requires `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`):*
+
+When using alias models (`sonnet`, `haiku`, `opus`) with `./emtom/run_emtom.sh --model ...`,
+the provider auto-selects `anthropic_claude` if `ANTHROPIC_API_KEY` is set, otherwise `bedrock_claude`.
+
+| Model | Aliases | Model ID |
+|-------|---------|----------|
 | Claude Sonnet 4.5 | `sonnet`, `sonnet-4.5`, `sonnet4.5` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
 | Claude Haiku 4.5 | `haiku`, `haiku-4.5`, `haiku4.5` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
 | Claude Opus 4.5 | `opus`, `opus-4.5`, `opus4.5` | `us.anthropic.claude-opus-4-5-20251101-v1:0` |
@@ -170,7 +183,7 @@ Evaluate whether a task genuinely requires Theory of Mind reasoning. The judge i
 
 ```bash
 ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --llm openai_chat --model gpt-5
-./emtom/run_emtom.sh judge --task my_task.json --llm bedrock_claude --model sonnet --no-auto-retry
+./emtom/run_emtom.sh judge --task my_task.json --llm anthropic_claude --model sonnet --no-auto-retry
 ```
 
 **Options:**
@@ -664,7 +677,8 @@ emtom/
 habitat_llm/
 ├── llm/                   # LLM implementations
 │   ├── openai_chat.py     # OpenAI provider
-│   └── bedrock_claude.py  # AWS Bedrock Claude
+│   ├── anthropic_claude.py # Anthropic Claude API
+│   └── bedrock_claude.py   # AWS Bedrock Claude
 └── conf/                  # Hydra configs
 ```
 

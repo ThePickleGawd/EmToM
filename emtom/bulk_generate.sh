@@ -3,13 +3,15 @@
 # Runs task generation across all GPUs with 3 processes per GPU
 # Generates all 3 categories: cooperative, competitive, mixed
 #
-# Usage: ./emtom/bulk_generate.sh [options]
+# Usage: ./emtom/bulk_generate.sh [options] [-- <run_emtom.sh args>]
 #
 # Examples:
-#   ./emtom/bulk_generate.sh                  # 24 processes (8 GPUs x 3)
-#   ./emtom/bulk_generate.sh --per-gpu 2      # 16 processes (8 GPUs x 2)
-#   ./emtom/bulk_generate.sh --model gpt-5    # Use different model
-#   ./emtom/bulk_generate.sh --dry-run        # Preview without running
+#   ./emtom/bulk_generate.sh                              # 24 processes (8 GPUs x 3)
+#   ./emtom/bulk_generate.sh --per-gpu 2                  # 16 processes (8 GPUs x 2)
+#   ./emtom/bulk_generate.sh --model gpt-5                # Use different model
+#   ./emtom/bulk_generate.sh --dry-run                    # Preview without running
+#   ./emtom/bulk_generate.sh --per-gpu 5 -- --difficulty hard  # Difficulty preset
+#   ./emtom/bulk_generate.sh -- --difficulty hard --subtasks-max 20  # Override preset
 
 set -e
 
@@ -41,13 +43,10 @@ trap cleanup_lock EXIT INT TERM
 PER_GPU=3
 MODEL="gpt-5.2"
 NUM_TASKS=3
-ITERATIONS_PER_TASK=300  # Max iterations per task (total = this * num-tasks)
-SUBTASKS_MIN=""
-SUBTASKS_MAX=""
 DRY_RUN=false
 CATEGORY_FILTER=""  # Empty = all 3 categories (round-robin)
 OUTPUT_DIR="data/emtom/tasks"
-DIFFICULTY=""
+EXTRA_ARGS=()  # Extra args forwarded verbatim to run_emtom.sh generate
 
 # Colors
 RED='\033[0;31m'
@@ -63,29 +62,35 @@ print_usage() {
     echo "Generates tasks across all GPUs (3 processes per GPU)"
     echo "All 3 categories covered: cooperative, competitive, mixed"
     echo ""
-    echo "Usage: ./emtom/bulk_generate.sh [options]"
+    echo "Usage: ./emtom/bulk_generate.sh [options] [-- <run_emtom.sh args>]"
     echo ""
     echo "Options:"
     echo "  --per-gpu N         Processes per GPU (default: 3, one per category)"
     echo "  --model MODEL       LLM model (default: gpt-5.2)"
     echo "  --num-tasks N       Tasks per process (default: 3)"
-    echo "  --iterations-per-task N  Max iterations per task (default: 300)"
-    echo "  --subtasks-min N    Minimum subtasks per task"
-    echo "  --subtasks-max N    Maximum subtasks per task"
     echo "  --category CAT      Only generate this category (cooperative, competitive, mixed)"
-    echo "  --difficulty LEVEL  Difficulty for generation (easy, medium, hard)"
     echo "  --output-dir DIR    Output directory for submitted tasks (default: data/emtom/tasks)"
     echo "  --dry-run           Show commands without executing"
     echo ""
+    echo "Everything after -- is forwarded to run_emtom.sh generate:"
+    echo "  --difficulty, --subtasks-*, --tom-target-*, --iterations-per-task, etc."
+    echo "  See: ./emtom/run_emtom.sh generate --help"
+    echo ""
     echo "Examples:"
-    echo "  ./emtom/bulk_generate.sh                  # 24 processes (8 GPUs x 3)"
-    echo "  ./emtom/bulk_generate.sh --per-gpu 6      # 48 processes (2 per category per GPU)"
-    echo "  ./emtom/bulk_generate.sh --model gpt-5"
+    echo "  ./emtom/bulk_generate.sh                                  # 24 processes (8 GPUs x 3)"
+    echo "  ./emtom/bulk_generate.sh --per-gpu 6                      # 48 processes"
+    echo "  ./emtom/bulk_generate.sh --per-gpu 5 -- --difficulty hard  # Hard presets"
+    echo "  ./emtom/bulk_generate.sh -- --difficulty hard --subtasks-max 20  # Override preset"
 }
 
-# Parse arguments
+# Parse arguments — everything after -- goes to EXTRA_ARGS
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --)
+            shift
+            EXTRA_ARGS=("$@")
+            break
+            ;;
         --per-gpu)
             PER_GPU=$2
             shift 2
@@ -98,28 +103,8 @@ while [[ $# -gt 0 ]]; do
             NUM_TASKS=$2
             shift 2
             ;;
-        --iterations-per-task)
-            ITERATIONS_PER_TASK=$2
-            shift 2
-            ;;
-        --subtasks-min)
-            SUBTASKS_MIN=$2
-            shift 2
-            ;;
-        --subtasks-max)
-            SUBTASKS_MAX=$2
-            shift 2
-            ;;
         --category)
             CATEGORY_FILTER=$2
-            shift 2
-            ;;
-        --difficulty)
-            DIFFICULTY=$2
-            if [[ "$DIFFICULTY" != "easy" && "$DIFFICULTY" != "medium" && "$DIFFICULTY" != "hard" ]]; then
-                echo "Error: --difficulty must be 'easy', 'medium', or 'hard'"
-                exit 1
-            fi
             shift 2
             ;;
         --output-dir)
@@ -135,7 +120,7 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         *)
-            echo "Unknown option: $1"
+            echo "Unknown option: $1 (use -- to pass args to run_emtom.sh)"
             print_usage
             exit 1
             ;;
@@ -172,13 +157,12 @@ echo -e "==============================================${NC}"
 echo -e "GPUs:               ${GREEN}$NUM_GPUS${NC}"
 echo -e "Processes per GPU:  ${GREEN}$PER_GPU${NC}"
 echo -e "Total processes:    ${GREEN}$TOTAL_PROCESSES${NC}"
-echo -e "Categories:         ${GREEN}${CATEGORIES[*]}${NC} (all 3)"
+echo -e "Categories:         ${GREEN}${CATEGORIES[*]}${NC}"
 echo -e "Model:              ${GREEN}$MODEL${NC}"
-[ -n "$DIFFICULTY" ] && echo -e "Difficulty:         ${GREEN}$DIFFICULTY${NC}"
 echo -e "Tasks per process:  ${GREEN}$NUM_TASKS${NC}"
-echo -e "Iterations/task:    ${GREEN}$ITERATIONS_PER_TASK${NC}"
-[ -n "$SUBTASKS_MIN" ] && echo -e "Subtasks min:       ${GREEN}$SUBTASKS_MIN${NC}"
-[ -n "$SUBTASKS_MAX" ] && echo -e "Subtasks max:       ${GREEN}$SUBTASKS_MAX${NC}"
+if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
+    echo -e "Extra args:         ${GREEN}${EXTRA_ARGS[*]}${NC}"
+fi
 echo -e "Task directory:     ${CYAN}$TASK_DIR${NC}"
 echo -e "Log directory:      ${CYAN}$LOG_DIR${NC}"
 echo "=============================================="
@@ -198,27 +182,18 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
 
         log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}.log"
 
-        # Build subtask flags
-        SUBTASK_FLAGS=""
-        [ -n "$SUBTASKS_MIN" ] && SUBTASK_FLAGS="$SUBTASK_FLAGS --subtasks-min $SUBTASKS_MIN"
-        [ -n "$SUBTASKS_MAX" ] && SUBTASK_FLAGS="$SUBTASK_FLAGS --subtasks-max $SUBTASKS_MAX"
-        DIFFICULTY_FLAGS=""
-        [ -n "$DIFFICULTY" ] && DIFFICULTY_FLAGS="$DIFFICULTY_FLAGS --difficulty $DIFFICULTY"
-
         if [ "$DRY_RUN" = true ]; then
             echo -e "${YELLOW}[DRY-RUN]${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}"
-            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --iterations-per-task $ITERATIONS_PER_TASK --category $category --output-dir $TASK_DIR$SUBTASK_FLAGS$DIFFICULTY_FLAGS"
+            echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --category $category --output-dir $TASK_DIR ${EXTRA_ARGS[*]}"
         else
             echo -e "${GREEN}Starting${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC} -> $log_file"
 
             CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate \
                 --model "$MODEL" \
                 --num-tasks "$NUM_TASKS" \
-                --iterations-per-task "$ITERATIONS_PER_TASK" \
                 --category "$category" \
                 --output-dir "$TASK_DIR" \
-                $SUBTASK_FLAGS \
-                $DIFFICULTY_FLAGS \
+                "${EXTRA_ARGS[@]}" \
                 > "$log_file" 2>&1 &
 
             pid=$!
@@ -246,7 +221,7 @@ echo ""
 echo -e "${CYAN}Monitoring:${NC}"
 echo "  watch -n 1 nvidia-smi          # GPU usage"
 echo "  tail -f $LOG_DIR/*.log         # All logs"
-echo "  pkill -f 'run_emtom.sh gen'    # Kill all"
+echo "  pkill -9 -f 'emtom/task_gen/runner.py'  # Kill all"
 echo ""
 
 # Wait for all processes

@@ -7,7 +7,7 @@ Usage:
 
 Or via shell script:
     ./emtom/run_emtom.sh generate --llm openai_chat --model gpt-5
-    ./emtom/run_emtom.sh generate --llm bedrock_claude --model sonnet
+    ./emtom/run_emtom.sh generate --llm anthropic_claude --model sonnet
 """
 
 from __future__ import annotations
@@ -230,7 +230,10 @@ def main(config: DictConfig) -> None:
 
     # Validate required parameters
     if not llm_provider:
-        cprint("Error: llm_provider is required. Use +llm_provider=openai_chat or +llm_provider=bedrock_claude", "red")
+        cprint(
+            "Error: llm_provider is required. Use +llm_provider=openai_chat, +llm_provider=anthropic_claude, or +llm_provider=bedrock_claude",
+            "red",
+        )
         sys.exit(1)
     if not model:
         cprint("Error: model is required. Use +model=<model_name>", "red")

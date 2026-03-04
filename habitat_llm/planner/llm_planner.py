@@ -782,13 +782,26 @@ class LLMPlanner(Planner):
             agent.uid: self.replan_required for agent in self.agents
         }
 
-        # Drop Communicate responses to avoid triggering replans; messages already delivered in context.
+        # Keep full Communicate responses for runner logs, but do not trigger
+        # replans from simple delivery acknowledgments.
+        communicate_agents = set()
         for agent in self.agents:
-            sig = self.last_high_level_actions.get(agent.uid, ("", "", ""))
+            sig = high_level_actions.get(agent.uid, ("", "", ""))
             if sig[0] == "Communicate":
-                responses[agent.uid] = ""
-        self.replan_required = any(responses.values())
-        print_str += self._add_responses_to_prompt(responses)
+                communicate_agents.add(agent.uid)
+
+        # Only non-communicate responses force a fresh LLM replan.
+        self.replan_required = any(
+            bool(response)
+            for uid, response in responses.items()
+            if uid not in communicate_agents
+        )
+
+        # Keep prompt noise low: teammate messages already flow into context.
+        responses_for_prompt = dict(responses)
+        for uid in communicate_agents:
+            responses_for_prompt[uid] = ""
+        print_str += self._add_responses_to_prompt(responses_for_prompt)
         # Preserve last_high_level_actions as produced
         self.last_high_level_actions = high_level_actions
 

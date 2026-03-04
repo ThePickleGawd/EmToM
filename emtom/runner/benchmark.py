@@ -345,6 +345,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
             llm_agent_state: Dict[int, Dict[str, Any]] = {}
             max_skill_steps = 1500
 
+            # Benchmark turns are action-completion rounds; force a fresh
+            # high-level plan each turn to avoid stale-action carryover loops.
+            for uid, planner in self.planners.items():
+                if f"agent_{uid}" not in self.human_agents:
+                    planner.replan_required = True
+
             # Buffer messages sent during this turn - they should only be visible next turn
             message_buffer: List[tuple] = []
             blocked_message_by_sender: Dict[int, str] = {}
@@ -544,12 +550,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     elif not low_level_actions or uid not in low_level_actions:
                         # Perception tool (Communicate, Find*, etc.) completed
                         # instantly — no simulation steps needed. The planner may
-                        # have cleared the response string (e.g. Communicate
-                        # responses are set to "" to prevent replans), so
-                        # reconstruct a sensible fallback.
+                        # return no response text, so reconstruct a fallback.
                         response = responses_dict.get(uid, "")
-                        if not response and orig_action_name == "Communicate":
-                            response = "Message delivered."
                         llm_agent_state[uid]['response'] = response or "Executed."
                         llm_agent_state[uid]['action_done'] = True
 
@@ -649,6 +651,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
                                 ap[agent_name] = (room, state['skill_steps'])
 
                     try:
+                        # Enforce one LLM call per turn: after the turn's initial
+                        # planning pass, phase-3 updates must never trigger a replan.
+                        state['planner'].replan_required = False
                         low_level_actions, planner_info, planner_done = state['planner'].get_next_action(
                             state['instruction'], observations, world_graph
                         )

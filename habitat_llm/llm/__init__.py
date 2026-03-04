@@ -10,6 +10,7 @@ from omegaconf import DictConfig, OmegaConf
 
 import habitat_llm
 from habitat_llm.llm.base_llm import BaseLLM
+from habitat_llm.llm.anthropic_claude import AnthropicClaude  # noqa: F401
 from habitat_llm.llm.bedrock_claude import BedrockClaude  # noqa: F401
 from habitat_llm.llm.hf_model import HFModel  # noqa: F401
 from habitat_llm.llm.llama import Llama  # noqa: F401

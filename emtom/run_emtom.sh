@@ -36,14 +36,41 @@ expand_model_name() {
     esac
 }
 
+has_anthropic_api_key() {
+    # Prefer exported env var.
+    if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+        return 0
+    fi
+
+    # Fallback to .env in project root.
+    if [[ -f ".env" ]]; then
+        local line
+        line=$(grep -E '^[[:space:]]*ANTHROPIC_API_KEY[[:space:]]*=' .env | tail -n 1 || true)
+        if [[ -n "$line" ]]; then
+            local value
+            value=$(printf '%s' "$line" | sed -E "s/^[^=]+=//; s/^[[:space:]]+//; s/[[:space:]]+$//; s/^['\\\"]//; s/['\\\"]$//")
+            if [[ -n "$value" ]]; then
+                return 0
+            fi
+        fi
+    fi
+
+    return 1
+}
+
 # Auto-detect LLM provider from model name
 detect_llm_provider() {
     local model=$1
     case $model in
-        gpt-5|gpt-5-mini|gpt-5.1|gpt-5.2)
+        gpt-5|gpt-5-mini|gpt-5.1|gpt-5.2|o3)
             echo "openai_chat" ;;
-        sonnet|haiku|opus)
-            echo "bedrock_claude" ;;
+        sonnet|sonnet-4.5|sonnet4.5|haiku|haiku-4.5|haiku4.5|opus|opus-4.5|opus4.5)
+            if has_anthropic_api_key; then
+                echo "anthropic_claude"
+            else
+                echo "bedrock_claude"
+            fi
+            ;;
         kimi-k2-thinking|moonshot.kimi-k2-thinking)
             echo "bedrock_kimi" ;;
         ministral-3-8b|ministral-3-14b|mistral-large-3|mistral.ministral-3-8b-instruct|mistral.ministral-3-14b-instruct|mistral.mistral-large-3-675b-instruct)
@@ -126,6 +153,13 @@ TOM_RATIO_TOLERANCE=0.08  # Allowed drift from target before guidance kicks in
 STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
 REPORT_FILE=""  # Optional JSON report output path for static verification
 NO_CALIBRATION=false  # Don't write benchmark results back into source task JSONs
+
+# Track which flags were explicitly set (for difficulty presets)
+TOM_L1_EXPLICIT=false
+TOM_L2_EXPLICIT=false
+TOM_L3_EXPLICIT=false
+SUBTASKS_MIN_EXPLICIT=false
+SUBTASKS_MAX_EXPLICIT=false
 
 print_usage() {
     echo -e "${BOLD}EMTOM Benchmark Pipeline${NC}"
@@ -976,14 +1010,18 @@ while [[ $# -gt 0 ]]; do
         --subtasks)
             SUBTASKS_MIN=$2
             SUBTASKS_MAX=$2
+            SUBTASKS_MIN_EXPLICIT=true
+            SUBTASKS_MAX_EXPLICIT=true
             shift 2
             ;;
         --subtasks-min)
             SUBTASKS_MIN=$2
+            SUBTASKS_MIN_EXPLICIT=true
             shift 2
             ;;
         --subtasks-max)
             SUBTASKS_MAX=$2
+            SUBTASKS_MAX_EXPLICIT=true
             shift 2
             ;;
         --iterations-per-task)
@@ -1072,14 +1110,17 @@ while [[ $# -gt 0 ]]; do
             ;;
         --tom-target-l1)
             TOM_TARGET_L1=$2
+            TOM_L1_EXPLICIT=true
             shift 2
             ;;
         --tom-target-l2)
             TOM_TARGET_L2=$2
+            TOM_L2_EXPLICIT=true
             shift 2
             ;;
         --tom-target-l3)
             TOM_TARGET_L3=$2
+            TOM_L3_EXPLICIT=true
             shift 2
             ;;
         --tom-ratio-tolerance)
@@ -1154,6 +1195,33 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Apply difficulty presets for flags not explicitly set
+if [ -n "$DIFFICULTY" ]; then
+    case $DIFFICULTY in
+        easy)
+            [ "$TOM_L1_EXPLICIT" = false ]      && TOM_TARGET_L1=0.60
+            [ "$TOM_L2_EXPLICIT" = false ]      && TOM_TARGET_L2=0.30
+            [ "$TOM_L3_EXPLICIT" = false ]      && TOM_TARGET_L3=0.10
+            [ "$SUBTASKS_MIN_EXPLICIT" = false ] && SUBTASKS_MIN=2
+            [ "$SUBTASKS_MAX_EXPLICIT" = false ] && SUBTASKS_MAX=3
+            ;;
+        medium)
+            [ "$TOM_L1_EXPLICIT" = false ]      && TOM_TARGET_L1=0.30
+            [ "$TOM_L2_EXPLICIT" = false ]      && TOM_TARGET_L2=0.50
+            [ "$TOM_L3_EXPLICIT" = false ]      && TOM_TARGET_L3=0.20
+            [ "$SUBTASKS_MIN_EXPLICIT" = false ] && SUBTASKS_MIN=3
+            [ "$SUBTASKS_MAX_EXPLICIT" = false ] && SUBTASKS_MAX=5
+            ;;
+        hard)
+            [ "$TOM_L1_EXPLICIT" = false ]      && TOM_TARGET_L1=0.00
+            [ "$TOM_L2_EXPLICIT" = false ]      && TOM_TARGET_L2=0.60
+            [ "$TOM_L3_EXPLICIT" = false ]      && TOM_TARGET_L3=0.40
+            [ "$SUBTASKS_MIN_EXPLICIT" = false ] && SUBTASKS_MIN=4
+            [ "$SUBTASKS_MAX_EXPLICIT" = false ] && SUBTASKS_MAX=8
+            ;;
+    esac
+fi
 
 if [ -z "$COMMAND" ]; then
     print_usage

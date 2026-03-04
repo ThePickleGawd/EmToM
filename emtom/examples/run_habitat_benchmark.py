@@ -52,9 +52,13 @@ MODEL_PROVIDER_MAP = {
     "gpt-5-mini": "openai_chat",
     "gpt-5.1": "openai_chat",
     "gpt-5.2": "openai_chat",
-    "sonnet": "bedrock_claude",
-    "haiku": "bedrock_claude",
-    "opus": "bedrock_claude",
+    "o3": "openai_chat",
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0": "bedrock_claude",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0": "bedrock_claude",
+    "us.anthropic.claude-opus-4-5-20251101-v1:0": "bedrock_claude",
+    "claude-sonnet-4-5-20250929": "anthropic_claude",
+    "claude-haiku-4-5-20251001": "anthropic_claude",
+    "claude-opus-4-5-20251101": "anthropic_claude",
     "kimi-k2-thinking": "bedrock_kimi",
     "moonshot.kimi-k2-thinking": "bedrock_kimi",
     "ministral-3-8b": "bedrock_mistral",
@@ -69,8 +73,21 @@ MODEL_PROVIDER_MAP = {
     "qwen.qwen3-vl-235b-a22b": "bedrock_qwen",
 }
 
+CLAUDE_ALIAS_MODELS = {
+    "sonnet",
+    "sonnet-4.5",
+    "sonnet4.5",
+    "haiku",
+    "haiku-4.5",
+    "haiku4.5",
+    "opus",
+    "opus-4.5",
+    "opus4.5",
+}
+
 KNOWN_LLM_PROVIDERS = {
     "openai_chat",
+    "anthropic_claude",
     "bedrock_claude",
     "bedrock_kimi",
     "bedrock_mistral",
@@ -83,9 +100,47 @@ def expand_model_name(model: str) -> str:
     return MODEL_ALIASES.get(model, model)
 
 
+def _anthropic_api_key_available() -> bool:
+    """Check whether ANTHROPIC_API_KEY is available via env or local .env file."""
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        return True
+
+    env_path = project_root / ".env"
+    if not env_path.exists():
+        return False
+
+    try:
+        for line in env_path.read_text().splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            if key.strip() != "ANTHROPIC_API_KEY":
+                continue
+            if value.strip().strip('"').strip("'"):
+                return True
+    except Exception:
+        return False
+
+    return False
+
+
+def _preferred_claude_provider() -> str:
+    """Prefer Anthropic direct API when ANTHROPIC_API_KEY is set."""
+    return "anthropic_claude" if _anthropic_api_key_available() else "bedrock_claude"
+
+
 def detect_llm_provider(model: str) -> Optional[str]:
     """Auto-detect provider from model name."""
-    return MODEL_PROVIDER_MAP.get(model)
+    normalized = (model or "").strip()
+    if not normalized:
+        return None
+    normalized_lower = normalized.lower()
+
+    if normalized_lower in CLAUDE_ALIAS_MODELS:
+        return _preferred_claude_provider()
+
+    return MODEL_PROVIDER_MAP.get(normalized_lower)
 
 
 def parse_team_model_map(raw_value: Any) -> Dict[str, str]:
@@ -135,7 +190,7 @@ def resolve_model_spec(model_ref: str, fallback_provider: Optional[str] = None) 
 
     Supports:
     - model only: "sonnet"
-    - explicit provider: "bedrock_claude:sonnet"
+    - explicit provider: "anthropic_claude:sonnet" or "bedrock_claude:sonnet"
     """
     raw = model_ref.strip()
     if not raw:
@@ -158,7 +213,7 @@ def resolve_model_spec(model_ref: str, fallback_provider: Optional[str] = None) 
     if not provider:
         raise ValueError(
             f"Could not detect provider for model '{model_ref}'. "
-            "Use provider:model syntax, e.g. bedrock_claude:sonnet."
+            "Use provider:model syntax, e.g. anthropic_claude:sonnet."
         )
 
     return {"model": model, "llm_provider": provider}
