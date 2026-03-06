@@ -1,4 +1,4 @@
-# Dead Simple Architecture
+# Benchmark Architecture
 
 This file is the source of truth for the benchmark architecture. Keep it short and keep it current.
 
