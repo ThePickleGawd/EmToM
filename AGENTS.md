@@ -1,0 +1,19 @@
+# AGENTS.md
+
+## Conventions
+
+- Use `./emtom/run_emtom.sh` as the main entry point. Do not call internal Python entrypoints directly unless there is a clear reason.
+- Do not commit unless explicitly asked.
+- Keep the implementation dead simple. Prefer one correct path over extra flags, compatibility layers, or speculative abstractions.
+- Do not hardcode logic that should scale with the benchmark, especially prompt content, action descriptions, mechanic handling, and agent-specific behavior.
+- Keep `README.md` brief: setup, quick start, and pointers.
+- Keep `docs/*.md` as the single source of truth for benchmark architecture and conceptual behavior.
+- When the benchmark architecture changes, update `docs/*.md` in the same change.
+
+## Architecture
+
+- The benchmark has a simple pipeline: explore scenes, generate tasks, verify solvability, judge ToM quality, then benchmark agents.
+- `emtom/pddl/` owns goal syntax, epistemic compilation, and solvability checks.
+- `emtom/task_gen/` owns task authoring, validation, and calibration flow.
+- `emtom/runner/` and `emtom/cli/` own execution surfaces and user-facing commands.
+- `docs/*.md` should describe the intended system shape. If the code and docs disagree, fix one immediately.
