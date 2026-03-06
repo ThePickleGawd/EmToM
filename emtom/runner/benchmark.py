@@ -248,6 +248,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
         mode: str,
         skill_steps: Optional[int] = None,
         selected_frames: Optional[List[str]] = None,
+        selected_frame_paths: Optional[List[str]] = None,
+        selected_frame_handles: Optional[List[Dict[str, Any]]] = None,
         selector: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Build a stable action-history record for downstream analysis."""
@@ -266,6 +268,10 @@ class BenchmarkRunner(EMTOMBaseRunner):
             entry["skill_steps"] = skill_steps
         if selected_frames is not None:
             entry["selected_frames"] = list(selected_frames)
+        if selected_frame_paths is not None:
+            entry["selected_frame_paths"] = list(selected_frame_paths)
+        if selected_frame_handles is not None:
+            entry["selected_frame_handles"] = [dict(handle) for handle in selected_frame_handles]
         if selector is not None:
             entry["selector"] = selector
         return entry
@@ -791,6 +797,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
                             handle.get("frame_id")
                             for handle in state.get("selected_frames", [])
                         ],
+                        selected_frame_paths=[
+                            handle.get("path")
+                            for handle in state.get("selected_frames", [])
+                            if handle.get("path")
+                        ],
+                        selected_frame_handles=state.get("selected_frames", []),
                         selector=state.get("selector"),
                     )
                 )

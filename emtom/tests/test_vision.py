@@ -98,6 +98,16 @@ def test_action_history_entry_includes_analysis_aliases():
         mode="llm",
         skill_steps=12,
         selected_frames=["frame_1"],
+        selected_frame_paths=["/tmp/frame_1.png"],
+        selected_frame_handles=[
+            {
+                "frame_id": "frame_1",
+                "path": "/tmp/frame_1.png",
+                "turn": 2,
+                "skill_step": 12,
+                "kind": "turn_end",
+            }
+        ],
         selector={"turn": 1},
     )
 
@@ -108,6 +118,8 @@ def test_action_history_entry_includes_analysis_aliases():
     assert entry["result"] == "Successful execution!"
     assert entry["observation"] == "Successful execution!"
     assert entry["selected_frames"] == ["frame_1"]
+    assert entry["selected_frame_paths"] == ["/tmp/frame_1.png"]
+    assert entry["selected_frame_handles"][0]["frame_id"] == "frame_1"
 
 
 def test_summarize_results_prefers_steps_field():
