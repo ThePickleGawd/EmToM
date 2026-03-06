@@ -62,7 +62,7 @@ def summarize_results(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "task_id": log.get("task_id", "unknown"),
             "task_title": log.get("task_title", "Unknown"),
             "success": log.get("success", False),
-            "steps": log.get("sim_steps", 0),
+            "steps": log.get("steps", log.get("sim_steps", 0)),
             "turns": log.get("turns", 0),
             "completed_subtasks": eval_data.get("completed_subtasks", []),
             "total_subtasks": eval_data.get("total_subtasks", 0),

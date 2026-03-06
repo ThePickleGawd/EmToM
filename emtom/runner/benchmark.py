@@ -237,6 +237,39 @@ class BenchmarkRunner(EMTOMBaseRunner):
             self.planners[uid] = planner
             print(f"[BenchmarkRunner] Created planner for agent_{uid}")
 
+    @staticmethod
+    def _make_action_history_entry(
+        *,
+        sim_step: int,
+        turn: int,
+        agent_id: str,
+        action: str,
+        result: str,
+        mode: str,
+        skill_steps: Optional[int] = None,
+        selected_frames: Optional[List[str]] = None,
+        selector: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build a stable action-history record for downstream analysis."""
+        entry: Dict[str, Any] = {
+            "sim_step": sim_step,
+            "turn": turn,
+            "agent": agent_id,
+            "agent_id": agent_id,
+            "action": action,
+            "action_taken": action,
+            "result": result,
+            "observation": result,
+            "mode": mode,
+        }
+        if skill_steps is not None:
+            entry["skill_steps"] = skill_steps
+        if selected_frames is not None:
+            entry["selected_frames"] = list(selected_frames)
+        if selector is not None:
+            entry["selector"] = selector
+        return entry
+
     def run(
         self,
         instruction: Dict[str, str],
@@ -322,14 +355,16 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         observation = result.get("observation", "")
                         print(f"Agent_{uid}_Observation: {observation}", flush=True)
 
-                        self._action_history.append({
-                            "sim_step": self._step_count,
-                            "turn": turn_count,
-                            "agent": agent_id,
-                            "action": action,
-                            "result": observation,
-                            "mode": "human",
-                        })
+                        self._action_history.append(
+                            self._make_action_history_entry(
+                                sim_step=self._step_count,
+                                turn=turn_count,
+                                agent_id=agent_id,
+                                action=action,
+                                result=observation,
+                                mode="human",
+                            )
+                        )
 
                         newly_completed = self._check_subtasks()
                         if newly_completed:
@@ -743,17 +778,22 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 print(f"Agent_{uid}_Observation: {response}", flush=True)
                 print(f"  ({skill_steps} steps)", flush=True)
 
-                self._action_history.append({
-                    "sim_step": self._step_count,
-                    "turn": turn_count,
-                    "agent": agent_id,
-                    "action": high_level_action,
-                    "result": response,
-                    "mode": "llm",
-                    "skill_steps": skill_steps,
-                    "selected_frames": [handle.get("frame_id") for handle in state.get("selected_frames", [])],
-                    "selector": state.get("selector"),
-                })
+                self._action_history.append(
+                    self._make_action_history_entry(
+                        sim_step=self._step_count,
+                        turn=turn_count,
+                        agent_id=agent_id,
+                        action=high_level_action,
+                        result=response,
+                        mode="llm",
+                        skill_steps=skill_steps,
+                        selected_frames=[
+                            handle.get("frame_id")
+                            for handle in state.get("selected_frames", [])
+                        ],
+                        selector=state.get("selector"),
+                    )
+                )
 
                 # Update belief tracker with action results
                 self._update_beliefs_for_action(agent_id, high_level_action, response)
@@ -823,7 +863,13 @@ class BenchmarkRunner(EMTOMBaseRunner):
             comm_dict = None
 
         # Save outputs
-        self._save_outputs(instruction, evaluation, turn_count, comm_metrics=comm_dict)
+        self._save_outputs(
+            instruction,
+            evaluation,
+            turn_count,
+            done=done,
+            comm_metrics=comm_dict,
+        )
 
         result = {
             "steps": self._step_count,
@@ -1461,11 +1507,13 @@ class BenchmarkRunner(EMTOMBaseRunner):
         instruction: Dict[str, str],
         evaluation: Dict[str, Any],
         turn_count: int,
+        done: bool,
         comm_metrics: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Save video, planner log, and prompts."""
         task_id = self.task.task_id if self.task else "unknown"
         sim_steps = self._step_count
+        success = evaluation.get("success", False)
 
         # Save video
         mode = "human" if self.human_agents else "benchmark"
@@ -1477,9 +1525,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
             "task_title": self.task.title if self.task else "Unknown",
             "instruction": instruction,
             "mechanics_active": self.game_manager.get_state().active_mechanics if self.game_manager else [],
-            "sim_steps": sim_steps,
+            "steps": sim_steps,
+            "sim_steps": sim_steps,  # Legacy alias kept for older analysis scripts.
             "turns": turn_count,
+            "done": done,
             "episode_over": self._episode_done,
+            "success": success,
             "human_agents": list(self.human_agents),
             "llm_agents": [f"agent_{uid}" for uid in self.planners.keys()],
             "action_history": self._action_history,
@@ -1488,7 +1539,6 @@ class BenchmarkRunner(EMTOMBaseRunner):
         if evaluation:
             log_data["evaluation"] = evaluation
             log_data["percent_complete"] = evaluation.get("percent_complete", 0.0)
-            log_data["success"] = evaluation.get("success", False)
 
         if self.task and self.task.mechanic_bindings:
             log_data["mechanic_bindings"] = [b.to_dict() for b in self.task.mechanic_bindings]

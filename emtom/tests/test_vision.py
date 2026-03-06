@@ -3,7 +3,9 @@ from __future__ import annotations
 import numpy as np
 from omegaconf import OmegaConf
 
+from emtom.runner.benchmark import BenchmarkRunner
 from emtom.runner.base import EMTOMBaseRunner
+from emtom.utils.summarize import summarize_results
 from emtom.vision import (
     VisualObservationStore,
     build_candidate_frame_set,
@@ -84,3 +86,50 @@ def test_candidate_downsampling_and_selector_parsing():
 
     fallback = parse_selector_response("SELECTED_FRAMES:", candidates, min_select=1, max_select=5)
     assert fallback[-1]["frame_id"] == "frame_7"
+
+
+def test_action_history_entry_includes_analysis_aliases():
+    entry = BenchmarkRunner._make_action_history_entry(
+        sim_step=4,
+        turn=2,
+        agent_id="agent_0",
+        action="Navigate[table_22]",
+        result="Successful execution!",
+        mode="llm",
+        skill_steps=12,
+        selected_frames=["frame_1"],
+        selector={"turn": 1},
+    )
+
+    assert entry["agent"] == "agent_0"
+    assert entry["agent_id"] == "agent_0"
+    assert entry["action"] == "Navigate[table_22]"
+    assert entry["action_taken"] == "Navigate[table_22]"
+    assert entry["result"] == "Successful execution!"
+    assert entry["observation"] == "Successful execution!"
+    assert entry["selected_frames"] == ["frame_1"]
+
+
+def test_summarize_results_prefers_steps_field():
+    summary = summarize_results(
+        [
+            {
+                "task_id": "task-1",
+                "task_title": "Example",
+                "success": True,
+                "steps": 6,
+                "sim_steps": 99,
+                "turns": 3,
+                "evaluation": {
+                    "completed_subtasks": [0],
+                    "total_subtasks": 1,
+                    "required_subtasks": 1,
+                    "completed_required": 1,
+                    "percent_complete": 1.0,
+                    "percent_required_complete": 1.0,
+                },
+            }
+        ]
+    )
+
+    assert summary["task_results"][0]["steps"] == 6
