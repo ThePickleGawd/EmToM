@@ -504,10 +504,10 @@ run_benchmark() {
         SAVE_VIDEO_OVERRIDE="++evaluation.save_video=false"
     fi
 
-    OBSERVATION_MODE_OVERRIDE="benchmark_observation_mode=$OBSERVATION_MODE"
+    OBSERVATION_MODE_OVERRIDE="++benchmark_observation_mode=$OBSERVATION_MODE"
     VISION_SELECTOR_OVERRIDES=""
     if [ "$OBSERVATION_MODE" = "vision" ]; then
-        VISION_SELECTOR_OVERRIDES="benchmark_vision.selector_min_frames=$SELECTOR_MIN_FRAMES benchmark_vision.selector_max_frames=$SELECTOR_MAX_FRAMES benchmark_vision.selector_max_candidates=$SELECTOR_MAX_CANDIDATES"
+        VISION_SELECTOR_OVERRIDES="++benchmark_vision.selector_min_frames=$SELECTOR_MIN_FRAMES ++benchmark_vision.selector_max_frames=$SELECTOR_MAX_FRAMES ++benchmark_vision.selector_max_candidates=$SELECTOR_MAX_CANDIDATES"
     fi
 
     # Optional benchmark task category filter

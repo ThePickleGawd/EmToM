@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 from omegaconf import OmegaConf
 
@@ -38,14 +40,30 @@ def _make_handles(count: int):
 def test_textual_visual_summary_toggle():
     text_runner = DummyRunner(OmegaConf.create({"benchmark_observation_mode": "text"}))
     vision_runner = DummyRunner(OmegaConf.create({"benchmark_observation_mode": "vision"}))
+    text_runner.env_interface = SimpleNamespace(get_agent_room=lambda uid: "kitchen_0")
+    vision_runner.env_interface = SimpleNamespace(get_agent_room=lambda uid: "kitchen_0")
 
     snapshots = ["[Step 30] kitchen_0: mug_0 (on counter_1)."]
     agents_passed = {"agent_1": ("kitchen_0", 30)}
 
-    text_result = text_runner._append_textual_visual_summary("Successful execution!", snapshots, agents_passed)
-    vision_result = vision_runner._append_textual_visual_summary("Successful execution!", snapshots, agents_passed)
+    text_result = text_runner._append_textual_visual_summary(
+        "Successful execution!",
+        0,
+        snapshots,
+        agents_passed,
+    )
+    vision_result = vision_runner._append_textual_visual_summary(
+        "Successful execution!",
+        0,
+        snapshots,
+        agents_passed,
+    )
 
-    assert "Surroundings observed while acting" in text_result
+    assert "agent_0_VisualSummary:" in text_result
+    assert "- Traversed: kitchen_0" in text_result
+    assert "- Saw: mug_0 (on counter_1)" in text_result
+    assert "- Saw other agents: agent_1 in kitchen_0" in text_result
+    assert "- Ended in: kitchen_0" in text_result
     assert vision_result == "Successful execution!"
 
 
@@ -145,3 +163,23 @@ def test_summarize_results_prefers_steps_field():
     )
 
     assert summary["task_results"][0]["steps"] == 6
+
+
+def test_inject_summary_into_planner_context():
+    planner = SimpleNamespace(
+        curr_prompt="Task: demo\nThought:",
+        trace="Task: demo\nThought:",
+        planner_config=SimpleNamespace(
+            planning_mode="cot",
+            llm=SimpleNamespace(user_tag="", assistant_tag="", eot_tag=""),
+        ),
+    )
+
+    EMTOMBaseRunner._inject_summary_into_planner_context(
+        planner,
+        "agent_0_VisualSummary:\n- Traversed: hallway_0",
+    )
+
+    assert "agent_0_VisualSummary:\n- Traversed: hallway_0" in planner.curr_prompt
+    assert planner.curr_prompt.endswith("Thought:")
+    assert "Surroundings observed while acting" not in planner.curr_prompt

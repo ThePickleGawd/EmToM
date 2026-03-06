@@ -750,12 +750,22 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 high_level_action = state['high_level_action']
                 response = state['response']
                 skill_steps = state['skill_steps']
+                visual_summary = self._build_textual_visual_summary(
+                    uid,
+                    surroundings.get(uid, []),
+                    agents_passed.get(uid),
+                )
 
                 # Append surroundings observations collected during motor skill
                 response = self._append_textual_visual_summary(
                     response,
+                    uid,
                     surroundings.get(uid, []),
                     agents_passed.get(uid),
+                )
+                self._inject_summary_into_planner_context(
+                    state.get("planner"),
+                    visual_summary,
                 )
 
                 # Apply mechanic state changes after successful execution

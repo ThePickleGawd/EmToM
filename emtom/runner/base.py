@@ -69,12 +69,113 @@ class EMTOMBaseRunner(ABC):
     def _append_textual_visual_summary(
         self,
         base_text: str,
+        uid: int,
         snapshots: List[str],
         agents_passed: Optional[Dict[str, tuple]] = None,
     ) -> str:
         if self._is_vision_mode():
             return base_text
-        return base_text + self._format_surroundings(snapshots, agents_passed)
+        summary = self._build_textual_visual_summary(uid, snapshots, agents_passed)
+        if not summary:
+            return base_text
+        return f"{base_text}\n\n{summary}" if base_text else summary
+
+    def _build_textual_visual_summary(
+        self,
+        uid: int,
+        snapshots: List[str],
+        agents_passed: Optional[Dict[str, tuple]] = None,
+    ) -> str:
+        """Build one compact per-turn visual summary for text-mode runs."""
+        if self._is_vision_mode():
+            return ""
+
+        traversed_rooms: List[str] = []
+        seen_objects: List[str] = []
+        seen_agents: List[str] = []
+
+        for snapshot in snapshots:
+            match = re.match(r"\[Step \d+\]\s+([^:]+):\s+(.*)", snapshot.strip())
+            if not match:
+                continue
+
+            room_name = match.group(1).strip()
+            remainder = match.group(2).strip()
+            if room_name and room_name not in traversed_rooms:
+                traversed_rooms.append(room_name)
+
+            parts = [part.strip() for part in remainder.split(".") if part.strip()]
+            if parts:
+                object_part = parts[0]
+                if object_part and object_part.lower() != "no objects nearby":
+                    for obj in [item.strip() for item in object_part.split(",")]:
+                        if obj and obj not in seen_objects:
+                            seen_objects.append(obj)
+
+                for part in parts[1:]:
+                    if re.match(r"agent_\d+\s+(nearby|in\s+\S+)", part):
+                        if part not in seen_agents:
+                            seen_agents.append(part)
+
+        if agents_passed:
+            for agent_name, (room_name, _) in agents_passed.items():
+                descriptor = f"{agent_name} in {room_name}"
+                if descriptor not in seen_agents:
+                    seen_agents.append(descriptor)
+
+        ended_in = None
+        try:
+            ended_in = self.env_interface.get_agent_room(uid)
+        except Exception:
+            ended_in = None
+
+        lines: List[str] = []
+        if traversed_rooms:
+            lines.append(f"- Traversed: {' -> '.join(traversed_rooms)}")
+        if seen_objects:
+            lines.append(f"- Saw: {', '.join(seen_objects[:5])}")
+        if seen_agents:
+            lines.append(f"- Saw other agents: {', '.join(seen_agents[:3])}")
+        if ended_in:
+            lines.append(f"- Ended in: {ended_in}")
+        elif not lines:
+            lines.append("- No notable new visual observations")
+
+        agent_id = f"agent_{uid}"
+        return f"{agent_id}_VisualSummary:\n" + "\n".join(lines)
+
+    @staticmethod
+    def _inject_summary_into_planner_context(
+        planner: Any,
+        summary: str,
+    ) -> None:
+        """Append a late runner-generated summary into the planner prompt history."""
+        if not summary or planner is None or not hasattr(planner, "curr_prompt"):
+            return
+
+        llm_cfg = getattr(getattr(planner, "planner_config", None), "llm", None)
+        user_tag = getattr(llm_cfg, "user_tag", "")
+        assistant_tag = getattr(llm_cfg, "assistant_tag", "")
+        eot_tag = getattr(llm_cfg, "eot_tag", "")
+        planning_mode = str(getattr(getattr(planner, "planner_config", None), "planning_mode", "")).lower()
+
+        prompt_thought_suffix = f"{assistant_tag}Thought:"
+        trace_thought_suffix = "Thought:"
+
+        if planning_mode == "cot":
+            if planner.curr_prompt.endswith(prompt_thought_suffix):
+                planner.curr_prompt = planner.curr_prompt[: -len(prompt_thought_suffix)]
+            if hasattr(planner, "trace") and planner.trace.endswith(trace_thought_suffix):
+                planner.trace = planner.trace[: -len(trace_thought_suffix)]
+
+        planner.curr_prompt += f"{user_tag}{summary}\n{eot_tag}"
+        if hasattr(planner, "trace"):
+            planner.trace += f"{summary}\n"
+
+        if planning_mode == "cot":
+            planner.curr_prompt += prompt_thought_suffix
+            if hasattr(planner, "trace"):
+                planner.trace += trace_thought_suffix
 
     def setup(
         self,
@@ -656,6 +757,7 @@ class EMTOMBaseRunner(ABC):
             # Append surroundings observations collected during motor skill
             obs_text = self._append_textual_visual_summary(
                 obs_text,
+                uid,
                 surroundings_snapshots,
                 agents_passed,
             )
@@ -1104,6 +1206,7 @@ class EMTOMBaseRunner(ABC):
             obs_text = (state["response"] or "").strip()
             obs_text = self._append_textual_visual_summary(
                 obs_text,
+                uid,
                 surroundings.get(uid, []),
                 agents_passed.get(uid),
             )
@@ -1420,35 +1523,6 @@ class EMTOMBaseRunner(ABC):
             pass
 
         return nearby
-
-    @staticmethod
-    def _format_surroundings(
-        snapshots: List[str],
-        agents_passed: Optional[Dict[str, tuple]] = None,
-    ) -> str:
-        """
-        Format accumulated surroundings snapshots and agent encounters.
-
-        Args:
-            snapshots: List of surroundings snapshot strings (last 3 kept).
-            agents_passed: Optional dict mapping agent_name -> (room, step)
-                           for agents encountered in the same room during execution.
-
-        Returns empty string if no snapshots and no encounters.
-        """
-        parts = []
-        if snapshots:
-            lines = "\n".join(f"- {s}" for s in snapshots)
-            parts.append(f"Surroundings observed while acting:\n{lines}")
-        if agents_passed:
-            encounter_strs = [
-                f"{name} (in {room} at step {step})"
-                for name, (room, step) in agents_passed.items()
-            ]
-            parts.append(f"Agents passed while acting: {', '.join(encounter_strs)}")
-        if not parts:
-            return ""
-        return "\n\n" + "\n\n".join(parts)
 
     def evaluate_task(
         self,
