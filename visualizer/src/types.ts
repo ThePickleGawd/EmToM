@@ -7,6 +7,7 @@ export interface ActionEntry {
   skill_steps: number;
   selected_frames: string[];
   frame_paths: string[];
+  thought?: string;
 }
 
 export interface TaskDetail {

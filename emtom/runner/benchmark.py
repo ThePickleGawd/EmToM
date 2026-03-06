@@ -251,6 +251,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         selected_frame_paths: Optional[List[str]] = None,
         selected_frame_handles: Optional[List[Dict[str, Any]]] = None,
         selector: Optional[Dict[str, Any]] = None,
+        thought: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Build a stable action-history record for downstream analysis."""
         entry: Dict[str, Any] = {
@@ -264,6 +265,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
             "observation": result,
             "mode": mode,
         }
+        if thought is not None:
+            entry["thought"] = thought
         if skill_steps is not None:
             entry["skill_steps"] = skill_steps
         if selected_frames is not None:
@@ -814,6 +817,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         ],
                         selected_frame_handles=state.get("selected_frames", []),
                         selector=state.get("selector"),
+                        thought=state.get("planner_info", {}).get("thought", {}).get(uid),
                     )
                 )
 

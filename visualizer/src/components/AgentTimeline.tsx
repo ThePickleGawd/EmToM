@@ -66,6 +66,12 @@ export default function AgentTimeline({ history, agents, onImageClick }: Props) 
                     </span>
                   )}
                 </div>
+                {entry.thought && (
+                  <div className="action-thought">
+                    <div className="action-thought-label">Thought</div>
+                    {entry.thought}
+                  </div>
+                )}
                 <div className="action-text">{entry.action}</div>
                 <div className="action-result">
                   <div className="action-result-label">Result</div>

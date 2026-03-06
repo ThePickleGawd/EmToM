@@ -23,7 +23,7 @@ def make_relative_path(abs_path: str) -> str:
 def process_action(entry: dict) -> dict:
     """Extract relevant fields from an action_history entry."""
     frame_paths = [make_relative_path(p) for p in entry.get("selected_frame_paths", [])]
-    return {
+    out = {
         "turn": entry.get("turn"),
         "sim_step": entry.get("sim_step"),
         "agent": entry.get("agent"),
@@ -33,6 +33,9 @@ def process_action(entry: dict) -> dict:
         "selected_frames": entry.get("selected_frames", []),
         "frame_paths": frame_paths,
     }
+    if entry.get("thought"):
+        out["thought"] = entry["thought"]
+    return out
 
 
 def process_task_dir(task_dir: Path) -> Optional[dict]:

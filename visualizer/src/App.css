@@ -439,6 +439,29 @@ body {
   margin-left: auto;
 }
 
+.action-thought {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  background: #fefce8;
+  border-left: 3px solid #eab308;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin-bottom: 8px;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.action-thought-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-weight: 600;
+  color: #a16207;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+
 .action-text {
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
