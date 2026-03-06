@@ -16,7 +16,7 @@ FD discovers relay chains automatically:
   observe → knows_a0 → inform → knows_a1 → relay → knows_a2
 
 Nested K: K(a0, K(a2, phi)) adds a second-layer knowledge predicate for a0
-knowing that a2 knows, achievable via inference or communication.
+knowing that a2 knows, achievable via communication.
 """
 
 from __future__ import annotations
@@ -153,11 +153,11 @@ def compile_epistemic(
     # Build inform actions: for every (sender, receiver) with can_communicate
     extra_actions.extend(
         _build_inform_actions_network(
-            leaf_facts, all_agents, can_comm, observability
+            leaf_facts, k_goals, all_agents, can_comm, observability
         )
     )
 
-    # Build nested K actions (inference + communication for outer layer)
+    # Build nested K actions (communication for outer layer)
     extra_actions.extend(
         _build_nested_k_actions(k_goals, all_agents, can_comm, observability)
     )
@@ -209,6 +209,13 @@ def _fact_id(agent: str, formula: Formula) -> str:
     return hashlib.md5(key.encode()).hexdigest()[:8]
 
 
+def _knowledge_fact_id(formula: EpistemicFormula) -> str:
+    """Return the fact_id suffix used for the given epistemic formula."""
+    if isinstance(formula.inner, (Knows, Believes)):
+        return _fact_id(formula.agent, formula.inner)
+    return _leaf_fact_hash(formula.inner)
+
+
 def _epistemic_nesting_depth(formula: Formula) -> int:
     """Count the number of K/B layers in a formula."""
     if isinstance(formula, (Knows, Believes)):
@@ -249,8 +256,7 @@ def _collect_k_goals(
         inner_k_fid = None
         if isinstance(inner, (Knows, Believes)):
             # Nested: inner fact_id for the inner K goal
-            inner_leaf = _get_leaf_formula(inner.inner)
-            inner_k_fid = _leaf_fact_hash(inner_leaf) if inner_leaf else None
+            inner_k_fid = _knowledge_fact_id(inner)
             # Outer fact_id is agent-specific
             fid = _fact_id(agent, inner)
         else:
@@ -419,6 +425,7 @@ def _build_observe_actions_network(
 
 def _build_inform_actions_network(
     leaf_facts: Dict[str, Formula],
+    k_goals: List[KGoalNode],
     all_agents: List[str],
     can_comm: Set[Tuple[str, str]],
     obs: ObservabilityModel,
@@ -428,10 +435,22 @@ def _build_inform_actions_network(
     For each fact and each (sender, receiver) with can_communicate:
     - Precondition: sender knows the fact + budget token
     - Effect: receiver knows the fact + consume token
+    - Optional effect: sender knows receiver now knows the fact
 
     FD discovers relay chains: observe → knows_a0 → inform → knows_a1 → ...
     """
     actions: List[str] = []
+    sender_ack_preds: Dict[Tuple[str, str, str], List[str]] = {}
+
+    for kg in k_goals:
+        if not isinstance(kg.inner, (Knows, Believes)):
+            continue
+        if isinstance(kg.inner.inner, (Knows, Believes)):
+            continue
+
+        key = (kg.agent, kg.inner.agent, _leaf_fact_hash(kg.inner.inner))
+        pred_name = f"knows_{kg.agent}_{kg.fact_id}"
+        sender_ack_preds.setdefault(key, []).append(pred_name)
 
     for fhash in sorted(leaf_facts):
         for sender in all_agents:
@@ -443,27 +462,35 @@ def _build_inform_actions_network(
 
                 sender_pred = f"knows_{sender}_{fhash}"
                 receiver_pred = f"knows_{receiver}_{fhash}"
+                ack_preds = sorted(set(sender_ack_preds.get((sender, receiver, fhash), [])))
+                effect_preds = [receiver_pred, *ack_preds]
 
                 budget = obs.message_limits.get(sender)
                 if budget is not None:
                     for tok_idx in range(1, budget + 1):
                         tok_pred = f"msg_tok_{sender}_{tok_idx}"
+                        effect_clause = " ".join(f"({pred})" for pred in effect_preds)
                         action = (
                             f"(:action inform_{receiver_pred}_from_{sender}_tok{tok_idx}\n"
                             f"  :parameters ()\n"
                             f"  :precondition (and ({sender_pred}) "
                             f"(can_communicate {sender} {receiver}) "
                             f"({tok_pred}))\n"
-                            f"  :effect (and ({receiver_pred}) (not ({tok_pred}))))"
+                            f"  :effect (and {effect_clause} (not ({tok_pred}))))"
                         )
                         actions.append(action)
                 else:
+                    effect_clause = (
+                        f"({' '.join(f'({pred})' for pred in effect_preds)})"
+                        if len(effect_preds) == 1
+                        else f"(and {' '.join(f'({pred})' for pred in effect_preds)})"
+                    )
                     action = (
                         f"(:action inform_{receiver_pred}_from_{sender}\n"
                         f"  :parameters ()\n"
                         f"  :precondition (and ({sender_pred}) "
                         f"(can_communicate {sender} {receiver}))\n"
-                        f"  :effect ({receiver_pred}))"
+                        f"  :effect {effect_clause})"
                     )
                     actions.append(action)
 
@@ -471,7 +498,7 @@ def _build_inform_actions_network(
 
 
 # ---------------------------------------------------------------------------
-# Nested K actions (outer-layer inference + communication)
+# Nested K actions (outer-layer communication)
 # ---------------------------------------------------------------------------
 
 def _build_nested_k_actions(
@@ -482,9 +509,9 @@ def _build_nested_k_actions(
 ) -> List[str]:
     """Build actions for nested K goals (K(a0, K(a2, phi))).
 
-    Two mechanisms for the outer agent to learn the inner agent knows:
-    1. Inference: if outer can observe phi AND inner knows → outer infers
-    2. Communication: inner tells outer (costs budget)
+    The outer agent can only learn nested knowledge via communication from
+    the inner agent. Direct observation of the physical fact is not enough to
+    establish what another agent knows.
     """
     actions: List[str] = []
 
@@ -502,33 +529,17 @@ def _build_nested_k_actions(
             continue
         inner_pred = f"knows_{inner_agent}_{inner_fid}"
 
-        # Get the leaf formula
-        leaf = _get_leaf_formula(kg.inner.inner)
-        if leaf is None:
+        if _get_leaf_formula(kg.inner.inner) is None:
             continue
 
-        # 1. Inference: outer can observe leaf AND inner knows → infer
-        if _is_formula_observable_by(outer_agent, leaf, obs):
-            phys_precond = leaf.to_pddl()
-            action = (
-                f"(:action infer_{outer_pred}\n"
-                f"  :parameters ()\n"
-                f"  :precondition (and {phys_precond} ({inner_pred}))\n"
-                f"  :effect ({outer_pred}))"
-            )
-            actions.append(action)
-
-        # 2. Communication: any agent who knows the inner K fact tells outer
-        #    This includes the inner agent directly, or anyone who learned it.
+        # Communication: the inner agent tells the outer agent about the
+        # inner knowledge fact.
         for sender in all_agents:
             if sender == outer_agent:
                 continue
             if (sender, outer_agent) not in can_comm:
                 continue
 
-            # Sender must know the inner K fact.
-            # For now, only the inner agent actually achieves the inner K pred.
-            # (We could generalize but EmToM depth is bounded at 3.)
             if sender != inner_agent:
                 continue
 

@@ -128,6 +128,46 @@ class TestBeliefStateTracker:
         # B doesn't care about world state
         assert tracker.evaluate_epistemic(formula, lambda p, a: False)
 
+    def test_communication_establishes_second_order_knowledge(self):
+        tracker = self._make_tracker()
+        tracker.record_observation("agent_0", "is_open", ("cabinet_27",))
+
+        tracker.record_communication(
+            "agent_0", "agent_1",
+            "cabinet_27 is open",
+            lambda p, a: p == "is_open" and a == ("cabinet_27",),
+        )
+
+        formula = Knows("agent_0", Knows("agent_1", Literal("is_open", ("cabinet_27",))))
+        assert tracker.evaluate_epistemic(
+            formula,
+            lambda p, a: p == "is_open" and a == ("cabinet_27",),
+        )
+
+    def test_leaf_relay_does_not_create_third_order_knowledge(self):
+        tracker = self._make_tracker(num_agents=3)
+        tracker.record_observation("agent_2", "is_open", ("cabinet_27",))
+
+        tracker.record_communication(
+            "agent_2", "agent_1",
+            "cabinet_27 is open",
+            lambda p, a: p == "is_open" and a == ("cabinet_27",),
+        )
+        tracker.record_communication(
+            "agent_1", "agent_0",
+            "cabinet_27 is open",
+            lambda p, a: p == "is_open" and a == ("cabinet_27",),
+        )
+
+        formula = Knows(
+            "agent_0",
+            Knows("agent_1", Knows("agent_2", Literal("is_open", ("cabinet_27",)))),
+        )
+        assert not tracker.evaluate_epistemic(
+            formula,
+            lambda p, a: p == "is_open" and a == ("cabinet_27",),
+        )
+
     def test_evaluate_non_epistemic_literal(self):
         tracker = self._make_tracker()
         formula = Literal("is_open", ("cabinet_27",))

@@ -45,6 +45,9 @@ class BeliefStateTracker:
     # agent -> set of believed facts
     beliefs: Dict[str, Set[Fact]] = field(default_factory=dict)
 
+    # agent -> explicit higher-order beliefs established by communication
+    epistemic_beliefs: Dict[str, Set[Formula]] = field(default_factory=dict)
+
     # agent -> current room
     agent_rooms: Dict[str, str] = field(default_factory=dict)
 
@@ -81,7 +84,9 @@ class BeliefStateTracker:
         tracker._rebuild_room_objects()
         # Initialize empty belief sets for all agents
         for i in range(num_agents):
-            tracker.beliefs.setdefault(f"agent_{i}", set())
+            agent_id = f"agent_{i}"
+            tracker.beliefs.setdefault(agent_id, set())
+            tracker.epistemic_beliefs.setdefault(agent_id, set())
         return tracker
 
     def record_observation(
@@ -151,6 +156,8 @@ class BeliefStateTracker:
         """
         sender_beliefs = self.beliefs.setdefault(sender, set())
         receiver_beliefs = self.beliefs.setdefault(receiver, set())
+        sender_epistemic = self.epistemic_beliefs.setdefault(sender, set())
+        receiver_epistemic = self.epistemic_beliefs.setdefault(receiver, set())
 
         # Find object IDs mentioned in the message
         # Match patterns like: cabinet_27, bottle_4, item_key_1, etc.
@@ -159,10 +166,12 @@ class BeliefStateTracker:
         mentioned_ids = {mid for mid in mentioned_ids if not mid.startswith("agent_")}
 
         # Transfer sender's beliefs about mentioned objects
+        transferred_facts: Set[Fact] = set()
         for fact in list(sender_beliefs):
             pred, args = fact
             if any(arg in mentioned_ids for arg in args):
                 receiver_beliefs.add(fact)
+                transferred_facts.add(fact)
 
         # Check binary predicates between mentioned ID pairs against world state.
         # When sender mentions e.g. "laptop_0 on table_29", verify the
@@ -177,10 +186,17 @@ class BeliefStateTracker:
                             fact = (pred, args)
                             sender_beliefs.add(fact)
                             receiver_beliefs.add(fact)
+                            transferred_facts.add(fact)
 
         if not mentioned_ids:
             # If no IDs mentioned, transfer all sender beliefs
             receiver_beliefs.update(sender_beliefs)
+            transferred_facts.update(sender_beliefs)
+
+        for pred, args in transferred_facts:
+            literal = Literal(pred, args)
+            sender_epistemic.add(Knows(receiver, literal))
+            receiver_epistemic.add(Knows(sender, literal))
 
     def record_state_change(
         self,
@@ -289,17 +305,12 @@ class BeliefStateTracker:
             return not self._agent_believes_formula(agent, formula.operand)
 
         if isinstance(formula, (Knows, Believes)):
-            # Nested: K(a, K(b, phi)) — does agent_a believe that agent_b knows phi?
-            # Simplified: agent_a knows phi AND agent_b knows phi
-            inner_agent = formula.agent
-            return (
-                self._agent_believes_formula(agent, formula.inner)
-                and self._agent_believes_formula(inner_agent, formula.inner)
-            )
+            return formula in self.epistemic_beliefs.get(agent, set())
 
         return False
 
     def reset(self) -> None:
         """Reset all beliefs."""
         self.beliefs.clear()
+        self.epistemic_beliefs.clear()
         self.agent_rooms.clear()

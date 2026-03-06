@@ -315,6 +315,50 @@ class TestCommunicationBudget:
         warning = PDKBSolver().check_communication_budget(problem, obs)
         assert warning is None  # Trivial K() doesn't need communication
 
+    def test_topology_restricts_informers(self):
+        """Only agents with a route to the receiver should count toward budget."""
+        problem = self._make_problem("(K agent_0 (is_open cabinet_27))")
+        obs = ObservabilityModel(
+            restricted_rooms={"agent_0": {"kitchen_1"}},
+            object_rooms={"cabinet_27": "kitchen_1"},
+            message_limits={"agent_1": 1, "agent_2": 1},
+            message_targets={
+                "agent_1": {"agent_2"},
+                "agent_2": {"agent_1"},
+            },
+        )
+        warning = PDKBSolver().check_communication_budget(problem, obs)
+        assert warning is not None
+        assert "insufficient" in warning.lower()
+
+    def test_topology_allows_direct_informer(self):
+        """A sender with budget and direct access to the receiver should satisfy the check."""
+        problem = self._make_problem("(K agent_0 (is_open cabinet_27))")
+        obs = ObservabilityModel(
+            restricted_rooms={"agent_0": {"kitchen_1"}},
+            object_rooms={"cabinet_27": "kitchen_1"},
+            message_limits={"agent_1": 1},
+            message_targets={"agent_1": {"agent_0"}},
+        )
+        warning = PDKBSolver().check_communication_budget(problem, obs)
+        assert warning is None
+
+
+class TestObservabilityModel:
+    def test_restricted_communication_binding_populates_message_targets(self):
+        task = MagicMock()
+        task.num_agents = 2
+        task.mechanic_bindings = [
+            MagicMock(
+                mechanic_type="restricted_communication",
+                allowed_targets={"agent_0": ["agent_1"]},
+            )
+        ]
+        task.message_targets = None
+
+        obs = ObservabilityModel.from_task(task)
+        assert obs.message_targets == {"agent_0": {"agent_1"}}
+
 
 class TestGenerateTomReasoning:
     """Tests for LLM-generated tom_reasoning."""

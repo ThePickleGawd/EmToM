@@ -326,7 +326,7 @@ class TestInformActions:
         leaf_facts = {"abc12345": Literal("is_open", ("cabinet_27",))}
         all_agents = ["agent_0", "agent_1"]
         can_comm = {("agent_0", "agent_1"), ("agent_1", "agent_0")}
-        actions = _build_inform_actions_network(leaf_facts, all_agents, can_comm, obs)
+        actions = _build_inform_actions_network(leaf_facts, [], all_agents, can_comm, obs)
         # 2 directions × 1 fact = 2 inform actions
         assert len(actions) == 2
         assert any("from_agent_0" in a for a in actions)
@@ -338,7 +338,7 @@ class TestInformActions:
         leaf_facts = {"abc12345": Literal("is_open", ("cabinet_27",))}
         all_agents = ["agent_0", "agent_1"]
         can_comm = {("agent_1", "agent_0")}
-        actions = _build_inform_actions_network(leaf_facts, all_agents, can_comm, obs)
+        actions = _build_inform_actions_network(leaf_facts, [], all_agents, can_comm, obs)
         assert len(actions) == 3  # 3 token variants
         assert any("tok1" in a for a in actions)
         assert any("tok2" in a for a in actions)
@@ -350,8 +350,23 @@ class TestInformActions:
         leaf_facts = {"abc12345": Literal("is_open", ("cabinet_27",))}
         all_agents = ["agent_0", "agent_1"]
         can_comm: set = set()  # empty!
-        actions = _build_inform_actions_network(leaf_facts, all_agents, can_comm, obs)
+        actions = _build_inform_actions_network(leaf_facts, [], all_agents, can_comm, obs)
         assert len(actions) == 0
+
+    def test_sender_knows_receiver_knows_effect(self):
+        """Direct inform should also establish sender knowledge of receiver knowledge."""
+        inner = Knows("agent_1", Literal("is_open", ("cabinet_27",)))
+        outer = Knows("agent_0", inner)
+        obs = _make_obs()
+        nodes = _collect_k_goals(outer, obs)
+        leaf_facts = _collect_leaf_facts(nodes)
+        all_agents = ["agent_0", "agent_1"]
+        can_comm = {("agent_0", "agent_1")}
+        actions = _build_inform_actions_network(leaf_facts, nodes, all_agents, can_comm, obs)
+
+        outer_node = next(n for n in nodes if n.agent == "agent_0" and n.depth == 2)
+        expected_pred = f"knows_agent_0_{outer_node.fact_id}"
+        assert any(expected_pred in action for action in actions)
 
 
 # ---------------------------------------------------------------------------
@@ -443,8 +458,8 @@ class TestGoalReplacement:
 # ---------------------------------------------------------------------------
 
 class TestNestedKActions:
-    def test_both_can_observe_generates_inference(self):
-        """K(a0, K(a1, phi)) where both can observe → inference action."""
+    def test_both_can_observe_does_not_generate_inference(self):
+        """Observing the world does not create knowledge about another agent's knowledge."""
         inner = Knows("agent_1", Literal("is_open", ("cabinet_27",)))
         outer = Knows("agent_0", inner)
         obs = _make_obs(
@@ -454,7 +469,7 @@ class TestNestedKActions:
         all_agents = ["agent_0", "agent_1"]
         can_comm = {("agent_0", "agent_1"), ("agent_1", "agent_0")}
         actions = _build_nested_k_actions(nodes, all_agents, can_comm, obs)
-        assert any("infer_knows_agent_0" in a for a in actions)
+        assert not any("infer_knows_agent_0" in a for a in actions)
 
     def test_outer_restricted_no_inference_but_has_inform(self):
         """K(a0, K(a1, phi)) where a0 restricted → no inference, but inform from a1."""
@@ -470,6 +485,23 @@ class TestNestedKActions:
         actions = _build_nested_k_actions(nodes, all_agents, can_comm, obs)
         assert not any("infer_" in a for a in actions)
         assert any("inform_" in a and "from_agent_1" in a for a in actions)
+
+    def test_k3_uses_nested_inner_predicate(self):
+        """K3 preconditions must depend on the inner nested knowledge predicate, not the leaf fact."""
+        inner = Knows("agent_2", Literal("is_open", ("cabinet_27",)))
+        middle = Knows("agent_1", inner)
+        outer = Knows("agent_0", middle)
+        obs = _make_obs(object_rooms={"cabinet_27": "kitchen_1"})
+        nodes = _collect_k_goals(outer, obs)
+        all_agents = ["agent_0", "agent_1", "agent_2"]
+        can_comm = {("agent_1", "agent_0"), ("agent_2", "agent_1")}
+        actions = _build_nested_k_actions(nodes, all_agents, can_comm, obs)
+
+        middle_node = next(n for n in nodes if n.agent == "agent_1" and n.depth == 2)
+        leaf_hash = _leaf_fact_hash(Literal("is_open", ("cabinet_27",)))
+        outer_action = next(a for a in actions if "inform_knows_agent_0" in a and "from_agent_1" in a)
+        assert f"knows_agent_1_{middle_node.fact_id}" in outer_action
+        assert f"knows_agent_1_{leaf_hash}" not in outer_action
 
 
 # ---------------------------------------------------------------------------
@@ -854,6 +886,46 @@ class TestFDSolverEpistemicCompilation:
                 "agent_2": {"kitchen_1"},
             },
             object_rooms={"cabinet_27": "kitchen_1"},
+        )
+        result = FastDownwardSolver().solve(EMTOM_DOMAIN, problem, obs)
+        assert not result.solvable
+
+    def test_k3_ring_unsolvable(self):
+        """One-way relay can spread the leaf fact without achieving the required nested knowledge."""
+        inner = Knows("agent_2", Literal("is_open", ("cabinet_27",)))
+        middle = Knows("agent_1", inner)
+        outer = Knows("agent_0", middle)
+        problem = _make_problem(
+            outer,
+            objects={
+                "agent_0": "agent",
+                "agent_1": "agent",
+                "agent_2": "agent",
+                "agent_3": "agent",
+                "cabinet_27": "furniture",
+                "kitchen_1": "room",
+                "bedroom_1": "room",
+            },
+            init=[
+                Literal("is_closed", ("cabinet_27",)),
+                Literal("can_communicate", ("agent_0", "agent_1")),
+                Literal("can_communicate", ("agent_1", "agent_2")),
+                Literal("can_communicate", ("agent_2", "agent_3")),
+                Literal("can_communicate", ("agent_3", "agent_0")),
+            ],
+        )
+        obs = _make_obs(
+            restricted={
+                "agent_1": {"kitchen_1"},
+                "agent_3": {"kitchen_1"},
+            },
+            object_rooms={"cabinet_27": "kitchen_1"},
+            message_limits={
+                "agent_0": 1,
+                "agent_1": 1,
+                "agent_2": 1,
+                "agent_3": 1,
+            },
         )
         result = FastDownwardSolver().solve(EMTOM_DOMAIN, problem, obs)
         assert not result.solvable

@@ -262,6 +262,9 @@ class PDKBSolver:
             for agent in all_agents:
                 if agent == receiver:
                     continue
+                agent_targets = observability.message_targets.get(agent)
+                if agent_targets is not None and receiver not in agent_targets:
+                    continue
                 limit = observability.message_limits.get(agent)
                 if limit is not None:
                     total_budget += limit
@@ -360,5 +363,4 @@ def _compute_non_trivial_depth(
         return _compute_non_trivial_depth(formula.operand, observability)
 
     return 0, trivial_goals
-
 

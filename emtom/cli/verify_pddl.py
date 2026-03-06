@@ -172,6 +172,11 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
 
     # Check communication budget
     budget_warning = solver.check_communication_budget(problem, observability)
+    if budget_warning:
+        return failure(
+            f"PDDL goal is not solvable: {budget_warning}",
+            data={"valid": False, "pddl_goal": goal_spec.to_pddl_string()},
+        )
 
     # Compute ToM depth (use FD solver result for authoritative belief_depth)
     from emtom.pddl.tom_verifier import explain_tom_depth
@@ -206,8 +211,6 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
             f"{result.trivial_k_goals}. Consider removing them or adding room_restriction "
             f"to create real information asymmetry."
         )
-    if budget_warning:
-        output["budget_warning"] = budget_warning
 
     return success(output)
 

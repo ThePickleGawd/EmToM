@@ -170,6 +170,62 @@ class TestVerifyPddl:
         finally:
             os.unlink(tmp)
 
+    def test_budget_warning_returns_failure(self):
+        from emtom.cli.verify_pddl import run
+        from emtom.pddl.dsl import Problem, Literal
+        from emtom.pddl.solver import SolverResult
+        from emtom.pddl.epistemic import ObservabilityModel
+
+        task = {
+            "task_id": "test_budget_warning",
+            "title": "Budget warning",
+            "category": "cooperative",
+            "scene_id": "scene",
+            "episode_id": "episode",
+            "active_mechanics": [],
+            "mechanic_bindings": [],
+            "task": "Test task",
+            "agent_secrets": {},
+            "agent_actions": {},
+            "num_agents": 2,
+            "problem_pddl": (
+                "(define (problem test)\n"
+                "  (:domain emtom)\n"
+                "  (:objects agent_0 agent_1 - agent cabinet_27 - furniture)\n"
+                "  (:init)\n"
+                "  (:goal (K agent_0 (is_open cabinet_27)))\n"
+                ")"
+            ),
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(task, f)
+            tmp = f.name
+
+        try:
+            with patch("emtom.pddl.compiler.compile_task") as mock_compile_task, \
+                 patch("emtom.pddl.fd_solver.FastDownwardSolver.solve") as mock_solve, \
+                 patch("emtom.pddl.fd_solver.FastDownwardSolver.check_communication_budget") as mock_budget, \
+                 patch("emtom.pddl.epistemic.ObservabilityModel.from_task_with_scene") as mock_obs:
+                mock_compile_task.return_value = Problem(
+                    name="test",
+                    domain_name="emtom",
+                    objects={"agent_0": "agent", "agent_1": "agent", "cabinet_27": "furniture"},
+                    init=[Literal("can_communicate", ("agent_1", "agent_0"))],
+                    goal=Literal("is_open", ("cabinet_27",)),
+                )
+                mock_solve.return_value = SolverResult(solvable=True, solve_time=0.0)
+                mock_budget.return_value = "Communication budget may be insufficient"
+                mock_obs.return_value = ObservabilityModel()
+
+                result = run(tmp)
+
+            assert result["success"] is False
+            assert "not solvable" in result["error"].lower()
+            assert result["data"]["valid"] is False
+        finally:
+            os.unlink(tmp)
+
 
 # ---------------------------------------------------------------------------
 # submit_task tests

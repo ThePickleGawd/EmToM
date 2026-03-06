@@ -1406,8 +1406,10 @@ SUMMARY:"""
             # Benchmark ran successfully - merge results with validation
             validation_result.update(results)
 
-            # Mark test as passed (for submit_task gate)
-            self.last_test_passed = True
+            # Require non-zero benchmark progress before allowing submission.
+            evaluation = results.get("evaluation", {})
+            progress = evaluation.get("percent_complete", 0.0)
+            self.last_test_passed = progress > 0
 
             return json.dumps(validation_result, indent=2)
         except Exception as e:
@@ -1514,7 +1516,7 @@ SUMMARY:"""
         else:
             # Cooperative / default
             results_block = {
-                "passed": results.get("done", False),
+                "passed": evaluation.get("success", False),
                 "progress": evaluation.get("percent_complete", 0.0),
             }
 

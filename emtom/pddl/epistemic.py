@@ -72,6 +72,12 @@ class ObservabilityModel:
                     if isinstance(limit, (int, float)):
                         model.message_limits[agent_id] = int(limit)
 
+            elif mtype == "restricted_communication":
+                allowed_targets = binding.allowed_targets or {}
+                for agent_id, targets in allowed_targets.items():
+                    if isinstance(targets, list):
+                        model.message_targets[agent_id] = set(targets)
+
         # Message targets from task
         if task.message_targets:
             for agent_id, targets in task.message_targets.items():
