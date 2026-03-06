@@ -238,6 +238,10 @@ def run_benchmark(
     output_dir: str,
     no_video: bool = True,
     category: Optional[str] = None,
+    observation_mode: str = "text",
+    selector_min_frames: int = 1,
+    selector_max_frames: int = 5,
+    selector_max_candidates: int = 12,
 ) -> BenchmarkResults:
     """Run benchmark via run_emtom.sh and parse results.
 
@@ -257,6 +261,10 @@ def run_benchmark(
         "--tasks-dir", str(tasks_dir),
         "--model", model,
         "--output-dir", str(output_dir),
+        "--observation-mode", observation_mode,
+        "--selector-min-frames", str(selector_min_frames),
+        "--selector-max-frames", str(selector_max_frames),
+        "--selector-max-candidates", str(selector_max_candidates),
     ]
     if no_video:
         cmd.append("--no-video")
@@ -379,6 +387,10 @@ def run_benchmark_parallel(
     team_model_map: Optional[str] = None,
     extra_args: Optional[List[str]] = None,
     write_calibration: bool = True,
+    observation_mode: str = "text",
+    selector_min_frames: int = 1,
+    selector_max_frames: int = 5,
+    selector_max_candidates: int = 12,
 ) -> BenchmarkResults:
     """Run benchmark in parallel — one process per task JSON.
 
@@ -506,6 +518,10 @@ def run_benchmark_parallel(
                     "--tasks-dir", task_input,
                     "--model", model,
                     "--output-dir", bench_out,
+                    "--observation-mode", observation_mode,
+                    "--selector-min-frames", str(selector_min_frames),
+                    "--selector-max-frames", str(selector_max_frames),
+                    "--selector-max-candidates", str(selector_max_candidates),
                     "--no-calibration",
                 ]
                 if no_video:

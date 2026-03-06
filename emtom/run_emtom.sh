@@ -150,6 +150,10 @@ K_LEVEL=""  # Allowed k-levels (e.g. "2 3"). Empty = random per task.
 STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
 REPORT_FILE=""  # Optional JSON report output path for static verification
 NO_CALIBRATION=false  # Don't write benchmark results back into source task JSONs
+OBSERVATION_MODE="text"  # Benchmark observation mode: text or vision
+SELECTOR_MIN_FRAMES=1
+SELECTOR_MAX_FRAMES=5
+SELECTOR_MAX_CANDIDATES=12
 
 # Track which flags were explicitly set (for difficulty presets)
 TOM_L1_EXPLICIT=false
@@ -238,6 +242,10 @@ print_usage() {
     echo "  --tasks-dir DIR      Custom tasks directory (default: data/emtom/tasks)"
     echo "  --team-model-map MAP Team->model mapping for competitive tasks"
     echo "                       Format: team_0=sonnet,team_1=gpt-5"
+    echo "  --observation-mode MODE  Benchmark observation mode: text|vision (default: $OBSERVATION_MODE)"
+    echo "  --selector-min-frames N  Vision mode selector minimum frames (default: $SELECTOR_MIN_FRAMES)"
+    echo "  --selector-max-frames N  Vision mode selector maximum frames (default: $SELECTOR_MAX_FRAMES)"
+    echo "  --selector-max-candidates N  Vision mode selector candidate pool size (default: $SELECTOR_MAX_CANDIDATES)"
     echo "  --max-workers N      Run benchmark in parallel (N concurrent processes, GPU round-robin)"
     echo "  --no-video           Disable video recording (default: on)"
     echo "  --no-calibration     Don't write results back into source task JSONs"
@@ -297,6 +305,7 @@ print_usage() {
     echo "  ./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/my_tasks"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
     echo "  ./emtom/run_emtom.sh benchmark --category competitive"
+    echo "  ./emtom/run_emtom.sh benchmark --task data/emtom/tasks/my_task.json --model gpt-5 --observation-mode vision"
     echo "  ./emtom/run_emtom.sh benchmark --team-model-map team_0=sonnet,team_1=gpt-5"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
     echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
@@ -495,6 +504,12 @@ run_benchmark() {
         SAVE_VIDEO_OVERRIDE="++evaluation.save_video=false"
     fi
 
+    OBSERVATION_MODE_OVERRIDE="benchmark_observation_mode=$OBSERVATION_MODE"
+    VISION_SELECTOR_OVERRIDES=""
+    if [ "$OBSERVATION_MODE" = "vision" ]; then
+        VISION_SELECTOR_OVERRIDES="benchmark_vision.selector_min_frames=$SELECTOR_MIN_FRAMES benchmark_vision.selector_max_frames=$SELECTOR_MAX_FRAMES benchmark_vision.selector_max_candidates=$SELECTOR_MAX_CANDIDATES"
+    fi
+
     # Optional benchmark task category filter
     CATEGORY_OVERRIDE=""
     if [ -n "$CATEGORY" ]; then
@@ -521,6 +536,7 @@ run_benchmark() {
         echo "Task file: $TASK_FILE"
         echo "Agents: $TASK_NUM_AGENTS (from task)"
         echo "Max simulation steps: $MAX_SIM_STEPS"
+        echo "Observation mode: $OBSERVATION_MODE"
         if [ -n "$CATEGORY" ]; then
             echo "Category filter: $CATEGORY"
         fi
@@ -530,6 +546,11 @@ run_benchmark() {
         echo "=============================================="
 
         CONFIG_NAME=$(get_agent_config $TASK_NUM_AGENTS $AGENT_TYPE)
+        if [ -n "$OUTPUT_DIR" ]; then
+            SINGLE_TASK_OUTPUT_DIR="$OUTPUT_DIR"
+        else
+            SINGLE_TASK_OUTPUT_DIR='./outputs/emtom/${now:%Y-%m-%d_%H-%M-%S}-benchmark'
+        fi
 
         # Build optional overrides
         MAX_TURNS_OVERRIDE=""
@@ -547,11 +568,13 @@ run_benchmark() {
             $MAX_TURNS_OVERRIDE \
             $REPLANNING_OVERRIDES \
             $SAVE_VIDEO_OVERRIDE \
+            $OBSERVATION_MODE_OVERRIDE \
+            $VISION_SELECTOR_OVERRIDES \
             $CATEGORY_OVERRIDE \
             +task=$TASK_FILE \
             +model=$MODEL \
             +llm_provider=$LLM_PROVIDER \
-            "hydra.run.dir=./outputs/emtom/\${now:%Y-%m-%d_%H-%M-%S}-benchmark"
+            "hydra.run.dir=$SINGLE_TASK_OUTPUT_DIR"
         return
     fi
 
@@ -598,6 +621,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
     echo "LLM: $LLM_PROVIDER ($MODEL)"
     echo "Task source: $TASK_DIR ($TASK_COUNT tasks)"
     echo "Agent counts: $AGENT_COUNTS"
+    echo "Observation mode: $OBSERVATION_MODE"
     if [ -n "$CATEGORY" ]; then
         echo "Category: $CATEGORY"
     fi
@@ -623,7 +647,11 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
             --tasks-dir $TASK_DIR \
             --model $MODEL_SHORT \
             --output-dir $OUTPUT_BASE \
-            --max-workers $MAX_WORKERS"
+            --max-workers $MAX_WORKERS \
+            --observation-mode $OBSERVATION_MODE \
+            --selector-min-frames $SELECTOR_MIN_FRAMES \
+            --selector-max-frames $SELECTOR_MAX_FRAMES \
+            --selector-max-candidates $SELECTOR_MAX_CANDIDATES"
         if [ "$NO_VIDEO" = true ]; then
             PARALLEL_CMD="$PARALLEL_CMD --no-video"
         fi
@@ -664,6 +692,8 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
                 $MAX_TURNS_OVERRIDE \
                 $REPLANNING_OVERRIDES \
                 $SAVE_VIDEO_OVERRIDE \
+                $OBSERVATION_MODE_OVERRIDE \
+                $VISION_SELECTOR_OVERRIDES \
                 $CATEGORY_OVERRIDE \
                 +num_agents_filter=$NUM_AGENTS \
                 +task_dir=$TASK_DIR \
@@ -1088,6 +1118,26 @@ while [[ $# -gt 0 ]]; do
                 echo "Error: --team-model-map must include '=' entries, e.g. team_0=sonnet,team_1=gpt-5"
                 exit 1
             fi
+            shift 2
+            ;;
+        --observation-mode)
+            OBSERVATION_MODE=$2
+            if [[ "$OBSERVATION_MODE" != "text" && "$OBSERVATION_MODE" != "vision" ]]; then
+                echo "Error: --observation-mode must be 'text' or 'vision'"
+                exit 1
+            fi
+            shift 2
+            ;;
+        --selector-min-frames)
+            SELECTOR_MIN_FRAMES=$2
+            shift 2
+            ;;
+        --selector-max-frames)
+            SELECTOR_MAX_FRAMES=$2
+            shift 2
+            ;;
+        --selector-max-candidates)
+            SELECTOR_MAX_CANDIDATES=$2
             shift 2
             ;;
         --difficulty)

@@ -12,8 +12,8 @@ defaults:
   - /agent/@agents.agent_1.config: oracle_rearrange_object_states_agent
   - /wandb_conf@                : own
   # Override planner instruct to use EMTOM-specific prompts (not PARTNR few-shot examples)
-  - override /instruct@evaluation.agents.agent_0.planner.plan_config.instruct: emtom_no_visual
-  - override /instruct@evaluation.agents.agent_1.planner.plan_config.instruct: emtom_no_visual
+  - override /instruct@evaluation.agents.agent_0.planner.plan_config.instruct: emtom_agent
+  - override /instruct@evaluation.agents.agent_1.planner.plan_config.instruct: emtom_agent
   - _self_
 
 world_model:
@@ -30,6 +30,13 @@ env: habitat
 num_runs_per_episode: 1
 num_proc: 1
 dry_run: False
+benchmark_observation_mode: text
+benchmark_vision:
+  selector_prompt_name: emtom_frame_selector
+  selector_min_frames: 1
+  selector_max_frames: 5
+  selector_max_candidates: 12
+  image_format: png
 # Both embodied agents are robots; keep ids explicit
 robot_agent_uid: 0
 human_agent_uid: 1

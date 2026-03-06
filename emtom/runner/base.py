@@ -63,6 +63,19 @@ class EMTOMBaseRunner(ABC):
         # Causal event log (ARE-style tracing)
         self.event_log = EventLog()
 
+    def _is_vision_mode(self) -> bool:
+        return str(getattr(self.config, "benchmark_observation_mode", "text")).lower() == "vision"
+
+    def _append_textual_visual_summary(
+        self,
+        base_text: str,
+        snapshots: List[str],
+        agents_passed: Optional[Dict[str, tuple]] = None,
+    ) -> str:
+        if self._is_vision_mode():
+            return base_text
+        return base_text + self._format_surroundings(snapshots, agents_passed)
+
     def setup(
         self,
         env_interface: "EnvironmentInterface",
@@ -641,7 +654,11 @@ class EMTOMBaseRunner(ABC):
                     obs_text = f"Action timed out after {max_skill_steps} simulator steps."
 
             # Append surroundings observations collected during motor skill
-            obs_text += self._format_surroundings(surroundings_snapshots, agents_passed)
+            obs_text = self._append_textual_visual_summary(
+                obs_text,
+                surroundings_snapshots,
+                agents_passed,
+            )
 
             if action_failed:
                 # Log failed action
@@ -1085,7 +1102,11 @@ class EMTOMBaseRunner(ABC):
         # Phase 3: Collect results and apply mechanics
         for uid, state in agent_states.items():
             obs_text = (state["response"] or "").strip()
-            obs_text += self._format_surroundings(surroundings.get(uid, []), agents_passed.get(uid))
+            obs_text = self._append_textual_visual_summary(
+                obs_text,
+                surroundings.get(uid, []),
+                agents_passed.get(uid),
+            )
             mech_result = state["mech_result"]
 
             # Handle non-terminated actions as explicit failures.

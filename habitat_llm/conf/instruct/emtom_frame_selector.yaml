@@ -1,9 +1,3 @@
-# Deprecated alias. Historically this file was treated like a vision-mode acting prompt,
-# but EMTOM now uses:
-# - emtom_agent.yaml for the acting planner
-# - emtom_frame_selector.yaml for the separate frame-selection call
-#
-# Keep this file as a compatibility alias for older references.
 prompt: |-
     You are selecting first-person images for an embodied EMTOM agent.
 

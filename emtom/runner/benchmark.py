@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 
 from omegaconf import DictConfig
 
+from emtom.vision import VisualObservationStore
+
 from .base import EMTOMBaseRunner
 
 if TYPE_CHECKING:
@@ -38,6 +40,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         self.task: Optional["GeneratedTask"] = None
         self.human_agents: Set[str] = set()
         self._completed_subtasks: Set[str] = set()
+        self._visual_store: Optional[VisualObservationStore] = None
 
     def setup(
         self,
@@ -71,6 +74,16 @@ class BenchmarkRunner(EMTOMBaseRunner):
         message_targets = self._resolve_message_targets(task)
 
         super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions, save_video=save_video, message_targets=message_targets)
+
+        if self._is_vision_mode():
+            vision_cfg = getattr(self.config, "benchmark_vision", None)
+            image_format = getattr(vision_cfg, "image_format", "png") if vision_cfg else "png"
+            self._visual_store = VisualObservationStore(
+                os.path.join(self.output_dir, "visual_observations"),
+                image_format=image_format,
+            )
+        else:
+            self._visual_store = None
 
         # Set human agents
         if human_agents:
@@ -257,6 +270,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
         observations = self.get_observations()
         self.record_frame(observations, turn=0)
+        self._capture_visual_frames(observations, turn=0, skill_step=0, kind="initial")
 
         done = False
         turn_count = 0
@@ -280,6 +294,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
             print(f"{'='*60}", flush=True)
 
             world_graph = self.get_world_graph()
+            self._set_planner_visual_context(turn=max(turn_count - 1, 0))
 
             # =====================================================================
             # Phase 1: Handle human agents first (sequential)
@@ -493,6 +508,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
                                 'orig_action': orig_action_name,
                                 'orig_target': action_target,
                                 'skip_mechanic_apply': False,
+                                'selected_frames': planner_info.get("selected_frames", []),
+                                'selector': planner_info.get("selector"),
                             }
                             continue
 
@@ -521,6 +538,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
                                     'orig_action': orig_action_name,
                                     'orig_target': action_target,
                                     'skip_mechanic_apply': False,
+                                    'selected_frames': planner_info.get("selected_frames", []),
+                                    'selector': planner_info.get("selector"),
                                 }
                                 continue
                             low_level_actions = {uid: low_level_action}
@@ -540,6 +559,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         'orig_action': orig_action_name,
                         'orig_target': action_target,
                         'skip_mechanic_apply': False,
+                        'selected_frames': planner_info.get("selected_frames", []),
+                        'selector': planner_info.get("selector"),
                     }
 
                     # Check if action already completed in first call
@@ -631,6 +652,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         break
 
                 total_skill_steps += 1
+                self._capture_visual_frames(
+                    observations,
+                    turn=turn_count,
+                    skill_step=total_skill_steps,
+                    kind="in_action",
+                )
 
                 # Get next low-level actions for each active agent
                 for uid, state in llm_agent_state.items():
@@ -684,7 +711,11 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 skill_steps = state['skill_steps']
 
                 # Append surroundings observations collected during motor skill
-                response += self._format_surroundings(surroundings.get(uid, []), agents_passed.get(uid))
+                response = self._append_textual_visual_summary(
+                    response,
+                    surroundings.get(uid, []),
+                    agents_passed.get(uid),
+                )
 
                 # Apply mechanic state changes after successful execution
                 mech_result = state.get('mech_result')
@@ -720,6 +751,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     "result": response,
                     "mode": "llm",
                     "skill_steps": skill_steps,
+                    "selected_frames": [handle.get("frame_id") for handle in state.get("selected_frames", [])],
+                    "selector": state.get("selector"),
                 })
 
                 # Update belief tracker with action results
@@ -756,6 +789,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 observations = self.get_observations()
                 # Record end-of-turn frame (no actions displayed)
                 self.record_frame(observations, turn=turn_count)
+                self._capture_visual_frames(
+                    observations,
+                    turn=turn_count,
+                    skill_step=total_skill_steps,
+                    kind="turn_end",
+                )
 
         print(f"\n[Benchmark] Finished: steps={self._step_count}, turns={turn_count}, done={done}", flush=True)
 
@@ -795,6 +834,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
             "evaluation": evaluation,
             "success": evaluation.get("success", False),
         }
+        if self._is_vision_mode():
+            result["vision_mode"] = True
+            result["selector_metrics"] = self._collect_selector_metrics()
         if comm_dict:
             result["communication_metrics"] = comm_dict
         return result
@@ -1454,6 +1496,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
         if comm_metrics:
             log_data["communication_metrics"] = comm_metrics
 
+        if self._is_vision_mode():
+            log_data["vision_mode"] = True
+            log_data["selector_metrics"] = self._collect_selector_metrics()
+            if self._visual_store is not None:
+                log_data["visual_frame_index"] = self._visual_store.export_index()
+
         self.save_planner_log(log_data)
 
         # Save prompts from LLM planners
@@ -1493,6 +1541,46 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 else:
                     traces[agent_id] = prompt
         return traces
+
+    def _capture_visual_frames(
+        self,
+        observations: Dict[str, Any],
+        turn: int,
+        skill_step: int,
+        kind: str,
+    ) -> None:
+        if not self._is_vision_mode() or self._visual_store is None:
+            return
+
+        agent_ids = [f"agent_{uid}" for uid in sorted(self.agents.keys())]
+        self._visual_store.capture(
+            observations=observations,
+            agent_ids=agent_ids,
+            turn=turn,
+            skill_step=skill_step,
+            sim_step=self.get_sim_steps(),
+            kind=kind,
+        )
+
+    def _set_planner_visual_context(self, turn: int) -> None:
+        if not self._is_vision_mode() or self._visual_store is None:
+            return
+
+        for uid, planner in self.planners.items():
+            if not hasattr(planner, "set_visual_context"):
+                continue
+            agent_id = f"agent_{uid}"
+            planner.set_visual_context(
+                turn=turn,
+                available_frames=self._visual_store.get_turn_handles(turn, agent_id),
+            )
+
+    def _collect_selector_metrics(self) -> Dict[str, Any]:
+        metrics: Dict[str, Any] = {}
+        for uid, planner in self.planners.items():
+            if hasattr(planner, "get_selector_metrics"):
+                metrics[f"agent_{uid}"] = planner.get_selector_metrics()
+        return metrics
 
 
 def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:

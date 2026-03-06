@@ -337,6 +337,39 @@ def apply_agent_llm_configs(config: DictConfig, agent_model_mapping: Dict[str, D
             agent_conf.planner.plan_config.llm = copied_cfg
 
 
+def ensure_benchmark_observation_config(config: DictConfig) -> None:
+    """Populate benchmark observation defaults."""
+    with open_dict(config):
+        if not hasattr(config, "benchmark_observation_mode"):
+            config.benchmark_observation_mode = "text"
+        if not hasattr(config, "benchmark_vision") or config.benchmark_vision is None:
+            config.benchmark_vision = OmegaConf.create(
+                {
+                    "selector_prompt_name": "emtom_frame_selector",
+                    "selector_min_frames": 1,
+                    "selector_max_frames": 5,
+                    "selector_max_candidates": 12,
+                    "image_format": "png",
+                }
+            )
+
+
+def apply_benchmark_prompt_configs(config: DictConfig) -> None:
+    """Apply EMTOM benchmark prompt defaults with a shared acting-agent prompt."""
+    import habitat_llm
+
+    habitat_llm_dir = os.path.dirname(habitat_llm.__file__)
+    agent_instruct = OmegaConf.load(f"{habitat_llm_dir}/conf/instruct/emtom_agent.yaml")
+
+    with open_dict(config):
+        for agent_conf in config.evaluation.agents.values():
+            if not hasattr(agent_conf, "planner") or not hasattr(agent_conf.planner, "plan_config"):
+                continue
+            agent_conf.planner.plan_config.instruct = OmegaConf.create(
+                OmegaConf.to_container(agent_instruct, resolve=True)
+            )
+
+
 def load_tasks_from_file(task_file: str) -> Tuple[List[GeneratedTask], List[Dict]]:
     """Load tasks from a single JSON file.
 
@@ -450,6 +483,7 @@ def run_single_task(
         team_model_specs=team_model_specs,
     )
     apply_agent_llm_configs(config, model_assignment["agent_model_mapping"])
+    apply_benchmark_prompt_configs(config)
 
     if task.category == "competitive":
         cprint("Team model mapping for this task:", "blue")
@@ -710,6 +744,7 @@ def main(config: DictConfig) -> None:
     """Main entry point with Hydra configuration."""
     fix_config(config)
     config = setup_config(config, seed=47668090)
+    ensure_benchmark_observation_config(config)
 
     # Get default model and provider from config (passed via +model=X +llm_provider=Y)
     model = expand_model_name(config.get("model", "gpt-5.2"))
@@ -737,6 +772,7 @@ def main(config: DictConfig) -> None:
     cprint("EMTOM Habitat Benchmark", "blue")
     cprint("=" * 60, "blue")
     cprint(f"LLM: {llm_provider} ({model})", "blue")
+    cprint(f"Observation mode: {config.benchmark_observation_mode}", "blue")
     if team_model_specs:
         cprint(f"Team model mapping requested: {team_model_map_requested}", "blue")
         for team_id, spec in sorted(team_model_specs.items()):
@@ -898,6 +934,7 @@ def main(config: DictConfig) -> None:
         json.dump({
             "model": model,
             "llm_provider": llm_provider,
+            "benchmark_observation_mode": config.benchmark_observation_mode,
             "task_category_filter": task_category_filter,
             "team_model_map_requested": team_model_map_requested,
             "team_model_map_resolved": team_model_specs,

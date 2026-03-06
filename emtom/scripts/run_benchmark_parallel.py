@@ -37,6 +37,10 @@ def main():
     parser.add_argument("--category", default=None)
     parser.add_argument("--team-model-map", default=None)
     parser.add_argument("--no-calibration", action="store_true", default=False)
+    parser.add_argument("--observation-mode", default="text", choices=["text", "vision"])
+    parser.add_argument("--selector-min-frames", type=int, default=1)
+    parser.add_argument("--selector-max-frames", type=int, default=5)
+    parser.add_argument("--selector-max-candidates", type=int, default=12)
 
     args = parser.parse_args()
 
@@ -48,6 +52,10 @@ def main():
         no_video=args.no_video,
         category=args.category,
         team_model_map=args.team_model_map,
+        observation_mode=args.observation_mode,
+        selector_min_frames=args.selector_min_frames,
+        selector_max_frames=args.selector_max_frames,
+        selector_max_candidates=args.selector_max_candidates,
         write_calibration=not args.no_calibration,
     )
 
