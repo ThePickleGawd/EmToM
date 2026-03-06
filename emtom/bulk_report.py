@@ -228,6 +228,21 @@ class RunReport:
             counts[r.category] = counts.get(r.category, 0) + r.tasks_generated
         return counts
 
+    def tasks_by_k_level(self) -> Dict[int, int]:
+        """Count generated tasks by ToM k-level, reading from task JSON files."""
+        counts: Dict[int, int] = {}
+        for r in self.results:
+            for task_path in r.task_paths:
+                try:
+                    with open(task_path) as f:
+                        task_data = json.load(f)
+                    level = task_data.get("tom_level")
+                    if isinstance(level, int):
+                        counts[level] = counts.get(level, 0) + 1
+                except Exception:
+                    continue
+        return counts
+
     def errors_by_category(self) -> Dict[str, List[ProcessResult]]:
         cats: Dict[str, List[ProcessResult]] = {}
         for r in self.results:
@@ -314,6 +329,31 @@ def print_report(report: RunReport) -> None:
             share = count / total * 100
             color = GREEN if count > 0 else DIM
             print(f"  {color}{cat:<16} {count:>8} {share:>9.1f}%{RESET}")
+        print()
+
+    # ── K-Level (ToM) distribution ──
+    by_k = report.tasks_by_k_level()
+    if by_k:
+        K_COLORS = {1: GREEN, 2: YELLOW, 3: MAGENTA}
+        k_total = sum(by_k.values())
+        print(f"  {BOLD}ToM K-Level Distribution:{RESET}")
+        print(f"  {BOLD}{'┌'}{'─' * 10}{'┬'}{'─' * 10}{'┬'}{'─' * 12}{'┐'}{RESET}")
+        print(f"  {BOLD}{'│'} {'K-Level':^8} {'│'} {'Tasks':^8} {'│'} {'Share':^10} {'│'}{RESET}")
+        print(f"  {BOLD}{'├'}{'─' * 10}{'┼'}{'─' * 10}{'┼'}{'─' * 12}{'┤'}{RESET}")
+        for level in sorted(by_k.keys()):
+            count = by_k[level]
+            share = count / k_total * 100
+            color = K_COLORS.get(level, CYAN)
+            print(
+                f"  {BOLD}{'│'}{RESET} {color}{'k = ' + str(level):^8}{RESET} "
+                f"{BOLD}{'│'}{RESET} {color}{count:^8}{RESET} "
+                f"{BOLD}{'│'}{RESET} {color}{share:^10.1f}%{RESET}{BOLD}{'│'}{RESET}"
+            )
+        print(f"  {BOLD}{'├'}{'─' * 10}{'┼'}{'─' * 10}{'┼'}{'─' * 12}{'┤'}{RESET}")
+        print(
+            f"  {BOLD}{'│'} {'Total':^8} {'│'} {k_total:^8} {'│'} {'100.0%':^10} {'│'}{RESET}"
+        )
+        print(f"  {BOLD}{'└'}{'─' * 10}{'┴'}{'─' * 10}{'┴'}{'─' * 12}{'┘'}{RESET}")
         print()
 
     # ── Error breakdown ──
