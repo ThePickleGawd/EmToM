@@ -1,7 +1,11 @@
-import type { RunSummary } from "../types";
+import type { RunSummary, TaskSummary } from "../types";
+import type { Source } from "../App";
 
 interface Props {
+  source: Source;
+  onSourceChange: (s: Source) => void;
   runs: RunSummary[];
+  libraryTasks: TaskSummary[];
   selectedRunId: string;
   selectedRun?: RunSummary;
   selectedTaskId: string;
@@ -10,46 +14,69 @@ interface Props {
 }
 
 export default function Sidebar({
+  source,
+  onSourceChange,
   runs,
+  libraryTasks,
   selectedRunId,
   selectedRun,
   selectedTaskId,
   onRunChange,
   onTaskSelect,
 }: Props) {
+  const tasks = source === "library" ? libraryTasks : selectedRun?.tasks || [];
+
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
         <h1>
-          <span>EmToM</span> Benchmark Visualizer
+          <span>EmToM</span> Visualizer
         </h1>
-        <select
-          className="run-select"
-          value={selectedRunId}
-          onChange={(e) => onRunChange(e.target.value)}
-        >
-          {runs.map((run) => (
-            <option key={run.id} value={run.id}>
-              {run.id}
-            </option>
-          ))}
-        </select>
-        {selectedRun && (
-          <div className="run-meta">
-            {selectedRun.model && (
-              <span className="run-meta-item">{selectedRun.model}</span>
+        <div className="source-tabs">
+          <button
+            className={`source-tab ${source === "benchmarks" ? "active" : ""}`}
+            onClick={() => onSourceChange("benchmarks")}
+          >
+            Benchmarks
+          </button>
+          <button
+            className={`source-tab ${source === "library" ? "active" : ""}`}
+            onClick={() => onSourceChange("library")}
+          >
+            Task Library ({libraryTasks.length})
+          </button>
+        </div>
+        {source === "benchmarks" && (
+          <>
+            <select
+              className="run-select"
+              value={selectedRunId}
+              onChange={(e) => onRunChange(e.target.value)}
+            >
+              {runs.map((run) => (
+                <option key={run.id} value={run.id}>
+                  {run.id}
+                </option>
+              ))}
+            </select>
+            {selectedRun && (
+              <div className="run-meta">
+                {selectedRun.model && (
+                  <span className="run-meta-item">{selectedRun.model}</span>
+                )}
+                <span className="run-meta-item">
+                  {selectedRun.passed}/{selectedRun.total} passed
+                </span>
+                <span className="run-meta-item">
+                  {selectedRun.pass_rate.toFixed(0)}%
+                </span>
+              </div>
             )}
-            <span className="run-meta-item">
-              {selectedRun.passed}/{selectedRun.total} passed
-            </span>
-            <span className="run-meta-item">
-              {selectedRun.pass_rate.toFixed(0)}%
-            </span>
-          </div>
+          </>
         )}
       </div>
       <div className="task-list">
-        {selectedRun?.tasks.map((task) => (
+        {tasks.map((task) => (
           <div
             key={task.task_id}
             className={`task-item ${selectedTaskId === task.task_id ? "active" : ""}`}

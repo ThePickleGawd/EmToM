@@ -77,6 +77,43 @@ body {
   color: var(--accent);
 }
 
+/* ─── Source tabs ─── */
+
+.source-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.source-tab {
+  flex: 1;
+  padding: 6px 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: none;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.source-tab:first-child {
+  border-right: 1px solid var(--border);
+}
+
+.source-tab.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.source-tab:hover:not(.active) {
+  background: var(--surface-hover);
+}
+
 .run-select {
   width: 100%;
   padding: 7px 10px;
@@ -268,6 +305,98 @@ body {
   color: var(--failure);
 }
 
+/* ─── Calibration meta ─── */
+
+.calibration-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.calibration-meta-item {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 3px 8px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+}
+
+/* ─── PDDL block ─── */
+
+.pddl-toggle {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pddl-toggle:hover {
+  text-decoration: underline;
+}
+
+.pddl-block {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  margin-top: 8px;
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* ─── Trajectory toggle ─── */
+
+.trajectory-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  width: fit-content;
+}
+
+.trajectory-toggle-btn {
+  padding: 6px 14px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.trajectory-toggle-btn:last-child {
+  border-right: none;
+}
+
+.trajectory-toggle-btn.active {
+  background: var(--text);
+  color: var(--surface);
+}
+
+.trajectory-toggle-btn:hover:not(.active) {
+  background: var(--surface-hover);
+}
+
 /* ─── Agent tabs ─── */
 
 .agent-tabs {
@@ -398,6 +527,11 @@ body {
 .action-card.communicate {
   background: var(--communicate-bg);
   border-color: var(--communicate-border);
+}
+
+.action-card.visual-summary {
+  background: #faf5ff;
+  border-color: #d8b4fe;
 }
 
 .action-card-header {

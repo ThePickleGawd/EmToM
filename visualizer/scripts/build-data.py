@@ -9,6 +9,7 @@ from typing import Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 OUTPUTS_DIR = PROJECT_ROOT / "outputs" / "emtom"
+TASKS_DIR = PROJECT_ROOT / "data" / "emtom" / "tasks"
 DATA_DIR = Path(__file__).resolve().parent.parent / "public" / "data"
 
 
@@ -69,6 +70,103 @@ def process_task_dir(task_dir: Path) -> Optional[dict]:
         "llm_agents": data.get("llm_agents", []),
         "human_agents": data.get("human_agents", []),
         "action_history": actions,
+    }
+
+
+def flatten_calibration(calibration: list) -> list:
+    """Flatten calibration trajectory into action_history format."""
+    entries = []
+    for cal in calibration:
+        for turn_data in cal.get("trajectory", []):
+            turn = turn_data.get("turn", 0)
+            for agent_id, agent_data in turn_data.get("agents", {}).items():
+                entry = {
+                    "turn": turn,
+                    "sim_step": turn,
+                    "agent": agent_id,
+                    "action": agent_data.get("action", ""),
+                    "result": agent_data.get("observation", ""),
+                    "skill_steps": 0,
+                    "selected_frames": [],
+                    "frame_paths": [],
+                }
+                if agent_data.get("thought"):
+                    entry["thought"] = agent_data["thought"]
+                entries.append(entry)
+    return entries
+
+
+def flatten_golden(golden: list) -> list:
+    """Flatten golden_trajectory into action_history format."""
+    entries = []
+    for step_idx, step in enumerate(golden):
+        for agent_action in step.get("actions", []):
+            entries.append({
+                "turn": step_idx + 1,
+                "sim_step": step_idx + 1,
+                "agent": agent_action.get("agent", ""),
+                "action": agent_action.get("action", ""),
+                "result": "",
+                "skill_steps": 0,
+                "selected_frames": [],
+                "frame_paths": [],
+            })
+    return entries
+
+
+def process_task_file(task_file: Path) -> Optional[dict]:
+    """Process a task JSON from data/emtom/tasks/."""
+    try:
+        with open(task_file) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    task_id = data.get("task_id", task_file.stem)
+    agents = [f"agent_{i}" for i in range(data.get("num_agents", 2))]
+
+    # Build instruction from agent_secrets
+    instruction = {}
+    for agent_id, secrets in data.get("agent_secrets", {}).items():
+        instruction[agent_id] = "\n".join(secrets)
+
+    # Extract mechanic types from bindings
+    mechanics = list({b.get("mechanic_type", "") for b in data.get("mechanic_bindings", []) if b.get("mechanic_type")})
+
+    calibration = data.get("calibration", [])
+    cal_history = flatten_calibration(calibration) if calibration else []
+    golden_history = flatten_golden(data.get("golden_trajectory", []))
+
+    cal_passed = False
+    cal_steps = 0
+    if calibration:
+        cal_passed = calibration[-1].get("results", {}).get("passed", False)
+        cal_steps = calibration[-1].get("steps", 0)
+
+    return {
+        "task_id": task_id,
+        "task_title": data.get("title", ""),
+        "task_description": data.get("task", ""),
+        "category": data.get("category", ""),
+        "instruction": instruction,
+        "mechanics_active": mechanics,
+        "steps": cal_steps,
+        "turns": len(calibration[-1].get("trajectory", [])) if calibration else 0,
+        "done": True,
+        "success": cal_passed,
+        "llm_agents": agents,
+        "human_agents": [],
+        "action_history": cal_history,
+        "golden_trajectory": golden_history,
+        "problem_pddl": data.get("problem_pddl", ""),
+        "tom_level": data.get("tom_level"),
+        "tom_reasoning": data.get("tom_reasoning"),
+        "calibration_meta": {
+            "tested_at": calibration[-1].get("tested_at", "") if calibration else "",
+            "agent_models": calibration[-1].get("agent_models", {}) if calibration else {},
+            "passed": cal_passed,
+            "progress": calibration[-1].get("results", {}).get("progress", 0) if calibration else 0,
+        } if calibration else None,
     }
 
 
@@ -162,12 +260,42 @@ def main():
         else:
             print("skipped")
 
+    # ── Task library from data/emtom/tasks/ ──
+    library_tasks = []
+    if TASKS_DIR.exists():
+        lib_dir = DATA_DIR / "tasks" / "_library"
+        lib_dir.mkdir(parents=True, exist_ok=True)
+
+        task_files = sorted(TASKS_DIR.glob("*.json"), reverse=True)
+        print(f"\nFound {len(task_files)} task library files")
+
+        for tf in task_files:
+            task_data = process_task_file(tf)
+            if task_data is None:
+                continue
+
+            out_file = lib_dir / f"{task_data['task_id']}.json"
+            with open(out_file, "w") as f:
+                json.dump(task_data, f)
+
+            library_tasks.append({
+                "task_id": task_data["task_id"],
+                "title": task_data["task_title"],
+                "category": task_data["category"],
+                "success": task_data["success"],
+                "turns": task_data["turns"],
+                "steps": task_data["steps"],
+                "agents": len(task_data["llm_agents"]),
+            })
+
+        print(f"  Processed {len(library_tasks)} tasks")
+
     runs_file = DATA_DIR / "runs.json"
     with open(runs_file, "w") as f:
-        json.dump({"runs": runs}, f)
+        json.dump({"runs": runs, "library": library_tasks}, f)
 
     total_tasks = sum(len(r["tasks"]) for r in runs)
-    print(f"\nDone: {len(runs)} runs, {total_tasks} tasks")
+    print(f"\nDone: {len(runs)} runs, {total_tasks} benchmark tasks, {len(library_tasks)} library tasks")
     print(f"Output: {runs_file}")
 
 

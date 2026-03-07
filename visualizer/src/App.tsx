@@ -3,8 +3,11 @@ import type { RunsIndex, RunSummary, TaskDetail } from "./types";
 import Sidebar from "./components/Sidebar";
 import TaskView from "./components/TaskView";
 
+export type Source = "benchmarks" | "library";
+
 export default function App() {
   const [runsIndex, setRunsIndex] = useState<RunsIndex | null>(null);
+  const [source, setSource] = useState<Source>("benchmarks");
   const [selectedRunId, setSelectedRunId] = useState<string>("");
   const [selectedTaskId, setSelectedTaskId] = useState<string>("");
   const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
@@ -28,10 +31,13 @@ export default function App() {
 
   const loadTask = useCallback(
     (taskId: string) => {
-      if (!selectedRunId) return;
       setSelectedTaskId(taskId);
       setLoadingTask(true);
-      fetch(`/data/tasks/${selectedRunId}/${taskId}.json`)
+      const path =
+        source === "library"
+          ? `/data/tasks/_library/${taskId}.json`
+          : `/data/tasks/${selectedRunId}/${taskId}.json`;
+      fetch(path)
         .then((r) => r.json())
         .then((data: TaskDetail) => {
           setTaskDetail(data);
@@ -39,11 +45,17 @@ export default function App() {
         })
         .catch(() => setLoadingTask(false));
     },
-    [selectedRunId],
+    [source, selectedRunId],
   );
 
   const handleRunChange = (runId: string) => {
     setSelectedRunId(runId);
+    setSelectedTaskId("");
+    setTaskDetail(null);
+  };
+
+  const handleSourceChange = (s: Source) => {
+    setSource(s);
     setSelectedTaskId("");
     setTaskDetail(null);
   };
@@ -70,7 +82,10 @@ export default function App() {
   return (
     <div className="app">
       <Sidebar
+        source={source}
+        onSourceChange={handleSourceChange}
         runs={runsIndex.runs}
+        libraryTasks={runsIndex.library || []}
         selectedRunId={selectedRunId}
         selectedRun={selectedRun}
         selectedTaskId={selectedTaskId}

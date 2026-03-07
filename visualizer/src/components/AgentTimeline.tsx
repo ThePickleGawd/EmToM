@@ -44,12 +44,14 @@ export default function AgentTimeline({ history, agents, onImageClick }: Props) 
             const actionType = extractActionType(entry.action);
             const isCommunicate =
               actionType.toLowerCase() === "communicate";
+            const isVisualSummary =
+              actionType.toLowerCase() === "visualsummary";
             const color = agentColor(entry.agent, agents);
 
             return (
               <div
                 key={`${turn}-${i}`}
-                className={`action-card ${isCommunicate ? "communicate" : ""}`}
+                className={`action-card ${isCommunicate ? "communicate" : ""} ${isVisualSummary ? "visual-summary" : ""}`}
               >
                 <div className="action-card-header">
                   <span

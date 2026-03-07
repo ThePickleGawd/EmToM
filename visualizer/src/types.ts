@@ -10,9 +10,17 @@ export interface ActionEntry {
   thought?: string;
 }
 
+export interface CalibrationMeta {
+  tested_at: string;
+  agent_models: Record<string, string>;
+  passed: boolean;
+  progress: number;
+}
+
 export interface TaskDetail {
   task_id: string;
   task_title: string;
+  task_description?: string;
   instruction: Record<string, string>;
   mechanics_active: string[];
   steps: number;
@@ -22,6 +30,11 @@ export interface TaskDetail {
   llm_agents: string[];
   human_agents: string[];
   action_history: ActionEntry[];
+  golden_trajectory?: ActionEntry[];
+  problem_pddl?: string;
+  tom_level?: number;
+  tom_reasoning?: string;
+  calibration_meta?: CalibrationMeta | null;
 }
 
 export interface TaskSummary {
@@ -46,4 +59,5 @@ export interface RunSummary {
 
 export interface RunsIndex {
   runs: RunSummary[];
+  library: TaskSummary[];
 }

@@ -92,10 +92,13 @@ def _build_trajectory_from_log(results_dir: str) -> List[Dict[str, Any]]:
             )
         else:
             agent_id = record.get("agent", "unknown")
-            turns[turn]["agents"][agent_id] = {
+            agent_entry: Dict[str, Any] = {
                 "action": record.get("action", ""),
                 "observation": record.get("result", ""),
             }
+            if record.get("thought"):
+                agent_entry["thought"] = record["thought"]
+            turns[turn]["agents"][agent_id] = agent_entry
 
     trajectory = []
     for turn_num in sorted(turns.keys()):
