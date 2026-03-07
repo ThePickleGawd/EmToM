@@ -3,9 +3,9 @@ Verify PDDL goal solvability and compute ToM depth.
 
 Checks:
 1. `problem_pddl` syntax is valid
-2. Goal compiles against scene objects
-3. Goal is structurally solvable by PDKBSolver
-4. Computes ToM depth from epistemic structure
+2. Raw `problem_pddl` is self-contained
+3. Goal is strictly solvable by Fast Downward under depth-bounded proof checks
+4. Computes minimum ToM depth from iterative solving
 
 Usage:
     # CLI
@@ -53,7 +53,10 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     # Build GoalSpec from canonical inline problem_pddl.
     from emtom.pddl.goal_spec import GoalSpec
     from emtom.pddl.domain import EMTOM_DOMAIN
-    from emtom.pddl.problem_pddl import parse_problem_pddl
+    from emtom.pddl.problem_pddl import (
+        parse_problem_pddl,
+        validate_problem_pddl_self_contained,
+    )
 
     problem_pddl = task_data.get("problem_pddl")
     legacy_goal_fields = [k for k in ("goals", "pddl_goal", "pddl_ordering", "pddl_owners") if k in task_data]
@@ -71,6 +74,15 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
         parsed_problem = parse_problem_pddl(problem_pddl)
     except ValueError as e:
         return failure(f"Invalid problem_pddl: {e}")
+    raw_pddl_errors = validate_problem_pddl_self_contained(
+        parsed_problem,
+        num_agents=task_data.get("num_agents", 2),
+    )
+    if raw_pddl_errors:
+        return failure(
+            "problem_pddl must be self-contained:\n" + "\n".join(raw_pddl_errors),
+            data={"valid": False, "pddl_goal": parsed_problem.goal_pddl},
+        )
 
     declared_domain = task_data.get("pddl_domain")
     if isinstance(declared_domain, str) and declared_domain:
@@ -118,69 +130,35 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
             except (json.JSONDecodeError, IOError):
                 pass
 
-    # Compile and solve with FastDownwardSolver (real state-space search)
+    # Compile and solve with strict iterative proof.
     from emtom.pddl.compiler import compile_task
-    from emtom.pddl.epistemic import ObservabilityModel
-    from emtom.pddl.fd_solver import FastDownwardSolver
+    from emtom.pddl.tom_verifier import explain_tom_depth, prove_minimal_tom_level
 
     compile_start = time.perf_counter()
-    problem = compile_task(task, scene_data)
+    compile_task(task, scene_data)
     compile_time_s = time.perf_counter() - compile_start
-    solver = FastDownwardSolver()
-    observability = ObservabilityModel.from_task_with_scene(task, scene_data)
     solve_start = time.perf_counter()
-    result = solver.solve(EMTOM_DOMAIN, problem, observability)
+    proof = prove_minimal_tom_level(task, scene_data=scene_data, strict=True)
     solve_wall_time_s = time.perf_counter() - solve_start
+    result = proof.get("solver_result")
 
-    if not result.solvable:
-        diagnostic = result.error or "unknown"
-        # When epistemic goals are present, diagnose whether the physical
-        # layer or the epistemic layer is the root cause.
-        from emtom.pddl.fd_solver import _has_epistemic_goals, _strip_epistemic, _deduplicate_conjuncts
-        if _has_epistemic_goals(problem.goal):
-            try:
-                physical_goal = _deduplicate_conjuncts(_strip_epistemic(problem.goal))
-                phys_problem = Problem(
-                    name=problem.name,
-                    domain_name=problem.domain_name,
-                    objects=problem.objects,
-                    init=problem.init,
-                    goal=physical_goal,
-                )
-                from emtom.pddl.fd_solver import _problem_to_pddl
-                domain_pddl = EMTOM_DOMAIN.to_planning_pddl()
-                problem_pddl = _problem_to_pddl(phys_problem, domain_pddl)
-                phys_result = solver._run_planner(domain_pddl, problem_pddl, timeout=15.0)
-                if not phys_result["solvable"]:
-                    diagnostic += (
-                        "\n  Diagnostic: Physical goals are not achievable from "
-                        "initial state (check room restrictions, object placement, "
-                        "and action preconditions)"
-                    )
-                else:
-                    diagnostic += (
-                        "\n  Diagnostic: Physical goals are achievable but "
-                        "epistemic K() requirements are unsatisfiable (check "
-                        "communication paths, observability, and K() goal structure)"
-                    )
-            except Exception:
-                pass  # Diagnostic is best-effort
+    if result is None or not result.solvable:
+        diagnostic = (
+            proof["proof_attempts"][-1]["error"]
+            if proof.get("proof_attempts")
+            else "unknown"
+        )
         return failure(
             f"PDDL goal is not solvable: {diagnostic}",
             data={"valid": False, "pddl_goal": goal_spec.to_pddl_string()},
         )
 
-    # Check communication budget
-    budget_warning = solver.check_communication_budget(problem, observability)
-    if budget_warning:
-        return failure(
-            f"PDDL goal is not solvable: {budget_warning}",
-            data={"valid": False, "pddl_goal": goal_spec.to_pddl_string()},
-        )
-
-    # Compute ToM depth (use FD solver result for authoritative belief_depth)
-    from emtom.pddl.tom_verifier import explain_tom_depth
     tom_info = explain_tom_depth(task, scene_data, solver_result=result)
+    tom_info["epistemic_goal_depth"] = proof["epistemic_goal_depth"]
+    tom_info["proved_unsat_below"] = proof["proved_unsat_below"]
+    tom_info["proof_backend"] = proof["proof_backend"]
+    tom_info["proof_strict"] = proof["proof_strict"]
+    tom_info["proof_attempts"] = proof["proof_attempts"]
 
     # Goal description
     formula = goal_spec.to_formula()
@@ -192,10 +170,16 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
         "pddl_goal": parsed_problem.goal_pddl if parsed_problem else goal_spec.to_pddl_string(),
         "solvable": True,
         "tom_level": tom_info["tom_level"],
+        "minimal_tom_level": tom_info["tom_level"],
+        "epistemic_goal_depth": tom_info["epistemic_goal_depth"],
         "tom_reasoning": tom_info["tom_reasoning"],
         "goal_description": description,
         "num_conjuncts": len(goal_spec),
         "solve_time": result.solve_time,
+        "proved_unsat_below": tom_info["proved_unsat_below"],
+        "proof_backend": tom_info["proof_backend"],
+        "proof_strict": tom_info["proof_strict"],
+        "proof_attempts": tom_info["proof_attempts"],
         "timing": {
             "parse_time_ms": round(parse_time_s * 1000, 3),
             "compile_time_ms": round(compile_time_s * 1000, 3),

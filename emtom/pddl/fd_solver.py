@@ -150,6 +150,7 @@ class FastDownwardSolver:
         observability: Optional[ObservabilityModel] = None,
         max_belief_depth: int = 3,
         timeout: float = 30.0,
+        strict: bool = False,
     ) -> SolverResult:
         """
         Solve a PDDL problem using Fast Downward.
@@ -170,6 +171,15 @@ class FastDownwardSolver:
             SolverResult with solvability, plan, and belief depth.
         """
         if not HAS_UP:
+            if strict:
+                return SolverResult(
+                    solvable=False,
+                    solve_time=0.0,
+                    error=(
+                        "Strict proof backend unavailable: unified-planning / "
+                        "Fast Downward is not installed"
+                    ),
+                )
             logger.warning(
                 "unified-planning not installed; falling back to PDKBSolver "
                 "(structural checks only, no real state-space search). "
@@ -190,12 +200,12 @@ class FastDownwardSolver:
         has_epistemic = _has_epistemic_goals(problem.goal)
         if has_epistemic and observability and observability.object_rooms:
             return self._solve_epistemic(
-                domain, problem, observability, timeout, start
+                domain, problem, observability, max_belief_depth, timeout, start, strict
             )
 
         # Non-epistemic or no observability data: strip K/B and solve physical
         return self._solve_physical(
-            domain, problem, observability, max_belief_depth, timeout, start
+            domain, problem, observability, max_belief_depth, timeout, start, strict
         )
 
     def _solve_epistemic(
@@ -203,8 +213,10 @@ class FastDownwardSolver:
         domain: Domain,
         problem: Problem,
         observability: ObservabilityModel,
+        max_belief_depth: int,
         timeout: float,
         start: float,
+        strict: bool,
     ) -> SolverResult:
         """Epistemic compilation path — single FD call for physical + epistemic."""
         from emtom.pddl.epistemic_compiler import compile_epistemic
@@ -219,6 +231,18 @@ class FastDownwardSolver:
                 solvable=False,
                 solve_time=time.time() - start,
                 error=f"Epistemic compilation error: {e}",
+            )
+
+        if compilation.belief_depth > max_belief_depth:
+            return SolverResult(
+                solvable=False,
+                solve_time=time.time() - start,
+                belief_depth=compilation.belief_depth,
+                error=(
+                    f"Task requires belief depth {compilation.belief_depth}, "
+                    f"which exceeds allowed depth {max_belief_depth}"
+                ),
+                trivial_k_goals=compilation.trivial_k_goals,
             )
 
         try:
@@ -243,8 +267,14 @@ class FastDownwardSolver:
                     ),
                 )
             logger.error(
-                "Fast Downward planner error (epistemic): %s — falling back to PDKBSolver", e
+                "Fast Downward planner error (epistemic): %s", e
             )
+            if strict:
+                return SolverResult(
+                    solvable=False,
+                    solve_time=time.time() - start,
+                    error=f"Strict proof backend failed: {e}",
+                )
             return self._fallback.solve(
                 domain, problem, observability, max_belief_depth=3
             )
@@ -276,6 +306,7 @@ class FastDownwardSolver:
         max_belief_depth: int,
         timeout: float,
         start: float,
+        strict: bool,
     ) -> SolverResult:
         """Strip K/B and solve the physical goal only (fallback path)."""
         physical_goal = _strip_epistemic(problem.goal)
@@ -295,7 +326,13 @@ class FastDownwardSolver:
         try:
             result = self._run_planner(domain_pddl, problem_pddl, timeout)
         except Exception as e:
-            logger.error("Fast Downward planner error: %s — falling back to PDKBSolver", e)
+            logger.error("Fast Downward planner error: %s", e)
+            if strict:
+                return SolverResult(
+                    solvable=False,
+                    solve_time=time.time() - start,
+                    error=f"Strict proof backend failed: {e}",
+                )
             return self._fallback.solve(
                 domain, problem, observability, max_belief_depth
             )
@@ -312,6 +349,17 @@ class FastDownwardSolver:
             problem, observability, max_belief_depth
         )
         belief_depth, trivial_goals = epistemic_result
+        if belief_depth > max_belief_depth:
+            return SolverResult(
+                solvable=False,
+                solve_time=time.time() - start,
+                belief_depth=belief_depth,
+                error=(
+                    f"Task requires belief depth {belief_depth}, "
+                    f"which exceeds allowed depth {max_belief_depth}"
+                ),
+                trivial_k_goals=trivial_goals,
+            )
 
         return SolverResult(
             solvable=True,

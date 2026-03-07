@@ -17,7 +17,8 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 from emtom.pddl.compiler import compile_task
 from emtom.pddl.domain import EMTOM_DOMAIN
 from emtom.pddl.epistemic import ObservabilityModel
-from emtom.pddl.solver import PDKBSolver, SolverResult
+from emtom.pddl.fd_solver import FastDownwardSolver
+from emtom.pddl.solver import PDKBSolver, SolverResult, _max_epistemic_depth
 
 if TYPE_CHECKING:
     from emtom.task_gen.task_generator import GeneratedTask
@@ -97,27 +98,75 @@ def compute_tom_depth(
     Returns:
         Minimum ToM depth (0-3), or -1 if unsolvable at any depth
     """
-    # Fast path: use authoritative FD result when available.
     if solver_result is not None:
         if not solver_result.solvable:
             return -1
         return solver_result.belief_depth
 
-    # Fallback: PDKBSolver structural heuristic.
+    proof = prove_minimal_tom_level(task, scene_data=scene_data, max_depth=max_depth)
+    return proof["tom_level"]
+
+
+def prove_minimal_tom_level(
+    task: "GeneratedTask",
+    scene_data: Optional[Dict[str, Any]] = None,
+    max_depth: int = 3,
+    strict: bool = True,
+) -> Dict[str, Any]:
+    """Prove the minimum supported ToM depth by iterative depth-bounded solving."""
     problem = compile_task(task, scene_data)
     observability = ObservabilityModel.from_task_with_scene(task, scene_data)
-    solver = PDKBSolver()
+    solver = FastDownwardSolver() if strict else PDKBSolver()
+    epistemic_goal_depth = _max_epistemic_depth(problem.goal) if problem.goal else 0
 
-    result = solver.solve(EMTOM_DOMAIN, problem, observability, max_depth)
+    attempts = []
+    trivial_goals = []
+    first_success: Optional[SolverResult] = None
+    minimal_level = -1
 
-    if not result.solvable:
-        if result.error and "unknown object" in result.error and scene_data is None:
-            if observability.has_information_asymmetry():
-                return 1
-            return 0
-        return -1
+    for level in range(max_depth + 1):
+        if strict:
+            result = solver.solve(
+                EMTOM_DOMAIN,
+                problem,
+                observability,
+                max_belief_depth=level,
+                strict=True,
+            )
+        else:
+            result = solver.solve(
+                EMTOM_DOMAIN,
+                problem,
+                observability,
+                max_belief_depth=level,
+            )
 
-    return result.belief_depth
+        attempts.append(
+            {
+                "level": level,
+                "solvable": result.solvable,
+                "belief_depth": result.belief_depth,
+                "error": result.error,
+            }
+        )
+        if result.trivial_k_goals:
+            trivial_goals = result.trivial_k_goals
+        if result.solvable:
+            minimal_level = level
+            first_success = result
+            break
+
+    return {
+        "tom_level": minimal_level,
+        "minimal_tom_level": minimal_level,
+        "epistemic_goal_depth": epistemic_goal_depth,
+        "proved_unsat_below": list(range(minimal_level)) if minimal_level >= 0 else list(range(max_depth + 1)),
+        "proof_attempts": attempts,
+        "proof_backend": "fast_downward_strict" if strict else "pdkb_structural",
+        "proof_strict": strict,
+        "solver_result": first_success,
+        "trivial_k_goals": trivial_goals,
+    }
 
 
 def explain_tom_depth(
@@ -140,7 +189,13 @@ def explain_tom_depth(
         - communication_required: bool
         - trivial_k_goals: list of trivially satisfied K() goals (if any)
     """
-    depth = compute_tom_depth(task, scene_data, solver_result=solver_result)
+    proof = None
+    if solver_result is None:
+        proof = prove_minimal_tom_level(task, scene_data=scene_data, strict=True)
+        depth = proof["tom_level"]
+        solver_result = proof.get("solver_result")
+    else:
+        depth = compute_tom_depth(task, scene_data, solver_result=solver_result)
     observability = ObservabilityModel.from_task_with_scene(task, scene_data)
 
     # Analyze information gaps
@@ -157,30 +212,32 @@ def explain_tom_depth(
     trivial_goals = []
     if solver_result is not None:
         trivial_goals = solver_result.trivial_k_goals or []
-    else:
-        problem = compile_task(task, scene_data)
-        result = PDKBSolver().solve(EMTOM_DOMAIN, problem, observability)
-        if result.trivial_k_goals:
-            trivial_goals = result.trivial_k_goals
+    elif proof is not None:
+        trivial_goals = proof.get("trivial_k_goals", [])
 
     # Build reasoning explanation
     if depth == 0:
-        reasoning = "All agents have full observability. No belief reasoning needed."
+        reasoning = (
+            "The task is solvable without any epistemic reasoning or communication. "
+            "A purely physical plan succeeds at depth 0."
+        )
     elif depth == 1:
         reasoning = (
-            f"Information asymmetry requires first-order belief reasoning. "
-            f"Agents must reason about what others know. "
-            f"Gaps: {'; '.join(gaps) if gaps else 'agent secrets create private knowledge'}."
+            f"Task requires first-order knowledge reasoning. "
+            f"The goal is unsatisfiable at depth 0 but solvable at depth 1. "
+            f"Gaps: {'; '.join(gaps) if gaps else 'private information is encoded in the task'}."
         )
     elif depth == 2:
         reasoning = (
             f"Task requires second-order belief reasoning. "
+            f"The goal is unsatisfiable at depths 0-1 but solvable at depth 2. "
             f"Agents must model what others think about third parties' knowledge. "
             f"Gaps: {'; '.join(gaps)}."
         )
     elif depth == 3:
         reasoning = (
             f"Task requires third-order belief reasoning. "
+            f"The goal is unsatisfiable at depths 0-2 but solvable at depth 3. "
             f"Complex nested beliefs about others' models of others. "
             f"Gaps: {'; '.join(gaps)}."
         )
@@ -195,10 +252,16 @@ def explain_tom_depth(
 
     return {
         "tom_level": depth,
+        "minimal_tom_level": depth,
+        "epistemic_goal_depth": proof["epistemic_goal_depth"] if proof is not None else depth,
         "tom_reasoning": reasoning,
         "information_gaps": gaps,
         "communication_required": comm_required,
         "trivial_k_goals": trivial_goals,
+        "proof_attempts": proof["proof_attempts"] if proof is not None else [],
+        "proof_backend": proof["proof_backend"] if proof is not None else "solver_result",
+        "proof_strict": proof["proof_strict"] if proof is not None else True,
+        "proved_unsat_below": proof["proved_unsat_below"] if proof is not None else [],
     }
 
 

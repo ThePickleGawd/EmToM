@@ -13,7 +13,7 @@ from emtom.pddl.dsl import (
     Domain, Formula, Literal, Knows, Believes, Not, And, Or,
     Problem,
 )
-from emtom.pddl.problem_pddl import parse_problem_pddl
+from emtom.pddl.problem_pddl import parse_problem_pddl, validate_problem_pddl_self_contained
 
 if TYPE_CHECKING:
     from emtom.task_gen.task_generator import GeneratedTask
@@ -95,44 +95,16 @@ def compile_task(
     scene_data: Optional[Dict[str, Any]] = None,
 ) -> Problem:
     """Compile a GeneratedTask into a PDDL Problem."""
-    # New single-format path: inline task-level problem PDDL.
     task_problem_pddl = getattr(task, "problem_pddl", None)
     if isinstance(task_problem_pddl, str) and task_problem_pddl.strip():
         parsed = parse_problem_pddl(task_problem_pddl)
+        validation_errors = validate_problem_pddl_self_contained(
+            parsed,
+            num_agents=getattr(task, "num_agents", None),
+        )
+        if validation_errors:
+            raise ValueError("; ".join(validation_errors))
         problem = parsed.to_problem()
-
-        # Canonical grounding for inline problems:
-        # keep authored goal/init, but normalize object inventory from
-        # scene + task metadata so solver checks don't fail on omitted
-        # declarations in :objects.
-        if scene_data:
-            for room in scene_data.get("rooms", []):
-                if isinstance(room, str) and room:
-                    problem.objects[room] = "room"
-            for furn in scene_data.get("furniture", []):
-                if isinstance(furn, str) and furn:
-                    problem.objects[furn] = "furniture"
-            for obj in scene_data.get("objects", []):
-                if isinstance(obj, str) and obj:
-                    problem.objects[obj] = "object"
-
-        for item_def in (task.items or []):
-            if isinstance(item_def, dict):
-                item_id = item_def.get("item_id")
-                if isinstance(item_id, str) and item_id and _VALID_PDDL_ID.match(item_id):
-                    problem.objects[item_id] = "item"
-
-        # Ensure declared agent cardinality is reflected in objects.
-        for i in range(task.num_agents):
-            problem.objects[f"agent_{i}"] = "agent"
-
-        # Auto-register objects referenced in the goal but missing from :objects.
-        if problem.goal:
-            from emtom.pddl.domain import EMTOM_DOMAIN
-            inferred = _infer_object_types(problem.goal, EMTOM_DOMAIN)
-            for obj_id, typ in inferred.items():
-                if obj_id not in problem.objects:
-                    problem.objects[obj_id] = typ
 
         # Add default init facts (e.g., furniture starts closed)
         _add_default_init_facts(problem)

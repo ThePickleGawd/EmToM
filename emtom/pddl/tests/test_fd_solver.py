@@ -229,6 +229,9 @@ def _make_problem(goal, objects=None, init=None):
             "kitchen_1": "room",
         },
         init=init or [
+            Literal("agent_in_room", ("agent_0", "kitchen_1")),
+            Literal("agent_in_room", ("agent_1", "kitchen_1")),
+            Literal("is_in_room", ("cabinet_27", "kitchen_1")),
             Literal("is_closed", ("cabinet_27",)),
             Literal("can_communicate", ("agent_0", "agent_1")),
             Literal("can_communicate", ("agent_1", "agent_0")),
@@ -251,14 +254,19 @@ class TestFastDownwardSolver:
     def test_unsolvable_restricted(self):
         """Agent restricted from only room with target, no other agents can help
         because communicate has no physical effects."""
-        goal = Literal("agent_in_room", ("agent_0", "kitchen_1"))
+        goal = Literal("is_open", ("cabinet_27",))
         problem = _make_problem(
             goal,
             objects={
                 "agent_0": "agent",
+                "cabinet_27": "furniture",
+                "bedroom_1": "room",
                 "kitchen_1": "room",
             },
             init=[
+                Literal("agent_in_room", ("agent_0", "bedroom_1")),
+                Literal("is_in_room", ("cabinet_27", "kitchen_1")),
+                Literal("is_closed", ("cabinet_27",)),
                 Literal("is_restricted", ("agent_0", "kitchen_1")),
             ],
         )
@@ -289,6 +297,9 @@ class TestFastDownwardSolver:
                 "kitchen_1": "room",
             },
             init=[
+                Literal("agent_in_room", ("agent_0", "kitchen_1")),
+                Literal("agent_in_room", ("agent_1", "kitchen_1")),
+                Literal("is_in_room", ("cabinet_27", "kitchen_1")),
                 Literal("is_held_by", ("cabinet_27", "agent_0")),
                 Literal("can_communicate", ("agent_0", "agent_1")),
                 Literal("can_communicate", ("agent_1", "agent_0")),
@@ -305,6 +316,9 @@ class TestFastDownwardSolver:
         problem = _make_problem(
             goal,
             init=[
+                Literal("agent_in_room", ("agent_0", "kitchen_1")),
+                Literal("agent_in_room", ("agent_1", "kitchen_1")),
+                Literal("is_in_room", ("cabinet_27", "kitchen_1")),
                 Literal("is_closed", ("cabinet_27",)),
                 Literal("can_communicate", ("agent_0", "agent_1")),
                 Literal("can_communicate", ("agent_1", "agent_0")),
@@ -336,7 +350,7 @@ class TestFastDownwardFallback:
 # ---------------------------------------------------------------------------
 
 class TestCompilerTypeInference:
-    """Test auto-registration of goal-referenced objects with correct types."""
+    """The compiler now requires self-contained raw PDDL instead of inference."""
 
     def _make_task(self, goal_str, objects_str=""):
         from unittest.mock import MagicMock
@@ -364,36 +378,44 @@ class TestCompilerTypeInference:
     def test_furniture_inferred_from_is_open(self):
         from emtom.pddl.compiler import compile_task
         task = self._make_task("(is_open cabinet_27)")
-        problem = compile_task(task)
-        assert problem.objects.get("cabinet_27") == "furniture"
+        with pytest.raises(ValueError, match="problem_pddl"):
+            compile_task(task)
 
     def test_furniture_inferred_from_is_on_top_second_arg(self):
         from emtom.pddl.compiler import compile_task
         task = self._make_task("(is_on_top laptop_0 table_29)")
-        problem = compile_task(task)
-        assert problem.objects.get("table_29") == "furniture"
+        with pytest.raises(ValueError, match="problem_pddl"):
+            compile_task(task)
 
     def test_room_inferred_from_agent_in_room(self):
         from emtom.pddl.compiler import compile_task
         task = self._make_task("(agent_in_room agent_0 kitchen_1)")
-        problem = compile_task(task)
-        assert problem.objects.get("kitchen_1") == "room"
+        with pytest.raises(ValueError, match="problem_pddl"):
+            compile_task(task)
 
     def test_item_inferred_from_has_item(self):
         from emtom.pddl.compiler import compile_task
         task = self._make_task("(has_item agent_0 item_key_1)")
-        problem = compile_task(task)
-        assert problem.objects.get("item_key_1") == "item"
+        with pytest.raises(ValueError, match="problem_pddl"):
+            compile_task(task)
 
     def test_epistemic_goal_objects_inferred(self):
         from emtom.pddl.compiler import compile_task
         task = self._make_task("(K agent_0 (is_open drawer_5))")
-        problem = compile_task(task)
-        assert problem.objects.get("drawer_5") == "furniture"
+        with pytest.raises(ValueError, match="problem_pddl"):
+            compile_task(task)
 
     def test_default_closed_added_for_furniture(self):
         from emtom.pddl.compiler import compile_task
-        task = self._make_task("(is_open cabinet_27)")
+        task = self._make_task(
+            "(is_open cabinet_27)",
+            "agent_0 agent_1 - agent kitchen_1 - room cabinet_27 - furniture",
+        )
+        task.problem_pddl = task.problem_pddl.replace(
+            "  (:init)\n",
+            "  (:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1) "
+            "(is_in_room cabinet_27 kitchen_1))\n",
+        )
         problem = compile_task(task)
         closed_lits = [l for l in problem.init if l.predicate == "is_closed"]
         assert any(l.args == ("cabinet_27",) for l in closed_lits)
@@ -413,8 +435,8 @@ class TestCompilerTypeInference:
         task.problem_pddl = (
             "(define (problem test_001)\n"
             "  (:domain emtom)\n"
-            "  (:objects agent_0 - agent cabinet_27 - furniture)\n"
-            "  (:init (is_open cabinet_27))\n"
+            "  (:objects agent_0 - agent kitchen_1 - room cabinet_27 - furniture)\n"
+            "  (:init (agent_in_room agent_0 kitchen_1) (is_in_room cabinet_27 kitchen_1) (is_open cabinet_27))\n"
             "  (:goal (is_open cabinet_27))\n"
             ")"
         )
@@ -438,8 +460,8 @@ class TestCompilerCanCommunicate:
         task.problem_pddl = (
             "(define (problem test_001)\n"
             "  (:domain emtom)\n"
-            "  (:objects agent_0 agent_1 - agent)\n"
-            "  (:init)\n"
+            "  (:objects agent_0 agent_1 - agent kitchen_1 - room cabinet_27 - furniture)\n"
+            "  (:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1) (is_in_room cabinet_27 kitchen_1))\n"
             "  (:goal (is_open cabinet_27))\n"
             ")"
         )
@@ -482,8 +504,9 @@ class TestCompilerCanCommunicate:
         task.problem_pddl = (
             "(define (problem test_001)\n"
             "  (:domain emtom)\n"
-            "  (:objects agent_0 agent_1 - agent)\n"
-            "  (:init (can_communicate agent_0 agent_1))\n"
+            "  (:objects agent_0 agent_1 - agent kitchen_1 - room cabinet_27 - furniture)\n"
+            "  (:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1) "
+            "         (is_in_room cabinet_27 kitchen_1) (can_communicate agent_0 agent_1))\n"
             "  (:goal (is_open cabinet_27))\n"
             ")"
         )

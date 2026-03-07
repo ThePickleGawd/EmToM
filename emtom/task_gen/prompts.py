@@ -35,7 +35,7 @@ print('patched')
 PY]
 Assigned!
 
-Thought: Task is ready. Let me run the judge to check quality.
+Thought: Task is ready. Let me run the judge, which will verify the PDDL first and then check quality.
 Action: judge[]
 Assigned!
 
@@ -43,8 +43,7 @@ Assigned!
 - `new_scene[N]` - **CALL FIRST!** Load scene with N agents (2-10), reset task.
 - `new_scene[N, keep]` - Change agent count, keep current scene and task edits.
 - `bash[cmd]` - Run shell commands.
-- `verify_pddl[]` - Check PDDL goal solvability and compute ToM depth.
-- `judge[]` - Evaluate task quality. Must pass before verify.
+- `judge[]` - Runs strict PDDL verification first, then evaluates task quality.
 - `verify_golden_trajectory[]` - Deterministically regenerate trajectory from spec and test it in simulator. Run after judge passes.
 - `test_task[]` - Difficulty calibration. Measures LLM agent pass rate (target: ~10%).
 - `submit_task[]` - Save task. Requires judge + verify + test_task.
@@ -56,12 +55,11 @@ Assigned!
 1. `new_scene[N]` → load scene with N agents
 2. **Before first edit**, inspect examples in `{working_dir}/sampled_tasks/` (recent dataset examples + calibration signals)
 3. Edit `{task_file}` — define goals in `problem_pddl` (inline full problem file)
-4. `verify_pddl[]` → check solvability + ToM depth
-5. `judge[]` → fix → repeat until pass
-6. `verify_golden_trajectory[]` → deterministic regeneration + simulator check → fix spec → repeat until pass
-7. `test_task[]` → measures pass rate and records calibration data
-8. `submit_task[]`
-9. Repeat from step 1 for next task
+4. `judge[]` → runs strict PDDL verification first, then LLM quality evaluation → fix → repeat until pass
+5. `verify_golden_trajectory[]` → deterministic regeneration + simulator check → fix spec → repeat until pass
+6. `test_task[]` → measures pass rate and records calibration data
+7. `submit_task[]`
+8. Repeat from step 1 for next task
 
 ## Files
 - `{task_file}` - Working task (created after new_scene)
@@ -117,7 +115,7 @@ Assigned!
 - Each agent's secrets MUST include which other agents are on their team (e.g., "You are on a team with agent_1." for cooperative, or "You are on team_0 with agent_1. The opposing team is agent_2." for competitive)
 - Do NOT use positive `is_inside` goals unless the object is already inside in `:init` and meant to remain there. Prefer `is_on_top` for movable-placement goals.
 - Do NOT use `has_most` or `has_at_least` in `problem_pddl` goals; they are not part of deterministic PDDL solvability checks in this pipeline.
-- Before running `judge[]`, ensure `verify_pddl[]` passes and no goal references unknown scene IDs.
+- `judge[]` automatically runs strict PDDL verification first. Do not call a separate PDDL-verification tool.
 - Avoid `python3 -c "..."` commands that include literal `\\n` escapes.
 - For multi-line JSON edits, prefer heredocs (e.g., `python3 - <<'PY' ... PY`) or `apply_patch`.
 
@@ -199,7 +197,7 @@ Before designing any task, verify the scene supports your concept. Do this IMMED
 If the scene fails any check, immediately call `new_scene[N]` — do NOT waste iterations trying to design around a bad scene.
 
 ## PDDL-Scene Consistency Rules
-The most common source of verify failures is mismatches between PDDL and scene data. Before running `verify_pddl[]`:
+The most common source of judge failures is mismatches between `problem_pddl` and scene data. Before running `judge[]`:
 
 1. **`:objects` section must list only scene IDs**: Every agent, object, furniture, and room in `:objects` must exist in the current scene data. Never invent IDs.
 2. **`:init` must reflect actual scene state**: If an object is on table_29 in the scene, write `(is_on_top object table_29)` in `:init`. Do NOT invent initial locations.
@@ -246,7 +244,7 @@ These are the most frequent failure patterns. Avoid them:
   "message_targets": {{"agent_0": ["agent_1"], "agent_1": ["agent_0"]}},
   "mechanic_bindings": [{{"mechanic_type": "limited_bandwidth", "message_limits": {{"agent_0": 3, "agent_1": 3}}}}],
   "pddl_domain": "emtom",
-  "problem_pddl": "(define (problem task_x)\\n  (:domain emtom)\\n  (:objects\\n    agent_0 agent_1 - agent\\n  )\\n  (:init\\n  )\\n  (:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))\\n)",
+  "problem_pddl": "(define (problem task_x)\\n  (:domain emtom)\\n  (:objects\\n    agent_0 agent_1 - agent\\n    kitchen_1 - room\\n    bottle_4 - object\\n    cabinet_27 table_13 - furniture\\n  )\\n  (:init\\n    (agent_in_room agent_0 kitchen_1)\\n    (agent_in_room agent_1 kitchen_1)\\n    (is_in_room bottle_4 kitchen_1)\\n    (is_in_room cabinet_27 kitchen_1)\\n    (is_in_room table_13 kitchen_1)\\n  )\\n  (:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))\\n)",
   "items": [{{"item_id": "item_X", "inside": "container"}}],
   "locked_containers": {{"container": "item_key"}}
 }}
@@ -259,6 +257,10 @@ These are the most frequent failure patterns. Avoid them:
 ## PDDL Goal Format
 Use `problem_pddl` as the single goal source. It must contain a full PDDL problem:
 - Required sections: `(:domain ...)`, `(:objects ...)`, `(:init ...)`, `(:goal ...)`
+- `problem_pddl` must be **self-contained**. Do not rely on scene augmentation during verification.
+- Every goal/mechanic-relevant object or furniture must have explicit room grounding in `:init` via `is_in_room`.
+- Every declared agent must have an explicit `agent_in_room` fact in `:init`.
+- Communication constraints must be encoded in `:init` with `can_communicate`.
 - Single goal example: `(:goal (is_open cabinet_27))`
 - Conjunction: `(:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))`
 - Negation: `(:goal (and (not (is_open drawer_5))))`
@@ -267,7 +269,7 @@ Use `problem_pddl` as the single goal source. It must contain a full PDDL proble
 - `pddl_domain` must match the `:domain` value in `problem_pddl`
 - Do NOT set `goals`, `pddl_goal`, `subtasks`, or `success_condition` when using `problem_pddl`
 - `tom_level` and `tom_reasoning` are auto-computed from `problem_pddl` — do NOT set manually
-- Run `verify_pddl[]` to check solvability and computed ToM depth
+- Run `judge[]` to trigger strict PDDL verification and see the computed minimal ToM depth
 
 ## Goal Ownership (`:goal-owners`)
 For **competitive** and **mixed** tasks, use a `:goal-owners` section in `problem_pddl` to assign goals to teams or agents.
@@ -322,34 +324,34 @@ they need to acquire first.
 **Rules:**
 - Every K() goal must pair with a physical goal that depends on that knowledge
 - Never use K() on facts the agent can directly observe (no blocking mechanic)
-- K() is NOT enforced for pass/fail — it annotates the ToM structure of the task
-- The evaluator unwraps K() to check the inner literal in the final world state
+- K() goals ARE part of strict ToM verification and determine the minimum solvable depth
+- The evaluator still unwraps K() when checking the underlying world fact, but strict verification also requires the epistemic goal structure to be solvable
 
 ### Example: K=0 (no epistemic reasoning)
 ```json
-"problem_pddl": "(define (problem task_k0)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent)\\n  (:init)\\n  (:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))\\n)"
+"problem_pddl": "(define (problem task_k0)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent kitchen_1 - room bottle_4 - object cabinet_27 table_13 - furniture)\\n  (:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1) (is_in_room bottle_4 kitchen_1) (is_in_room cabinet_27 kitchen_1) (is_in_room table_13 kitchen_1))\\n  (:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))\\n)"
 ```
 
 ### Example: K=1 (agent must acquire knowledge via communication)
 ```json
-"problem_pddl": "(define (problem task_k1)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent)\\n  (:init)\\n  (:goal (and (K agent_0 (is_in_room trophy_1 kitchen_0)) (is_on_top trophy_1 table_8)))\\n)"
+"problem_pddl": "(define (problem task_k1)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent kitchen_0 dining_room_0 - room trophy_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 dining_room_0) (agent_in_room agent_1 kitchen_0) (is_in_room trophy_1 kitchen_0) (is_in_room table_8 dining_room_0) (is_restricted agent_0 kitchen_0) (can_communicate agent_1 agent_0))\\n  (:goal (and (K agent_0 (is_in_room trophy_1 kitchen_0)) (is_on_top trophy_1 table_8)))\\n)"
 ```
 Scenario: agent_0 is restricted from kitchen. agent_1 observes trophy_1 in kitchen and communicates location. agent_0 uses this knowledge to coordinate retrieval.
 
 ### Example: K=2 (agent must reason about another's beliefs)
 ```json
-"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 agent_2 - agent)\\n  (:init)\\n  (:goal (and (K agent_0 (K agent_2 (is_in_room gem_1 bedroom_0))) (is_on_top gem_1 table_8)))\\n)"
+"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 agent_2 - agent bedroom_0 hallway_0 study_0 - room gem_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 hallway_0) (agent_in_room agent_1 study_0) (agent_in_room agent_2 bedroom_0) (is_in_room gem_1 bedroom_0) (is_in_room table_8 hallway_0) (is_restricted agent_0 bedroom_0) (can_communicate agent_2 agent_1) (can_communicate agent_1 agent_0))\\n  (:goal (and (K agent_0 (K agent_2 (is_in_room gem_1 bedroom_0))) (is_on_top gem_1 table_8)))\\n)"
 ```
 Scenario: 3-agent relay. agent_0 is restricted from bedroom. agent_2 can observe bedroom but can only communicate with agent_1 (restricted_communication). agent_0 needs to know that agent_2 has learned the gem's location — second-order belief required to coordinate the relay.
 
 ## Theory of Mind
-ToM depth is auto-computed from the K/B nesting depth in `problem_pddl` `:goal`.
-- **Depth 0**: No K() goals — all agents share full information
-- **Depth 1**: K(agent, fact) — agents must reason about what others know (e.g., room restrictions create private knowledge)
-- **Depth 2**: K(agent, K(other, fact)) — agents must reason about what others believe about third parties' knowledge
-- **Depth 3**: Third-order belief nesting (rare)
+ToM depth is computed as the **minimum solvable belief depth** under strict verification.
+- **Depth 0**: Task is solvable with a purely physical plan and no epistemic reasoning
+- **Depth 1**: First-order knowledge is required
+- **Depth 2**: Second-order nested knowledge is required
+- **Depth 3**: Third-order nested knowledge is required
 
-Use `verify_pddl[]` to see the computed ToM depth. Design information asymmetry to increase ToM requirements:
+Use `judge[]` to see the computed minimal ToM depth from its strict PDDL-verification step. Design explicit epistemic goals plus information asymmetry to increase ToM requirements:
 - `room_restriction`: creates private knowledge (agent can't observe directly)
 - `remote_control`: hidden effects only discoverable by the agent present
 - `limited_bandwidth`: forces strategic info sharing under constraint

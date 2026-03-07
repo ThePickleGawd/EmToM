@@ -74,7 +74,7 @@ def parse_extra_args():
 def _infer_task_tom_level(task_data: dict) -> Optional[int]:
     """Infer tom_level from stored field or computed PDDL semantics."""
     stored = task_data.get("tom_level")
-    if isinstance(stored, int) and 1 <= stored <= 3:
+    if isinstance(stored, int) and 0 <= stored <= 3:
         return stored
 
     # Fallback for historical tasks missing persisted tom_level.
@@ -84,8 +84,7 @@ def _infer_task_tom_level(task_data: dict) -> Optional[int]:
         task = GeneratedTask.from_dict(task_data)
         level = task.compute_tom_level(scene_data=None)
         if isinstance(level, int):
-            # Keep calibration focused on levels 1-3.
-            return min(max(level, 1), 3)
+            return min(max(level, 0), 3)
     except Exception:
         return None
     return None
@@ -163,7 +162,7 @@ def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
         "failed": 0,
         "untested": 0,
         "model": model,
-        "tom_counts": {1: 0, 2: 0, 3: 0},
+        "tom_counts": {0: 0, 1: 0, 2: 0, 3: 0},
         "tom_total": 0,
         "tom_unknown": 0,
         "tom_ratios": {1: None, 2: None, 3: None},
@@ -181,7 +180,7 @@ def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
                 task = json.load(f)
 
             tom_level = _infer_task_tom_level(task)
-            if tom_level in (1, 2, 3):
+            if tom_level in (0, 1, 2, 3):
                 stats["tom_counts"][tom_level] += 1
                 stats["tom_total"] += 1
             else:
@@ -200,7 +199,7 @@ def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
     stats["total"] = stats["passed"] + stats["failed"]
     stats["rate"] = stats["passed"] / stats["total"] if stats["total"] > 0 else None
     if stats["tom_total"] > 0:
-        for level in (1, 2, 3):
+        for level in (0, 1, 2, 3):
             stats["tom_ratios"][level] = stats["tom_counts"][level] / stats["tom_total"]
     return stats
 

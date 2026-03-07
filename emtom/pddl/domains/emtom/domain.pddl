@@ -32,14 +32,14 @@
   )
 
 (:action open
-  :parameters (?a - agent ?f - furniture)
-  :precondition (and (is_closed ?f) (not (is_locked_permanent ?f)))
+  :parameters (?a - agent ?f - furniture ?r - room)
+  :precondition (and (agent_in_room ?a ?r) (is_in_room ?f ?r) (is_closed ?f) (not (is_locked_permanent ?f)))
   :effect (and (is_open ?f) (not (is_closed ?f)) (when (is_inverse ?f) (is_closed ?f)) (when (is_inverse ?f) (not (is_open ?f))) (forall (?g - furniture) (when (mirrors ?f ?g) (is_open ?g))) (forall (?g - furniture) (when (controls ?f ?g) (is_unlocked ?g))))
 )
 
 (:action close
-  :parameters (?a - agent ?f - furniture)
-  :precondition (is_open ?f)
+  :parameters (?a - agent ?f - furniture ?r - room)
+  :precondition (and (agent_in_room ?a ?r) (is_in_room ?f ?r) (is_open ?f))
   :effect (and (is_closed ?f) (not (is_open ?f)) (when (is_inverse ?f) (is_open ?f)) (when (is_inverse ?f) (not (is_closed ?f))) (forall (?g - furniture) (when (mirrors ?f ?g) (is_closed ?g))))
 )
 
@@ -50,20 +50,20 @@
 )
 
 (:action pick
-  :parameters (?a - agent ?x - object)
-  :precondition ()
+  :parameters (?a - agent ?x - object ?r - room)
+  :precondition (and (agent_in_room ?a ?r) (is_in_room ?x ?r))
   :effect (is_held_by ?x ?a)
 )
 
 (:action place
-  :parameters (?a - agent ?x - object ?f - furniture)
-  :precondition (is_held_by ?x ?a)
-  :effect (and (not (is_held_by ?x ?a)) (is_on_top ?x ?f) (is_inside ?x ?f))
+  :parameters (?a - agent ?x - object ?f - furniture ?r - room)
+  :precondition (and (is_held_by ?x ?a) (agent_in_room ?a ?r) (is_in_room ?f ?r))
+  :effect (and (not (is_held_by ?x ?a)) (is_on_top ?x ?f) (is_inside ?x ?f) (is_in_room ?x ?r))
 )
 
 (:action use_item
-  :parameters (?a - agent ?i - item ?f - furniture)
-  :precondition (and (has_item ?a ?i) (requires_item ?f ?i))
+  :parameters (?a - agent ?i - item ?f - furniture ?r - room)
+  :precondition (and (has_item ?a ?i) (requires_item ?f ?i) (agent_in_room ?a ?r) (is_in_room ?f ?r))
   :effect (is_unlocked ?f)
 )
 )

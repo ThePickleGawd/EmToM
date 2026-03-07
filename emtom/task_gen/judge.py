@@ -259,30 +259,30 @@ CRITERIA_DESCRIPTIONS = {
     },
     "goal_relevance": {
         "name": "Goal Relevance",
-        "description": "Does every PDDL goal conjunct directly contribute to the main objective?",
-        "rubric": """0.0: Many filler goals (opening random furniture, navigating pointlessly)
-0.3: Several goal conjuncts unrelated to main objective
-0.5: Some tangential goals that could be removed
-0.7: Most goals essential, 1-2 questionable
-1.0: All goal conjuncts directly advance the objective - removing any would break the task""",
+        "description": "Does every shared PDDL goal conjunct materially contribute to the benchmarked task, rather than acting as filler or decoration?",
+        "rubric": """0.0: Goal is mostly filler or arbitrary conjuncts with no coherent task objective
+0.3: Several conjuncts are decorative, redundant, or weakly related to the main objective
+0.5: Core objective is present but some conjuncts could be removed without changing the task much
+0.7: Most conjuncts are essential, with at most one questionable or weakly motivated goal
+1.0: Every conjunct materially contributes to the task objective; removing any would meaningfully change the task""",
     },
     "pddl_solvability": {
-        "name": "PDDL Solvability & Epistemic Coherence",
-        "description": "Is the task structurally solvable from `problem_pddl`: are predicates valid, is the goal logically coherent for the category? For K() goals specifically: (1) is there a concrete blocking mechanic preventing direct observation, AND (2) does the K() knowledge serve as a prerequisite for a physical goal in the same task? K() should express 'agent must learn X in order to accomplish Y', not just 'agent knows X' with no purpose.",
-        "rubric": """0.0: Goal references nonexistent objects or uses invalid predicates
-0.3: Goal is technically valid but trivially satisfied or impossible; K() goals with NO backing mechanic OR no connection to any physical goal (decorative K())
-0.5: Goal is valid but category logic is weak; K() goals have a blocking mechanic but the knowledge doesn't clearly enable any physical goal
-0.7: Goal is well-formed, K() goals each backed by a mechanic AND linked to a physical goal they enable, minor issues
-1.0: Goal is well-formed, every K() goal has a blocking mechanic AND is a clear information prerequisite for a physical goal — the agent needs this knowledge to coordinate or act""",
+        "name": "Formal Goal Quality & Epistemic Coherence",
+        "description": "Does the self-contained `problem_pddl` define a formally meaningful task for this benchmark? Treat hard formal invalidity as a near-automatic fail. When the task is formally valid, focus on whether the epistemic and physical goals create a coherent benchmark challenge. For K() goals specifically: (1) is there a concrete blocking mechanic preventing direct observation, and (2) does that knowledge genuinely matter for accomplishing a physical objective?",
+        "rubric": """0.0: Raw problem_pddl is invalid, not self-contained, contradictory, or obviously impossible; or K() goals are fake/decorative
+0.3: Task is barely formalizable but weak: trivially satisfied, poorly grounded, or K() goals have little real purpose
+0.5: Formally valid task, but the epistemic structure is weak, category logic is shaky, or knowledge goals feel loosely attached
+0.7: Formally well-structured and benchmark-relevant; K() goals are mostly meaningful information prerequisites with only minor weaknesses
+1.0: Self-contained, formally coherent, and benchmark-meaningful: the physical and epistemic goals work together cleanly, and every K() goal captures a genuine information prerequisite""",
     },
     "mechanic_utilization": {
         "name": "Mechanic Utilization & Balance",
-        "description": "Are listed mechanics essential? (Empty list = auto-pass at 1.0). Penalize redundant or purposeless mechanics, not the count itself.",
-        "rubric": """0.0: Mechanics listed but never triggered or used
-0.3: Mechanics present but most could be removed without affecting the task
-0.5: Mechanics add flavor but aren't essential to the coordination challenge
-0.7: Well-integrated mechanics that each serve a distinct purpose
-1.0: Every mechanic is essential — task wouldn't work without each one""",
+        "description": "Are the listed mechanics genuinely used to create the intended coordination or ToM challenge? Penalize mechanics that are redundant, decorative, or disconnected from the goal structure. Empty mechanics are fine when the task is intentionally simple.",
+        "rubric": """0.0: Mechanics are listed but unused, misleading, or disconnected from the actual task
+0.3: Mechanics appear in the spec but most could be removed without changing the challenge
+0.5: Mechanics matter somewhat, but at least one is decorative or only weakly connected to the benchmark challenge
+0.7: Mechanics are well integrated and each serves a distinct purpose, with only minor redundancy
+1.0: Mechanics are tightly integrated with the formal goals and task design; each one materially contributes to the benchmark challenge""",
     },
     # Cooperative-specific
     "task_interdependence": {
@@ -431,10 +431,14 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 - `task` is GLOBAL; for competitive/mixed it must not leak secret targets or team-specific objectives
 - Secrets must be actionable (room/furniture/key/constraint) and required
 - Secrets must be natural language (no IDs) and not step-by-step
-- Single-format goal source is `problem_pddl` (legacy formats may appear in old tasks)
+- Single-format goal source is `problem_pddl`
 - Category intent must be reflected in `problem_pddl` objective structure
+- Raw `problem_pddl` should be self-contained: required symbols belong in `:objects`, relevant room grounding belongs in `:init`
 - **Mechanic consistency**: Every mechanic referenced in `task` or `agent_secrets` (e.g., "the handle is reversed", "you have limited messages") MUST have a corresponding entry in `mechanic_bindings`. If secrets describe constraints that aren't in bindings, the simulator won't enforce them.
 - **K() goal backing**: Every `K()` goal in `problem_pddl` (or legacy goal field) must be backed by a mechanic that prevents the agent from directly observing the fact (e.g., `room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). If the agent could just walk there and see, the K() goal is fake.
+- Distinguish **formal validity** from **design quality**:
+  - If the formal task is invalid, contradictory, or not self-contained, score `Formal Goal Quality & Epistemic Coherence` near 0.
+  - If the formal task is valid, judge whether the goal design is actually meaningful for the benchmark rather than merely technically valid.
 
 ## Evaluation Criteria
 Score each criterion from 0.0 to 1.0.

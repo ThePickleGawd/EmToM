@@ -154,6 +154,17 @@ class PDKBSolver:
         belief_depth, trivial_goals = self._compute_min_belief_depth(
             problem, observability, max_belief_depth
         )
+        if belief_depth > max_belief_depth:
+            return SolverResult(
+                solvable=False,
+                belief_depth=belief_depth,
+                solve_time=time.time() - start,
+                error=(
+                    f"Task requires belief depth {belief_depth}, "
+                    f"which exceeds allowed depth {max_belief_depth}"
+                ),
+                trivial_k_goals=trivial_goals,
+            )
 
         return SolverResult(
             solvable=True,
@@ -187,21 +198,14 @@ class PDKBSolver:
 
         # Count syntactic nesting depth of epistemic formulas in the goal
         syntactic_depth = _max_epistemic_depth(problem.goal) if problem.goal else 0
-
-        # If there's information asymmetry but no explicit epistemic goals,
-        # the task requires at least depth 1 (agents need to model others' beliefs)
-        if syntactic_depth == 0 and observability.has_information_asymmetry():
-            if observability.restricted_rooms or observability.hidden_effects:
-                return 1, trivial_goals
+        if syntactic_depth == 0:
+            return 0, trivial_goals
 
         # If scene data is available (object_rooms populated), do semantic check
         if syntactic_depth > 0 and observability.object_rooms:
             semantic_depth, trivial_goals = _compute_non_trivial_depth(
                 problem.goal, observability
             )
-            # Use the semantic depth but ensure asymmetry still counts
-            if semantic_depth == 0 and observability.has_information_asymmetry():
-                return 1, trivial_goals
             return min(semantic_depth, max_depth), trivial_goals
 
         return min(syntactic_depth, max_depth), trivial_goals
@@ -363,4 +367,3 @@ def _compute_non_trivial_depth(
         return _compute_non_trivial_depth(formula.operand, observability)
 
     return 0, trivial_goals
-

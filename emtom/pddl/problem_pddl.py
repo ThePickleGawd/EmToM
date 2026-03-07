@@ -133,6 +133,117 @@ def collect_object_ids_from_formula(formula: Formula) -> Set[str]:
     return out
 
 
+def collect_object_ids_from_init(
+    init_literals: List[Literal],
+    epistemic_init: Optional[List[Union[Knows, Believes]]] = None,
+) -> Set[str]:
+    """Collect grounded object IDs referenced in an init block."""
+    out: Set[str] = set()
+
+    for lit in init_literals:
+        for arg in lit.args:
+            if not arg.startswith("?"):
+                out.add(arg)
+
+    for expr in epistemic_init or []:
+        out.update(collect_object_ids_from_formula(expr))
+
+    return out
+
+
+def build_object_room_map_from_problem(parsed_problem: ParsedProblemPDDL) -> Dict[str, str]:
+    """Build object/furniture -> room mapping from explicit init facts only."""
+    room_map: Dict[str, str] = {}
+
+    for lit in parsed_problem.init_literals:
+        if lit.negated:
+            continue
+        if lit.predicate == "is_in_room" and len(lit.args) == 2:
+            obj_id, room_id = lit.args
+            room_map[obj_id] = room_id
+
+    return room_map
+
+
+def validate_problem_pddl_self_contained(
+    parsed_problem: ParsedProblemPDDL,
+    *,
+    num_agents: Optional[int] = None,
+    require_room_grounding: bool = True,
+) -> List[str]:
+    """Validate raw problem PDDL as a self-contained proof artifact."""
+    errors: List[str] = []
+    declared = set(parsed_problem.objects.keys())
+
+    init_refs = collect_object_ids_from_init(
+        parsed_problem.init_literals, parsed_problem.epistemic_init
+    )
+    goal_refs = collect_object_ids_from_formula(parsed_problem.goal_formula)
+
+    undeclared_init = sorted(ref for ref in init_refs if ref not in declared)
+    undeclared_goal = sorted(ref for ref in goal_refs if ref not in declared)
+
+    if undeclared_init:
+        errors.append(
+            "problem_pddl :init references undeclared objects: "
+            + ", ".join(undeclared_init)
+        )
+    if undeclared_goal:
+        errors.append(
+            "problem_pddl :goal references undeclared objects: "
+            + ", ".join(undeclared_goal)
+        )
+
+    if num_agents is not None:
+        expected_agents = {f"agent_{i}" for i in range(num_agents)}
+        declared_agents = {
+            name for name, typ in parsed_problem.objects.items() if typ == "agent"
+        }
+        if declared_agents != expected_agents:
+            errors.append(
+                "problem_pddl :objects must declare exactly the benchmark agents: "
+                f"expected {sorted(expected_agents)}, got {sorted(declared_agents)}"
+            )
+
+    if require_room_grounding:
+        room_map = build_object_room_map_from_problem(parsed_problem)
+        room_typed_objects = {
+            name for name, typ in parsed_problem.objects.items() if typ in {"object", "furniture"}
+        }
+
+        relevant_room_objects = set()
+        for obj_id in init_refs | goal_refs:
+            if obj_id in room_typed_objects:
+                relevant_room_objects.add(obj_id)
+
+        missing_room_grounding = sorted(
+            obj_id for obj_id in relevant_room_objects if obj_id not in room_map
+        )
+        if missing_room_grounding:
+            errors.append(
+                "problem_pddl must ground room membership with "
+                "`(is_in_room <object> <room>)` for all goal/mechanic-relevant "
+                "objects and furniture. Missing: "
+                + ", ".join(missing_room_grounding)
+            )
+
+        expected_agents = {name for name, typ in parsed_problem.objects.items() if typ == "agent"}
+        agent_room_grounded = {
+            lit.args[0]
+            for lit in parsed_problem.init_literals
+            if not lit.negated and lit.predicate == "agent_in_room" and len(lit.args) == 2
+        }
+        missing_agent_rooms = sorted(expected_agents - agent_room_grounded)
+        if missing_agent_rooms:
+            errors.append(
+                "problem_pddl must ground all agents with "
+                "`(agent_in_room <agent> <room>)` in :init. Missing: "
+                + ", ".join(missing_agent_rooms)
+            )
+
+    return errors
+
+
 def _strip_comments(text: str) -> str:
     # PDDL line comments start with ';'
     return re.sub(r";[^\n]*", "", text)

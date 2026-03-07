@@ -62,8 +62,9 @@ def _make_minimal_task(**overrides) -> dict:
         "problem_pddl": (
             "(define (problem test_001) "
             "(:domain emtom) "
-            "(:objects agent_0 agent_1 - agent cup_1 - object table_2 - furniture) "
-            "(:init) "
+            "(:objects agent_0 agent_1 - agent kitchen_1 - room cup_1 - object table_2 - furniture) "
+            "(:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1) "
+            "(is_in_room cup_1 kitchen_1) (is_in_room table_2 kitchen_1)) "
             "(:goal (and (is_on_top cup_1 table_2))))"
         ),
         "golden_trajectory": [
@@ -170,11 +171,9 @@ class TestVerifyPddl:
         finally:
             os.unlink(tmp)
 
-    def test_budget_warning_returns_failure(self):
+    def test_verify_returns_strict_proof_metadata(self):
         from emtom.cli.verify_pddl import run
-        from emtom.pddl.dsl import Problem, Literal
         from emtom.pddl.solver import SolverResult
-        from emtom.pddl.epistemic import ObservabilityModel
 
         task = {
             "task_id": "test_budget_warning",
@@ -191,8 +190,10 @@ class TestVerifyPddl:
             "problem_pddl": (
                 "(define (problem test)\n"
                 "  (:domain emtom)\n"
-                "  (:objects agent_0 agent_1 - agent cabinet_27 - furniture)\n"
-                "  (:init)\n"
+                "  (:objects agent_0 agent_1 - agent kitchen_1 - room cabinet_27 - furniture)\n"
+                "  (:init (agent_in_room agent_0 kitchen_1) "
+                "         (agent_in_room agent_1 kitchen_1) "
+                "         (is_in_room cabinet_27 kitchen_1))\n"
                 "  (:goal (K agent_0 (is_open cabinet_27)))\n"
                 ")"
             ),
@@ -203,26 +204,26 @@ class TestVerifyPddl:
             tmp = f.name
 
         try:
-            with patch("emtom.pddl.compiler.compile_task") as mock_compile_task, \
-                 patch("emtom.pddl.fd_solver.FastDownwardSolver.solve") as mock_solve, \
-                 patch("emtom.pddl.fd_solver.FastDownwardSolver.check_communication_budget") as mock_budget, \
-                 patch("emtom.pddl.epistemic.ObservabilityModel.from_task_with_scene") as mock_obs:
-                mock_compile_task.return_value = Problem(
-                    name="test",
-                    domain_name="emtom",
-                    objects={"agent_0": "agent", "agent_1": "agent", "cabinet_27": "furniture"},
-                    init=[Literal("can_communicate", ("agent_1", "agent_0"))],
-                    goal=Literal("is_open", ("cabinet_27",)),
-                )
-                mock_solve.return_value = SolverResult(solvable=True, solve_time=0.0)
-                mock_budget.return_value = "Communication budget may be insufficient"
-                mock_obs.return_value = ObservabilityModel()
-
+            with patch(
+                "emtom.pddl.tom_verifier.prove_minimal_tom_level",
+                return_value={
+                    "tom_level": 1,
+                    "minimal_tom_level": 1,
+                    "epistemic_goal_depth": 1,
+                    "proved_unsat_below": [0],
+                    "proof_attempts": [{"level": 0, "solvable": False, "belief_depth": 1, "error": "requires depth 1"}],
+                    "proof_backend": "fast_downward_strict",
+                    "proof_strict": True,
+                    "solver_result": SolverResult(solvable=True, belief_depth=1, solve_time=0.0),
+                    "trivial_k_goals": [],
+                },
+            ):
                 result = run(tmp)
 
-            assert result["success"] is False
-            assert "not solvable" in result["error"].lower()
-            assert result["data"]["valid"] is False
+            assert result["success"] is True
+            assert result["data"]["proof_strict"] is True
+            assert result["data"]["proof_backend"] == "fast_downward_strict"
+            assert result["data"]["proved_unsat_below"] == [0]
         finally:
             os.unlink(tmp)
 
@@ -264,8 +265,10 @@ class TestSubmitTask:
             "problem_pddl": (
                 "(define (problem t_submit)"
                 " (:domain emtom)"
-                " (:objects agent_0 agent_1 - agent cup_1 - object table_1 - furniture)"
-                " (:init (is_on_top cup_1 table_1))"
+                " (:objects agent_0 agent_1 - agent kitchen_1 - room cup_1 - object table_1 - furniture)"
+                " (:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1)"
+                "        (is_in_room cup_1 kitchen_1) (is_in_room table_1 kitchen_1)"
+                "        (is_on_top cup_1 table_1))"
                 " (:goal (is_on_top cup_1 table_1)))"
             ),
         }
@@ -326,8 +329,10 @@ class TestSubmitTask:
             "problem_pddl": (
                 "(define (problem t_submit)"
                 " (:domain emtom)"
-                " (:objects agent_0 agent_1 - agent cup_1 - object table_1 - furniture)"
-                " (:init (is_on_top cup_1 table_1))"
+                " (:objects agent_0 agent_1 - agent kitchen_1 - room cup_1 - object table_1 - furniture)"
+                " (:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1)"
+                "        (is_in_room cup_1 kitchen_1) (is_in_room table_1 kitchen_1)"
+                "        (is_on_top cup_1 table_1))"
                 " (:goal (is_on_top cup_1 table_1)))"
             ),
         }
@@ -362,6 +367,35 @@ class TestJudgeTask:
         result = run("/nonexistent/task.json")
         assert result["success"] is False
         assert "not found" in result["error"]
+
+    def test_judge_runs_verify_pddl_first(self):
+        from emtom.cli.judge_task import run
+
+        task = _make_minimal_task(
+            problem_pddl=(
+                "(define (problem test_001) "
+                "(:domain emtom) "
+                "(:objects agent_0 agent_1 - agent kitchen_1 - room cup_1 - object table_2 - furniture) "
+                "(:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1) "
+                "(is_in_room cup_1 kitchen_1) (is_in_room table_2 kitchen_1)) "
+                "(:goal (and (is_on_top cup_1 table_2))))"
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            task_path = Path(td) / "task.json"
+            with open(task_path, "w") as f:
+                json.dump(task, f)
+
+            with patch(
+                "emtom.cli.verify_pddl.run",
+                return_value=failure("strict proof failed", data={"valid": False}),
+            ), patch("emtom.pddl.planner.regenerate_golden_trajectory") as mock_regen:
+                result = run(str(task_path))
+
+            assert result["success"] is False
+            assert "strict proof failed" in result["error"]
+            mock_regen.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -61,6 +61,13 @@ def run(
 
     scene_data = _load_scene_data(working_dir, scene_file)
 
+    # Deterministic strict PDDL verification is the first judge gate.
+    from emtom.cli.verify_pddl import run as verify_pddl_run
+
+    verify_result = verify_pddl_run(task_file, working_dir=working_dir)
+    if not verify_result["success"]:
+        return verify_result
+
     # Always regenerate golden trajectory from authoritative task spec.
     try:
         from emtom.pddl.planner import regenerate_golden_trajectory
@@ -144,6 +151,7 @@ def run(
         "overall_score": verdict.overall_score,
         "threshold": judge.overall_threshold,
         "models": list(verdict.judgments.keys()),
+        "pddl_verification": verify_result["data"],
         "model_results": {
             model: {
                 "passed": j.is_valid,

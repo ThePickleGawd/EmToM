@@ -91,10 +91,23 @@ class ObservabilityModel:
         task: "GeneratedTask",
         scene_data: Optional[Dict[str, Any]] = None,
     ) -> "ObservabilityModel":
-        """Build observability model with scene-level object-to-room mapping."""
+        """Build observability model from task PDDL, with scene fallback only."""
         model = cls.from_task(task)
 
-        if scene_data:
+        problem_pddl = getattr(task, "problem_pddl", None)
+        if isinstance(problem_pddl, str) and problem_pddl.strip():
+            try:
+                from emtom.pddl.problem_pddl import (
+                    build_object_room_map_from_problem,
+                    parse_problem_pddl,
+                )
+
+                parsed_problem = parse_problem_pddl(problem_pddl)
+                model.object_rooms = build_object_room_map_from_problem(parsed_problem)
+            except Exception:
+                model.object_rooms = {}
+
+        if not model.object_rooms and scene_data:
             model.object_rooms = _build_object_room_map(scene_data)
 
         return model

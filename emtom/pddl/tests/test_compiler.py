@@ -321,8 +321,19 @@ class TestCompiler:
             task.problem_pddl = (
                 f"(define (problem test_001)\n"
                 f"  (:domain emtom)\n"
-                f"  (:objects)\n"
-                f"  (:init)\n"
+                f"  (:objects\n"
+                f"    agent_0 agent_1 - agent\n"
+                f"    kitchen_1 - room\n"
+                f"    cabinet_27 table_13 - furniture\n"
+                f"    bottle_4 - object\n"
+                f"  )\n"
+                f"  (:init\n"
+                f"    (agent_in_room agent_0 kitchen_1)\n"
+                f"    (agent_in_room agent_1 kitchen_1)\n"
+                f"    (is_in_room cabinet_27 kitchen_1)\n"
+                f"    (is_in_room table_13 kitchen_1)\n"
+                f"    (is_in_room bottle_4 kitchen_1)\n"
+                f"  )\n"
                 f"  (:goal {pddl_goal})\n"
                 f")"
             )
@@ -332,12 +343,7 @@ class TestCompiler:
 
     def test_basic_compile(self):
         task = self._make_task()
-        scene_data = {
-            "rooms": ["kitchen_1", "bedroom_1"],
-            "furniture": ["cabinet_27", "table_13"],
-            "objects": ["bottle_4"],
-        }
-        problem = compile_task(task, scene_data)
+        problem = compile_task(task)
         assert problem.name == "test_001"
         assert "agent_0" in problem.objects
         assert "cabinet_27" in problem.objects
@@ -357,8 +363,9 @@ class TestCompiler:
         task.problem_pddl = (
             "(define (problem test_001)\n"
             "  (:domain emtom)\n"
-            "  (:objects cabinet_27 - furniture)\n"
-            "  (:init (is_inverse cabinet_27))\n"
+            "  (:objects agent_0 agent_1 - agent kitchen_1 - room cabinet_27 - furniture)\n"
+            "  (:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1) "
+            "         (is_in_room cabinet_27 kitchen_1) (is_inverse cabinet_27))\n"
             "  (:goal (is_open cabinet_27))\n"
             ")"
         )

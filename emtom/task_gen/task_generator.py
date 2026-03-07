@@ -117,7 +117,7 @@ class GeneratedTask:
     initial_states: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     # THEORY OF MIND
-    tom_level: int = 1
+    tom_level: int = 0
     tom_reasoning: Optional[str] = None
 
     # MESSAGE TARGETING (optional, restricts who each agent can message)
@@ -214,7 +214,7 @@ class GeneratedTask:
             items=items,
             locked_containers=locked_containers,
             initial_states=initial_states,
-            tom_level=data.get("tom_level", 1),
+            tom_level=data.get("tom_level", 0),
             tom_reasoning=data.get("tom_reasoning"),
             message_targets=message_targets,
             teams=teams,
@@ -240,7 +240,7 @@ class GeneratedTask:
             return self.tom_level
         from emtom.pddl.tom_verifier import compute_tom_depth
         depth = compute_tom_depth(self, scene_data)
-        return max(depth, 1)
+        return depth
 
     def get_pddl_propositions(self) -> List[Dict[str, Any]]:
         """Get goal conjuncts as evaluation.py proposition format."""

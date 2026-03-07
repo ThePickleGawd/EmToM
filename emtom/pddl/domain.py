@@ -147,8 +147,10 @@ EMTOM_ACTIONS = [
     # Open: with conditional effects for mechanics
     Action(
         name="open",
-        params=[Param("a", "agent"), Param("f", "furniture")],
+        params=[Param("a", "agent"), Param("f", "furniture"), Param("r", "room")],
         preconditions=And(operands=(
+            Literal("agent_in_room", ("?a", "?r")),
+            Literal("is_in_room", ("?f", "?r")),
             Literal("is_closed", ("?f",)),
             Not(operand=Literal("is_locked_permanent", ("?f",))),
         )),
@@ -183,8 +185,12 @@ EMTOM_ACTIONS = [
     # Close
     Action(
         name="close",
-        params=[Param("a", "agent"), Param("f", "furniture")],
-        preconditions=Literal("is_open", ("?f",)),
+        params=[Param("a", "agent"), Param("f", "furniture"), Param("r", "room")],
+        preconditions=And(operands=(
+            Literal("agent_in_room", ("?a", "?r")),
+            Literal("is_in_room", ("?f", "?r")),
+            Literal("is_open", ("?f",)),
+        )),
         effects=[
             Effect(Literal("is_closed", ("?f",))),
             Effect(Literal("is_open", ("?f",), negated=True)),
@@ -228,8 +234,11 @@ EMTOM_ACTIONS = [
     # Pick
     Action(
         name="pick",
-        params=[Param("a", "agent"), Param("x", "object")],
-        preconditions=None,
+        params=[Param("a", "agent"), Param("x", "object"), Param("r", "room")],
+        preconditions=And(operands=(
+            Literal("agent_in_room", ("?a", "?r")),
+            Literal("is_in_room", ("?x", "?r")),
+        )),
         effects=[
             Effect(Literal("is_held_by", ("?x", "?a"))),
         ],
@@ -239,8 +248,12 @@ EMTOM_ACTIONS = [
     # Place
     Action(
         name="place",
-        params=[Param("a", "agent"), Param("x", "object"), Param("f", "furniture")],
-        preconditions=Literal("is_held_by", ("?x", "?a")),
+        params=[Param("a", "agent"), Param("x", "object"), Param("f", "furniture"), Param("r", "room")],
+        preconditions=And(operands=(
+            Literal("is_held_by", ("?x", "?a")),
+            Literal("agent_in_room", ("?a", "?r")),
+            Literal("is_in_room", ("?f", "?r")),
+        )),
         effects=[
             Effect(Literal("is_held_by", ("?x", "?a"), negated=True)),
             # Domain-level abstraction: runtime Place can realize either
@@ -249,6 +262,7 @@ EMTOM_ACTIONS = [
             # task-level goals authored in problem_pddl.
             Effect(Literal("is_on_top", ("?x", "?f"))),
             Effect(Literal("is_inside", ("?x", "?f"))),
+            Effect(Literal("is_in_room", ("?x", "?r"))),
         ],
         observability="full",
     ),
@@ -274,10 +288,12 @@ EMTOM_ACTIONS = [
     # UseItem
     Action(
         name="use_item",
-        params=[Param("a", "agent"), Param("i", "item"), Param("f", "furniture")],
+        params=[Param("a", "agent"), Param("i", "item"), Param("f", "furniture"), Param("r", "room")],
         preconditions=And(operands=(
             Literal("has_item", ("?a", "?i")),
             Literal("requires_item", ("?f", "?i")),
+            Literal("agent_in_room", ("?a", "?r")),
+            Literal("is_in_room", ("?f", "?r")),
         )),
         effects=[
             Effect(Literal("is_unlocked", ("?f",))),

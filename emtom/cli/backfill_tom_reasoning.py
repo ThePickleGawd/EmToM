@@ -43,7 +43,7 @@ def backfill(
             continue
 
         tom_level = task_data.get("tom_level")
-        if not isinstance(tom_level, int) or tom_level < 1:
+        if not isinstance(tom_level, int) or tom_level < 0:
             print(f"  SKIP {task_file.name}: no valid tom_level ({tom_level!r})")
             skipped += 1
             continue

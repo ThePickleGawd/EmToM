@@ -393,7 +393,7 @@ Your previous task did not pass the ToM verification. You MUST address these iss
                     "- 2-3 subtasks maximum\n"
                     "- Secrets MUST explain any active mechanic in plain language\n"
                     "- All effects should be observable (no remote effects in unseen rooms)\n"
-                    "- tom_level 1 only\n"
+                    "- tom_level 0-1 only\n"
                     "- limited_bandwidth with generous limits (4-5 messages) works well at this level\n"
                 ),
                 "medium": (
@@ -454,7 +454,7 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
             tom_calibration_section = (
                 f"\n## Required K-Level: {target_k}\n"
                 f"This task MUST be Theory-of-Mind level {target_k}.\n"
-                f"Design epistemic goals so that `verify_pddl[]` computes tom_level = {target_k}.\n"
+                f"Design epistemic goals so that `judge[]`'s strict PDDL verification computes tom_level = {target_k}.\n"
                 f"submit_task[] will REJECT the task if the computed tom_level is not {target_k}.\n"
             )
 
@@ -1172,8 +1172,6 @@ SUMMARY:"""
             return self._verify_golden_trajectory()
         elif tool == "judge":
             return self._judge()
-        elif tool == "verify_pddl":
-            return self._verify_pddl()
         elif tool == "submit_task":
             return self._submit_task()
         elif tool == "new_scene":
@@ -1181,7 +1179,7 @@ SUMMARY:"""
         elif tool == "fail":
             return self._fail(args)
         else:
-            return f"Unknown tool: {tool}. Available: bash, test_task, verify_pddl, verify_golden_trajectory, judge, submit_task, new_scene, fail"
+            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, judge, submit_task, new_scene, fail"
 
     def _bash(self, command: str) -> str:
         """
@@ -1675,15 +1673,6 @@ SUMMARY:"""
             task_file=str(self.task_file) if persist else None,
         )
 
-    def _verify_pddl(self) -> str:
-        """Verify PDDL goal solvability and compute ToM depth."""
-        from emtom.cli.verify_pddl import run
-
-        result = run(str(self.task_file), working_dir=str(self.working_dir))
-        if result["success"]:
-            return json.dumps(result["data"], indent=2)
-        return json.dumps({"valid": False, "error": result["error"]}, indent=2)
-
     def _verify_golden_trajectory(self) -> str:
         """Regenerate trajectory from PDDL, then execute in subprocess (fresh GL context)."""
         if not self.task_file.exists():
@@ -2015,7 +2004,7 @@ Use these learnings to improve your next task. Avoid repeating mistakes."""
             k_section = (
                 f"\n## Required K-Level: {self._current_k_level}\n"
                 f"This task MUST be Theory-of-Mind level {self._current_k_level}.\n"
-                f"Design epistemic goals so that `verify_pddl[]` computes tom_level = {self._current_k_level}.\n"
+                f"Design epistemic goals so that `judge[]`'s strict PDDL verification computes tom_level = {self._current_k_level}.\n"
                 f"submit_task[] will REJECT the task if the computed tom_level is not {self._current_k_level}.\n"
             )
         static = getattr(self, "_static_extra_sections", "")

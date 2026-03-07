@@ -98,6 +98,7 @@ def validate(
         from emtom.pddl.problem_pddl import parse_problem_pddl
         from emtom.pddl.domain import EMTOM_DOMAIN
         from emtom.pddl.dsl import validate_goal_predicates
+        from emtom.pddl.problem_pddl import validate_problem_pddl_self_contained
 
         parsed = parse_problem_pddl(task_data["problem_pddl"])
         declared_domain = task_data.get("pddl_domain", "")
@@ -117,6 +118,15 @@ def validate(
             return failure(
                 "problem_pddl goal predicate validation failed: "
                 + "; ".join(pred_errors)
+            )
+
+        self_contained_errors = validate_problem_pddl_self_contained(
+            parsed, num_agents=task_data.get("num_agents", 2)
+        )
+        if self_contained_errors:
+            return failure(
+                "problem_pddl must be self-contained: "
+                + "; ".join(self_contained_errors)
             )
     except Exception as e:
         return failure(f"Invalid problem_pddl: {e}")

@@ -70,7 +70,7 @@ class TestSolver:
         )
         result = PDKBSolver().solve(EMTOM_DOMAIN, problem, obs)
         assert result.solvable
-        assert result.belief_depth >= 1
+        assert result.belief_depth == 0
 
     def test_static_literal_requires_exact_init_match(self):
         """is_inside is achievable via place action, so PDKBSolver treats it as dynamic."""
@@ -144,8 +144,16 @@ class TestTomVerifier:
         task.problem_pddl = (
             f"(define (problem test_001)\n"
             f"  (:domain emtom)\n"
-            f"  (:objects)\n"
-            f"  (:init)\n"
+            f"  (:objects\n"
+            f"    agent_0 agent_1 - agent\n"
+            f"    kitchen_1 - room\n"
+            f"    cabinet_27 - furniture\n"
+            f"  )\n"
+            f"  (:init\n"
+            f"    (agent_in_room agent_0 kitchen_1)\n"
+            f"    (agent_in_room agent_1 kitchen_1)\n"
+            f"    (is_in_room cabinet_27 kitchen_1)\n"
+            f"  )\n"
             f"  (:goal {pddl_goal})\n"
             f")"
         )
@@ -165,10 +173,13 @@ class TestTomVerifier:
         binding.trigger_object = None
         binding.target_object = None
         binding.requires_item = None
-        task = self._make_task(mechanics=[binding])
+        task = self._make_task(
+            pddl_goal="(K agent_0 (is_open cabinet_27))",
+            mechanics=[binding],
+        )
         scene = {"rooms": ["kitchen_1"], "furniture": ["cabinet_27"], "objects": []}
         depth = compute_tom_depth(task, scene)
-        assert depth >= 1
+        assert depth == 1
 
     def test_explain_provides_reasoning(self):
         task = self._make_task()
