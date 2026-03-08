@@ -117,7 +117,7 @@ print_llm_options() {
 
 # Default values
 MAX_SIM_STEPS=200000
-MAX_LLM_CALLS=""  # Empty = use 5x golden trajectory length
+MAX_LLM_CALLS=""  # Empty = use 4x golden trajectory length
 EXPLORATION_STEPS=20
 MECHANICS=""
 TASK_FILE=""
@@ -237,7 +237,7 @@ print_usage() {
     echo -e "${BOLD}Benchmark Options:${NC}"
     echo "  --model MODEL        LLM model name (default: gpt-5.2, provider auto-detected)"
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
-    echo "  --max-llm-calls N    Max LLM calls per agent (default: 5x golden trajectory)"
+    echo "  --max-llm-calls N    Max LLM calls per agent (default: 4x golden trajectory)"
     echo "  --category TYPE      Filter benchmark tasks by category: cooperative|competitive|mixed"
     echo "  --tasks-dir DIR      Custom tasks directory (default: data/emtom/tasks)"
     echo "  --team-model-map MAP Team->model mapping for competitive tasks"

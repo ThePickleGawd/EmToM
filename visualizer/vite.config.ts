@@ -2,10 +2,12 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import fs from "fs";
+import dynamicDataPlugin from "./vite-data-plugin";
 
 export default defineConfig({
   plugins: [
     react(),
+    dynamicDataPlugin(),
     {
       name: "serve-outputs",
       configureServer(server) {

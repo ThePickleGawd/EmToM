@@ -542,12 +542,12 @@ def run_single_task(
     # Get max steps from config
     max_steps = config.habitat.environment.get("max_episode_steps", 2000)
 
-    # Calculate max turns as 5x golden trajectory length
+    # Calculate max turns as 4x golden trajectory length.
     golden_trajectory = task_raw.get("golden_trajectory", [])
     if "max_turns" in config:
         max_turns = config.max_turns
     else:
-        max_turns = max(len(golden_trajectory) * 5, 20)  # Minimum 20 turns
+        max_turns = len(golden_trajectory) * 4
 
     cprint(f"\nMax simulation steps: {max_steps}", "blue")
     cprint(f"Max LLM turns: {max_turns} (golden trajectory: {len(golden_trajectory)} steps)", "blue")

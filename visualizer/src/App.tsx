@@ -38,12 +38,18 @@ export default function App() {
           ? `/data/tasks/_library/${taskId}.json`
           : `/data/tasks/${selectedRunId}/${taskId}.json`;
       fetch(path)
-        .then((r) => r.json())
+        .then((r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        })
         .then((data: TaskDetail) => {
           setTaskDetail(data);
           setLoadingTask(false);
         })
-        .catch(() => setLoadingTask(false));
+        .catch((err) => {
+          console.error("Failed to load task:", path, err);
+          setLoadingTask(false);
+        });
     },
     [source, selectedRunId],
   );

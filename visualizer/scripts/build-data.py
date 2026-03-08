@@ -170,68 +170,107 @@ def process_task_file(task_file: Path) -> Optional[dict]:
     }
 
 
+def find_results_dirs(run_dir: Path) -> list:
+    """Find all results directories in a benchmark run, handling two layouts.
+
+    Flat:   {run_dir}/results/{task_id}/planner-log/...
+    Nested: {run_dir}/{wrapper}/benchmark-*/results/{task_id}/planner-log/...
+    """
+    # Flat layout
+    flat = run_dir / "results"
+    if flat.exists() and flat.is_dir():
+        summary = {}
+        sf = flat / "benchmark_summary.json"
+        if sf.exists():
+            try:
+                with open(sf) as f:
+                    summary = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+        return [(flat, summary)]
+
+    # Nested layout
+    out = []
+    for wrapper in sorted(run_dir.iterdir()):
+        if not wrapper.is_dir() or wrapper.name.startswith(".") or wrapper.name == "logs":
+            continue
+        for bd in sorted(wrapper.iterdir()):
+            if not bd.is_dir() or not bd.name.startswith("benchmark-"):
+                continue
+            results_dir = bd / "results"
+            if not results_dir.exists() or not results_dir.is_dir():
+                continue
+            summary = {}
+            sf = results_dir / "benchmark_summary.json"
+            if sf.exists():
+                try:
+                    with open(sf) as f:
+                        summary = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    pass
+            out.append((results_dir, summary))
+    return out
+
+
 def process_run(run_dir: Path) -> Optional[dict]:
     """Process a benchmark run directory."""
-    results_dir = run_dir / "results"
-    if not results_dir.exists():
+    results_dirs = find_results_dirs(run_dir)
+    if not results_dirs:
         return None
-
-    # Read summary if available
-    summary_file = results_dir / "benchmark_summary.json"
-    summary = {}
-    if summary_file.exists():
-        try:
-            with open(summary_file) as f:
-                summary = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
 
     run_id = run_dir.name
     tasks_dir = DATA_DIR / "tasks" / run_id
     tasks_dir.mkdir(parents=True, exist_ok=True)
 
     task_summaries = []
-    for task_dir in sorted(results_dir.iterdir()):
-        if not task_dir.is_dir() or task_dir.name.startswith(".") or task_dir.name == "benchmark_summary.json":
-            continue
+    merged_summary = {}
 
-        task_data = process_task_dir(task_dir)
-        if task_data is None:
-            continue
+    for results_dir, summary in results_dirs:
+        if not merged_summary.get("model") and summary.get("model"):
+            merged_summary = summary
 
-        # Write per-task detail file
-        task_file = tasks_dir / f"{task_data['task_id']}.json"
-        with open(task_file, "w") as f:
-            json.dump(task_data, f)
+        for task_dir in sorted(results_dir.iterdir()):
+            if not task_dir.is_dir() or task_dir.name.startswith(".") or task_dir.name == "benchmark_summary.json":
+                continue
 
-        # Find category from summary results
-        category = ""
-        if "results" in summary:
-            for r in summary["results"]:
-                if r.get("task_id") == task_data["task_id"]:
-                    category = r.get("category", "")
-                    break
+            task_data = process_task_dir(task_dir)
+            if task_data is None:
+                continue
 
-        task_summaries.append({
-            "task_id": task_data["task_id"],
-            "title": task_data["task_title"],
-            "category": category,
-            "success": task_data["success"],
-            "turns": task_data["turns"],
-            "steps": task_data["steps"],
-            "agents": len(task_data["llm_agents"]),
-        })
+            # Write per-task detail file
+            task_file = tasks_dir / f"{task_data['task_id']}.json"
+            with open(task_file, "w") as f:
+                json.dump(task_data, f)
+
+            # Find category from summary results
+            category = ""
+            if "results" in summary:
+                for r in summary["results"]:
+                    if r.get("task_id") == task_data["task_id"]:
+                        category = r.get("category", "")
+                        break
+
+            task_summaries.append({
+                "task_id": task_data["task_id"],
+                "title": task_data["task_title"],
+                "category": category,
+                "success": task_data["success"],
+                "turns": task_data["turns"],
+                "steps": task_data["steps"],
+                "agents": len(task_data["llm_agents"]),
+            })
 
     if not task_summaries:
         return None
 
+    passed = sum(1 for t in task_summaries if t["success"])
     return {
         "id": run_id,
-        "model": summary.get("model", ""),
-        "observation_mode": summary.get("benchmark_observation_mode", ""),
-        "total": summary.get("total", len(task_summaries)),
-        "passed": summary.get("passed", sum(1 for t in task_summaries if t["success"])),
-        "pass_rate": summary.get("pass_rate", 0),
+        "model": merged_summary.get("model", ""),
+        "observation_mode": merged_summary.get("benchmark_observation_mode", ""),
+        "total": len(task_summaries),
+        "passed": passed,
+        "pass_rate": (passed / len(task_summaries) * 100) if task_summaries else 0,
         "tasks": task_summaries,
     }
 

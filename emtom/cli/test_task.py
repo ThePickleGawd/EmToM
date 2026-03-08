@@ -30,7 +30,7 @@ def main():
     parser.add_argument("--working-dir", default=None, help="Working directory")
     parser.add_argument("--trajectory-dir", default=None, help="Directory to save agent trajectory files")
     parser.add_argument("--config-name", default=None, help="Hydra config name (auto-detected from task)")
-    parser.add_argument("--max-turns", type=int, default=None, help="Max LLM turns (default: 5x golden trajectory)")
+    parser.add_argument("--max-turns", type=int, default=None, help="Max LLM turns (default: 4x golden trajectory)")
     parser.add_argument("--test-model", type=str, default=None, help="Override model for LLM agents")
     parser.add_argument("--team-model-map", type=str, default=None,
                         help="Team->model mapping for competitive tasks, e.g. team_0=gpt-5.2,team_1=sonnet")

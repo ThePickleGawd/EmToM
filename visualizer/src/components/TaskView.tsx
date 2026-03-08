@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { TaskDetail } from "../types";
 import AgentTimeline from "./AgentTimeline";
+import { downloadJson } from "../download";
 
 const AGENT_COLORS = [
   "var(--agent-0)",
@@ -53,7 +54,16 @@ export default function TaskView({ task, onImageClick }: Props) {
   return (
     <div>
       <div className="task-header">
-        <h2 className="task-title">{task.task_title}</h2>
+        <div className="task-title-row">
+          <h2 className="task-title">{task.task_title}</h2>
+          <button
+            className="download-btn"
+            title="Download task JSON"
+            onClick={() => downloadJson(task, `${task.task_id}.json`)}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </button>
+        </div>
         <div className="task-meta">
           <span
             className={`task-result-badge ${task.success ? "success" : "failure"}`}

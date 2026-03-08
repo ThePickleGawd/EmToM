@@ -25,7 +25,7 @@ def main():
     parser.add_argument("--result-file", required=True, help="Path to write result JSON")
     parser.add_argument("--trajectory-dir", default=None, help="Directory to save agent trajectory files")
     parser.add_argument("--config-name", default="examples/emtom_2_robots")
-    parser.add_argument("--max-turns", type=int, default=None, help="Max LLM turns (default: 3x golden trajectory)")
+    parser.add_argument("--max-turns", type=int, default=None, help="Max LLM turns (default: 4x golden trajectory)")
     parser.add_argument("--test-model", type=str, default=None, help="Override model for LLM agents (e.g. gpt-5-mini)")
     args = parser.parse_args()
 
@@ -154,12 +154,12 @@ def main():
         # Get max_steps from config (same as run_habitat_benchmark.py)
         max_steps = config.habitat.environment.get("max_episode_steps", 20000)
 
-        # Calculate max_turns: use CLI arg if provided, otherwise 5x golden trajectory
+        # Calculate max_turns: use CLI arg if provided, otherwise 4x golden trajectory.
         if args.max_turns is not None:
             max_turns = args.max_turns
         else:
             golden_trajectory = task_data.get("golden_trajectory", [])
-            max_turns = max(len(golden_trajectory) * 5, 20)  # Match benchmark default
+            max_turns = len(golden_trajectory) * 4  # Match benchmark default.
 
         results = runner.run(instruction=instruction, max_steps=max_steps, max_turns=max_turns)
 
