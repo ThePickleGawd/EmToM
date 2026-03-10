@@ -32,18 +32,24 @@ export default function Sidebar({
         <h1>
           <span>EmToM</span> Visualizer
         </h1>
-        <div className="source-tabs">
+        <div className="source-tabs source-tabs-3">
+          <button
+            className={`source-tab ${source === "campaign" ? "active" : ""}`}
+            onClick={() => onSourceChange("campaign")}
+          >
+            Campaign
+          </button>
           <button
             className={`source-tab ${source === "benchmarks" ? "active" : ""}`}
             onClick={() => onSourceChange("benchmarks")}
           >
-            Benchmarks
+            Runs
           </button>
           <button
             className={`source-tab ${source === "library" ? "active" : ""}`}
             onClick={() => onSourceChange("library")}
           >
-            Task Library ({libraryTasks.length})
+            Library
           </button>
         </div>
         {source === "benchmarks" && (

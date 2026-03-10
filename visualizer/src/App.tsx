@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback } from "react";
 import type { RunsIndex, RunSummary, TaskDetail } from "./types";
 import Sidebar from "./components/Sidebar";
 import TaskView from "./components/TaskView";
+import CampaignView from "./components/CampaignView";
 
-export type Source = "benchmarks" | "library";
+export type Source = "campaign" | "benchmarks" | "library";
 
 export default function App() {
   const [runsIndex, setRunsIndex] = useState<RunsIndex | null>(null);
-  const [source, setSource] = useState<Source>("benchmarks");
+  const [source, setSource] = useState<Source>("campaign");
   const [selectedRunId, setSelectedRunId] = useState<string>("");
   const [selectedTaskId, setSelectedTaskId] = useState<string>("");
   const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
@@ -81,6 +82,57 @@ export default function App() {
           <div className="loading-spinner" />
           Loading benchmark data...
         </div>
+      </div>
+    );
+  }
+
+  // Campaign mode uses full-width layout (no sidebar)
+  if (source === "campaign") {
+    return (
+      <div className="app">
+        <aside className="sidebar">
+          <div className="sidebar-header">
+            <h1>
+              <span>EmToM</span> Visualizer
+            </h1>
+            <div className="source-tabs source-tabs-3">
+              <button
+                className="source-tab active"
+                onClick={() => handleSourceChange("campaign")}
+              >
+                Campaign
+              </button>
+              <button
+                className="source-tab"
+                onClick={() => handleSourceChange("benchmarks")}
+              >
+                Runs
+              </button>
+              <button
+                className="source-tab"
+                onClick={() => handleSourceChange("library")}
+              >
+                Library
+              </button>
+            </div>
+          </div>
+          <div className="campaign-sidebar-info">
+            <p className="campaign-sidebar-hint">
+              Campaign results, leaderboard, and competitive matchups.
+            </p>
+          </div>
+        </aside>
+        <main className="main-content">
+          <CampaignView onImageClick={setLightboxSrc} />
+        </main>
+        {lightboxSrc && (
+          <div
+            className="lightbox-overlay"
+            onClick={() => setLightboxSrc(null)}
+          >
+            <img className="lightbox-img" src={lightboxSrc} alt="Frame" />
+          </div>
+        )}
       </div>
     );
   }

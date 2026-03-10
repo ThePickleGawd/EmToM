@@ -10,6 +10,7 @@ import path from "path";
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const OUTPUTS_DIR = path.join(PROJECT_ROOT, "outputs", "emtom");
 const TASKS_DIR = path.join(PROJECT_ROOT, "data", "emtom", "tasks");
+const RESULTS_DIR = path.join(PROJECT_ROOT, "data", "emtom", "results");
 
 function makeRelativePath(absPath: string): string {
   const prefix = PROJECT_ROOT + "/";
@@ -413,6 +414,108 @@ export default function dynamicDataPlugin(): Plugin {
                 res.end(JSON.stringify(taskData));
                 return;
               }
+            }
+            res.statusCode = 404;
+            res.end("Not found");
+            return;
+          }
+
+          // GET /data/campaign.json — campaign definition
+          if (urlPath === "/campaign.json") {
+            const campaignFile = path.join(RESULTS_DIR, "campaign.json");
+            if (fs.existsSync(campaignFile)) {
+              res.setHeader("Content-Type", "application/json");
+              res.end(fs.readFileSync(campaignFile, "utf-8"));
+            } else {
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify(null));
+            }
+            return;
+          }
+
+          // GET /data/leaderboard.json — leaderboard
+          if (urlPath === "/leaderboard.json") {
+            const lbFile = path.join(RESULTS_DIR, "leaderboard.json");
+            if (fs.existsSync(lbFile)) {
+              res.setHeader("Content-Type", "application/json");
+              res.end(fs.readFileSync(lbFile, "utf-8"));
+            } else {
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify(null));
+            }
+            return;
+          }
+
+          // GET /data/campaign-run/{runKey}.json — campaign run benchmark summary
+          const campaignRunMatch = urlPath.match(
+            /^\/campaign-run\/(.+)\.json$/,
+          );
+          if (campaignRunMatch) {
+            const runKey = campaignRunMatch[1];
+            const summaryFile = path.join(
+              RESULTS_DIR,
+              "runs",
+              runKey,
+              "benchmark_summary.json",
+            );
+            if (fs.existsSync(summaryFile)) {
+              res.setHeader("Content-Type", "application/json");
+              res.end(fs.readFileSync(summaryFile, "utf-8"));
+            } else {
+              res.statusCode = 404;
+              res.end("Not found");
+            }
+            return;
+          }
+
+          // GET /data/campaign-task/{runKey}/{taskId}.json — campaign run task detail
+          const campaignTaskMatch = urlPath.match(
+            /^\/campaign-task\/([^/]+)\/(.+)\.json$/,
+          );
+          if (campaignTaskMatch) {
+            const [, runKey, taskId] = campaignTaskMatch;
+            const taskDir = path.join(
+              RESULTS_DIR,
+              "runs",
+              runKey,
+              "tasks",
+              taskId,
+            );
+            if (fs.existsSync(taskDir)) {
+              const taskData = processTaskDir(taskDir);
+              if (taskData) {
+                res.setHeader("Content-Type", "application/json");
+                res.end(JSON.stringify(taskData));
+                return;
+              }
+            }
+            // Fallback: check outputs dir for campaign runs
+            const campaignFile = path.join(RESULTS_DIR, "campaign.json");
+            if (fs.existsSync(campaignFile)) {
+              try {
+                const campaign = JSON.parse(
+                  fs.readFileSync(campaignFile, "utf-8"),
+                );
+                const runDef = campaign.runs?.[runKey];
+                if (runDef?.output_dir) {
+                  const outputRunDir = path.join(
+                    PROJECT_ROOT,
+                    runDef.output_dir,
+                  );
+                  const resultsDirs = findResultsDirs(outputRunDir);
+                  for (const { resultsDir } of resultsDirs) {
+                    const td = path.join(resultsDir, taskId);
+                    if (fs.existsSync(td)) {
+                      const taskData = processTaskDir(td);
+                      if (taskData) {
+                        res.setHeader("Content-Type", "application/json");
+                        res.end(JSON.stringify(taskData));
+                        return;
+                      }
+                    }
+                  }
+                }
+              } catch {}
             }
             res.statusCode = 404;
             res.end("Not found");
