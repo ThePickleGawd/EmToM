@@ -233,15 +233,11 @@ class PDKBSolver:
             receiver = conjunct.agent
             inner = conjunct.inner
 
-            # Get the inner literal
-            node = inner
-            while isinstance(node, EpistemicFormula):
-                node = node.inner
-            if not isinstance(node, Literal):
+            if not isinstance(inner, Literal):
                 continue
 
             # Check if receiver can directly observe this fact
-            if observability.is_fact_observable_by(receiver, node.predicate, node.args):
+            if observability.is_fact_observable_by(receiver, inner.predicate, inner.args):
                 continue  # Trivial — no communication needed
 
             # This K() goal requires someone to communicate to receiver
@@ -337,18 +333,12 @@ def _compute_non_trivial_depth(
         agent = formula.agent
         inner = formula.inner
 
-        # Get the leaf literal to check observability
-        node = inner
-        while isinstance(node, EpistemicFormula):
-            node = node.inner
-
-        if isinstance(node, Literal):
-            if observability.is_k_goal_trivial(agent, node):
-                trivial_goals.append(formula.to_pddl())
-                # Trivial K() — doesn't add depth, but still recurse inner
-                inner_depth, inner_trivial = _compute_non_trivial_depth(inner, observability)
-                trivial_goals.extend(inner_trivial)
-                return inner_depth, trivial_goals
+        if isinstance(inner, Literal) and observability.is_k_goal_trivial(agent, inner):
+            trivial_goals.append(formula.to_pddl())
+            # Trivial depth-1 K() — doesn't add depth, but still recurse inner
+            inner_depth, inner_trivial = _compute_non_trivial_depth(inner, observability)
+            trivial_goals.extend(inner_trivial)
+            return inner_depth, trivial_goals
 
         # Non-trivial K() — adds 1 to depth
         inner_depth, inner_trivial = _compute_non_trivial_depth(inner, observability)

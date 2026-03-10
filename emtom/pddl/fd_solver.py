@@ -74,6 +74,78 @@ def _has_epistemic_goals(formula: Formula) -> bool:
     return False
 
 
+def _collect_epistemic_leaf_literals(formula: Formula) -> List[Literal]:
+    """Collect leaf literals that appear under at least one K()/B() wrapper."""
+    literals: List[Literal] = []
+
+    def _walk(node: Formula, inside_epistemic: bool) -> None:
+        if isinstance(node, Literal):
+            if inside_epistemic:
+                literals.append(node)
+            return
+        if isinstance(node, (Knows, Believes)):
+            _walk(node.inner, True)
+            return
+        if isinstance(node, (And, Or)):
+            for op in node.operands:
+                _walk(op, inside_epistemic)
+            return
+        if isinstance(node, Not) and node.operand is not None:
+            _walk(node.operand, inside_epistemic)
+
+    _walk(formula, False)
+    return literals
+
+
+def _epistemic_grounding_errors(
+    problem: Problem,
+    observability: Optional[ObservabilityModel],
+) -> List[str]:
+    """Return missing grounding needed for strict epistemic proof."""
+    if observability is None or problem.goal is None:
+        return ["observability model is unavailable"]
+
+    grounded_object_rooms = observability.object_rooms or {}
+    agent_room_grounding = {
+        lit.args[0]
+        for lit in problem.init
+        if lit.predicate == "agent_in_room" and len(lit.args) == 2 and not lit.negated
+    }
+
+    errors: List[str] = []
+    seen: Set[str] = set()
+    for literal in _collect_epistemic_leaf_literals(problem.goal):
+        for arg in literal.args:
+            if arg.startswith("?"):
+                continue
+            obj_type = problem.objects.get(arg)
+            if obj_type is None:
+                key = f"undeclared:{arg}"
+                if key not in seen:
+                    errors.append(f"{literal.to_pddl()} references undeclared object '{arg}'")
+                    seen.add(key)
+                continue
+            if obj_type == "room":
+                continue
+            if obj_type == "agent":
+                if arg not in agent_room_grounding:
+                    key = f"agent:{arg}"
+                    if key not in seen:
+                        errors.append(
+                            f"{literal.to_pddl()} requires `(agent_in_room {arg} <room>)` in :init"
+                        )
+                        seen.add(key)
+                continue
+            if arg not in grounded_object_rooms:
+                key = f"object:{arg}"
+                if key not in seen:
+                    errors.append(
+                        f"{literal.to_pddl()} requires `(is_in_room {arg} <room>)` in :init"
+                    )
+                    seen.add(key)
+    return errors
+
+
 def _deduplicate_conjuncts(formula: Formula) -> Formula:
     """Remove duplicate conjuncts from an And formula."""
     if not isinstance(formula, And):
@@ -198,7 +270,17 @@ class FastDownwardSolver:
 
         # Epistemic compilation path: unified FD call for physical + epistemic
         has_epistemic = _has_epistemic_goals(problem.goal)
-        if has_epistemic and observability and observability.object_rooms:
+        grounding_errors = _epistemic_grounding_errors(problem, observability) if has_epistemic else []
+        if has_epistemic and strict and grounding_errors:
+            return SolverResult(
+                solvable=False,
+                solve_time=time.time() - start,
+                error=(
+                    "Strict epistemic proof requires explicit observability grounding: "
+                    + "; ".join(grounding_errors)
+                ),
+            )
+        if has_epistemic and observability and not grounding_errors:
             return self._solve_epistemic(
                 domain, problem, observability, max_belief_depth, timeout, start, strict
             )

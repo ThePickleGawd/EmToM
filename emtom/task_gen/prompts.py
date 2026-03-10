@@ -340,9 +340,9 @@ Scenario: agent_0 is restricted from kitchen. agent_1 observes trophy_1 in kitch
 
 ### Example: K=2 (agent must reason about another's beliefs)
 ```json
-"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 agent_2 - agent bedroom_0 hallway_0 study_0 - room gem_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 hallway_0) (agent_in_room agent_1 study_0) (agent_in_room agent_2 bedroom_0) (is_in_room gem_1 bedroom_0) (is_in_room table_8 hallway_0) (is_restricted agent_0 bedroom_0) (can_communicate agent_2 agent_1) (can_communicate agent_1 agent_0))\\n  (:goal (and (K agent_0 (K agent_2 (is_in_room gem_1 bedroom_0))) (is_on_top gem_1 table_8)))\\n)"
+"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent bedroom_0 hallway_0 - room gem_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 hallway_0) (agent_in_room agent_1 bedroom_0) (is_in_room gem_1 bedroom_0) (is_in_room table_8 hallway_0) (is_restricted agent_0 bedroom_0) (can_communicate agent_1 agent_0))\\n  (:goal (and (K agent_0 (K agent_1 (is_in_room gem_1 bedroom_0))) (is_on_top gem_1 table_8)))\\n)"
 ```
-Scenario: 3-agent relay. agent_0 is restricted from bedroom. agent_2 can observe bedroom but can only communicate with agent_1 (restricted_communication). agent_0 needs to know that agent_2 has learned the gem's location — second-order belief required to coordinate the relay.
+Scenario: agent_0 is restricted from bedroom. agent_1 can directly observe the gem in bedroom and can communicate to agent_0. The goal requires agent_0 to reason not just about the gem's location, but about agent_1's knowledge of that location.
 
 ## Theory of Mind
 ToM depth is computed as the **minimum solvable belief depth** under strict verification.
@@ -353,9 +353,9 @@ ToM depth is computed as the **minimum solvable belief depth** under strict veri
 
 Use `judge[]` to see the computed minimal ToM depth from its strict PDDL-verification step. Design explicit epistemic goals plus information asymmetry to increase ToM requirements:
 - `room_restriction`: creates private knowledge (agent can't observe directly)
-- `remote_control`: hidden effects only discoverable by the agent present
+- `remote_control`: use cautiously for ToM calibration; `room_restriction` is the most reliable way to create verifier-provable K() goals
 - `limited_bandwidth`: forces strategic info sharing under constraint
-- `restricted_communication`: relay chains force genuine K=2 (agent_0 → agent_1 → agent_2 means agent_0 must reason about what agent_1 relays)
+- `restricted_communication`: constrains who can inform whom, but always confirm the intended K-level with `judge[]`
 - `unreliable_communication`: ambiguous delivery forces ACK protocols — sender must model whether recipient received the message
 
 ## Success Conditions

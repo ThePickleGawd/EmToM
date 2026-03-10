@@ -181,6 +181,23 @@ class TestTomVerifier:
         depth = compute_tom_depth(task, scene)
         assert depth == 1
 
+    def test_room_valued_fact_depth_1(self):
+        """Room-valued literals should not become trivially observable."""
+        binding = MagicMock()
+        binding.mechanic_type = "room_restriction"
+        binding.restricted_rooms = ["kitchen_1"]
+        binding.for_agents = ["agent_0"]
+        binding.trigger_object = None
+        binding.target_object = None
+        binding.requires_item = None
+        task = self._make_task(
+            pddl_goal="(K agent_0 (agent_in_room agent_1 kitchen_1))",
+            mechanics=[binding],
+        )
+        scene = {"rooms": ["kitchen_1"], "furniture": ["cabinet_27"], "objects": []}
+        depth = compute_tom_depth(task, scene)
+        assert depth == 1
+
     def test_explain_provides_reasoning(self):
         task = self._make_task()
         scene = {"rooms": [], "furniture": ["cabinet_27"], "objects": []}
@@ -264,6 +281,26 @@ class TestTrivialKGoals:
         result = PDKBSolver().solve(EMTOM_DOMAIN, problem, obs)
         assert result.solvable
         assert result.trivial_k_goals == []  # Can't determine triviality without scene data
+
+    def test_nested_k_not_zeroed_by_outer_leaf_visibility(self):
+        """Fallback heuristic should not erase the outer K() layer for nested goals."""
+        problem = self._make_problem(
+            "(K agent_0 (K agent_1 (is_open cabinet_27)))",
+            objects={
+                "agent_0": "agent",
+                "agent_1": "agent",
+                "cabinet_27": "furniture",
+                "kitchen_1": "room",
+                "bedroom_1": "room",
+            },
+        )
+        obs = ObservabilityModel(
+            restricted_rooms={"agent_0": {"bedroom_1"}},  # asymmetry exists, but cabinet remains visible
+            object_rooms={"cabinet_27": "kitchen_1", "kitchen_1": "kitchen_1", "bedroom_1": "bedroom_1"},
+        )
+        result = PDKBSolver().solve(EMTOM_DOMAIN, problem, obs)
+        assert result.solvable
+        assert result.belief_depth == 1
 
 
 class TestCommunicationBudget:

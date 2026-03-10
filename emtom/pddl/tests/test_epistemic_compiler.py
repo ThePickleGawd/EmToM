@@ -823,8 +823,19 @@ class TestFDSolverEpistemicCompilation:
             # No object_rooms → falls back
         )
         result = FastDownwardSolver().solve(EMTOM_DOMAIN, problem, obs)
-        # Physical goal is solvable (K stripped)
-        assert result.solvable
+        assert "Strict epistemic proof requires explicit observability grounding" not in (result.error or "")
+
+    def test_no_observability_strict_fails_closed(self):
+        """Strict mode must not drop epistemic goals to physical-only solving."""
+        goal = Knows("agent_0", Literal("is_open", ("cabinet_27",)))
+        problem = _make_problem(goal)
+        obs = _make_obs(
+            restricted={"agent_0": {"kitchen_1"}},
+            # No object_rooms → strict proof should fail
+        )
+        result = FastDownwardSolver().solve(EMTOM_DOMAIN, problem, obs, strict=True)
+        assert not result.solvable
+        assert "Strict epistemic proof requires explicit observability grounding" in result.error
 
     def test_relay_chain_solvable(self):
         """K(a2, phi): a2 restricted, a0 can see, but 0→1→2 only.

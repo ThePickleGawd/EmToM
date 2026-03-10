@@ -152,8 +152,16 @@ def collect_object_ids_from_init(
 
 
 def build_object_room_map_from_problem(parsed_problem: ParsedProblemPDDL) -> Dict[str, str]:
-    """Build object/furniture -> room mapping from explicit init facts only."""
+    """Build entity -> room mapping from explicit init facts only.
+
+    Rooms map to themselves so observability checks work for room-valued facts
+    such as ``(agent_in_room agent_1 kitchen_1)``.
+    """
     room_map: Dict[str, str] = {}
+
+    for obj_id, obj_type in parsed_problem.objects.items():
+        if obj_type == "room":
+            room_map[obj_id] = obj_id
 
     for lit in parsed_problem.init_literals:
         if lit.negated:
