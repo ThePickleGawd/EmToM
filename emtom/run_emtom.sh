@@ -26,6 +26,7 @@ NC='\033[0m' # No Color
 expand_model_name() {
     local model=$1
     case $model in
+        kimi-k2.5)             echo "accounts/fireworks/models/kimi-k2p5" ;;
         kimi-k2-thinking)       echo "moonshot.kimi-k2-thinking" ;;
         ministral-3-8b)         echo "mistral.ministral-3-8b-instruct" ;;
         ministral-3-14b)        echo "mistral.ministral-3-14b-instruct" ;;
@@ -71,6 +72,8 @@ detect_llm_provider() {
                 echo "bedrock_claude"
             fi
             ;;
+        kimi-k2.5|accounts/fireworks/models/kimi-k2p5)
+            echo "openai_chat" ;;
         kimi-k2-thinking|moonshot.kimi-k2-thinking)
             echo "bedrock_kimi" ;;
         ministral-3-8b|ministral-3-14b|mistral-large-3|mistral.ministral-3-8b-instruct|mistral.ministral-3-14b-instruct|mistral.mistral-large-3-675b-instruct)
@@ -99,6 +102,7 @@ print_llm_options() {
     echo -e "│ Claude Haiku              │ ${GREEN}haiku${NC}              │"
     echo -e "│ Claude Opus               │ ${GREEN}opus${NC}               │"
     echo -e "├───────────────────────────┼────────────────────┤"
+    echo -e "│ Kimi K2.5                │ ${GREEN}kimi-k2.5${NC}          │"
     echo -e "│ Kimi K2 Thinking          │ ${GREEN}kimi-k2-thinking${NC}   │"
     echo -e "├───────────────────────────┼────────────────────┤"
     echo -e "│ Ministral 3 8B            │ ${GREEN}ministral-3-8b${NC}     │"
@@ -111,7 +115,7 @@ print_llm_options() {
     echo ""
     echo -e "${YELLOW}Example usage:${NC}"
     echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model gpt-5${NC}"
-    echo -e "  ./emtom/run_emtom.sh judge --task task.json ${GREEN}--model mistral-large-3${NC}"
+    echo -e "  ./emtom/run_emtom.sh judge --task task.json ${GREEN}--model kimi-k2.5${NC}"
     echo ""
 }
 
@@ -211,6 +215,7 @@ print_usage() {
     echo -e "  │ Claude Haiku              │ ${GREEN}haiku${NC}              │"
     echo -e "  │ Claude Opus               │ ${GREEN}opus${NC}               │"
     echo -e "  ├───────────────────────────┼────────────────────┤"
+    echo -e "  │ Kimi K2.5                │ ${GREEN}kimi-k2.5${NC}          │"
     echo -e "  │ Kimi K2 Thinking          │ ${GREEN}kimi-k2-thinking${NC}   │"
     echo -e "  ├───────────────────────────┼────────────────────┤"
     echo -e "  │ Ministral 3 8B            │ ${GREEN}ministral-3-8b${NC}     │"

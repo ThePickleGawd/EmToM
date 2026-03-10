@@ -11,17 +11,17 @@ Priority criteria (evaluated first, suggestions prioritized):
 - agent_necessity: Every agent must be indispensable
 - secret_relevance: Secrets must be required for task completion
 
-Uses a multi-LLM council (Claude Opus + GPT-5) to reduce bias.
+Uses a multi-LLM council (Kimi K2.5 + GPT-5.2) to reduce bias.
 Both models must agree for a task to pass.
 
 Usage:
     # CLI
     python -m emtom.task_gen.judge --task <path>
-    python -m emtom.task_gen.judge --task <path> --models opus,gpt-5
+    python -m emtom.task_gen.judge --task <path> --models kimi-k2.5,gpt-5.2
 
     # Programmatic
     from emtom.task_gen.judge import Judge
-    judge = Judge(models=["opus", "gpt-5"])
+    judge = Judge(models=["kimi-k2.5", "gpt-5.2"])
     verdict = judge.evaluate(task_data, scene_data)
 """
 
@@ -62,6 +62,9 @@ def _detect_provider_for_model(model: str) -> str:
     if normalized.startswith("gpt"):
         return "openai_chat"
 
+    if normalized.startswith("accounts/fireworks/models/"):
+        return "openai_chat"
+
     if normalized.startswith("us.anthropic.claude-"):
         return "bedrock_claude"
 
@@ -94,6 +97,9 @@ def _detect_provider_for_model(model: str) -> str:
             except Exception:
                 pass
         return "bedrock_claude"
+
+    if normalized.startswith("kimi-k2.5"):
+        return "openai_chat"
 
     return "openai_chat"
 
@@ -559,7 +565,7 @@ class Judge:
     PRIORITY_CRITERIA = ["agent_necessity", "secret_quality"]
 
     # Default council models
-    DEFAULT_MODELS = ["opus", "gpt-5.2"]
+    DEFAULT_MODELS = ["kimi-k2.5", "gpt-5.2"]
 
     def __init__(
         self,
@@ -575,7 +581,7 @@ class Judge:
         Initialize the judge.
 
         Args:
-            models: List of model names for council (default: ["opus", "gpt-5.2"])
+            models: List of model names for council (default: ["kimi-k2.5", "gpt-5.2"])
             overall_threshold: Minimum overall score to pass (default 0.65)
             min_criterion_threshold: Minimum score for any criterion (default 0.5)
             verbose: Print debug information
@@ -1071,8 +1077,8 @@ def main():
         help="Path to task JSON file"
     )
     parser.add_argument(
-        "--models", type=str, default="opus,gpt-5",
-        help="Comma-separated list of models for council (default: opus,gpt-5)"
+        "--models", type=str, default="kimi-k2.5,gpt-5.2",
+        help="Comma-separated list of models for council (default: kimi-k2.5,gpt-5.2)"
     )
     parser.add_argument(
         "--threshold", type=float, default=0.65,

@@ -1,6 +1,6 @@
 # EmToM: Automated Generation of Epistemic Theory-of-Mind Tasks for Multi-Agent Evaluation
 
-> **TL;DR:** An LLM agent loads a 3D household scene, then iteratively drafts a multi-agent task requiring Theory of Mind reasoning—expressed as a formal goal (PDDL), private per-agent secrets, and interaction constraints (e.g., communication limits, room restrictions). Each candidate passes three validation gates: structural checks (PDDL solvability + trajectory replay in the Habitat simulator), a dual-model judge council (Claude Opus + GPT-5.2, consensus required), and a full LLM-agent benchmark.
+> **TL;DR:** An LLM agent loads a 3D household scene, then iteratively drafts a multi-agent task requiring Theory of Mind reasoning—expressed as a formal goal (PDDL), private per-agent secrets, and interaction constraints (e.g., communication limits, room restrictions). Each candidate passes three validation gates: structural checks (PDDL solvability + trajectory replay in the Habitat simulator), a dual-model judge council (Kimi K2.5 + GPT-5.2, consensus required), and a full LLM-agent benchmark.
 
 ## 1 Overview
 
@@ -29,7 +29,7 @@ The pipeline proceeds in four stages. **(1)** A ReAct-style LLM agent designs ta
                     │       │                                         │
                     │       ▼                                         │
                     │  judge[] ─────────► multi-model council         │
-                    │       │             (Opus + GPT-5.2,            │
+                    │       │             (Kimi K2.5 + GPT-5.2,       │
                     │       │              8–10 criteria,             │
                     │       │              both must agree)           │
                     │       ▼                                         │

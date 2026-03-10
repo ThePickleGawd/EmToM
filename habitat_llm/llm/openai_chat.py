@@ -73,12 +73,22 @@ class OpenAIChat(BaseLLM):
         "gpt5.1": "gpt-5.1",
         # GPT-5.2
         "gpt5.2": "gpt-5.2",
+        # Fireworks-hosted Kimi K2.5
+        "kimi-k2.5": "accounts/fireworks/models/kimi-k2p5",
     }
 
     @classmethod
     def resolve_model_alias(cls, model: str) -> str:
         """Resolve a model alias to the full OpenAI model ID."""
         return cls.MODEL_ALIASES.get(model.lower(), model)
+
+    @staticmethod
+    def _is_fireworks_model(model: str) -> bool:
+        normalized = (model or "").strip().lower()
+        return (
+            normalized.startswith("accounts/fireworks/models/")
+            or normalized.startswith("kimi-k2.5")
+        )
 
     def __init__(self, conf: DictConfig):
         """
@@ -87,12 +97,23 @@ class OpenAIChat(BaseLLM):
         """
         self.llm_conf = conf
         self.generation_params = self.llm_conf.generation_params
-        try:
-            api_key = os.getenv("OPENAI_API_KEY")
-            assert len(api_key) > 0, ValueError("No OPENAI_API_KEY keys provided")
-        except Exception:
-            raise ValueError("No OPENAI API keys provided")
-        self.client = OpenAI(api_key=api_key)
+        model_name = self.resolve_model_alias(self.generation_params.model)
+        if self._is_fireworks_model(model_name):
+            api_key = (os.getenv("FIREWORKS_API_KEY") or "").strip()
+            if not api_key:
+                raise ValueError("No FIREWORKS_API_KEY provided")
+            base_url = (
+                os.getenv("FIREWORKS_BASE_URL")
+                or os.getenv("OPENAI_BASE_URL")
+                or "https://api.fireworks.ai/inference/v1"
+            ).strip()
+        else:
+            api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+            if not api_key:
+                raise ValueError("No OPENAI_API_KEY provided")
+            base_url = (os.getenv("OPENAI_BASE_URL") or "").strip() or None
+
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
         self._validate_conf()
         self.verbose = self.llm_conf.verbose
         self.verbose = True

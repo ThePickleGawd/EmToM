@@ -1,5 +1,5 @@
 """
-Evaluate task quality using multi-model council (Claude Opus + GPT-5).
+Evaluate task quality using multi-model council (Kimi K2.5 + GPT-5.2).
 
 Scores task on category-specific criteria and returns pass/fail with suggestions.
 
@@ -40,7 +40,7 @@ def run(
         working_dir: Optional working directory (for scene data, trajectory lookup).
         scene_file: Optional explicit scene data JSON file.
         trajectory_dir: Optional path to benchmark rollout data.
-        models: Council model names (default: ["opus", "gpt-5.2"]).
+        models: Council model names (default: ["kimi-k2.5", "gpt-5.2"]).
         threshold: Overall score threshold for passing.
         difficulty: Difficulty level context (easy/medium/hard).
         user_query: Optional user query the task should align with.
