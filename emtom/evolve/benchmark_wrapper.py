@@ -394,6 +394,7 @@ def run_benchmark_parallel(
     selector_min_frames: int = 1,
     selector_max_frames: int = 5,
     selector_max_candidates: int = 12,
+    log_prefix: str = "[evolve]",
 ) -> BenchmarkResults:
     """Run benchmark in parallel — one process per task JSON.
 
@@ -414,6 +415,7 @@ def run_benchmark_parallel(
         team_model_map: Optional team→model mapping string (e.g. "team_0=gpt-5.2,team_1=sonnet").
         extra_args: Additional args forwarded to each subprocess benchmark call.
         write_calibration: Write calibration to source task JSONs as each task completes.
+        log_prefix: Prefix used for progress and warning logs.
 
     Returns:
         Merged BenchmarkResults across all tasks.
@@ -426,7 +428,7 @@ def run_benchmark_parallel(
 
     task_files = sorted(tasks_path.glob("*.json"))
     if not task_files:
-        print(f"[evolve] WARNING: no task files in {tasks_dir}", file=sys.stderr)
+        print(f"{log_prefix} WARNING: no task files in {tasks_dir}", file=sys.stderr)
         return BenchmarkResults(model=model, total=0, passed=0, failed=0, pass_rate=0.0)
 
     # Pre-filter by category so we don't spawn unnecessary subprocesses
@@ -442,7 +444,7 @@ def run_benchmark_parallel(
                 filtered.append(tf)  # include on error, let subprocess handle it
         task_files = filtered
         if not task_files:
-            print(f"[evolve] WARNING: no {category} tasks in {tasks_dir}", file=sys.stderr)
+            print(f"{log_prefix} WARNING: no {category} tasks in {tasks_dir}", file=sys.stderr)
             return BenchmarkResults(model=model, total=0, passed=0, failed=0, pass_rate=0.0)
 
     # Detect GPUs for round-robin distribution
@@ -468,10 +470,10 @@ def run_benchmark_parallel(
     spinner_idx = 0
     last_status = None
 
-    print(f"[evolve] Parallel benchmark: {total_tasks} tasks, max_workers={max_workers}")
-    print(f"[evolve] GPUs detected: {gpu_ids} ({len(gpu_ids)} devices)")
-    print(f"[evolve] Benchmark output dir: {out_path.resolve()}")
-    print(f"[evolve] Benchmark logs: {log_dir.resolve()}")
+    print(f"{log_prefix} Parallel benchmark: {total_tasks} tasks, max_workers={max_workers}")
+    print(f"{log_prefix} GPUs detected: {gpu_ids} ({len(gpu_ids)} devices)")
+    print(f"{log_prefix} Benchmark output dir: {out_path.resolve()}")
+    print(f"{log_prefix} Benchmark logs: {log_dir.resolve()}")
 
     # Parse team_model_map string -> dict for calibration updates
     _team_model_dict: Optional[Dict[str, str]] = None
@@ -492,7 +494,7 @@ def run_benchmark_parallel(
                     if proc.returncode != 0:
                         failed_stems.append(stem)
                         print(
-                            f"[evolve] WARNING: benchmark for {stem} exited with code {proc.returncode}",
+                            f"{log_prefix} WARNING: benchmark for {stem} exited with code {proc.returncode}",
                             file=sys.stderr,
                         )
                     elif write_calibration:
@@ -506,7 +508,7 @@ def run_benchmark_parallel(
                             pass  # task produced no results (skipped)
                         except Exception as e:
                             print(
-                                f"[evolve] WARNING: calibration failed for {stem}: {e}",
+                                f"{log_prefix} WARNING: calibration failed for {stem}: {e}",
                                 file=sys.stderr,
                             )
                 else:
@@ -550,13 +552,13 @@ def run_benchmark_parallel(
             if done >= total_tasks and not active:
                 if sys.stdout.isatty():
                     print()  # finish in-place status line
-                print(f"[evolve] Benchmark: {done}/{total_tasks} tasks complete — done!")
+                print(f"{log_prefix} Benchmark: {done}/{total_tasks} tasks complete — done!")
                 break
 
             spinner = spinner_chars[spinner_idx % len(spinner_chars)]
             spinner_idx += 1
             status = (
-                f"[evolve] {spinner} benchmarking: {done}/{total_tasks} tasks complete "
+                f"{log_prefix} {spinner} benchmarking: {done}/{total_tasks} tasks complete "
                 f"(active={len(active)})"
             )
             if sys.stdout.isatty():
@@ -580,7 +582,7 @@ def run_benchmark_parallel(
 
     if failed_stems:
         print(
-            f"[evolve] WARNING: {len(failed_stems)} task(s) failed and will be excluded "
+            f"{log_prefix} WARNING: {len(failed_stems)} task(s) failed and will be excluded "
             f"from results: {', '.join(sorted(failed_stems)[:10])}. "
             f"See logs in {log_dir}",
             file=sys.stderr,
@@ -601,7 +603,7 @@ def run_benchmark_parallel(
             continue
         except Exception as e:
             print(
-                f"[evolve] WARNING: failed parsing results for '{stem}': {e}",
+                f"{log_prefix} WARNING: failed parsing results for '{stem}': {e}",
                 file=sys.stderr,
             )
             skipped_stems.append(stem)
@@ -612,7 +614,7 @@ def run_benchmark_parallel(
 
     if skipped_stems:
         print(
-            f"[evolve] {len(skipped_stems)} task(s) produced no results (skipped or failed)"
+            f"{log_prefix} {len(skipped_stems)} task(s) produced no results (skipped or failed)"
         )
 
     total = total_passed + total_failed

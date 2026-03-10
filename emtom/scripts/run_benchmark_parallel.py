@@ -57,6 +57,7 @@ def main():
         selector_max_frames=args.selector_max_frames,
         selector_max_candidates=args.selector_max_candidates,
         write_calibration=not args.no_calibration,
+        log_prefix="[parallel]",
     )
 
     print(

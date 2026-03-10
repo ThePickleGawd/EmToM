@@ -714,6 +714,7 @@ def run_evolution(config: EvolutionConfig, resume_dir: Optional[str] = None) -> 
                 output_dir=benchmark_output,
                 max_workers=config.max_workers,
                 no_video=True,
+                log_prefix="[evolve]",
             )
             tier_benchmark_seconds = time.time() - bench_start
 
