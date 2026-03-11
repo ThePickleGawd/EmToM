@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -71,6 +72,7 @@ class TaskGeneratorAgent:
         calibration_stats: Optional[Dict[str, Any]] = None,
         category: Optional[str] = None,
         seed_task: Optional[str] = None,
+        random_seed_task: bool = False,
         judge_threshold: Optional[float] = None,
         difficulty: Optional[str] = None,
         test_model: Optional[str] = None,
@@ -97,6 +99,7 @@ class TaskGeneratorAgent:
             calibration_stats: Dataset calibration stats (pass rate, target rate) for difficulty guidance
             category: Task category to generate: "cooperative", "competitive", or "mixed" (None = random)
             seed_task: Optional path to existing task JSON to use as seed instead of blank template
+            random_seed_task: If True, each new_scene[] loads a random existing task as the seed
         """
         self.llm = llm_client
         self.config = config
@@ -115,6 +118,8 @@ class TaskGeneratorAgent:
         self.calibration_stats = calibration_stats or {}
         self.category = category  # None means random selection
         self.seed_task = seed_task  # Path to existing task to use as seed
+        self.random_seed_task = random_seed_task
+        self.random_seed_tasks_dir = Path("data/emtom/tasks")
         self.difficulty = difficulty  # Difficulty level for evolve pipeline
         self.test_model = test_model  # Override model for test_task calibration
 
@@ -310,7 +315,6 @@ class TaskGeneratorAgent:
         available_mechanics = get_mechanics_for_task_generation()
 
         # Select category (random if not specified)
-        import random
         task_category = self.category or random.choice(["cooperative", "competitive", "mixed"])
 
         # Select k-level for this task
@@ -460,10 +464,10 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
 
         # Build seed task section if using a seed
         seed_section = ""
-        if self.seed_task:
+        if self.seed_task or self.random_seed_task:
             seed_section = f"""
 ## Seed Task
-A previous task has been loaded into working_task.json as your starting point.
+A seed task will be loaded into working_task.json as your starting point.
 Use it as a foundation and modify it based on the query/requirements above.
 After calling `new_scene[N]`, view it with: `bash[cat {self.task_file}]`
 The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adapt it to the new scene and any requested changes.
@@ -654,7 +658,8 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
     def _create_working_task_from_template(self, num_agents: Optional[int] = None) -> int:
         """Create working_task.json from template or seed task.
 
-        If self.seed_task is set, loads the seed task instead of the blank template.
+        If self.seed_task or self.random_seed_task is set, loads a seed task instead
+        of the blank template.
         Scene fields (scene_id, episode_id, agent_spawns) are always updated from the current scene.
 
         Args:
@@ -667,8 +672,8 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
             num_agents = self.agents_max
 
         # Load seed task or blank template
-        if self.seed_task:
-            seed_path = Path(self.seed_task)
+        seed_path = self._resolve_seed_task_path()
+        if seed_path is not None:
             with open(seed_path) as f:
                 task = json.load(f)
             self._log(f"Loaded seed task from {seed_path}")
@@ -690,7 +695,7 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
         task["num_agents"] = num_agents
 
         # Only generate placeholder agent fields when not using a seed task
-        if not self.seed_task:
+        if seed_path is None:
             # Include Find* tools so agents can discover objects at runtime instead of hardcoded IDs
             default_actions = ["Navigate", "Open", "Close", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
             task["agent_secrets"] = {
@@ -709,8 +714,70 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
         with open(self.task_file, 'w') as f:
             json.dump(task, f, indent=2)
 
-        self._log(f"Created {self.task_file} with {num_agents} agents{' (from seed)' if self.seed_task else ''}")
+        self._log(
+            f"Created {self.task_file} with {num_agents} agents"
+            f"{' (from seed)' if seed_path is not None else ''}"
+        )
         return num_agents
+
+    def _resolve_seed_task_path(self) -> Optional[Path]:
+        """Return an explicit seed task or a random compatible seed when enabled."""
+        if self.seed_task:
+            return Path(self.seed_task)
+        if not self.random_seed_task:
+            return None
+
+        if not self.random_seed_tasks_dir.exists():
+            self._log(
+                f"Random seed task requested but seed dir does not exist: "
+                f"{self.random_seed_tasks_dir}"
+            )
+            return None
+
+        task_files = sorted(self.random_seed_tasks_dir.glob("*.json"))
+        candidates: List[tuple[Path, dict]] = []
+        for path in task_files:
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if not all(k in data for k in ("title", "task", "agent_actions")):
+                continue
+            candidates.append((path, data))
+
+        if not candidates:
+            self._log(
+                f"Random seed task requested but no task JSONs found in "
+                f"{self.random_seed_tasks_dir}"
+            )
+            return None
+
+        category_matches = candidates
+        if self.category:
+            filtered = [item for item in candidates if item[1].get("category") == self.category]
+            if filtered:
+                category_matches = filtered
+
+        k_matches = category_matches
+        if self._current_k_level is not None:
+            filtered = []
+            for path, data in category_matches:
+                stored_level = data.get("tom_level")
+                if isinstance(stored_level, int) and stored_level == self._current_k_level:
+                    filtered.append((path, data))
+            if filtered:
+                k_matches = filtered
+
+        chosen_path, chosen_data = random.choice(k_matches)
+        self._log(
+            "Randomly selected seed task "
+            f"{chosen_path} (category={chosen_data.get('category')}, "
+            f"tom_level={chosen_data.get('tom_level', 'unknown')})"
+        )
+        return chosen_path
 
     def _truncate_old_heredocs(self) -> None:
         """Truncate large heredoc content in PREVIOUS assistant messages.

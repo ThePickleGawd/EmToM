@@ -14,7 +14,7 @@ Individual benchmark runs still land in outputs/emtom/ as usual.
 After each run completes, the interesting bits are copied into data/emtom/results/runs/.
 
 Usage:
-    python -m emtom.scripts.campaign create --models gpt-5.2 kimi-k2.5 --modes text vision
+    python -m emtom.scripts.campaign add --models gpt-5.2 kimi-k2.5 --modes text vision
     python -m emtom.scripts.campaign run
     python -m emtom.scripts.campaign run --only kimi-k2.5_text_cooperative
     python -m emtom.scripts.campaign status
@@ -111,35 +111,36 @@ def _derive_runs(
     return runs
 
 
-def cmd_create(args: argparse.Namespace) -> None:
-    """Create or update campaign.json."""
-    models = args.models
-    modes = args.modes
-
-    # Auto-generate all pairwise matchups
-    matchups = list(combinations(models, 2))
-
-    # Load existing campaign to preserve completed runs
-    existing_runs: Dict[str, Dict[str, Any]] = {}
+def cmd_add(args: argparse.Namespace) -> None:
+    """Add models/modes to the campaign. Creates campaign.json if it doesn't exist."""
+    # Load existing campaign if present
+    existing: Dict[str, Any] = {}
     if CAMPAIGN_FILE.exists():
         with open(CAMPAIGN_FILE) as f:
             existing = json.load(f)
-        existing_runs = existing.get("runs", {})
 
-    # Derive new run set
+    # Merge models and modes with existing (additive)
+    prev_models = existing.get("models", [])
+    prev_modes = existing.get("modes", [])
+    models = list(dict.fromkeys(prev_models + args.models))  # dedupe, preserve order
+    modes = list(dict.fromkeys(prev_modes + args.modes))
+
+    # All pairwise matchups from the full model list
+    matchups = list(combinations(models, 2))
+
+    # Derive the full run set from merged models/modes
     new_runs = _derive_runs(models, modes, matchups)
 
-    # Merge: keep status of existing completed runs
+    # Preserve status of all existing runs (complete, failed, pending with output_dir, etc.)
+    existing_runs = existing.get("runs", {})
     for key, run_def in new_runs.items():
-        if key in existing_runs and existing_runs[key].get("status") == "complete":
-            run_def["status"] = "complete"
-            run_def["output_dir"] = existing_runs[key].get("output_dir")
-            run_def["completed_at"] = existing_runs[key].get("completed_at")
+        if key in existing_runs:
+            new_runs[key] = existing_runs[key]
 
     task_counts = _count_tasks_by_category(TASKS_DIR)
 
     campaign = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": existing.get("created_at", datetime.now(timezone.utc).isoformat()),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "models": models,
         "modes": modes,
@@ -154,11 +155,17 @@ def cmd_create(args: argparse.Namespace) -> None:
     with open(CAMPAIGN_FILE, "w") as f:
         json.dump(campaign, f, indent=2)
 
+    added_models = [m for m in args.models if m not in prev_models]
+    added_modes = [m for m in args.modes if m not in prev_modes]
     pending = sum(1 for r in new_runs.values() if r["status"] == "pending")
     complete = sum(1 for r in new_runs.values() if r["status"] == "complete")
     print(f"Campaign updated: {len(new_runs)} runs ({complete} complete, {pending} pending)")
-    print(f"  Models: {models}")
-    print(f"  Modes: {modes}")
+    if added_models:
+        print(f"  Added models: {added_models}")
+    if added_modes:
+        print(f"  Added modes: {added_modes}")
+    print(f"  All models: {models}")
+    print(f"  All modes: {modes}")
     print(f"  Matchups: {[f'{a} vs {b}' for a, b in matchups]}")
     print(f"  Tasks: {campaign['task_total']} ({task_counts})")
     print(f"  Saved to: {CAMPAIGN_FILE}")
@@ -335,7 +342,7 @@ def _aggregate_parallel_summaries(output_dir: str, model: str) -> Optional[Dict[
 def cmd_run(args: argparse.Namespace) -> None:
     """Run pending benchmark runs."""
     if not CAMPAIGN_FILE.exists():
-        print("No campaign found. Run 'campaign create' first.")
+        print("No campaign found. Run 'campaign add --models ...' first.")
         sys.exit(1)
 
     with open(CAMPAIGN_FILE) as f:
@@ -372,11 +379,16 @@ def cmd_run(args: argparse.Namespace) -> None:
         run_def = to_run[key]
         success, output_dir = _run_benchmark(key, run_def, tasks_dir, max_workers)
 
-        # Update campaign status
-        runs[key]["output_dir"] = output_dir
+        # Re-read campaign.json before updating so we don't clobber
+        # changes made by concurrent 'campaign add' or other processes.
+        with open(CAMPAIGN_FILE) as f:
+            campaign = json.load(f)
+
+        # Update only this run's entry
+        campaign["runs"][key]["output_dir"] = output_dir
         if success:
-            runs[key]["status"] = "complete"
-            runs[key]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            campaign["runs"][key]["status"] = "complete"
+            campaign["runs"][key]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
             # Collect results into clean dir
             _collect_results(output_dir, key)
@@ -390,16 +402,17 @@ def cmd_run(args: argparse.Namespace) -> None:
                     with open(dest / "benchmark_summary.json", "w") as f:
                         json.dump(agg, f, indent=2)
         else:
-            runs[key]["status"] = "failed"
-            runs[key]["failed_at"] = datetime.now(timezone.utc).isoformat()
+            campaign["runs"][key]["status"] = "failed"
+            campaign["runs"][key]["failed_at"] = datetime.now(timezone.utc).isoformat()
 
         # Persist after each run
-        campaign["runs"] = runs
         campaign["updated_at"] = datetime.now(timezone.utc).isoformat()
         with open(CAMPAIGN_FILE, "w") as f:
             json.dump(campaign, f, indent=2)
 
-    # Auto-generate report
+    # Auto-generate report (re-read final state)
+    with open(CAMPAIGN_FILE) as f:
+        campaign = json.load(f)
     _generate_report(campaign)
 
 
@@ -410,7 +423,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 def cmd_status(args: argparse.Namespace) -> None:
     """Print campaign status."""
     if not CAMPAIGN_FILE.exists():
-        print("No campaign found. Run 'campaign create' first.")
+        print("No campaign found. Run 'campaign add --models ...' first.")
         sys.exit(1)
 
     with open(CAMPAIGN_FILE) as f:
@@ -622,7 +635,7 @@ def _generate_report(campaign: Dict[str, Any]) -> None:
 def cmd_report(args: argparse.Namespace) -> None:
     """Generate leaderboard from completed runs."""
     if not CAMPAIGN_FILE.exists():
-        print("No campaign found. Run 'campaign create' first.")
+        print("No campaign found. Run 'campaign add --models ...' first.")
         sys.exit(1)
 
     with open(CAMPAIGN_FILE) as f:
@@ -642,10 +655,10 @@ def main():
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    # create
-    p_create = sub.add_parser("create", help="Create or update campaign definition")
-    p_create.add_argument("--models", nargs="+", required=True, help="Models to benchmark")
-    p_create.add_argument("--modes", nargs="+", default=["text"], help="Observation modes (text, vision)")
+    # add
+    p_add = sub.add_parser("add", help="Add models/modes to the campaign")
+    p_add.add_argument("--models", nargs="+", required=True, help="Models to add")
+    p_add.add_argument("--modes", nargs="+", default=["text"], help="Observation modes to add (text, vision)")
 
     # run
     p_run = sub.add_parser("run", help="Run pending benchmarks")
@@ -660,8 +673,8 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "create":
-        cmd_create(args)
+    if args.command == "add":
+        cmd_add(args)
     elif args.command == "run":
         cmd_run(args)
     elif args.command == "status":

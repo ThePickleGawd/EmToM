@@ -53,6 +53,8 @@ def parse_extra_args():
                         help="Task category to generate (default: random)")
     parser.add_argument("--seed-task", type=str, default=None,
                         help="Path to existing task JSON to use as seed (instead of blank template)")
+    parser.add_argument("--random-seed-task", action="store_true", default=False,
+                        help="On each new_scene[], start from a random existing task seed")
     parser.add_argument("--sampled-tasks-dir", type=str, default=None,
                         help="Pre-built sampled_tasks directory (skips random sampling)")
     parser.add_argument("--judge-threshold", type=float, default=None,
@@ -247,6 +249,7 @@ def main(config: DictConfig) -> None:
     target_pass_rate = extra_args.target_pass_rate if extra_args else 0.10
     category = extra_args.category if extra_args else None
     seed_task = extra_args.seed_task if extra_args else None
+    random_seed_task = extra_args.random_seed_task if extra_args else False
     judge_threshold = extra_args.judge_threshold if extra_args else None
     difficulty = extra_args.difficulty if extra_args else None
     test_model = extra_args.test_model if extra_args else None
@@ -265,6 +268,11 @@ def main(config: DictConfig) -> None:
             cprint(f"ERROR: Seed task file not found: {seed_task_path}", "red")
             sys.exit(1)
         cprint(f"Seed task: {seed_task_path}", "green")
+    if seed_task and random_seed_task:
+        cprint("ERROR: --seed-task and --random-seed-task cannot be used together", "red")
+        sys.exit(1)
+    if random_seed_task:
+        cprint("Random seed task mode enabled (new_scene[] will load a random seed)", "green")
 
     # Load failed verification suggestions if retrying
     verification_feedback = None
@@ -446,6 +454,7 @@ def main(config: DictConfig) -> None:
         calibration_stats=calibration_stats,  # Dataset calibration stats for difficulty guidance
         category=category,  # Task category: cooperative, competitive, or mixed
         seed_task=seed_task,  # Existing task to use as seed instead of blank template
+        random_seed_task=random_seed_task,  # Random seed task on each new_scene[]
         judge_threshold=judge_threshold,  # Override judge threshold (None = use default)
         difficulty=difficulty,  # Difficulty context for judge: easy/medium/hard
         test_model=test_model,  # Override model for test_task calibration

@@ -141,6 +141,7 @@ RETRY_VERIFICATION=""  # Path to failed ToM verification file
 NO_AUTO_RETRY=false  # Disable automatic retry on judge failure
 CATEGORY=""  # Task category: cooperative, competitive, or mixed
 SEED_TASK=""  # Path to existing task to use as seed
+RANDOM_SEED_TASK=false  # Use a random existing task as seed on each new_scene[]
 NO_VIDEO=true  # Disable video saving (default: true for speed)
 MAX_WORKERS=""  # Parallel benchmark: max concurrent processes (empty = sequential)
 TASKS_DIR=""  # Custom tasks directory for benchmark
@@ -235,6 +236,7 @@ print_usage() {
     echo "  --retry-verification FILE  Retry generation using suggestions from failed ToM verification"
     echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
     echo "  --seed-task FILE     Use existing task JSON as seed instead of blank template"
+    echo "  --random-seed-task   On each new_scene[], load a random existing task seed"
     echo "  --sampled-tasks-dir DIR  Pre-built sampled_tasks directory (skips random sampling)"
     echo "  --k-level L [L ...]  Allowed ToM k-levels, e.g. --k-level 2 3 (default: random per task)"
     echo "  --tom-ratio-tolerance R  ToM ratio tolerance (default: $TOM_RATIO_TOLERANCE)"
@@ -453,6 +455,9 @@ run_generate() {
     fi
     if [ -n "$SEED_TASK" ]; then
         EXTRA_ARGS+=(--seed-task "$SEED_TASK")
+    fi
+    if [ "$RANDOM_SEED_TASK" = true ]; then
+        EXTRA_ARGS+=(--random-seed-task)
     fi
     if [ -n "$SAMPLED_TASKS_DIR" ]; then
         EXTRA_ARGS+=(--sampled-tasks-dir "$SAMPLED_TASKS_DIR")
@@ -1234,6 +1239,10 @@ while [[ $# -gt 0 ]]; do
         --seed-task)
             SEED_TASK=$2
             shift 2
+            ;;
+        --random-seed-task)
+            RANDOM_SEED_TASK=true
+            shift
             ;;
         --sampled-tasks-dir)
             SAMPLED_TASKS_DIR=$2

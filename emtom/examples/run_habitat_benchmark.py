@@ -39,6 +39,7 @@ from emtom.task_gen import GeneratedTask
 
 
 MODEL_ALIASES = {
+    "kimi-k2.5": "accounts/fireworks/models/kimi-k2p5",
     "kimi-k2-thinking": "moonshot.kimi-k2-thinking",
     "ministral-3-8b": "mistral.ministral-3-8b-instruct",
     "ministral-3-14b": "mistral.ministral-3-14b-instruct",
@@ -59,6 +60,8 @@ MODEL_PROVIDER_MAP = {
     "claude-sonnet-4-5-20250929": "anthropic_claude",
     "claude-haiku-4-5-20251001": "anthropic_claude",
     "claude-opus-4-5-20251101": "anthropic_claude",
+    "kimi-k2.5": "openai_chat",
+    "accounts/fireworks/models/kimi-k2p5": "openai_chat",
     "kimi-k2-thinking": "bedrock_kimi",
     "moonshot.kimi-k2-thinking": "bedrock_kimi",
     "ministral-3-8b": "bedrock_mistral",
