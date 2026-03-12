@@ -94,9 +94,12 @@ export interface Campaign {
 }
 
 export interface LeaderboardSoloEntry {
-  pass_rate: number;
-  total: number;
-  passed: number;
+  model: string;
+  mode: string;
+  pass_rate?: number;
+  total?: number;
+  passed?: number;
+  overall?: { pass_rate: number; total: number; passed: number };
   categories: Record<string, { pass_rate: number; total: number; passed: number }>;
 }
 

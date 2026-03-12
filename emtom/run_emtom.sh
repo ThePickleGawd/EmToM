@@ -63,7 +63,7 @@ has_anthropic_api_key() {
 detect_llm_provider() {
     local model=$1
     case $model in
-        gpt-5|gpt-5-mini|gpt-5.1|gpt-5.2|o3)
+        gpt-4o|gpt-4o-mini|gpt-5|gpt-5-mini|gpt-5.1|gpt-5.2|o3)
             echo "openai_chat" ;;
         sonnet|sonnet-4.5|sonnet4.5|haiku|haiku-4.5|haiku4.5|opus|opus-4.5|opus4.5)
             if has_anthropic_api_key; then

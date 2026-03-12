@@ -2,22 +2,20 @@
 """
 Campaign system for organized benchmark evaluation.
 
-Manages a single campaign definition (which models, modes, matchups to run),
-orchestrates benchmark runs, and aggregates results into a clean directory.
+One persistent campaign that tracks all models, modes, and matchups.
+Incrementally benchmarks new tasks and prunes deleted ones — safe to
+run repeatedly as the task pool grows.
 
 The campaign lives at data/emtom/results/:
-  campaign.json          — definition + run status
+  campaign.json          — definition + run status + per-run completed_tasks
   leaderboard.json       — aggregated results matrix
   runs/                  — clean per-run results (summaries + planner logs)
 
-Individual benchmark runs still land in outputs/emtom/ as usual.
-After each run completes, the interesting bits are copied into data/emtom/results/runs/.
-
 Usage:
     python -m emtom.scripts.campaign add --models gpt-5.2 kimi-k2.5 --modes text vision
-    python -m emtom.scripts.campaign run
+    python -m emtom.scripts.campaign run                              # benchmark new tasks
     python -m emtom.scripts.campaign run --only kimi-k2.5_text_cooperative
-    python -m emtom.scripts.campaign status
+    python -m emtom.scripts.campaign status                           # show new/stale counts
     python -m emtom.scripts.campaign report
 """
 
@@ -25,14 +23,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 RESULTS_DIR = PROJECT_ROOT / "data" / "emtom" / "results"
@@ -58,6 +58,101 @@ def _count_tasks_by_category(tasks_dir: Path) -> Dict[str, int]:
         except (json.JSONDecodeError, OSError):
             pass
     return counts
+
+
+def _get_task_ids_by_category(tasks_dir: Path, category: str) -> Dict[str, Path]:
+    """Return {task_id: file_path} for all tasks matching category."""
+    result: Dict[str, Path] = {}
+    for tf in tasks_dir.glob("*.json"):
+        try:
+            with open(tf) as f:
+                data = json.load(f)
+            if data.get("category") == category:
+                tid = data.get("task_id", "")
+                if tid:
+                    result[tid] = tf
+        except (json.JSONDecodeError, OSError):
+            pass
+    return result
+
+
+def _backfill_completed_tasks(run_key: str) -> List[str]:
+    """Extract task_ids from an existing benchmark_summary.json for backfill."""
+    summary = _read_run_summary(run_key)
+    if not summary:
+        return []
+    return [r["task_id"] for r in summary.get("results", []) if r.get("task_id")]
+
+
+def _merge_results(
+    summary_path: Path,
+    new_results: List[Dict[str, Any]],
+    model: str,
+) -> None:
+    """Merge new per-task results into an existing benchmark_summary.json."""
+    existing: Dict[str, Any] = {}
+    if summary_path.exists():
+        try:
+            with open(summary_path) as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    all_results = existing.get("results", [])
+    # Deduplicate: new results replace any existing entries with same task_id
+    new_ids = {r["task_id"] for r in new_results if r.get("task_id")}
+    all_results = [r for r in all_results if r.get("task_id") not in new_ids]
+    all_results.extend(new_results)
+
+    passed = sum(1 for r in all_results if r.get("success"))
+    failed = sum(1 for r in all_results if not r.get("skipped") and not r.get("success"))
+    total = len(all_results)
+
+    merged = {
+        "model": model or existing.get("model", ""),
+        "total": total,
+        "passed": passed,
+        "failed": failed,
+        "pass_rate": (passed / total * 100) if total > 0 else 0,
+        "results": all_results,
+    }
+    with open(summary_path, "w") as f:
+        json.dump(merged, f, indent=2)
+
+
+def _prune_results(
+    run_key: str,
+    stale_ids: Set[str],
+) -> None:
+    """Remove stale task results from benchmark_summary and planner logs."""
+    summary_path = RUNS_DIR / run_key / "benchmark_summary.json"
+    if summary_path.exists():
+        try:
+            with open(summary_path) as f:
+                summary = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return
+
+        results = [r for r in summary.get("results", []) if r.get("task_id") not in stale_ids]
+        passed = sum(1 for r in results if r.get("success"))
+        failed = sum(1 for r in results if not r.get("skipped") and not r.get("success"))
+        total = len(results)
+        summary["results"] = results
+        summary["total"] = total
+        summary["passed"] = passed
+        summary["failed"] = failed
+        summary["pass_rate"] = (passed / total * 100) if total > 0 else 0
+
+        with open(summary_path, "w") as f:
+            json.dump(summary, f, indent=2)
+
+    # Remove planner log dirs for stale tasks
+    tasks_dest = RUNS_DIR / run_key / "tasks"
+    if tasks_dest.exists():
+        for tid in stale_ids:
+            task_log_dir = tasks_dest / tid
+            if task_log_dir.exists():
+                shutil.rmtree(str(task_log_dir), ignore_errors=True)
 
 
 def _derive_runs(
@@ -111,8 +206,33 @@ def _derive_runs(
     return runs
 
 
+def _validate_model(model: str) -> None:
+    """Raise ValueError if model name won't resolve to a known provider."""
+    from emtom.examples.run_habitat_benchmark import resolve_model_spec
+
+    try:
+        resolve_model_spec(model)
+    except ValueError:
+        from emtom.examples.run_habitat_benchmark import (
+            CLAUDE_ALIAS_MODELS,
+            MODEL_PROVIDER_MAP,
+        )
+        known = sorted(set(MODEL_PROVIDER_MAP.keys()) | CLAUDE_ALIAS_MODELS)
+        raise ValueError(
+            f"Unknown model '{model}'. Known models:\n  " + "\n  ".join(known)
+        )
+
+
 def cmd_add(args: argparse.Namespace) -> None:
     """Add models/modes to the campaign. Creates campaign.json if it doesn't exist."""
+    # Validate all models before making any changes
+    for model in args.models:
+        try:
+            _validate_model(model)
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
     # Load existing campaign if present
     existing: Dict[str, Any] = {}
     if CAMPAIGN_FILE.exists():
@@ -235,71 +355,76 @@ def _run_benchmark(
     return success, str(output_dir)
 
 
-def _collect_results(output_dir: str, run_key: str) -> None:
-    """Copy benchmark summary and planner logs into data/emtom/results/runs/."""
+def _collect_results(output_dir: str, run_key: str, model: str = "", append: bool = False) -> None:
+    """Copy benchmark summary and planner logs into data/emtom/results/runs/.
+
+    When append=True, merge new results into existing summary instead of overwriting.
+    """
     out_path = Path(output_dir)
     dest = RUNS_DIR / run_key
     dest.mkdir(parents=True, exist_ok=True)
 
-    # Find benchmark_summary.json — check multiple locations
-    summary_found = False
-    for pattern in [
-        out_path / "results" / "benchmark_summary.json",
-        *sorted(out_path.glob("*-*agents/results/benchmark_summary.json")),
-    ]:
-        if pattern.exists():
-            shutil.copy2(str(pattern), str(dest / "benchmark_summary.json"))
-            summary_found = True
-            # Also copy per-task planner logs
-            results_dir = pattern.parent
-            tasks_dest = dest / "tasks"
-            tasks_dest.mkdir(exist_ok=True)
+    tasks_dest = dest / "tasks"
+    tasks_dest.mkdir(exist_ok=True)
+
+    summary_dest = dest / "benchmark_summary.json"
+
+    # Check flat layout first: {output_dir}/results/benchmark_summary.json
+    flat_summary = out_path / "results" / "benchmark_summary.json"
+    if flat_summary.exists():
+        if append:
+            with open(flat_summary) as f:
+                new_data = json.load(f)
+            _merge_results(summary_dest, new_data.get("results", []), model)
+        else:
+            shutil.copy2(str(flat_summary), str(summary_dest))
+        results_dir = flat_summary.parent
+        for task_dir in sorted(results_dir.iterdir()):
+            if not task_dir.is_dir() or task_dir.name.startswith("."):
+                continue
+            log_dir = task_dir / "planner-log"
+            if not log_dir.exists():
+                continue
+            log_files = sorted(log_dir.glob("planner-log-*.json"))
+            if log_files:
+                task_dest = tasks_dest / task_dir.name
+                task_dest.mkdir(exist_ok=True)
+                shutil.copy2(str(log_files[-1]), str(task_dest / "planner-log.json"))
+        return
+
+    # Parallel layout: {output_dir}/{task_stem}/benchmark-Nagents/results/
+    # Collect planner logs from each per-task result dir
+    for task_wrapper in sorted(out_path.iterdir()):
+        if not task_wrapper.is_dir() or task_wrapper.name in ("logs",):
+            continue
+        for bench_dir in task_wrapper.iterdir():
+            if not bench_dir.is_dir() or not bench_dir.name.startswith("benchmark-"):
+                continue
+            results_dir = bench_dir / "results"
+            if not results_dir.exists():
+                continue
             for task_dir in sorted(results_dir.iterdir()):
-                if not task_dir.is_dir() or task_dir.name.startswith("."):
+                if not task_dir.is_dir():
                     continue
                 log_dir = task_dir / "planner-log"
                 if not log_dir.exists():
                     continue
                 log_files = sorted(log_dir.glob("planner-log-*.json"))
                 if log_files:
-                    task_dest = tasks_dest / task_dir.name
-                    task_dest.mkdir(exist_ok=True)
-                    shutil.copy2(str(log_files[-1]), str(task_dest / "planner-log.json"))
-            break  # Use first found
+                    td = tasks_dest / task_dir.name
+                    td.mkdir(exist_ok=True)
+                    shutil.copy2(str(log_files[-1]), str(td / "planner-log.json"))
 
-    # Also check parallel output layout (per-task subdirs at top level)
-    if not summary_found:
-        # Parallel mode: results are in {output_dir}/{task_stem}/benchmark-Nagents/results/
-        tasks_dest = dest / "tasks"
-        tasks_dest.mkdir(exist_ok=True)
-        for task_wrapper in sorted(out_path.iterdir()):
-            if not task_wrapper.is_dir() or task_wrapper.name in ("logs",):
-                continue
-            for bench_dir in task_wrapper.iterdir():
-                if not bench_dir.is_dir() or not bench_dir.name.startswith("benchmark-"):
-                    continue
-                results_dir = bench_dir / "results"
-                if not results_dir.exists():
-                    continue
-                sf = results_dir / "benchmark_summary.json"
-                if sf.exists() and not summary_found:
-                    # Use first summary as template
-                    shutil.copy2(str(sf), str(dest / "benchmark_summary.json"))
-                    summary_found = True
-                for task_dir in sorted(results_dir.iterdir()):
-                    if not task_dir.is_dir():
-                        continue
-                    log_dir = task_dir / "planner-log"
-                    if not log_dir.exists():
-                        continue
-                    log_files = sorted(log_dir.glob("planner-log-*.json"))
-                    if log_files:
-                        td = tasks_dest / task_dir.name
-                        td.mkdir(exist_ok=True)
-                        shutil.copy2(str(log_files[-1]), str(td / "planner-log.json"))
-
-    if not summary_found:
-        print(f"  WARNING: no benchmark_summary.json found in {output_dir}")
+    # Aggregate per-task summaries into one benchmark_summary.json
+    agg = _aggregate_parallel_summaries(output_dir, model)
+    if agg:
+        if append:
+            _merge_results(summary_dest, agg.get("results", []), model)
+        else:
+            with open(summary_dest, "w") as f:
+                json.dump(agg, f, indent=2)
+    else:
+        print(f"  WARNING: no benchmark results found in {output_dir}")
 
 
 def _aggregate_parallel_summaries(output_dir: str, model: str) -> Optional[Dict[str, Any]]:
@@ -339,8 +464,37 @@ def _aggregate_parallel_summaries(output_dir: str, model: str) -> Optional[Dict[
     }
 
 
+def _sync_run(
+    run_key: str,
+    run_def: Dict[str, Any],
+    tasks_dir: Path,
+) -> Tuple[Set[str], Set[str]]:
+    """Compute new and stale task_ids for a run. Returns (new_ids, stale_ids).
+
+    Also backfills completed_tasks from existing summary if missing.
+    """
+    category = run_def["category"]
+    current = _get_task_ids_by_category(tasks_dir, category)
+    current_ids = set(current.keys())
+
+    completed = set(run_def.get("completed_tasks", []))
+    if not completed and run_def.get("status") == "complete":
+        # Backfill from existing benchmark_summary.json
+        completed = set(_backfill_completed_tasks(run_key))
+        if completed:
+            run_def["completed_tasks"] = sorted(completed)
+
+    new_ids = current_ids - completed
+    stale_ids = completed - current_ids
+    return new_ids, stale_ids
+
+
 def cmd_run(args: argparse.Namespace) -> None:
-    """Run pending benchmark runs."""
+    """Run pending and incremental benchmark runs.
+
+    Pending runs benchmark all tasks. Complete runs detect new/deleted tasks
+    and incrementally update results.
+    """
     if not CAMPAIGN_FILE.exists():
         print("No campaign found. Run 'campaign add --models ...' first.")
         sys.exit(1)
@@ -352,65 +506,134 @@ def cmd_run(args: argparse.Namespace) -> None:
     tasks_dir = PROJECT_ROOT / campaign["tasks_dir"]
     max_workers = args.max_workers
 
-    # Filter to specific run if --only specified
+    # Build the set of runs that need work
+    to_run: Dict[str, Dict[str, Any]] = {}
+    incremental_info: Dict[str, Tuple[Set[str], Set[str]]] = {}  # key -> (new_ids, stale_ids)
+    campaign_dirty = False
+
+    # Filter by --only or --models
+    model_filter = set(args.models) if args.models else None
+
     if args.only:
         if args.only not in runs:
             print(f"Run '{args.only}' not found. Available runs:")
             for key in sorted(runs.keys()):
                 print(f"  {key} [{runs[key]['status']}]")
             sys.exit(1)
-        to_run = {args.only: runs[args.only]}
+        candidates = {args.only: runs[args.only]}
+    elif model_filter:
+        candidates = {}
+        for key, run_def in runs.items():
+            # Solo runs: check "model". Matchup runs: check both "model_a" and "model_b".
+            run_models = set()
+            if run_def.get("model"):
+                run_models.add(run_def["model"])
+            if run_def.get("model_a"):
+                run_models.add(run_def["model_a"])
+            if run_def.get("model_b"):
+                run_models.add(run_def["model_b"])
+            if run_models & model_filter:
+                candidates[key] = run_def
     else:
-        to_run = {k: v for k, v in runs.items() if v["status"] == "pending"}
+        candidates = runs
+
+    for key, run_def in candidates.items():
+        if run_def["status"] == "pending":
+            to_run[key] = run_def
+        elif run_def["status"] in ("complete", "failed"):
+            new_ids, stale_ids = _sync_run(key, run_def, tasks_dir)
+            if "completed_tasks" not in run_def:
+                # backfill happened inside _sync_run
+                campaign_dirty = True
+            if stale_ids:
+                print(f"  Pruning {len(stale_ids)} deleted task(s) from {key}")
+                _prune_results(key, stale_ids)
+                completed = set(run_def.get("completed_tasks", []))
+                run_def["completed_tasks"] = sorted(completed - stale_ids)
+                campaign_dirty = True
+            if new_ids:
+                to_run[key] = run_def
+                incremental_info[key] = (new_ids, stale_ids)
+
+    # Persist any backfill / prune changes before running benchmarks
+    if campaign_dirty:
+        campaign["updated_at"] = datetime.now(timezone.utc).isoformat()
+        with open(CAMPAIGN_FILE, "w") as f:
+            json.dump(campaign, f, indent=2)
 
     if not to_run:
-        print("No pending runs. Use 'campaign status' to see all runs.")
+        print("All runs up to date. Use 'campaign status' to see all runs.")
         return
 
+    # Print plan
     print(f"Running {len(to_run)} benchmark(s) (max_workers={max_workers}):")
     for key in sorted(to_run.keys()):
         r = to_run[key]
+        label = ""
         if r["type"] == "solo":
-            print(f"  {key}: {r['model']} / {r['mode']} / {r['category']}")
+            label = f"{r['model']} / {r['mode']} / {r['category']}"
         else:
-            print(f"  {key}: {r['team_0']} vs {r['team_1']} / {r['mode']}")
+            label = f"{r['team_0']} vs {r['team_1']} / {r['mode']}"
+        if key in incremental_info:
+            new_ids, _ = incremental_info[key]
+            label += f" (+{len(new_ids)} new tasks)"
+        print(f"  {key}: {label}")
 
+    # Execute each run
     for key in sorted(to_run.keys()):
         run_def = to_run[key]
-        success, output_dir = _run_benchmark(key, run_def, tasks_dir, max_workers)
+        is_incremental = key in incremental_info
+        tmp_dir = None
+
+        try:
+            if is_incremental:
+                # Create temp dir with symlinks to only new tasks
+                new_ids, _ = incremental_info[key]
+                category = run_def["category"]
+                current = _get_task_ids_by_category(tasks_dir, category)
+                tmp_dir = tempfile.mkdtemp(prefix=f"campaign_incr_{key}_")
+                for tid in new_ids:
+                    src = current.get(tid)
+                    if src and src.exists():
+                        os.symlink(str(src.resolve()), os.path.join(tmp_dir, src.name))
+                benchmark_dir = Path(tmp_dir)
+            else:
+                benchmark_dir = tasks_dir
+
+            success, output_dir = _run_benchmark(key, run_def, benchmark_dir, max_workers)
+        finally:
+            if tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
         # Re-read campaign.json before updating so we don't clobber
         # changes made by concurrent 'campaign add' or other processes.
         with open(CAMPAIGN_FILE) as f:
             campaign = json.load(f)
 
-        # Update only this run's entry
         campaign["runs"][key]["output_dir"] = output_dir
         if success:
             campaign["runs"][key]["status"] = "complete"
             campaign["runs"][key]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
-            # Collect results into clean dir
-            _collect_results(output_dir, key)
+            model = run_def.get("model", run_def.get("team_0", ""))
+            _collect_results(output_dir, key, model=model, append=is_incremental)
 
-            # Write aggregated summary for parallel runs if needed
-            dest = RUNS_DIR / key
-            if not (dest / "benchmark_summary.json").exists():
-                model = run_def.get("model", run_def.get("team_0", ""))
-                agg = _aggregate_parallel_summaries(output_dir, model)
-                if agg:
-                    with open(dest / "benchmark_summary.json", "w") as f:
-                        json.dump(agg, f, indent=2)
+            # Update completed_tasks from the (merged) summary
+            summary = _read_run_summary(key)
+            if summary:
+                all_ids = [r["task_id"] for r in summary.get("results", []) if r.get("task_id")]
+                campaign["runs"][key]["completed_tasks"] = sorted(set(all_ids))
         else:
-            campaign["runs"][key]["status"] = "failed"
-            campaign["runs"][key]["failed_at"] = datetime.now(timezone.utc).isoformat()
+            if not is_incremental:
+                campaign["runs"][key]["status"] = "failed"
+                campaign["runs"][key]["failed_at"] = datetime.now(timezone.utc).isoformat()
+            # For incremental failures, keep status="complete" with old results intact
 
-        # Persist after each run
         campaign["updated_at"] = datetime.now(timezone.utc).isoformat()
         with open(CAMPAIGN_FILE, "w") as f:
             json.dump(campaign, f, indent=2)
 
-    # Auto-generate report (re-read final state)
+    # Auto-generate report
     with open(CAMPAIGN_FILE) as f:
         campaign = json.load(f)
     _generate_report(campaign)
@@ -421,7 +644,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 def cmd_status(args: argparse.Namespace) -> None:
-    """Print campaign status."""
+    """Print campaign status, including new/stale task counts."""
     if not CAMPAIGN_FILE.exists():
         print("No campaign found. Run 'campaign add --models ...' first.")
         sys.exit(1)
@@ -430,38 +653,52 @@ def cmd_status(args: argparse.Namespace) -> None:
         campaign = json.load(f)
 
     runs = campaign["runs"]
+    tasks_dir = PROJECT_ROOT / campaign["tasks_dir"]
     by_status = {"pending": 0, "complete": 0, "failed": 0, "running": 0}
     for r in runs.values():
         s = r.get("status", "pending")
         by_status[s] = by_status.get(s, 0) + 1
 
+    task_counts = _count_tasks_by_category(tasks_dir)
     print(f"Campaign: {len(runs)} runs")
     print(f"  Complete: {by_status['complete']}")
     print(f"  Pending:  {by_status['pending']}")
     print(f"  Failed:   {by_status['failed']}")
     print(f"  Models:   {campaign['models']}")
     print(f"  Modes:    {campaign['modes']}")
+    print(f"  Tasks:    {sum(task_counts.values())} ({task_counts})")
     print()
 
     # Group by type for display
     solo_runs = {k: v for k, v in runs.items() if v.get("type") == "solo"}
     matchup_runs = {k: v for k, v in runs.items() if v.get("type") == "matchup"}
 
+    def _status_label(key: str, r: Dict[str, Any]) -> str:
+        status = r["status"].upper()
+        suffix = ""
+        if r["status"] in ("complete", "failed"):
+            new_ids, stale_ids = _sync_run(key, r, tasks_dir)
+            parts = []
+            if new_ids:
+                parts.append(f"+{len(new_ids)} new")
+            if stale_ids:
+                parts.append(f"-{len(stale_ids)} stale")
+            if parts:
+                suffix = f" ({', '.join(parts)})"
+        completed = r.get("completed_tasks", [])
+        count = f" [{len(completed)} tasks]" if completed else ""
+        pad = " " * max(0, 10 - len(status))
+        return f"[{status}]{pad} {key}{count}{suffix}"
+
     if solo_runs:
         print("Solo runs (cooperative + mixed):")
         for key in sorted(solo_runs.keys()):
-            r = solo_runs[key]
-            status = r["status"].upper()
-            pad = " " * max(0, 10 - len(status))
-            print(f"  [{status}]{pad} {key}")
+            print(f"  {_status_label(key, solo_runs[key])}")
 
     if matchup_runs:
         print("\nCompetitive matchups:")
         for key in sorted(matchup_runs.keys()):
-            r = matchup_runs[key]
-            status = r["status"].upper()
-            pad = " " * max(0, 10 - len(status))
-            print(f"  [{status}]{pad} {key}")
+            print(f"  {_status_label(key, matchup_runs[key])}")
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +869,52 @@ def _generate_report(campaign: Dict[str, Any]) -> None:
     print(f"\nSaved to: {leaderboard_file}")
 
 
+def cmd_remove(args: argparse.Namespace) -> None:
+    """Remove models from the campaign, including their runs and results."""
+    if not CAMPAIGN_FILE.exists():
+        print("No campaign found.")
+        sys.exit(1)
+
+    with open(CAMPAIGN_FILE) as f:
+        campaign = json.load(f)
+
+    to_remove = set(args.models)
+    current_models = campaign.get("models", [])
+    unknown = to_remove - set(current_models)
+    if unknown:
+        print(f"Models not in campaign: {sorted(unknown)}")
+        print(f"Current models: {current_models}")
+        sys.exit(1)
+
+    # Find runs to delete
+    runs = campaign["runs"]
+    keys_to_delete = []
+    for key, run_def in runs.items():
+        run_models = {run_def.get("model"), run_def.get("model_a"), run_def.get("model_b")} - {None}
+        if run_models & to_remove:
+            keys_to_delete.append(key)
+
+    # Delete run results from disk
+    for key in keys_to_delete:
+        results_path = RUNS_DIR / key
+        if results_path.exists():
+            shutil.rmtree(str(results_path))
+        del runs[key]
+
+    # Update models and matchups
+    remaining = [m for m in current_models if m not in to_remove]
+    campaign["models"] = remaining
+    campaign["competitive_matchups"] = [list(m) for m in combinations(remaining, 2)]
+    campaign["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    with open(CAMPAIGN_FILE, "w") as f:
+        json.dump(campaign, f, indent=2)
+
+    print(f"Removed {sorted(to_remove)}: deleted {len(keys_to_delete)} runs")
+    print(f"  Remaining models: {remaining}")
+    print(f"  Remaining runs: {len(runs)}")
+
+
 def cmd_report(args: argparse.Namespace) -> None:
     """Generate leaderboard from completed runs."""
     if not CAMPAIGN_FILE.exists():
@@ -660,9 +943,14 @@ def main():
     p_add.add_argument("--models", nargs="+", required=True, help="Models to add")
     p_add.add_argument("--modes", nargs="+", default=["text"], help="Observation modes to add (text, vision)")
 
+    # remove
+    p_rm = sub.add_parser("remove", help="Remove models from the campaign")
+    p_rm.add_argument("--models", nargs="+", required=True, help="Models to remove")
+
     # run
     p_run = sub.add_parser("run", help="Run pending benchmarks")
     p_run.add_argument("--only", default=None, help="Run only this specific run key")
+    p_run.add_argument("--models", nargs="+", default=None, help="Only run benchmarks involving these models")
     p_run.add_argument("--max-workers", type=int, default=50, help="Parallel workers per run")
 
     # status
@@ -675,6 +963,8 @@ def main():
 
     if args.command == "add":
         cmd_add(args)
+    elif args.command == "remove":
+        cmd_remove(args)
     elif args.command == "run":
         cmd_run(args)
     elif args.command == "status":

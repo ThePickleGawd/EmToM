@@ -303,7 +303,7 @@ function LeaderboardPanel({
                         {entry ? (
                           <>
                             <td className="campaign-rate-cell">
-                              <RateBar rate={entry.pass_rate} />
+                              <RateBar rate={entry.overall?.pass_rate ?? entry.pass_rate ?? 0} />
                             </td>
                             {["cooperative", "mixed"].map((cat) => {
                               const cs = entry.categories[cat];

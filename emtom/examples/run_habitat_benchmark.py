@@ -49,6 +49,8 @@ MODEL_ALIASES = {
 }
 
 MODEL_PROVIDER_MAP = {
+    "gpt-4o": "openai_chat",
+    "gpt-4o-mini": "openai_chat",
     "gpt-5": "openai_chat",
     "gpt-5-mini": "openai_chat",
     "gpt-5.1": "openai_chat",
