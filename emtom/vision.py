@@ -86,7 +86,7 @@ def extract_agent_rgb_frame(
 class VisualObservationStore:
     """Persist per-turn RGB observations and return lightweight frame handles."""
 
-    def __init__(self, root_dir: str, image_format: str = "png"):
+    def __init__(self, root_dir: str, image_format: str = "jpeg"):
         self.root_dir = Path(root_dir)
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self.image_format = image_format.lower().lstrip(".") or "png"
@@ -248,5 +248,8 @@ def parse_selector_response(
 
 def load_frame_as_data_url(handle: Dict[str, Any]) -> str:
     """Load a saved frame from disk and return a data URL for multimodal LLM input."""
-    image = Image.open(handle["path"]).convert("RGB")
-    return pil_image_to_data_url(image)
+    path = handle["path"]
+    image = Image.open(path).convert("RGB")
+    ext = Path(path).suffix.lower().lstrip(".")
+    fmt = "jpeg" if ext in ("jpg", "jpeg") else ext or "png"
+    return pil_image_to_data_url(image, fmt=fmt)

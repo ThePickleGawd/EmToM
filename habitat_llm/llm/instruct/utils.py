@@ -546,18 +546,17 @@ def image_data_to_pil(data: str):
     )
 
 
-def pil_image_to_data_url(image: Image):
+def pil_image_to_data_url(image: Image, fmt: str = "png"):
     """
-    Convert array to numpy64
+    Convert a PIL image to a base64-encoded data URL.
     """
-    # Guess the MIME type of the image based on the file extension
-    # Note this can be obtained using pil_image = Image.fromarray(image_file)
     buffered = io.BytesIO()
-    image.save(buffered, format="png")
+    save_fmt = "JPEG" if fmt.lower() in ("jpg", "jpeg") else fmt.upper()
+    image.save(buffered, format=save_fmt)
     img_byte = buffered.getvalue()
     base64_encoded_data = base64.b64encode(img_byte).decode("utf-8")
 
-    mime_type = "image/png"
+    mime_type = f"image/{fmt.lower()}"
 
     # Construct the data URL
     return f"data:{mime_type};base64,{base64_encoded_data}"

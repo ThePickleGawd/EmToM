@@ -633,10 +633,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         with open(CAMPAIGN_FILE, "w") as f:
             json.dump(campaign, f, indent=2)
 
-    # Auto-generate report
-    with open(CAMPAIGN_FILE) as f:
-        campaign = json.load(f)
-    _generate_report(campaign)
+        # Update leaderboard after each run for live visibility
+        _generate_report(campaign)
 
 
 # ---------------------------------------------------------------------------

@@ -354,7 +354,7 @@ def ensure_benchmark_observation_config(config: DictConfig) -> None:
                     "selector_min_frames": 1,
                     "selector_max_frames": 5,
                     "selector_max_candidates": 12,
-                    "image_format": "png",
+                    "image_format": "jpeg",
                 }
             )
 

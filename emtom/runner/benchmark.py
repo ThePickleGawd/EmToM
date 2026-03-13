@@ -77,7 +77,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
         if self._is_vision_mode():
             vision_cfg = getattr(self.config, "benchmark_vision", None)
-            image_format = getattr(vision_cfg, "image_format", "png") if vision_cfg else "png"
+            image_format = getattr(vision_cfg, "image_format", "jpeg") if vision_cfg else "jpeg"
             self._visual_store = VisualObservationStore(
                 os.path.join(self.output_dir, "visual_observations"),
                 image_format=image_format,
@@ -696,12 +696,13 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         break
 
                 total_skill_steps += 1
-                self._capture_visual_frames(
-                    observations,
-                    turn=turn_count,
-                    skill_step=total_skill_steps,
-                    kind="in_action",
-                )
+                if total_skill_steps % 30 == 0:
+                    self._capture_visual_frames(
+                        observations,
+                        turn=turn_count,
+                        skill_step=total_skill_steps,
+                        kind="in_action",
+                    )
 
                 # Get next low-level actions for each active agent
                 for uid, state in llm_agent_state.items():
