@@ -658,7 +658,7 @@ function RunDetailPanel({
           </div>
 
           {/* Category breakdown */}
-          {Object.keys(summary.category_stats).length > 0 && (
+          {summary.category_stats && Object.keys(summary.category_stats).length > 0 && (
             <div className="campaign-cat-stats">
               {Object.entries(summary.category_stats).map(([cat, stats]) => (
                 <div key={cat} className="campaign-cat-stat">

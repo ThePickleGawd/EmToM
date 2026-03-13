@@ -37,16 +37,26 @@ function processAction(entry: Record<string, any>): Record<string, any> {
 }
 
 function processTaskDir(taskDir: string): Record<string, any> | null {
-  const logDir = path.join(taskDir, "planner-log");
-  if (!fs.existsSync(logDir)) return null;
+  let logFile: string | null = null;
 
-  const logFiles = fs
-    .readdirSync(logDir)
-    .filter((f) => f.startsWith("planner-log-") && f.endsWith(".json"))
-    .sort();
-  if (logFiles.length === 0) return null;
+  // Campaign layout: flat planner-log.json in the task dir
+  const flatLog = path.join(taskDir, "planner-log.json");
+  if (fs.existsSync(flatLog)) {
+    logFile = flatLog;
+  } else {
+    // Benchmark layout: planner-log/planner-log-*.json subdirectory
+    const logDir = path.join(taskDir, "planner-log");
+    if (!fs.existsSync(logDir)) return null;
 
-  const logFile = path.join(logDir, logFiles[logFiles.length - 1]);
+    const logFiles = fs
+      .readdirSync(logDir)
+      .filter((f) => f.startsWith("planner-log-") && f.endsWith(".json"))
+      .sort();
+    if (logFiles.length === 0) return null;
+    logFile = path.join(logDir, logFiles[logFiles.length - 1]);
+  }
+
+  if (!logFile) return null;
   let data: Record<string, any>;
   try {
     data = JSON.parse(fs.readFileSync(logFile, "utf-8"));
@@ -459,8 +469,53 @@ export default function dynamicDataPlugin(): Plugin {
               "benchmark_summary.json",
             );
             if (fs.existsSync(summaryFile)) {
+              const summary = JSON.parse(
+                fs.readFileSync(summaryFile, "utf-8"),
+              );
+              // Compute category_stats if missing
+              if (!summary.category_stats && Array.isArray(summary.results)) {
+                const catStats: Record<
+                  string,
+                  {
+                    total: number;
+                    passed: number;
+                    pass_rate: number;
+                    avg_progress: number;
+                    avg_steps: number;
+                    timed_out: number;
+                  }
+                > = {};
+                for (const r of summary.results) {
+                  const cat = r.category || "unknown";
+                  if (!catStats[cat]) {
+                    catStats[cat] = {
+                      total: 0,
+                      passed: 0,
+                      pass_rate: 0,
+                      avg_progress: 0,
+                      avg_steps: 0,
+                      timed_out: 0,
+                    };
+                  }
+                  const s = catStats[cat];
+                  s.total++;
+                  if (r.success) s.passed++;
+                  s.avg_steps += r.steps || 0;
+                  s.avg_progress +=
+                    r.evaluation?.percent_complete ?? (r.success ? 1 : 0);
+                  if (r.done === false && r.episode_over === true) s.timed_out++;
+                }
+                for (const s of Object.values(catStats)) {
+                  if (s.total > 0) {
+                    s.pass_rate = (s.passed / s.total) * 100;
+                    s.avg_steps = s.avg_steps / s.total;
+                    s.avg_progress = s.avg_progress / s.total;
+                  }
+                }
+                summary.category_stats = catStats;
+              }
               res.setHeader("Content-Type", "application/json");
-              res.end(fs.readFileSync(summaryFile, "utf-8"));
+              res.end(JSON.stringify(summary));
             } else {
               res.statusCode = 404;
               res.end("Not found");

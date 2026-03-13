@@ -798,34 +798,35 @@ body {
 .campaign-nav {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 0;
   margin-bottom: 20px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-light);
+  border-bottom: 2px solid var(--border-light);
 }
 
 .campaign-nav-btn {
   font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   background: none;
   border: none;
   cursor: pointer;
-  padding: 4px 8px;
-  border-radius: var(--radius);
+  padding: 10px 16px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
   transition: all 0.12s ease;
 }
 
 .campaign-nav-btn:hover {
-  background: var(--surface-hover);
   color: var(--text);
+  background: var(--surface-hover);
 }
 
 .campaign-nav-btn.active {
-  background: var(--accent-light);
   color: var(--accent);
   font-weight: 600;
+  border-bottom-color: var(--accent);
+  background: none;
 }
 
 .campaign-nav-sep {
