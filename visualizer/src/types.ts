@@ -103,14 +103,30 @@ export interface LeaderboardSoloEntry {
   categories: Record<string, { pass_rate: number; total: number; passed: number }>;
 }
 
-export interface LeaderboardMatchup {
-  model_a: string;
-  model_b: string;
+export interface LeaderboardMatchupDirection {
+  team_0: string;
+  team_1: string;
+  team_0_wins: number;
+  team_1_wins: number;
+  draws: number;
+  total: number;
+}
+
+export interface LeaderboardMatchupCombined {
   model_a_wins: number;
   model_b_wins: number;
   draws: number;
   total: number;
   model_a_win_rate: number;
+}
+
+export interface LeaderboardMatchup {
+  model_a: string;
+  model_b: string;
+  mode: string;
+  forward?: LeaderboardMatchupDirection;
+  swap?: LeaderboardMatchupDirection;
+  combined?: LeaderboardMatchupCombined;
 }
 
 export interface Leaderboard {

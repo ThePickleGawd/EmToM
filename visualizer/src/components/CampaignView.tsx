@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import type {
   Campaign,
   Leaderboard,
+  LeaderboardMatchup,
   CampaignBenchmarkSummary,
   CampaignRunResult,
   TaskDetail,
@@ -347,39 +348,55 @@ function LeaderboardPanel({
         <h3 className="campaign-section-title">Competitive Matchups</h3>
         {hasMatchupData ? (
           <div className="campaign-matchup-grid">
-            {Object.entries(leaderboard!.matchups).map(([key, m]) => (
-              <div key={key} className="campaign-matchup-card">
-                <div className="campaign-matchup-vs">
-                  <span
-                    className="campaign-matchup-model"
-                    style={{ color: modelColor(m.model_a) }}
-                  >
-                    {m.model_a}
-                  </span>
-                  <span className="campaign-matchup-vs-label">vs</span>
-                  <span
-                    className="campaign-matchup-model"
-                    style={{ color: modelColor(m.model_b) }}
-                  >
-                    {m.model_b}
-                  </span>
+            {(() => {
+              // Group matchups by model pair
+              const grouped: Record<string, { model_a: string; model_b: string; modes: { mode: string; combined: LeaderboardMatchup['combined'] }[] }> = {};
+              for (const [, m] of Object.entries(leaderboard!.matchups)) {
+                const pairKey = `${m.model_a}_vs_${m.model_b}`;
+                if (!grouped[pairKey]) {
+                  grouped[pairKey] = { model_a: m.model_a, model_b: m.model_b, modes: [] };
+                }
+                grouped[pairKey].modes.push({ mode: m.mode || 'unknown', combined: m.combined });
+              }
+              return Object.entries(grouped).map(([pairKey, group]) => (
+                <div key={pairKey} className="campaign-matchup-card">
+                  <div className="campaign-matchup-vs">
+                    <span
+                      className="campaign-matchup-model"
+                      style={{ color: modelColor(group.model_a) }}
+                    >
+                      {group.model_a}
+                    </span>
+                    <span className="campaign-matchup-vs-label">vs</span>
+                    <span
+                      className="campaign-matchup-model"
+                      style={{ color: modelColor(group.model_b) }}
+                    >
+                      {group.model_b}
+                    </span>
+                  </div>
+                  {group.modes.map((entry) => (
+                    <div key={entry.mode} className="campaign-matchup-mode-row">
+                      <span className="campaign-matchup-mode">{entry.mode}</span>
+                      <div className="campaign-matchup-bar-wrap">
+                        <MatchupBar
+                          aWins={entry.combined?.model_a_wins ?? 0}
+                          bWins={entry.combined?.model_b_wins ?? 0}
+                          draws={entry.combined?.draws ?? 0}
+                          colorA={modelColor(group.model_a)}
+                          colorB={modelColor(group.model_b)}
+                        />
+                      </div>
+                      <div className="campaign-matchup-stats">
+                        <span>{entry.combined?.model_a_wins ?? 0} win</span>
+                        <span>{entry.combined?.draws ?? 0} draw</span>
+                        <span>{entry.combined?.model_b_wins ?? 0} win</span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div className="campaign-matchup-bar-wrap">
-                  <MatchupBar
-                    aWins={m.model_a_wins}
-                    bWins={m.model_b_wins}
-                    draws={m.draws}
-                    colorA={modelColor(m.model_a)}
-                    colorB={modelColor(m.model_b)}
-                  />
-                </div>
-                <div className="campaign-matchup-stats">
-                  <span>{m.model_a_wins}W</span>
-                  <span>{m.draws}D</span>
-                  <span>{m.model_b_wins}W</span>
-                </div>
-              </div>
-            ))}
+              ));
+            })()}
           </div>
         ) : (
           <MatchupPreviewGrid

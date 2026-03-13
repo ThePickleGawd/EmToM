@@ -1052,6 +1052,27 @@ body {
   font-weight: 500;
 }
 
+.campaign-matchup-mode-row {
+  margin-top: 8px;
+}
+
+.campaign-matchup-mode-row + .campaign-matchup-mode-row {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color, #e0e0e0);
+}
+
+.campaign-matchup-mode {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-secondary, #f0f0f0);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 500;
+  display: inline-block;
+  margin-bottom: 6px;
+}
+
 .campaign-matchup-bar-wrap {
   margin-bottom: 8px;
 }
