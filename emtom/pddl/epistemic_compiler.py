@@ -662,15 +662,17 @@ def _collect_action_constants(
     """Extract grounded object names from action strings and map to types.
 
     Unified-planning's PDDLReader requires any object referenced in domain
-    actions to be declared as :constants. We parse the action strings for
-    known problem objects.
+    actions to be declared as :constants. We scan the action strings for
+    known problem objects AND collect all agents (since inform actions
+    reference them via can_communicate).
     """
     constants: Dict[str, str] = {}
-    for action_str in extra_actions:
-        for obj_name, obj_type in problem.objects.items():
-            # Look for the object name as a whole word in the action
-            if re.search(rf'\b{re.escape(obj_name)}\b', action_str):
-                constants[obj_name] = obj_type
+    # Combine all action text for a single scan pass
+    combined = "\n".join(extra_actions)
+    for obj_name, obj_type in problem.objects.items():
+        # Look for the object name as a whole word in any action
+        if re.search(rf'\b{re.escape(obj_name)}\b', combined):
+            constants[obj_name] = obj_type
     return constants
 
 

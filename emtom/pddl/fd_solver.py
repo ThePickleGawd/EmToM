@@ -202,6 +202,73 @@ def _strip_goal_owners_from_pddl(pddl_str: str) -> str:
 # FastDownwardSolver
 # ---------------------------------------------------------------------------
 
+def _validate_pddl_grounding(domain_pddl: str, problem_pddl: str) -> List[str]:
+    """Check that all ground names in domain actions are declared.
+
+    Domain-level actions with :parameters () (0-ary, like epistemic
+    observe/inform actions) can only reference :constants, not problem
+    :objects. This pre-check catches the issue before unified-planning
+    crashes with an opaque "does not correspond" error.
+
+    Returns list of error strings (empty = valid).
+    """
+    errors: List[str] = []
+
+    # Collect declared :constants from domain
+    const_names: Set[str] = set()
+    const_match = re.search(r'\(:constants\s(.*?)\)', domain_pddl, re.DOTALL)
+    if const_match:
+        # Parse "name1 name2 - type" lines
+        for token in re.findall(r'(\b[a-zA-Z_]\w*)\b', const_match.group(1)):
+            if token not in ("agent", "room", "item", "furniture", "object"):
+                const_names.add(token)
+
+    # Collect declared :objects from problem
+    obj_names: Set[str] = set()
+    obj_match = re.search(r'\(:objects\s(.*?)\)', problem_pddl, re.DOTALL)
+    if obj_match:
+        for token in re.findall(r'(\b[a-zA-Z_]\w*)\b', obj_match.group(1)):
+            if token not in ("agent", "room", "item", "furniture", "object"):
+                obj_names.add(token)
+
+    all_declared = const_names | obj_names
+
+    # Collect predicate names from domain (so we don't flag them as missing objects)
+    pred_names: Set[str] = set()
+    pred_match = re.search(r'\(:predicates\s(.*?)\)\s*(?:\(:)', domain_pddl, re.DOTALL)
+    if pred_match:
+        pred_names = set(re.findall(r'\((\w+)', pred_match.group(1)))
+
+    # Find 0-ary actions (no parameters) — these are the epistemic compiler's actions
+    zero_ary_actions = re.findall(
+        r'\(:action\s+(\w+)\s+:parameters\s*\(\s*\)\s+:precondition\s+(.*?)\s+:effect\s+(.*?)\)',
+        domain_pddl,
+        re.DOTALL,
+    )
+
+    for action_name, precond, effect in zero_ary_actions:
+        # Extract all identifiers from precondition and effect
+        for section in (precond, effect):
+            tokens = re.findall(r'\b([a-zA-Z_]\w*)\b', section)
+            for token in tokens:
+                # Skip PDDL keywords, predicate names, and action-internal names
+                if token in ("and", "or", "not", "when", "forall"):
+                    continue
+                if token in pred_names:
+                    continue
+                # Skip 0-ary predicates (knows_*, msg_tok_*)
+                if token.startswith(("knows_", "msg_tok_")):
+                    continue
+                if token not in all_declared:
+                    errors.append(
+                        f"Action '{action_name}' references undeclared name "
+                        f"'{token}' (not in :constants or :objects)"
+                    )
+
+    # Deduplicate
+    return list(dict.fromkeys(errors))
+
+
 class FastDownwardSolver:
     """
     Real state-space PDDL solver using Fast Downward via unified-planning.
@@ -461,6 +528,14 @@ class FastDownwardSolver:
 
         Returns dict with 'solvable' (bool), 'plan' (list of str), 'error' (str).
         """
+        # Pre-validate: check that domain actions don't reference undeclared names.
+        grounding_errors = _validate_pddl_grounding(domain_pddl, problem_pddl)
+        if grounding_errors:
+            raise RuntimeError(
+                "PDDL grounding error (names in domain actions not declared "
+                f"as :constants or :objects): {'; '.join(grounding_errors)}"
+            )
+
         reader = PDDLReader()
 
         # Write temp files for PDDLReader

@@ -49,6 +49,7 @@ OUTPUT_DIR="data/emtom/tasks"
 EXTRA_ARGS=()  # Extra args forwarded verbatim to run_emtom.sh generate
 DIFFICULTY=""
 K_LEVEL=""  # Allowed k-levels (e.g. "2 3"). Empty = random per task.
+K_DISTRIBUTION=""  # Slot distribution (e.g. "1:2,2:3,3:3"). Overrides --k-level.
 
 # Colors
 RED='\033[0;31m'
@@ -73,6 +74,8 @@ print_usage() {
     echo "  --category CAT      Only generate this category (cooperative, competitive, mixed)"
     echo "  --difficulty LEVEL  Difficulty for generation (easy, medium, hard)"
     echo "  --k-level L [L ...] Allowed k-levels, e.g. --k-level 2 3 (default: random per task)"
+    echo "  --k-distribution D  Slots per k-level, e.g. 1:2,2:3,3:3 = 2 slots K=1, 3 K=2, 3 K=3"
+    echo "                      Slot counts must sum to --per-gpu. Overrides --k-level."
     echo "  --output-dir DIR    Output directory for submitted tasks (default: data/emtom/tasks)"
     echo "  --dry-run           Show commands without executing"
     echo ""
@@ -83,6 +86,7 @@ print_usage() {
     echo "Examples:"
     echo "  ./emtom/bulk_generate.sh                                  # 24 processes (8 GPUs x 3)"
     echo "  ./emtom/bulk_generate.sh --per-gpu 6                      # 48 processes"
+    echo "  ./emtom/bulk_generate.sh --per-gpu 8 --k-distribution 1:2,2:3,3:3  # Weighted K-levels"
     echo "  ./emtom/bulk_generate.sh --per-gpu 5 -- --difficulty hard  # Hard presets"
     echo "  ./emtom/bulk_generate.sh -- --difficulty hard --subtasks-max 20  # Override preset"
 }
@@ -132,6 +136,10 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
+        --k-distribution)
+            K_DISTRIBUTION=$2
+            shift 2
+            ;;
         --output-dir)
             OUTPUT_DIR=$2
             shift 2
@@ -151,6 +159,33 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Build per-slot k-level array from --k-distribution
+declare -a SLOT_K_LEVELS=()
+if [ -n "$K_DISTRIBUTION" ]; then
+    if [ -n "$K_LEVEL" ]; then
+        echo -e "${RED}Error: --k-distribution and --k-level are mutually exclusive${NC}"
+        exit 1
+    fi
+    # Parse "1:2,2:3,3:3" into SLOT_K_LEVELS array
+    IFS=',' read -ra K_PAIRS <<< "$K_DISTRIBUTION"
+    for pair in "${K_PAIRS[@]}"; do
+        k_val="${pair%%:*}"
+        k_count="${pair##*:}"
+        if ! [[ "$k_val" =~ ^[123]$ ]] || ! [[ "$k_count" =~ ^[0-9]+$ ]]; then
+            echo -e "${RED}Error: --k-distribution entries must be K:COUNT where K is 1-3 (got '$pair')${NC}"
+            exit 1
+        fi
+        for _ in $(seq 1 "$k_count"); do
+            SLOT_K_LEVELS+=("$k_val")
+        done
+    done
+    # Validate total matches --per-gpu
+    if [ "${#SLOT_K_LEVELS[@]}" -ne "$PER_GPU" ]; then
+        echo -e "${RED}Error: --k-distribution slot counts sum to ${#SLOT_K_LEVELS[@]} but --per-gpu is $PER_GPU${NC}"
+        exit 1
+    fi
+fi
 
 # Build category list
 if [ -n "$CATEGORY_FILTER" ]; then
@@ -185,7 +220,13 @@ echo -e "Total processes:    ${GREEN}$TOTAL_PROCESSES${NC}"
 echo -e "Categories:         ${GREEN}${CATEGORIES[*]}${NC}"
 echo -e "Model:              ${GREEN}$MODEL${NC}"
 [ -n "$DIFFICULTY" ] && echo -e "Difficulty:         ${GREEN}$DIFFICULTY${NC}"
-[ -n "$K_LEVEL" ] && echo -e "K-level:            ${GREEN}${K_LEVEL}${NC}" || echo -e "K-level:            ${GREEN}random per task${NC}"
+if [ -n "$K_DISTRIBUTION" ]; then
+    echo -e "K-distribution:     ${GREEN}${K_DISTRIBUTION}${NC} (per GPU: ${SLOT_K_LEVELS[*]})"
+elif [ -n "$K_LEVEL" ]; then
+    echo -e "K-level:            ${GREEN}${K_LEVEL}${NC}"
+else
+    echo -e "K-level:            ${GREEN}random per task${NC}"
+fi
 echo -e "Tasks per process:  ${GREEN}$NUM_TASKS${NC}"
 if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
     echo -e "Extra args:         ${GREEN}${EXTRA_ARGS[*]}${NC}"
@@ -207,19 +248,36 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
         category_idx=$((process_idx % NUM_CATEGORIES))
         category=${CATEGORIES[$category_idx]}
 
-        log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}.log"
+        # Include k-level in log name when using distribution
+        if [ "${#SLOT_K_LEVELS[@]}" -gt 0 ]; then
+            slot_k="${SLOT_K_LEVELS[$slot]}"
+            log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}_k${slot_k}.log"
+        else
+            log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}.log"
+        fi
 
         # Build flags for first-class options
         DIFFICULTY_FLAGS=""
         [ -n "$DIFFICULTY" ] && DIFFICULTY_FLAGS="--difficulty $DIFFICULTY"
         K_LEVEL_FLAGS=""
-        [ -n "$K_LEVEL" ] && K_LEVEL_FLAGS="--k-level $K_LEVEL"
+        if [ "${#SLOT_K_LEVELS[@]}" -gt 0 ]; then
+            # --k-distribution: each slot gets a single fixed k-level
+            K_LEVEL_FLAGS="--k-level ${SLOT_K_LEVELS[$slot]}"
+        elif [ -n "$K_LEVEL" ]; then
+            K_LEVEL_FLAGS="--k-level $K_LEVEL"
+        fi
+
+        # Build display label
+        slot_label="GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}"
+        if [ "${#SLOT_K_LEVELS[@]}" -gt 0 ]; then
+            slot_label="GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}, K=${SLOT_K_LEVELS[$slot]}"
+        fi
 
         if [ "$DRY_RUN" = true ]; then
-            echo -e "${YELLOW}[DRY-RUN]${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}"
+            echo -e "${YELLOW}[DRY-RUN]${NC} $slot_label"
             echo "  CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate --model $MODEL --num-tasks $NUM_TASKS --category $category --output-dir $TASK_DIR $DIFFICULTY_FLAGS $K_LEVEL_FLAGS ${EXTRA_ARGS[*]}"
         else
-            echo -e "${GREEN}Starting${NC} GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC} -> $log_file"
+            echo -e "${GREEN}Starting${NC} $slot_label -> $log_file"
 
             CUDA_VISIBLE_DEVICES=$gpu ./emtom/run_emtom.sh generate \
                 --model "$MODEL" \
@@ -233,7 +291,11 @@ for gpu in $(seq 0 $((NUM_GPUS - 1))); do
 
             pid=$!
             PIDS+=($pid)
-            PROCESS_INFO+=("GPU$gpu:$category:$pid")
+            if [ "${#SLOT_K_LEVELS[@]}" -gt 0 ]; then
+                PROCESS_INFO+=("GPU$gpu:$category:K${SLOT_K_LEVELS[$slot]}:$pid")
+            else
+                PROCESS_INFO+=("GPU$gpu:$category:$pid")
+            fi
         fi
 
         process_idx=$((process_idx + 1))
