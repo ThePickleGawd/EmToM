@@ -891,20 +891,30 @@ The user specifically requested:
             print(f"[Judge/{model}] Evaluating {category} task ({len(prompt)} chars)")
 
         # Get response with retries for transient provider/network failures.
+        # Use aggressive backoff with jitter to handle rate limits (429)
+        # under high parallelism (e.g. 128 concurrent bulk gen processes).
         response = None
-        max_retries = 4
+        max_retries = 8
         for attempt in range(1, max_retries + 1):
             try:
                 response = llm.generate(prompt)
                 break
-            except Exception:
+            except Exception as exc:
                 if attempt >= max_retries:
                     raise
-                backoff_s = min(12, 2 ** attempt)
+                # Longer backoff for rate limits (429), shorter for other errors
+                exc_str = str(exc)
+                if "429" in exc_str or "too_many_requests" in exc_str or "overloaded" in exc_str:
+                    base_backoff = min(120, 15 * (2 ** (attempt - 1)))
+                else:
+                    base_backoff = min(30, 2 ** attempt)
+                # Add jitter to avoid thundering herd
+                import random
+                backoff_s = base_backoff * (0.5 + random.random())
                 if self.verbose:
                     print(
                         f"[Judge/{model}] LLM call failed (attempt {attempt}/{max_retries}), "
-                        f"retrying in {backoff_s}s"
+                        f"retrying in {backoff_s:.0f}s"
                     )
                 time.sleep(backoff_s)
 
