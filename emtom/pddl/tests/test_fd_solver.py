@@ -1,5 +1,8 @@
 """Tests for Fast Downward solver and domain fixes."""
 
+import os
+from pathlib import Path
+
 import pytest
 
 from emtom.pddl.dsl import (
@@ -242,6 +245,75 @@ def _make_problem(goal, objects=None, init=None):
 
 @pytest.mark.skipif(not HAS_UP, reason="unified-planning not installed")
 class TestFastDownwardSolver:
+    def test_run_planner_uses_isolated_cwd(self, monkeypatch, tmp_path):
+        """Planner.solve should not run in the shared repo cwd."""
+        monkeypatch.chdir(tmp_path)
+        original_cwd = os.getcwd()
+        seen = {}
+
+        class _FakeStatus:
+            SOLVED_SATISFICING = "SOLVED_SATISFICING"
+            SOLVED_OPTIMALLY = "SOLVED_OPTIMALLY"
+
+            def __init__(self, name):
+                self.name = name
+
+            def __eq__(self, other):
+                return self.name == getattr(other, "name", other)
+
+        class _FakeAction:
+            def __str__(self):
+                return "open(agent_0, cabinet_27, kitchen_1)"
+
+        class _FakePlan:
+            actions = [_FakeAction()]
+
+        class _FakeResult:
+            status = _FakeStatus("SOLVED_SATISFICING")
+            plan = _FakePlan()
+
+        class _FakePlanner:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def solve(self, problem, timeout=None):
+                seen["cwd"] = os.getcwd()
+                Path("output.sas").write_text("planner scratch")
+                return _FakeResult()
+
+        monkeypatch.setattr(
+            "emtom.pddl.fd_solver.OneshotPlanner",
+            lambda name: _FakePlanner(),
+        )
+
+        domain_pddl = EMTOM_DOMAIN.to_planning_pddl()
+        problem_pddl = (
+            "(define (problem test)\n"
+            "  (:domain emtom)\n"
+            "  (:objects\n"
+            "    agent_0 - agent\n"
+            "    cabinet_27 - furniture\n"
+            "    kitchen_1 - room\n"
+            "  )\n"
+            "  (:init\n"
+            "    (agent_in_room agent_0 kitchen_1)\n"
+            "    (is_in_room cabinet_27 kitchen_1)\n"
+            "    (is_closed cabinet_27)\n"
+            "  )\n"
+            "  (:goal (is_open cabinet_27))\n"
+            ")"
+        )
+
+        result = FastDownwardSolver()._run_planner(domain_pddl, problem_pddl, timeout=1.0)
+
+        assert result["solvable"]
+        assert seen["cwd"] != original_cwd
+        assert os.getcwd() == original_cwd
+        assert not (tmp_path / "output.sas").exists()
+
     def test_solvable_simple(self):
         """Simple: cabinet in init is closed, goal is to open it."""
         goal = Literal("is_open", ("cabinet_27",))

@@ -15,6 +15,7 @@ Falls back to PDKBSolver when unified-planning is not installed.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import tempfile
 import time
@@ -551,7 +552,6 @@ class FastDownwardSolver:
             pf.write(problem_pddl)
             problem_path = pf.name
 
-        import os
         try:
             up_problem = reader.parse_problem(domain_path, problem_path)
         except Exception as e:
@@ -565,9 +565,16 @@ class FastDownwardSolver:
         os.unlink(domain_path)
         os.unlink(problem_path)
 
-        # Solve with Fast Downward (default heuristic search)
-        with OneshotPlanner(name="fast-downward") as planner:
-            up_result = planner.solve(up_problem, timeout=timeout)
+        # Fast Downward writes auxiliary files like output.sas in the process
+        # cwd by default. Isolate each solve so concurrent workers do not race.
+        with tempfile.TemporaryDirectory(prefix="fd_run_") as planner_cwd:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(planner_cwd)
+                with OneshotPlanner(name="fast-downward") as planner:
+                    up_result = planner.solve(up_problem, timeout=timeout)
+            finally:
+                os.chdir(old_cwd)
 
         if up_result.status in (
             up_result.status.__class__.SOLVED_SATISFICING,
