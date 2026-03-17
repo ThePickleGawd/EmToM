@@ -154,6 +154,9 @@ def _make_k_task_data(
         "  )\n"
         "  (:init\n"
         "    (is_closed cabinet_27)\n"
+        "    (is_in_room cabinet_27 kitchen_1)\n"
+        "    (agent_in_room agent_0 bedroom_1)\n"
+        "    (agent_in_room agent_1 kitchen_1)\n"
         "    (can_communicate agent_0 agent_1)\n"
         "    (can_communicate agent_1 agent_0)\n"
         "  )\n"
@@ -233,16 +236,16 @@ class TestDeriveCommStepsUnit:
             "(K agent_0 (is_open cabinet_27))", 2,
         )
         assert len(result["steps"]) == 0
-        assert any("belief_depth=0" in n for n in result["notes"])
+        assert any("communication unnecessary" in n for n in result["notes"])
 
-    def test_no_scene_data_skips(self):
-        """No scene data should fail fast for epistemic derivation."""
+    def test_problem_pddl_grounding_suffices_without_scene_data(self):
+        """Self-contained problem_pddl should derive communication without scene_data."""
         task_data = _make_k_task_data()
-        with pytest.raises(ValueError, match="object-room mapping"):
-            _derive_communicate_steps(
-                task_data, {},
-                "(K agent_0 (is_open cabinet_27))", 2,
-            )
+        result = _derive_communicate_steps(
+            task_data, {},
+            "(K agent_0 (is_open cabinet_27))", 2,
+        )
+        assert len(result["steps"]) >= 1
 
     @pytest.mark.skipif(not HAS_UP, reason="unified-planning not installed")
     def test_communicate_message_is_nl(self):
@@ -337,8 +340,13 @@ class TestGenerateTrajectoryWithCommunicate:
             "problem_pddl": (
                 "(define (problem test)\n"
                 "  (:domain emtom)\n"
-                "  (:objects agent_0 agent_1 - agent cabinet_27 - furniture)\n"
-                "  (:init (is_closed cabinet_27))\n"
+                "  (:objects agent_0 agent_1 - agent cabinet_27 - furniture kitchen_1 - room)\n"
+                "  (:init\n"
+                "    (is_closed cabinet_27)\n"
+                "    (is_in_room cabinet_27 kitchen_1)\n"
+                "    (agent_in_room agent_0 kitchen_1)\n"
+                "    (agent_in_room agent_1 kitchen_1)\n"
+                "  )\n"
                 "  (:goal (is_open cabinet_27))\n"
                 ")"
             ),
@@ -376,7 +384,7 @@ class TestGenerateTrajectoryWithCommunicate:
         with pytest.raises(ValueError, match="missing problem_pddl"):
             generate_deterministic_trajectory(task_data, _make_scene_data())
 
-    def test_room_restriction_without_scene_mapping_fails_fast(self):
+    def test_room_restriction_problem_pddl_can_replace_scene_mapping(self):
         task_data = _make_k_task_data(
             pddl_goal="(is_open cabinet_27)",
             mechanics=[
@@ -387,8 +395,8 @@ class TestGenerateTrajectoryWithCommunicate:
                 }
             ],
         )
-        with pytest.raises(ValueError, match="missing room mapping"):
-            generate_deterministic_trajectory(task_data, scene_data=None)
+        result = generate_deterministic_trajectory(task_data, scene_data=None)
+        assert result["trajectory"]
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +417,10 @@ class TestRelayChainCommunicate:
             "  )\n"
             "  (:init\n"
             "    (is_closed cabinet_27)\n"
+            "    (is_in_room cabinet_27 kitchen_1)\n"
+            "    (agent_in_room agent_0 kitchen_1)\n"
+            "    (agent_in_room agent_1 bedroom_1)\n"
+            "    (agent_in_room agent_2 bedroom_1)\n"
             "    (can_communicate agent_0 agent_1)\n"
             "    (can_communicate agent_1 agent_2)\n"
             "  )\n"

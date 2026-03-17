@@ -1,18 +1,12 @@
 """
-Deterministic rule-based golden trajectory planner.
+Deterministic golden trajectory planner backed by strict PDDL solving.
 
-Given a PDDL goal and scene data, produces a golden trajectory that satisfies
-the goal. Same spec + scene always produces the same trajectory.
+Given a task spec and optional scene data, this module solves the authoritative
+PDDL problem with Fast Downward and translates the resulting plan into a
+golden trajectory. Same spec + scene always produces the same trajectory.
 
 This module is used by both agent.py (ReAct loop) and the CLI verify/submit
 commands, ensuring a single source of truth for trajectory generation.
-
-Usage:
-    from emtom.pddl.planner import regenerate_golden_trajectory
-
-    task_data = json.load(open("task.json"))
-    scene_data = ...  # SceneData or dict with rooms/furniture/objects
-    result = regenerate_golden_trajectory(task_data, scene_data, source="verify")
 """
 
 from __future__ import annotations
@@ -23,7 +17,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -64,32 +58,168 @@ def parse_fd_inform_actions(fd_plan: List[str]) -> List[InformAction]:
     return results
 
 
+_PLAN_STEP_RE = re.compile(
+    r"^(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)(?:\((?P<args>.*)\))?$"
+)
+
+
+def _scene_to_dict(scene_data: Any) -> Dict[str, Any]:
+    """Normalize SceneData-like inputs into plain dicts."""
+    if isinstance(scene_data, dict):
+        return scene_data
+    if hasattr(scene_data, "to_dict"):
+        return scene_data.to_dict()
+    return {}
+
+
+def _parse_plan_step(step: str) -> Tuple[str, List[str]]:
+    """Parse a unified-planning action string into name and ordered args."""
+    stripped = (step or "").strip()
+    match = _PLAN_STEP_RE.match(stripped)
+    if not match:
+        raise ValueError(f"Unsupported planner step format: {step}")
+
+    name = match.group("name")
+    args_str = (match.group("args") or "").strip()
+    if not args_str:
+        return name, []
+    return name, [arg.strip() for arg in args_str.split(",") if arg.strip()]
+
+
+def _collect_goal_relation_preferences(goal: Any) -> Dict[Tuple[str, str], str]:
+    """Map goal object/receptacle pairs to the intended runtime place relation."""
+    from emtom.pddl.dsl import And, Believes, Knows, Literal, Not, Or
+
+    relation_by_pair: Dict[Tuple[str, str], str] = {}
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, (Knows, Believes)):
+            _walk(node.inner)
+            return
+        if isinstance(node, Not) and node.operand is not None:
+            _walk(node.operand)
+            return
+        if isinstance(node, (And, Or)):
+            for operand in node.operands:
+                _walk(operand)
+            return
+        if isinstance(node, Literal) and not node.negated and len(node.args) >= 2:
+            if node.predicate == "is_inside":
+                relation_by_pair[(node.args[0], node.args[1])] = "within"
+            elif node.predicate == "is_on_top":
+                relation_by_pair.setdefault((node.args[0], node.args[1]), "on")
+
+    _walk(goal)
+    return relation_by_pair
+
+
+def _build_epistemic_message_maps(goal: Any, observability: Any) -> Tuple[Dict[str, Any], Dict[str, tuple]]:
+    """Build fact-hash maps needed to translate inform actions to messages."""
+    from emtom.pddl.dsl import Believes, Knows
+    from emtom.pddl.epistemic_compiler import (
+        _collect_k_goals,
+        _collect_leaf_facts,
+        _get_leaf_formula,
+    )
+
+    k_goals = _collect_k_goals(goal, observability)
+    leaf_facts = _collect_leaf_facts(k_goals)
+
+    nested_k_map: Dict[str, tuple] = {}
+    for kg in k_goals:
+        if kg.depth < 2 or not isinstance(kg.inner, (Knows, Believes)):
+            continue
+        leaf = _get_leaf_formula(kg.inner.inner)
+        if leaf is None:
+            continue
+        nested_k_map[kg.fact_id] = (kg.agent, kg.inner.agent, leaf)
+
+    return leaf_facts, nested_k_map
+
+
+def _build_communicate_action(
+    inform: InformAction,
+    num_agents: int,
+    leaf_facts: Dict[str, Any],
+    nested_k_map: Dict[str, tuple],
+) -> Dict[str, Any]:
+    """Convert an epistemic inform action into one golden trajectory step."""
+    from emtom.pddl.describe import _literal_to_nl, goal_to_natural_language
+    from emtom.pddl.dsl import Literal
+
+    formula = leaf_facts.get(inform.fact_hash)
+    nested = nested_k_map.get(inform.fact_hash)
+
+    if formula is not None and isinstance(formula, Literal):
+        message = _literal_to_nl(formula)
+    elif formula is not None:
+        message = goal_to_natural_language(formula)
+    elif nested is not None:
+        _outer_agent, inner_agent, leaf = nested
+        if isinstance(leaf, Literal):
+            inner_msg = _literal_to_nl(leaf)
+        else:
+            inner_msg = goal_to_natural_language(leaf)
+        message = f"{inner_agent} confirmed: {inner_msg}"
+    else:
+        raise RuntimeError(
+            f"Unknown fact_hash '{inform.fact_hash}' in inform action; "
+            "cannot derive deterministic Communicate step."
+        )
+
+    return wrap_parallel_step(
+        num_agents,
+        inform.sender,
+        f'Communicate["{message}", {inform.receiver}]',
+    )
+
+
+def _solve_task_for_trajectory(
+    task_data: Dict[str, Any],
+    scene_data: Any,
+) -> Tuple[Any, Any, Any]:
+    """Solve the authoritative compiled task and return (problem, obs, solver_result)."""
+    from emtom.pddl.compiler import compile_task
+    from emtom.pddl.domain import EMTOM_DOMAIN
+    from emtom.pddl.epistemic import ObservabilityModel
+    from emtom.pddl.fd_solver import FastDownwardSolver
+    from emtom.task_gen.task_generator import GeneratedTask
+
+    scene_dict = _scene_to_dict(scene_data)
+    task = GeneratedTask.from_dict(task_data)
+    problem = compile_task(task, scene_dict)
+    observability = ObservabilityModel.from_task_with_scene(task, scene_dict)
+
+    if _has_epistemic_goal(problem.goal) and not observability.object_rooms:
+        raise ValueError(
+            "Epistemic trajectory derivation requires scene object-room mapping "
+            "(missing observability.object_rooms)."
+        )
+
+    solver = FastDownwardSolver()
+    result = solver.solve(
+        EMTOM_DOMAIN,
+        problem,
+        observability,
+        max_belief_depth=3,
+        strict=True,
+    )
+    if not result.solvable:
+        raise RuntimeError(
+            f"Strict PDDL solve failed: {result.error or 'no plan found'}"
+        )
+
+    return problem, observability, result
+
+
 def _derive_communicate_steps(
     task_data: Dict[str, Any],
     scene_data: Any,
     pddl_goal: str,
     num_agents: int,
 ) -> Dict[str, Any]:
-    """Derive Communicate trajectory steps from FD epistemic plan.
-
-    Runs the epistemic compilation + FD solver pipeline, parses inform
-    actions from the plan, and converts them to Communicate[] steps.
-
-    Returns dict with "steps" (list of trajectory steps) and "notes" (list of str).
-    """
-    from emtom.pddl.describe import _literal_to_nl, goal_to_natural_language
-    from emtom.pddl.domain import EMTOM_DOMAIN
-    from emtom.pddl.dsl import Literal, Knows, Believes, parse_goal_string
-    from emtom.pddl.epistemic import ObservabilityModel
-    from emtom.pddl.epistemic_compiler import (
-        compile_epistemic,
-        _collect_k_goals,
-        _collect_leaf_facts,
-        _get_leaf_formula,
-    )
-    from emtom.pddl.compiler import compile_task
-    from emtom.pddl.fd_solver import FastDownwardSolver, HAS_UP
-    from emtom.task_gen.task_generator import GeneratedTask
+    """Derive Communicate trajectory steps from the strict solver plan."""
+    from emtom.pddl.fd_solver import HAS_UP
 
     if not HAS_UP:
         raise RuntimeError(
@@ -97,124 +227,34 @@ def _derive_communicate_steps(
             "(install unified-planning and up-fast-downward)."
         )
 
-    # Convert SceneData to dict if needed
-    if isinstance(scene_data, dict):
-        scene_dict = scene_data
-    elif hasattr(scene_data, "to_dict"):
-        scene_dict = scene_data.to_dict()
-    else:
-        scene_dict = {}
-
-    # Build GeneratedTask + compile to PDDL Problem
-    task = GeneratedTask.from_dict(task_data)
-    problem = compile_task(task, scene_dict)
-    obs = ObservabilityModel.from_task_with_scene(task, scene_dict)
-
-    if not obs.object_rooms:
-        raise ValueError(
-            "Epistemic trajectory derivation requires scene object-room mapping "
-            "(missing observability.object_rooms)."
-        )
-
-    # Parse the goal formula
-    goal = parse_goal_string(pddl_goal)
-
-    # Run epistemic compilation to check if belief_depth > 0
-    compilation = compile_epistemic(goal, EMTOM_DOMAIN, problem, obs)
-    if compilation.belief_depth == 0:
+    problem, observability, result = _solve_task_for_trajectory(task_data, scene_data)
+    if not _has_epistemic_goal(problem.goal):
         return {
             "steps": [],
-            "notes": ["belief_depth=0 (trivial K goals only); no communicate steps needed"],
+            "notes": ["no epistemic goals in problem; no communicate steps needed"],
             "communication_required": False,
         }
 
-    # Solve with FD using the already-compiled epistemic PDDL
-    # (avoids double-compilation inconsistency with problem.goal)
-    solver = FastDownwardSolver()
-    fd_result = solver._run_planner(
-        compilation.domain_pddl, compilation.problem_pddl, timeout=30.0
-    )
-    if not fd_result["solvable"]:
-        raise RuntimeError(
-            f"FD epistemic solve failed: {fd_result.get('error', 'no plan')}"
-        )
-    plan = fd_result.get("plan", [])
-
-    # Parse inform actions from FD plan
-    informs = parse_fd_inform_actions(plan)
+    informs = parse_fd_inform_actions(result.plan or [])
     if not informs:
-        # FD solved with observe+infer only (all agents can observe the fact).
-        # This is valid — no communication steps needed.
         return {
             "steps": [],
             "notes": [
-                "belief_depth>0 but FD solved without inform actions "
-                "(all relevant agents can directly observe the facts; "
-                "inference-only plan)."
+                "belief_depth=0 or direct observation made communication unnecessary"
             ],
             "communication_required": False,
         }
 
-    # Build hash → formula maps
-    k_goals = _collect_k_goals(goal, obs)
-    leaf_facts = _collect_leaf_facts(k_goals)  # hash → Formula
-
-    # Build nested K map: fact_id → (outer_agent, inner_agent, leaf_formula)
-    nested_k_map: Dict[str, tuple] = {}
-    for kg in k_goals:
-        if kg.depth >= 2 and isinstance(kg.inner, (Knows, Believes)):
-            inner_agent = kg.inner.agent
-            leaf = _get_leaf_formula(kg.inner.inner)
-            if leaf is not None:
-                nested_k_map[kg.fact_id] = (kg.agent, inner_agent, leaf)
-
-    # Convert each inform action to a Communicate step
-    steps: List[Dict[str, Any]] = []
-    notes: List[str] = []
-
-    for inform in informs:
-        formula = leaf_facts.get(inform.fact_hash)
-        nested = nested_k_map.get(inform.fact_hash)
-
-        if formula is not None and isinstance(formula, Literal):
-            message = _literal_to_nl(formula)
-        elif formula is not None:
-            message = goal_to_natural_language(formula)
-        elif nested is not None:
-            _outer_agent, inner_agent, leaf = nested
-            if isinstance(leaf, Literal):
-                inner_msg = _literal_to_nl(leaf)
-            else:
-                inner_msg = goal_to_natural_language(leaf)
-            message = f"{inner_agent} confirmed: {inner_msg}"
-        else:
-            raise RuntimeError(
-                f"Unknown fact_hash '{inform.fact_hash}' in inform action; "
-                "cannot derive deterministic Communicate step."
-            )
-
-        # Build the parallel step: sender Communicates, others Wait
-        step_actions: List[Dict[str, str]] = []
-        for i in range(max(1, num_agents)):
-            agent_id = f"agent_{i}"
-            if agent_id == inform.sender:
-                step_actions.append({
-                    "agent": agent_id,
-                    "action": f'Communicate["{message}", {inform.receiver}]',
-                })
-            else:
-                step_actions.append({
-                    "agent": agent_id,
-                    "action": "Wait[]",
-                })
-        steps.append({"actions": step_actions})
-
-    if not steps:
-        raise RuntimeError(
-            "Epistemic plan required communication but no Communicate steps were derived."
-        )
-
-    return {"steps": steps, "notes": notes, "communication_required": True}
+    leaf_facts, nested_k_map = _build_epistemic_message_maps(problem.goal, observability)
+    steps = [
+        _build_communicate_action(inform, num_agents, leaf_facts, nested_k_map)
+        for inform in informs
+    ]
+    return {
+        "steps": steps,
+        "notes": [f"derived {len(steps)} Communicate step(s) from strict solver plan"],
+        "communication_required": bool(steps),
+    }
 
 
 def _has_epistemic_goal(formula: Any) -> bool:
@@ -460,6 +500,19 @@ def wrap_parallel_step(num_agents: int, acting_agent: str, action: str) -> Dict[
     return {"actions": actions}
 
 
+def append_runtime_step(
+    trajectory: List[Dict[str, Any]],
+    num_agents: int,
+    acting_agent: str,
+    action: str,
+    navigate_target: Optional[str] = None,
+) -> None:
+    """Append a runtime step, optionally inserting target-level navigation first."""
+    if navigate_target:
+        trajectory.append(wrap_parallel_step(num_agents, acting_agent, f"Navigate[{navigate_target}]"))
+    trajectory.append(wrap_parallel_step(num_agents, acting_agent, action))
+
+
 def extract_plannable_literals(goal_formula: Any) -> List[Any]:
     """
     Extract a deterministic list of literals to satisfy from a PDDL goal.
@@ -556,7 +609,7 @@ def generate_deterministic_trajectory(
     """
     Build a deterministic golden trajectory from task spec.
 
-    This is a rule-based, non-LLM planner: same spec -> same trajectory.
+    This is a solver-backed, non-LLM planner: same spec -> same trajectory.
 
     Args:
         task_data: Parsed task dict with problem_pddl, mechanic_bindings, etc.
@@ -565,309 +618,163 @@ def generate_deterministic_trajectory(
     Returns:
         Dict with keys: trajectory, planned_literals, ignored_literals, planner_notes.
     """
-    num_agents = int(task_data.get("num_agents", 2) or 2)
-    init_positive_literals = set()
+    from emtom.pddl.dsl import Literal
 
+    num_agents = int(task_data.get("num_agents", 2) or 2)
     problem_pddl = task_data.get("problem_pddl")
     if not isinstance(problem_pddl, str) or not problem_pddl.strip():
         raise ValueError(
             "Cannot generate deterministic golden trajectory: missing problem_pddl."
         )
-    from emtom.pddl.problem_pddl import parse_problem_pddl
 
-    parsed_problem = parse_problem_pddl(problem_pddl)
-    pddl_goal = parsed_problem.goal_pddl
-    for init_lit in parsed_problem.init_literals:
-        if not getattr(init_lit, "negated", False):
-            init_positive_literals.add(
-                (init_lit.predicate, tuple(init_lit.args))
-            )
+    problem, observability, solver_result = _solve_task_for_trajectory(
+        task_data,
+        scene_data,
+    )
 
-    goal = parsed_problem.goal_formula
-    has_epistemic_goal = _has_epistemic_goal(goal)
-    literals = extract_plannable_literals(goal)
-
-    restrictions = extract_room_restrictions(task_data)
-    target_to_room = build_target_to_room_map(scene_data)
-
-    # Build literal-pddl -> owner mapping from :goal-owners.
-    literal_owner: Dict[str, str] = {}
-    for lit_str, owner in (parsed_problem.owners or {}).items():
-        if isinstance(owner, str) and isinstance(lit_str, str):
-            literal_owner[lit_str.strip()] = owner
-
-    remote_trigger_by_target: Dict[str, str] = {}
-    for binding in task_data.get("mechanic_bindings", []):
-        if not isinstance(binding, dict):
-            continue
-        if binding.get("mechanic_type") != "remote_control":
-            continue
-        trigger = binding.get("trigger_object")
-        target = binding.get("target_object")
-        if isinstance(trigger, str) and isinstance(target, str):
-            remote_trigger_by_target[target] = trigger
-
-    locked_containers = task_data.get("locked_containers", {})
-    if not isinstance(locked_containers, dict):
-        locked_containers = {}
-
-    item_location: Dict[str, str] = {}
-    for item in task_data.get("items", []):
-        if not isinstance(item, dict):
-            continue
-        item_id = item.get("item_id")
-        container = item.get("inside") or item.get("hidden_in")
-        if isinstance(item_id, str) and isinstance(container, str):
-            item_location[item_id] = container
-
+    relation_by_pair = _collect_goal_relation_preferences(problem.goal)
+    leaf_facts, nested_k_map = _build_epistemic_message_maps(problem.goal, observability)
+    object_types = dict(problem.objects)
+    plan = solver_result.plan or []
     trajectory: List[Dict[str, Any]] = []
-    planned_literals: List[str] = []
-    ignored_literals: List[str] = []
-    agent_action_queues: Dict[str, List[str]] = {
-        f"agent_{i}": [] for i in range(max(1, num_agents))
-    }
-    agent_loads: Dict[str, int] = {
-        f"agent_{i}": 0 for i in range(max(1, num_agents))
-    }
-
-    def add_action(agent_id: str, action: str) -> None:
-        if agent_id not in agent_action_queues:
-            agent_action_queues[agent_id] = []
-            agent_loads.setdefault(agent_id, 0)
-        agent_action_queues[agent_id].append(action)
-        agent_loads[agent_id] = agent_loads.get(agent_id, 0) + 1
-
-    def get_agent_for_literal(lit, target_id: str) -> str:
-        """Get agent for a literal, respecting owner field if set."""
-        owner = literal_owner.get(lit.to_pddl().strip())
-        if owner and owner.startswith("agent_"):
-            return owner
-        return pick_agent_for_target(
-            target_id,
-            num_agents,
-            target_to_room,
-            restrictions,
-            agent_loads=agent_loads,
-        )
-
-    for lit in literals:
-        pred = lit.predicate
-        args = list(lit.args)
-        lit_str = lit.to_pddl()
-
-        # Skip planning if this positive literal already holds in :init.
-        # This avoids pointless moves (and restriction violations) for stable facts,
-        # especially K() goals whose inner literal is already true in init.
-        if not lit.negated and (pred, tuple(args)) in init_positive_literals:
-            planned_literals.append(lit_str)
-            continue
-
-        if pred in ("is_open", "is_closed") and args:
-            target = args[0]
-            agent_id = get_agent_for_literal(lit, target)
-            add_action(agent_id, f"Navigate[{target}]")
-            if pred == "is_open":
-                add_action(agent_id, f"{'Close' if lit.negated else 'Open'}[{target}]")
-            else:
-                add_action(agent_id, f"{'Open' if lit.negated else 'Close'}[{target}]")
-            planned_literals.append(lit_str)
-            continue
-
-        if pred == "is_unlocked" and args and not lit.negated:
-            target = args[0]
-            if target in remote_trigger_by_target:
-                trigger = remote_trigger_by_target[target]
-                agent_id = get_agent_for_literal(lit, trigger)
-                add_action(agent_id, f"Navigate[{trigger}]")
-                add_action(agent_id, f"Open[{trigger}]")
-                planned_literals.append(lit_str)
-                continue
-
-            key_item = locked_containers.get(target)
-            if isinstance(key_item, str):
-                source = item_location.get(key_item)
-                if source:
-                    src_agent = get_agent_for_literal(lit, source)
-                    add_action(src_agent, f"Navigate[{source}]")
-                    add_action(src_agent, f"Open[{source}]")
-                dst_agent = get_agent_for_literal(lit, target)
-                add_action(dst_agent, f"Navigate[{target}]")
-                add_action(dst_agent, f"UseItem[{key_item}, {target}]")
-                planned_literals.append(lit_str)
-                continue
-
-            fallback_agent = get_agent_for_literal(lit, target)
-            add_action(fallback_agent, f"Navigate[{target}]")
-            add_action(fallback_agent, f"Open[{target}]")
-            planned_literals.append(lit_str)
-            continue
-
-        if pred in ("is_on_top", "is_inside") and len(args) >= 2:
-            obj, receptacle = args[0], args[1]
-            if lit.negated:
-                ignored_literals.append(lit_str)
-                continue
-            if obj.startswith("item_"):
-                # Items are inventory-only in this benchmark variant.
-                ignored_literals.append(lit_str)
-                continue
-            relation = "within" if pred == "is_inside" else "on"
-
-            # Check owner override first
-            owner = literal_owner.get(lit.to_pddl().strip())
-            if owner and owner.startswith("agent_"):
-                add_action(owner, f"Navigate[{obj}]")
-                add_action(owner, f"Pick[{obj}]")
-                add_action(owner, f"Navigate[{receptacle}]")
-                add_action(owner, f"Place[{obj}, {relation}, {receptacle}, None, None]")
-                planned_literals.append(lit_str)
-                continue
-
-            # Try to find a single agent that can reach BOTH obj and receptacle
-            single = pick_agent_for_targets(
-                [obj, receptacle], num_agents, target_to_room,
-                restrictions, agent_loads=agent_loads,
-            )
-            if single is not None:
-                add_action(single, f"Navigate[{obj}]")
-                add_action(single, f"Pick[{obj}]")
-                add_action(single, f"Navigate[{receptacle}]")
-                add_action(single, f"Place[{obj}, {relation}, {receptacle}, None, None]")
-                planned_literals.append(lit_str)
-                continue
-
-            # No single agent can reach both — use handoff via shared room
-            picker = pick_agent_for_target(
-                obj, num_agents, target_to_room, restrictions,
-                agent_loads=agent_loads,
-            )
-            placer = pick_agent_for_target(
-                receptacle, num_agents, target_to_room, restrictions,
-                agent_loads=agent_loads,
-            )
-            handoff_furn = find_handoff_furniture(
-                picker, placer, restrictions, scene_data,
-            )
-            if handoff_furn is None:
-                raise ValueError(
-                    f"Cannot plan {lit_str}: no agent can reach both "
-                    f"'{obj}' and '{receptacle}', and no shared room exists "
-                    "for handoff. Redesign room restrictions or goal."
-                )
-            # Picker: pick obj and place on handoff furniture
-            add_action(picker, f"Navigate[{obj}]")
-            add_action(picker, f"Pick[{obj}]")
-            add_action(picker, f"Navigate[{handoff_furn}]")
-            add_action(picker, f"Place[{obj}, on, {handoff_furn}, None, None]")
-            # Placer: pick from handoff and place on final receptacle
-            add_action(placer, f"Navigate[{handoff_furn}]")
-            add_action(placer, f"Pick[{obj}]")
-            add_action(placer, f"Navigate[{receptacle}]")
-            add_action(placer, f"Place[{obj}, {relation}, {receptacle}, None, None]")
-            planned_literals.append(lit_str)
-            continue
-
-        if pred == "agent_in_room" and len(args) >= 2 and not lit.negated:
-            agent_str, room = args[0], args[1]
-            # Verify agent is not restricted from this room
-            if room in restrictions.get(agent_str, set()):
-                raise ValueError(
-                    f"Cannot plan {lit_str}: {agent_str} is restricted from "
-                    f"{room}. Fix room_restriction bindings or goal."
-                )
-            # Navigate agent to a furniture item in the target room
-            nav_target = room
-            if isinstance(scene_data, dict):
-                fir = scene_data.get("furniture_in_rooms", {})
-            elif scene_data and hasattr(scene_data, "furniture_in_rooms"):
-                fir = scene_data.furniture_in_rooms
-            else:
-                fir = {}
-            room_furniture = fir.get(room, [])
-            if room_furniture:
-                nav_target = room_furniture[0]
-            add_action(agent_str, f"Navigate[{nav_target}]")
-            planned_literals.append(lit_str)
-            continue
-
-        if pred == "is_held_by" and len(args) >= 2 and not lit.negated:
-            obj, agent_str = args[0], args[1]
-            # Verify agent can reach the object's room
-            obj_room = target_to_room.get(obj)
-            if obj_room and obj_room in restrictions.get(agent_str, set()):
-                raise ValueError(
-                    f"Cannot plan {lit_str}: {agent_str} is restricted from "
-                    f"{obj_room} (where '{obj}' is). Fix room_restriction "
-                    "bindings or goal."
-                )
-            add_action(agent_str, f"Navigate[{obj}]")
-            add_action(agent_str, f"Pick[{obj}]")
-            planned_literals.append(lit_str)
-            continue
-
-        if pred in ("is_clean", "is_filled", "is_powered_on", "is_powered_off") and args:
-            target = args[0]
-            if lit.negated:
-                ignored_literals.append(lit_str)
-                continue
-            agent_id = get_agent_for_literal(lit, target)
-            add_action(agent_id, f"Navigate[{target}]")
-            action_map = {
-                "is_clean": "Clean",
-                "is_filled": "Fill",
-                "is_powered_on": "PowerOn",
-                "is_powered_off": "PowerOff",
-            }
-            add_action(agent_id, f"{action_map[pred]}[{target}]")
-            planned_literals.append(lit_str)
-            continue
-
-        ignored_literals.append(lit_str)
-
-    # Emit parallel trajectory by interleaving per-agent queues.
-    max_queue_len = max((len(q) for q in agent_action_queues.values()), default=0)
-    if max_queue_len <= 0:
-        trajectory = [wrap_parallel_step(num_agents, "agent_0", "Wait[]")]
-    else:
-        for turn_idx in range(max_queue_len):
-            step_actions: List[Dict[str, str]] = []
-            for i in range(max(1, num_agents)):
-                agent_id = f"agent_{i}"
-                queue = agent_action_queues.get(agent_id, [])
-                action = queue[turn_idx] if turn_idx < len(queue) else "Wait[]"
-                step_actions.append({"agent": agent_id, "action": action})
-            trajectory.append({"actions": step_actions})
-
-    # --- Append Communicate steps from FD epistemic compilation ---
-    comm_steps: List[Dict[str, Any]] = []
-    comm_notes: List[str] = []
     communication_derived = False
 
-    if has_epistemic_goal:
-        comm_result = _derive_communicate_steps(
-            task_data, scene_data, pddl_goal, num_agents
-        )
-        comm_steps = comm_result.get("steps", [])
-        comm_notes = comm_result.get("notes", [])
-        communication_derived = bool(comm_steps)
+    def require_type(name: str, expected: str, step: str) -> None:
+        actual = object_types.get(name)
+        if actual != expected:
+            raise RuntimeError(
+                f"Planner step '{step}' uses '{name}' as {expected}, "
+                f"but problem declares it as {actual or 'unknown'}."
+            )
 
-    if comm_steps:
-        trajectory.extend(comm_steps)
+    def require_movable_object(name: str, step: str) -> None:
+        actual = object_types.get(name)
+        if actual != "object":
+            raise RuntimeError(
+                f"Planner step '{step}' tries to move '{name}', "
+                f"but runtime only supports movable objects (declared type: {actual or 'unknown'})."
+            )
+
+    for step in plan:
+        if _INFORM_RE.search(step):
+            inform = parse_fd_inform_actions([step])[0]
+            trajectory.append(
+                _build_communicate_action(
+                    inform,
+                    num_agents,
+                    leaf_facts,
+                    nested_k_map,
+                )
+            )
+            communication_derived = True
+            continue
+
+        step_name, args = _parse_plan_step(step)
+        if step_name.startswith("observe_knows_"):
+            continue
+
+        if step_name == "open" and len(args) == 3:
+            require_type(args[0], "agent", step)
+            require_type(args[1], "furniture", step)
+            require_type(args[2], "room", step)
+            append_runtime_step(
+                trajectory,
+                num_agents,
+                args[0],
+                f"Open[{args[1]}]",
+                navigate_target=args[1],
+            )
+            continue
+        if step_name == "close" and len(args) == 3:
+            require_type(args[0], "agent", step)
+            require_type(args[1], "furniture", step)
+            require_type(args[2], "room", step)
+            append_runtime_step(
+                trajectory,
+                num_agents,
+                args[0],
+                f"Close[{args[1]}]",
+                navigate_target=args[1],
+            )
+            continue
+        if step_name == "navigate" and len(args) == 2:
+            require_type(args[0], "agent", step)
+            require_type(args[1], "room", step)
+            trajectory.append(wrap_parallel_step(num_agents, args[0], f"Navigate[{args[1]}]"))
+            continue
+        if step_name == "pick" and len(args) == 3:
+            require_type(args[0], "agent", step)
+            require_movable_object(args[1], step)
+            require_type(args[2], "room", step)
+            append_runtime_step(
+                trajectory,
+                num_agents,
+                args[0],
+                f"Pick[{args[1]}]",
+                navigate_target=args[1],
+            )
+            continue
+        if step_name == "place" and len(args) == 4:
+            require_type(args[0], "agent", step)
+            require_movable_object(args[1], step)
+            require_type(args[2], "furniture", step)
+            require_type(args[3], "room", step)
+            relation = relation_by_pair.get((args[1], args[2]), "on")
+            action = f"Place[{args[1]}, {relation}, {args[2]}, None, None]"
+            append_runtime_step(
+                trajectory,
+                num_agents,
+                args[0],
+                action,
+                navigate_target=args[2],
+            )
+            continue
+        if step_name == "use_item" and len(args) == 4:
+            require_type(args[0], "agent", step)
+            require_type(args[1], "item", step)
+            require_type(args[2], "furniture", step)
+            require_type(args[3], "room", step)
+            append_runtime_step(
+                trajectory,
+                num_agents,
+                args[0],
+                f"UseItem[{args[1]}, {args[2]}]",
+                navigate_target=args[2],
+            )
+            continue
+        if step_name == "wait" and len(args) == 1:
+            require_type(args[0], "agent", step)
+            trajectory.append(wrap_parallel_step(num_agents, args[0], "Wait[]"))
+            continue
+
+        raise RuntimeError(
+            f"Unsupported planner step '{step}'. Cannot translate to golden trajectory."
+        )
+
+    if not trajectory:
+        trajectory = [wrap_parallel_step(num_agents, "agent_0", "Wait[]")]
+
+    planned_literals = sorted({
+        node.to_pddl()
+        for node in problem.goal.flatten()
+        if isinstance(node, Literal)
+    }) if problem.goal else []
 
     planner_notes = [
-        "Deterministic rule-based planner generated trajectory from problem_pddl.",
-        "Epistemic wrappers are unwrapped to world-state literals.",
+        "Deterministic golden trajectory derived from strict Fast Downward plan.",
+        f"Translated {len(plan)} planner step(s) into {len(trajectory)} golden step(s).",
     ]
     if communication_derived:
+        planner_notes.append("Communicate steps were derived directly from epistemic inform actions.")
+    if solver_result.belief_depth:
         planner_notes.append(
-            f"Appended {len(comm_steps)} Communicate step(s) from FD epistemic plan."
+            f"Strict solver proved belief depth {solver_result.belief_depth}."
         )
-    planner_notes.extend(comm_notes)
 
     return {
         "trajectory": trajectory,
         "planned_literals": planned_literals,
-        "ignored_literals": ignored_literals,
+        "ignored_literals": [],
         "planner_notes": planner_notes,
         "communication_derived": communication_derived,
     }
@@ -910,8 +817,8 @@ def regenerate_golden_trajectory(
     communication_derived = plan_result.get("communication_derived", False)
 
     metadata.update({
-        "planner": "deterministic_rule_based",
-        "planner_version": "v4_strict_no_fallback",
+        "planner": "strict_fd_translator",
+        "planner_version": "v5_solver_backed",
         "source": source,
         "spec_hash": spec_hash,
         "trajectory_hash": trajectory_hash,
