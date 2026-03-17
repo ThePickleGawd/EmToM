@@ -566,6 +566,8 @@ class Judge:
 
     # Default council models
     DEFAULT_MODELS = ["kimi-k2.5", "gpt-5.2"]
+    MODEL_REQUEST_TIMEOUT_S = 45
+    COUNCIL_WALL_TIMEOUT_S = 180
 
     def __init__(
         self,
@@ -771,18 +773,24 @@ class Judge:
                     print(f"[Judge] Loaded rollout: success={rollout.success}, {rollout.steps} steps")
 
         # Evaluate with all models in parallel
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 
         if self.verbose:
             print(f"[Judge] Evaluating with {len(self.models)} models in parallel: {', '.join(self.models)}")
 
         judgments: Dict[str, Judgment] = {}
-        with ThreadPoolExecutor(max_workers=len(self.models)) as executor:
-            future_to_model = {
-                executor.submit(self._evaluate_single, task_dict, model, scene_data, rollout): model
-                for model in self.models
-            }
-            for future in as_completed(future_to_model):
+        executor = ThreadPoolExecutor(max_workers=len(self.models))
+        future_to_model = {
+            executor.submit(self._evaluate_single, task_dict, model, scene_data, rollout): model
+            for model in self.models
+        }
+        try:
+            done, not_done = wait(
+                set(future_to_model.keys()),
+                timeout=self.COUNCIL_WALL_TIMEOUT_S,
+                return_when=ALL_COMPLETED,
+            )
+            for future in done:
                 model = future_to_model[future]
                 try:
                     judgments[model] = future.result()
@@ -790,7 +798,25 @@ class Judge:
                         print(f"[Judge] {model} completed")
                 except Exception as e:
                     print(f"[Judge] {model} failed: {e}")
-                    judgments[model] = self._failed_judgment(f"[{model}] Error: {e}")
+                    judgments[model] = self._failed_judgment(
+                        f"[{model}] Error: {e}",
+                        category=task_dict.get("category", "cooperative"),
+                    )
+
+            for future in not_done:
+                model = future_to_model[future]
+                reason = (
+                    f"[{model}] Timed out after {self.COUNCIL_WALL_TIMEOUT_S}s "
+                    "waiting for judge model response"
+                )
+                print(f"[Judge] {reason}")
+                judgments[model] = self._failed_judgment(
+                    reason,
+                    category=task_dict.get("category", "cooperative"),
+                )
+                future.cancel()
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         # Check novelty if diversity tracker is available
         if self.diversity_tracker:
@@ -897,7 +923,10 @@ The user specifically requested:
         max_retries = 8
         for attempt in range(1, max_retries + 1):
             try:
-                response = llm.generate(prompt)
+                response = llm.generate(
+                    prompt,
+                    request_timeout=self.MODEL_REQUEST_TIMEOUT_S,
+                )
                 break
             except Exception as exc:
                 if attempt >= max_retries:

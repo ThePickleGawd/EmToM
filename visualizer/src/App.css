@@ -926,6 +926,13 @@ body {
   letter-spacing: -0.01em;
 }
 
+.campaign-section-subtitle {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 6px;
+}
+
 /* ─── Campaign table ─── */
 
 .campaign-table-wrap {
@@ -980,8 +987,21 @@ body {
 .campaign-tasks-cell {
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
-  color: var(--text-secondary);
   white-space: nowrap;
+}
+
+.campaign-tasks-done {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.campaign-tasks-sep {
+  color: var(--text-muted);
+  margin: 0 1px;
+}
+
+.campaign-tasks-total {
+  color: var(--text-muted);
 }
 
 .campaign-na {

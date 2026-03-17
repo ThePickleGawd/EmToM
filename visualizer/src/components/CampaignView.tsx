@@ -268,7 +268,7 @@ function LeaderboardPanel({
     <div className="campaign-panel">
       {/* Solo results matrix */}
       <div className="campaign-section">
-        <h3 className="campaign-section-title">Solo Pass Rates</h3>
+        <h3 className="campaign-section-title">Solo Pass Rates <span className="campaign-section-subtitle">cooperative + mixed</span></h3>
         {hasSoloData ? (
           <div className="campaign-table-wrap">
             <table className="campaign-table">
@@ -276,8 +276,8 @@ function LeaderboardPanel({
                 <tr>
                   <th>Model</th>
                   <th>Mode</th>
-                  <th>Tasks</th>
-                  <th>Overall</th>
+                  <th>Evaluated</th>
+                  <th>Pass Rate</th>
                   {["cooperative", "mixed"].map((cat) => (
                     <th key={cat}>{cat}</th>
                   ))}
@@ -301,7 +301,9 @@ function LeaderboardPanel({
                         {entry ? (
                           <>
                             <td className="campaign-tasks-cell">
-                              {entry.overall?.passed ?? 0}/{entry.overall?.total ?? 0}
+                              <span className="campaign-tasks-done">{entry.overall?.total ?? 0}</span>
+                              <span className="campaign-tasks-sep">/</span>
+                              <span className="campaign-tasks-total">{campaign.task_total - (campaign.task_counts?.competitive ?? 0)}</span>
                             </td>
                             <td className="campaign-rate-cell">
                               <RateBar rate={entry.overall?.pass_rate ?? entry.pass_rate ?? 0} />
@@ -376,7 +378,8 @@ function LeaderboardPanel({
                     </span>
                   </div>
                   {group.modes.map((entry) => {
-                    const total = (entry.combined?.model_a_wins ?? 0) + (entry.combined?.model_b_wins ?? 0) + (entry.combined?.draws ?? 0);
+                    const evaluated = (entry.combined?.model_a_wins ?? 0) + (entry.combined?.model_b_wins ?? 0) + (entry.combined?.draws ?? 0);
+                    const compTotal = campaign.task_counts?.competitive ?? 0;
                     return (
                     <div key={entry.mode} className="campaign-matchup-mode-row">
                       <span className="campaign-matchup-mode">{entry.mode}</span>
@@ -393,7 +396,11 @@ function LeaderboardPanel({
                         <span>{entry.combined?.model_a_wins ?? 0}W</span>
                         <span>{entry.combined?.draws ?? 0}D</span>
                         <span>{entry.combined?.model_b_wins ?? 0}W</span>
-                        <span className="campaign-matchup-total">{total} tasks</span>
+                        <span className="campaign-matchup-total">
+                          <span className="campaign-tasks-done">{evaluated}</span>
+                          <span className="campaign-tasks-sep">/</span>
+                          <span className="campaign-tasks-total">{compTotal}</span>
+                        </span>
                       </div>
                     </div>
                     );
