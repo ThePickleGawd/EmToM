@@ -186,12 +186,14 @@ class OpenAIChat(BaseLLM):
             text_response = self.client.chat.completions.create(
                 model=params["model"],
                 messages=messages,
+                timeout=request_timeout,
             )
         else:
             text_response = self.client.chat.completions.create(
                 model=params["model"],
                 messages=messages,
                 temperature=temperature,
+                timeout=request_timeout,
             )
         text_response = text_response.choices[0].message.content
         self.response = text_response

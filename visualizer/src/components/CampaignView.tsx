@@ -14,7 +14,15 @@ interface Props {
   onImageClick: (src: string) => void;
 }
 
-type Panel = "leaderboard" | "run-detail" | "task-detail";
+type Panel = "leaderboard" | "model-detail" | "run-detail" | "task-detail";
+
+interface ModelDetailSelection {
+  model: string;
+  mode: string;
+}
+
+type SummaryCache = Record<string, CampaignBenchmarkSummary | null | undefined>;
+type TaskParentPanel = "model-detail" | "run-detail";
 
 const MODEL_COLORS: Record<string, string> = {
   "gpt-5.2": "#10b981",
@@ -52,18 +60,24 @@ export default function CampaignView({ onImageClick }: Props) {
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [leaderboard, setLeaderboard] = useState<Leaderboard | null>(null);
   const [panel, setPanel] = useState<Panel>("leaderboard");
+  const [selectedModelDetail, setSelectedModelDetail] =
+    useState<ModelDetailSelection | null>(null);
+  const [taskParentPanel, setTaskParentPanel] =
+    useState<TaskParentPanel>("run-detail");
   const [selectedRunKey, setSelectedRunKey] = useState("");
   const [runSummary, setRunSummary] = useState<CampaignBenchmarkSummary | null>(
     null,
   );
   const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [summaryCache, setSummaryCache] = useState<SummaryCache>({});
   const [downloadingRunKey, setDownloadingRunKey] = useState<string | null>(
     null,
   );
   const [downloadingTaskKey, setDownloadingTaskKey] = useState<string | null>(
     null,
   );
+  const [downloadingEverything, setDownloadingEverything] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -78,35 +92,73 @@ export default function CampaignView({ onImageClick }: Props) {
 
   const fetchCampaignTask = useCallback(
     async (runKey: string, taskId: string): Promise<TaskDetail> => {
-      const response = await fetch(`/data/campaign-task/${runKey}/${taskId}.json`);
+      const response = await fetch(
+        `/data/campaign-task/${runKey}/${taskId}.json`,
+      );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response.json();
     },
     [],
   );
 
+  const loadRunSummary = useCallback(
+    async (runKey: string): Promise<CampaignBenchmarkSummary | null> => {
+      if (summaryCache[runKey] !== undefined) {
+        return summaryCache[runKey] ?? null;
+      }
+      try {
+        const response = await fetch(`/data/campaign-run/${runKey}.json`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data: CampaignBenchmarkSummary = await response.json();
+        setSummaryCache((prev) => ({ ...prev, [runKey]: data }));
+        return data;
+      } catch (error) {
+        console.error("Failed to load run summary", runKey, error);
+        setSummaryCache((prev) => ({ ...prev, [runKey]: null }));
+        return null;
+      }
+    },
+    [summaryCache],
+  );
+
   const openRun = useCallback((runKey: string) => {
     setSelectedRunKey(runKey);
-    setRunSummary(null);
+    setSelectedModelDetail(null);
     setPanel("run-detail");
-    fetch(`/data/campaign-run/${runKey}.json`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(setRunSummary)
-      .catch(() => setRunSummary(null));
-  }, []);
+    setRunSummary(summaryCache[runKey] ?? null);
+    loadRunSummary(runKey).then(setRunSummary);
+  }, [loadRunSummary, summaryCache]);
 
   const openTask = useCallback(
-    (taskId: string) => {
+    (runKey: string, taskId: string, parentPanel: TaskParentPanel) => {
+      setSelectedRunKey(runKey);
+      setTaskParentPanel(parentPanel);
       setTaskDetail(null);
       setPanel("task-detail");
-      fetchCampaignTask(selectedRunKey, taskId)
+      fetchCampaignTask(runKey, taskId)
         .then(setTaskDetail)
         .catch(() => setTaskDetail(null));
     },
-    [fetchCampaignTask, selectedRunKey],
+    [fetchCampaignTask],
+  );
+
+  const openModelDetail = useCallback(
+    async (model: string, mode: string) => {
+      if (!campaign) return;
+      setSelectedModelDetail({ model, mode });
+      setPanel("model-detail");
+      const matchingRunKeys = Object.entries(campaign.runs)
+        .filter(
+          ([, run]) =>
+            run.type === "solo" &&
+            run.model === model &&
+            run.mode === mode &&
+            run.status === "complete",
+        )
+        .map(([runKey]) => runKey);
+      await Promise.all(matchingRunKeys.map((runKey) => loadRunSummary(runKey)));
+    },
+    [campaign, loadRunSummary],
   );
 
   const downloadTask = useCallback(
@@ -157,6 +209,47 @@ export default function CampaignView({ onImageClick }: Props) {
     [fetchCampaignTask],
   );
 
+  const downloadEverything = useCallback(async () => {
+    if (!campaign) return;
+    setDownloadingEverything(true);
+    try {
+      const completedRuns = Object.entries(campaign.runs).filter(
+        ([, run]) => run.status === "complete",
+      );
+      const runs = await Promise.all(
+        completedRuns.map(async ([runKey, runDef]) => {
+          const summary = await loadRunSummary(runKey);
+          const tasks = summary
+            ? await Promise.all(
+                summary.results.map(async (result) => ({
+                  task_id: result.task_id,
+                  task: await fetchCampaignTask(runKey, result.task_id),
+                })),
+              )
+            : [];
+          return {
+            run_key: runKey,
+            run: runDef,
+            summary,
+            tasks,
+          };
+        }),
+      );
+      downloadJson(
+        {
+          campaign,
+          leaderboard,
+          runs,
+        },
+        "emtom-campaign-everything.json",
+      );
+    } catch (error) {
+      console.error("Failed to download full campaign bundle", error);
+    } finally {
+      setDownloadingEverything(false);
+    }
+  }, [campaign, fetchCampaignTask, leaderboard, loadRunSummary]);
+
   if (loading) {
     return (
       <div className="loading">
@@ -197,6 +290,14 @@ export default function CampaignView({ onImageClick }: Props) {
         >
           Leaderboard
         </button>
+        {panel === "model-detail" && selectedModelDetail && (
+          <>
+            <span className="campaign-nav-sep">/</span>
+            <span className="campaign-nav-current">
+              {selectedModelDetail.model} / {selectedModelDetail.mode}
+            </span>
+          </>
+        )}
         {panel === "run-detail" && (
           <>
             <span className="campaign-nav-sep">/</span>
@@ -208,9 +309,13 @@ export default function CampaignView({ onImageClick }: Props) {
             <span className="campaign-nav-sep">/</span>
             <button
               className="campaign-nav-btn"
-              onClick={() => setPanel("run-detail")}
+              onClick={() =>
+                setPanel(taskParentPanel)
+              }
             >
-              {selectedRunKey}
+              {taskParentPanel === "model-detail" && selectedModelDetail
+                ? `${selectedModelDetail.model} / ${selectedModelDetail.mode}`
+                : selectedRunKey}
             </button>
             <span className="campaign-nav-sep">/</span>
             <span className="campaign-nav-current">Task</span>
@@ -220,6 +325,19 @@ export default function CampaignView({ onImageClick }: Props) {
 
       {/* Campaign header stats */}
       <div className="campaign-header">
+        <div className="campaign-header-actions">
+          <button
+            className="download-btn campaign-download-all-btn"
+            disabled={downloadingEverything}
+            onClick={downloadEverything}
+            title="Download every completed campaign trajectory bundle"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span>
+              {downloadingEverything ? "Downloading..." : "Download Everything"}
+            </span>
+          </button>
+        </div>
         <div className="campaign-stat-row">
           <div className="campaign-stat">
             <span className="campaign-stat-value">{campaign.models.length}</span>
@@ -259,6 +377,17 @@ export default function CampaignView({ onImageClick }: Props) {
           soloRuns={soloRuns}
           matchupRuns={matchupRuns}
           onRunClick={openRun}
+          onModelClick={openModelDetail}
+        />
+      )}
+      {panel === "model-detail" && selectedModelDetail && (
+        <ModelDetailPanel
+          campaign={campaign}
+          selection={selectedModelDetail}
+          summaryCache={summaryCache}
+          onTaskClick={(runKey, taskId) => openTask(runKey, taskId, "model-detail")}
+          onTaskDownload={downloadTask}
+          downloadingTaskKey={downloadingTaskKey}
         />
       )}
       {panel === "run-detail" && (
@@ -266,7 +395,7 @@ export default function CampaignView({ onImageClick }: Props) {
           runKey={selectedRunKey}
           runDef={campaign.runs[selectedRunKey]}
           summary={runSummary}
-          onTaskClick={openTask}
+          onTaskClick={(taskId) => openTask(selectedRunKey, taskId, "run-detail")}
           onTaskDownload={downloadTask}
           onDownloadAll={downloadRunTasks}
           downloadingRunKey={downloadingRunKey}
@@ -297,12 +426,14 @@ function LeaderboardPanel({
   soloRuns,
   matchupRuns,
   onRunClick,
+  onModelClick,
 }: {
   leaderboard: Leaderboard | null;
   campaign: Campaign;
   soloRuns: [string, any][];
   matchupRuns: [string, any][];
   onRunClick: (k: string) => void;
+  onModelClick: (model: string, mode: string) => void;
 }) {
   const models = campaign.models;
   const modes = campaign.modes;
@@ -338,11 +469,16 @@ function LeaderboardPanel({
                     return (
                       <tr key={key}>
                         <td>
-                          <span
-                            className="campaign-model-dot"
-                            style={{ background: modelColor(model) }}
-                          />
-                          {model}
+                          <button
+                            className="campaign-model-link"
+                            onClick={() => onModelClick(model, mode)}
+                          >
+                            <span
+                              className="campaign-model-dot"
+                              style={{ background: modelColor(model) }}
+                            />
+                            {model}
+                          </button>
                         </td>
                         <td className="campaign-mode-cell">{mode}</td>
                         {entry ? (
@@ -565,6 +701,122 @@ function MatchupPreviewGrid({
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function ModelDetailPanel({
+  campaign,
+  selection,
+  summaryCache,
+  onTaskClick,
+  onTaskDownload,
+  downloadingTaskKey,
+}: {
+  campaign: Campaign;
+  selection: ModelDetailSelection;
+  summaryCache: SummaryCache;
+  onTaskClick: (runKey: string, taskId: string) => void;
+  onTaskDownload: (runKey: string, taskId: string) => void;
+  downloadingTaskKey: string | null;
+}) {
+  const relevantRuns = Object.entries(campaign.runs).filter(
+    ([, run]) =>
+      run.type === "solo" &&
+      run.model === selection.model &&
+      run.mode === selection.mode,
+  );
+  const hasPendingSummaries = relevantRuns.some(
+    ([runKey, runDef]) => runDef.status === "complete" && summaryCache[runKey] === undefined,
+  );
+
+  const rows = relevantRuns.flatMap(([runKey, runDef]) => {
+    const summary = summaryCache[runKey];
+    if (!summary) return [];
+    return summary.results.map((result) => ({
+      runKey,
+      runDef,
+      result,
+    }));
+  });
+
+  const groupedRows = rows.reduce<Record<string, typeof rows>>((acc, row) => {
+    const category = row.result.category || "unknown";
+    if (!acc[category]) acc[category] = [];
+    acc[category].push(row);
+    return acc;
+  }, {});
+
+  return (
+    <div className="campaign-panel">
+      <div className="campaign-run-detail-header">
+        <h3 className="campaign-run-detail-title">
+          <span style={{ color: modelColor(selection.model) }}>
+            {selection.model}
+          </span>
+          <span className="campaign-run-detail-sep">/</span>
+          {selection.mode}
+        </h3>
+        <div className="campaign-run-detail-status">
+          {rows.length} task{rows.length === 1 ? "" : "s"}
+        </div>
+      </div>
+
+      {hasPendingSummaries ? (
+        <div className="loading">
+          <div className="loading-spinner" />
+          Loading model tasks...
+        </div>
+      ) : rows.length > 0 ? (
+        Object.entries(groupedRows)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([category, categoryRows]) => (
+            <div key={category} className="campaign-section">
+              <h3 className="campaign-section-title">
+                <span className={`category-badge ${category}`}>{category}</span>
+                <span className="campaign-section-subtitle">
+                  {categoryRows.length} task
+                  {categoryRows.length === 1 ? "" : "s"}
+                </span>
+              </h3>
+              <div className="campaign-task-list">
+                {categoryRows.map(({ runKey, result }) => (
+                  <div key={`${runKey}:${result.task_id}`} className="campaign-task-row">
+                    <button
+                      className="campaign-task-row-main"
+                      onClick={() => onTaskClick(runKey, result.task_id)}
+                    >
+                      <span
+                        className={`task-status ${result.success ? "success" : "failure"}`}
+                      />
+                      <span className="campaign-task-row-title">{result.title}</span>
+                      <span className="campaign-task-row-meta">
+                        {result.turns}t · {result.steps}s
+                      </span>
+                      {result.evaluation && (
+                        <span className="campaign-task-row-progress">
+                          {(result.evaluation.percent_complete * 100).toFixed(0)}%
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      className="download-btn campaign-task-row-download"
+                      title="Download this trajectory JSON"
+                      disabled={downloadingTaskKey === `${runKey}:${result.task_id}`}
+                      onClick={() => onTaskDownload(runKey, result.task_id)}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))
+      ) : (
+        <div className="campaign-pending-msg">
+          No completed tasks are available for this model/mode yet.
+        </div>
+      )}
     </div>
   );
 }

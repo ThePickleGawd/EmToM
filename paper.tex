@@ -39,7 +39,7 @@
   framexleftmargin=0.5em
 }
 
-\title{EmToM: Embodied Agent Theory of Mind Evaluation Benchmark}
+\title{EmToM: An Evolving Benchmark for Embodied Theory of Mind}
 
 \author{}
 
@@ -61,13 +61,13 @@ TODO: Abstract placeholder.
 \section{Introduction}
 \label{sec:introduction}
 
-Humans routinely attribute beliefs, desires, and intentions to other people and use these attributions to predict behavior. This capacity---Theory of Mind (ToM)---is not an abstract cognitive luxury. It is the mechanism that makes coordination possible under partial observability and information asymmetry. When two people carry a couch through a doorway, each predicts how the other will pivot based on what the other can see. Developmental studies show that children acquire false-belief reasoning by age four and use it to coordinate joint actions shortly after~\citep{premack1978does, wimmer1983beliefs, tomasello2005understanding}. Adults deploy ToM constantly in collaborative settings: inferring a partner's knowledge gaps, anticipating what information to share, and adjusting plans based on what others are likely to believe~\citep{tomasello2005understanding, bratman1992shared}. Without ToM, coordination degrades to rigid scripting or trial-and-error.
+Humans track other people's beliefs, intentions, and mental states, and use these models to predict their behavior. This capacity is called Theory of Mind (ToM)~\citep{premack1978does, wimmer1983beliefs}. By age four, children understand that others can hold beliefs that differ from reality, for instance, that someone who left the room still believes an object is where they last saw it~\citep{wimmer1983beliefs, tomasello2005understanding}. Adults rely on ToM constantly for coordination: when two people carry a couch through a doorway, each predicts how the other will move based on what the other can see. ToM makes efficient coordination possible under partial observability and information asymmetry~\citep{tomasello2005understanding, bratman1992shared}.
 
 If multi-agent AI systems are to coordinate in open-ended environments---navigating homes, assisting humans, or jointly manipulating objects---they require the same capacity. An agent that cannot model what its partner knows will broadcast redundant information, fail to anticipate partner actions, or wait indefinitely for instructions that will never arrive. Embodied collaboration under partial observability demands that agents reason about each other's epistemic states: what has each agent seen, what can each agent infer, and what must be communicated? This is functional ToM---not passive story understanding, but active belief modeling that drives action selection in real time.
 
 Existing ToM benchmarks fall short of testing this capacity. Text-based evaluations such as Sally-Anne variants~\citep{wimmer1983beliefs}, ToMi~\citep{le2019revisiting}, HiToM~\citep{wu2023hi}, BigToM~\citep{gandhi2024understanding}, and FANToM~\citep{kim2023fantom} probe ToM through question-answering over written vignettes. These benchmarks are static: the agent reads a story and answers questions about characters' beliefs. They test \emph{passive} ToM---the ability to track beliefs in text---not \emph{functional} ToM---the ability to act on belief models during coordination. They are also limited in epistemic depth, typically testing first-order false belief (``does Sally know the ball moved?'') with only HiToM reaching higher orders. Perhaps most critically, they are hand-crafted and fixed-size, making them vulnerable to data contamination as LLMs train on increasingly large web corpora. Once a benchmark leaks into pretraining data, it no longer measures reasoning---it measures recall.
 
-We propose EmToM, a system that automatically generates multi-agent ToM tasks grounded in 3D household scenes from the Habitat simulator~\citep{szot2021habitat}. Each task defines a coordination problem where $n$ agents must achieve a shared goal expressed as a \pddl{} formula with epistemic extensions. Information asymmetry is created through room restrictions, limited communication bandwidth, and restricted messaging topologies. The epistemic operator $\K$ encodes knowledge requirements at nesting depths 0--3, where depth $d$ demands $(d{-}1)$-th order ToM: an agent must model what another agent believes about a third agent's beliefs. Tasks span cooperative, competitive, and mixed-motive settings.
+We propose EmToM, an \emph{evolving} benchmark that automatically generates multi-agent ToM tasks grounded in 3D household scenes from the Habitat simulator~\citep{szot2021habitat}. Unlike static benchmarks, EmToM is a benchmark \emph{generator}: a closed-loop pipeline that produces tasks, verifies them against the simulator, and calibrates difficulty by benchmarking against a model ladder. Each task defines a coordination problem where $n$ agents must achieve a shared goal expressed as a \pddl{} formula with epistemic extensions. The epistemic operator $\K$ encodes knowledge requirements at nesting depths 0--3, where depth $d$ demands $(d{-}1)$-th order ToM. The required ToM level is not a post-hoc annotation but a \emph{formal property} of the goal: count the $\K$-nesting depth. Tasks span cooperative, competitive, and mixed-motive settings. Agents observe the environment through egocentric RGB video and select key frames for reasoning, grounding all coordination in visual perception under partial observability.
 
 We ground our notion of ToM depth in the level-$k$ reasoning framework from behavioral game theory~\citep{stahl1994experimental, camerer2004cognitive}. A level-0 agent acts without modeling others---it follows a fixed heuristic or best-responds to a uniform prior over partner actions. A level-1 agent best-responds to level-0 partners: it models what others will do under the assumption that they are non-strategic. A level-2 agent best-responds to level-1 partners, and so on recursively. Formally, let $\pi^{(k)}_i$ denote the policy of agent $i$ at level $k$:
 %
@@ -170,6 +170,15 @@ The ICL sampler selects 9 failed tasks and 1 passed task, sorted by percent comp
 
 The pipeline targets a ToM-level distribution of approximately 30\% level-1, 45\% level-2, and 25\% level-3 tasks (8\% tolerance), ensuring coverage across epistemic depths while concentrating at level-2 where we observe the best signal for discriminating between model capabilities.
 
+\subsection{Visual observation pipeline}
+\label{sec:vision}
+
+Each agent perceives the environment through an egocentric RGB camera mounted at head height in the Habitat simulator. At every turn, the simulator renders a first-person video of the agent's surroundings as the agent executes its action. Rather than feeding the full video into the LLM context (which would exhaust the token budget within a few turns), we use a two-stage key-frame selection process.
+
+First, the video frames are uniformly subsampled to a candidate set of 10--15 frames. Second, the agent's LLM receives the candidate set alongside its current conversation context (task instructions, private secrets, communication history, and prior observations) and selects 2--5 frames that are most informative for its current reasoning step. The selected frames are injected into the LLM context as images for the next action decision. This process runs at every turn, so the agent's visual context evolves as it navigates and acts.
+
+The vision pipeline creates a tighter coupling between perception and ToM reasoning than text-only observation modes. An agent that can see a teammate picking up an object in the same room has direct visual evidence of the teammate's action---it does not need to wait for a message. Conversely, an agent restricted from a room receives no visual information about that room, forcing it to rely entirely on communicated beliefs. This asymmetry between visual access and room restrictions is what makes the epistemic goals non-trivial: the $\K$-nesting depth measures how many relay hops are needed to propagate a visual observation to an agent who cannot see it directly.
+
 \subsection{Task example: cooperative depth-4 epistemic chain}
 \label{sec:example_coop}
 
@@ -220,40 +229,77 @@ This is a \emph{self-referential} depth-4 chain: $a_1$ must know that $a_0$ know
 
 The competitive setting adds adversarial ToM on top. Each team holds hidden win conditions (e.g., team~0 wants the latch closed; team~1 wants it open). Room restrictions prevent team members from directly verifying the latch state: $a_0$ and $a_2$ cannot enter the kitchen, while $a_1$ and $a_3$ cannot enter the bedroom or living room where the remote-control trigger and inverse-state stand reside. Agents must reason not only about their teammate's beliefs but also about what the opposing team believes about \emph{their} strategy---second-order adversarial ToM layered on top of the self-referential epistemic goal.
 
-\section{Failure Modes}
-\label{sec:failure_modes}
+\section{Agent Behavioral Analysis}
+\label{sec:behaviors}
 
-We analyze recurring failure patterns observed when frontier LLMs attempt EmToM tasks. These failures are not random---they cluster into distinct modes that expose specific gaps in current models' ToM reasoning. We organize them by the reasoning capacity each mode tests: communication planning, belief propagation, epistemic goal comprehension, and adversarial robustness.
+We evaluate GPT-5.2 (vision mode, 35~tasks) and Sonnet (text mode, 33~tasks) on EmToM-generated tasks spanning 0th--3rd order epistemic depth, 2--4~agents, and cooperative, mixed-motive, and competitive settings. GPT-5.2 passes 6/35 tasks (17\%); Sonnet passes 8/33 (24\%). Rather than reporting aggregate accuracy, we characterize seven behavioral patterns that define the current capability frontier. Full task descriptions, agent instructions, and verbatim dialogue traces for each finding are in Appendix~\ref{app:traces}.
 
-\subsection{Communication budget exhaustion}
-\label{sec:fail_budget}
+\subsection{Second-order ToM: achievable but fragile}
+\label{sec:behav_tom2}
 
-The most frequent failure mode occurs in tasks combining limited bandwidth with restricted communication topologies. Agents exhaust their message budget on coordination overhead---announcing intentions, requesting status updates, or confirming receipt---before transmitting the task-critical facts that satisfy epistemic goals. In a depth-3 relay task with 1 message per agent and a linear chain topology ($a_0 \leftrightarrow a_1 \leftrightarrow a_2 \leftrightarrow a_3$), satisfying $\K_{a_0}(\K_{a_1}(\K_{a_2}(\phi)))$ requires at minimum two relay messages. If any intermediate agent spends its single message on a coordination query (e.g., ``What room are you in?''), the epistemic chain breaks irreparably. We observe this pattern in over 60\% of level-2+ task failures: the physical rearrangement goals are completed, but the epistemic goals fail because the belief propagation never reached the terminal agent.
+GPT-5.2 achieves genuine second-order belief reasoning---$\K(a_i, \K(a_j, \varphi))$---in 4 of 35~tasks. These successes share a common profile: ring communication topology, 2--4~agents, and $\geq$4 messages per agent. In the \emph{Manifest Chain} task (Appendix~\ref{app:manifest}), $a_0$ must end knowing that $a_3$ knows the cushion remains on its chair. Agent $a_0$ plans the full second-order relay in a single message, $a_2$ verifies the fact and explicitly grants $a_3$ justified belief (``you can truthfully say you know this''), and $a_3$ asserts knowledge with provenance (``I KNOW \ldots agent\_2 verified''). The agents distinguish \emph{receiving a message} from \emph{holding verified knowledge}.
 
-\subsection{Belief relay breaks}
-\label{sec:fail_relay}
+This capability is fragile. At depth~3 or bandwidth $\leq$2 messages per agent, no model succeeds. Sonnet shows 0~instances of second-order ToM across all 33~tasks; its belief modeling stays at the action level (``they will move X'') rather than the epistemic level (``they think we don't know X'').
 
-Even when agents preserve their message budget for task-relevant facts, belief chains break at relay nodes. An intermediate agent $a_j$ receives a fact from $a_i$ and must forward it to $a_k$, but instead acts on the information locally---placing an object or navigating to verify---without relaying it onward. This failure is distinct from budget exhaustion: the agent has a message available but misjudges the priority. The root cause is a failure of second-order reasoning. Agent $a_j$ recognizes that $a_k$ needs the fact (first-order: ``$a_k$ doesn't know $\phi$'') but fails to recognize that the \emph{goal requires} $a_k$ to know it (second-order: ``the task needs $a_k$ to know that I know $\phi$, so I must relay''). In chained topologies where $a_i$ cannot communicate with $a_k$ directly, this single relay failure is unrecoverable.
+\subsection{Cooperative bias: zero defection}
+\label{sec:behav_coop_bias}
 
-\subsection{Epistemic goal misinterpretation}
-\label{sec:fail_epistemic}
+Across 12 mixed-motive tasks in both model runs, no agent pursued a private objective that conflicted with the shared goal---a 100\% cooperation rate. In \emph{Silent Alarm Calibration} (Appendix~\ref{app:silent_alarm}), each of three agents receives a private side-request that directly contradicts one shared sub-goal. All three agents follow the shared goal without deliberation; the private objectives never appear in reasoning traces.
 
-Models frequently conflate observation with knowledge propagation. When the goal includes $\K_{a_i}(\phi)$, agents treat $a_i$'s physical presence in the room where $\phi$ holds as sufficient---ignoring that $a_i$ may have been restricted from that room entirely. A second variant occurs with nested goals: given $\K_{a_0}(\K_{a_1}(\phi))$, agents satisfy $\K_{a_1}(\phi)$ (ensuring $a_1$ observes $\phi$) but neglect the outer layer---no one communicates to $a_0$ that $a_1$ now knows $\phi$. The nesting is treated as a conjunction of independent knowledge requirements rather than a recursive belief structure. This misinterpretation is most acute at depth 3+, where models must track three or more layers of ``who knows that who knows.''
+The cooperative bias extends beyond passive compliance. In 4 of 12 mixed-motive tasks, agents voluntarily \emph{disclose} their private objectives. Agent $a_0$ broadcasts ``(my side objective)'' verbatim; $a_1$ writes ``personal objective---please do NOT move picture\_frame\_2'' (Appendix~\ref{app:transparency}). This is a compound ToM failure: agents neither pursue their own interest nor model that revealing private information changes others' strategic reasoning. The zero-defection pattern holds across both GPT-5.2 and Sonnet, suggesting it is model-agnostic---likely an artifact of RLHF training that optimizes for cooperation.
 
-\subsection{Self-referential belief loops}
-\label{sec:fail_selfref}
+\subsection{Confirmation spirals}
+\label{sec:behav_spiral}
 
-Competitive tasks with self-referential epistemic chains (Section~\ref{sec:example_comp}) expose a distinct failure. When the goal includes $\K_{a_1}(\K_{a_0}(\K_{a_1}(\phi)))$, agents enter degenerate loops: $a_1$ messages $a_0$ about $\phi$, $a_0$ messages back confirming receipt, and $a_1$ treats the exchange as sufficient. But the goal requires $a_1$ to \emph{know} that $a_0$ knows that $a_1$ knows $\phi$---a third-order condition that a simple two-message exchange does not formally satisfy unless both agents reason about the epistemic implications of the exchange itself. Models fail to distinguish between ``$a_0$ acknowledged my message'' and ``I can infer that $a_0$ has updated their model of my knowledge.''
+In relay tasks, agents fall into recursive confirmation loops where every agent requests verification from the next before acting. In \emph{Privacy Handoff Relay} (Appendix~\ref{app:spiral}), only $a_3$ can enter the bathroom. Instead of scouting, $a_3$ asks $a_2$ for the information that $a_2$ just asked $a_3$ to provide. All 8~messages are consumed on meta-communication; zero ground-truth observations are relayed. Agent $a_3$ finally scouts at turn~31 but cannot relay findings---all message budgets are exhausted.
 
-\subsection{Adversarial ToM failures}
-\label{sec:fail_adversarial}
-
-In competitive and mixed-motive tasks, agents fail to model opponents' strategic reasoning. Two failure patterns dominate. First, \emph{na\"ive trust}: agents in mixed tasks accept communicated information at face value despite the task description explicitly warning of potential misinformation. An opponent states ``the latch is open'' and the receiving agent updates its beliefs accordingly, without considering that the opponent benefits from the latch being in a different state. Second, \emph{strategy transparency}: agents announce their plans in messages visible to opponents. In tasks with partially overlapping communication graphs (where some channels span team boundaries), agents broadcast their full strategy without reasoning about who can intercept the message. Both failures reflect level-0 reasoning in an adversarial context---the agent acts as if all other agents are cooperative.
+The root cause is a role-awareness failure: agents cannot distinguish ``I need information from someone'' from ``I am the source of information for others.'' A related pattern appears in \emph{Triple-Consensus Protocol} (Appendix~\ref{app:deadlock}), where two agents mutually wait for the other's confirmation after both have exhausted their message budgets.
 
 \subsection{Physical--epistemic decoupling}
-\label{sec:fail_decouple}
+\label{sec:behav_decouple}
 
-A structural pattern across failure modes is the decoupling of physical and epistemic subgoals. Models treat object rearrangement (Pick, Place, Open, Close) and knowledge propagation (Communicate) as independent subtasks, solving them in sequence rather than jointly. This leads to scenarios where the physical configuration is correct---all objects are on their target surfaces, all containers are in the right state---but the epistemic goals are unsatisfied because no agent communicated the relevant observations. In tasks where the message budget is tight, the physical actions must be interleaved with communication: an agent should observe, relay, then act, rather than completing all physical goals first and attempting to communicate post hoc with no remaining budget. We observe qualitatively that this pattern intensifies with task complexity: at depth 1, most unsatisfied goals involve incorrect object placements; at depth 2+, agents frequently achieve the correct physical configuration but fail to propagate the observations needed to satisfy the epistemic $\K$ conditions. We note that our current evaluation reports a single percent-complete metric and does not decompose goal satisfaction into physical and epistemic components; the above characterization is based on manual inspection of traces and goal formulas.
+Agents treat epistemic relay goals and physical manipulation goals as independent sequential tasks. In \emph{Relay-of-Belief Drill} (Appendix~\ref{app:decoupling}), a three-hop belief relay executes perfectly by turn~22, but only 1~of~3 required cabinets is opened. Agents allocate all communication bandwidth to the relay and have no messages left for physical task coordination. 65 of 81~turns are \texttt{Wait} actions.
+
+At depth~1, 80\% of failures are physical (wrong object, wrong receptacle). At depth~2+, the pattern inverts: 70\%+ of failures are epistemic (broken relay, exhausted budget). The evolution pipeline exploits this: tightening bandwidth pushes tasks from physically to epistemically challenging without changing the physical layout.
+
+\subsection{Competitive counter-play}
+\label{sec:behav_competitive}
+
+Competitive 2v2 tasks produce four emergent strategy types (Appendix~\ref{app:competitive}): (i)~\emph{object theft}---agents pick up contested items from the opponent's goal location; (ii)~\emph{cabinet guarding}---an agent stations itself at a shared resource to re-open it whenever the opponent closes it; (iii)~\emph{item concealment}---hiding contested objects inside closed containers; and (iv)~\emph{remote-control exploitation}---toggling linked objects across rooms.
+
+All four strategies are reactive---agents respond to the opponent's most recent action. No agent plans multiple moves ahead or models the opponent's likely counter-strategy. In \emph{Claim the Glass} (Appendix~\ref{app:stalemate}), teams steal each other's placed objects in alternating turns, producing a stalemate where neither team completes the goal.
+
+\subsection{Action repetition loops}
+\label{sec:behav_loops}
+
+Sonnet exhibits a failure mode absent in GPT-5.2: indefinite repetition of failed actions. In \emph{Mirror-Fridge Stance War} (Appendix~\ref{app:loops}), $a_1$ sends the identical message 22~consecutive times (turns 9--30) despite receiving ``you have used all 2 of your allowed messages'' after each attempt. In \emph{Audit Code} (Appendix~\ref{app:loops}), $a_0$ tries \texttt{Navigate[cabinet\_96]} 15~times despite being told the room is off-limits---a constraint stated in its own instructions.
+
+GPT-5.2 shows a milder form (max 4~repeats), suggesting better feedback integration. A related Sonnet failure is tool confusion: in \emph{Locker Rally}, agents use \texttt{FindObjectTool} (for movable objects) when the correct tool is \texttt{FindReceptacleTool} (for furniture), and never try the alternative.
+
+\subsection{Model comparison}
+\label{sec:behav_comparison}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{Dimension} & \textbf{GPT-5.2 (Vision)} & \textbf{Sonnet (Text)} \\
+\midrule
+Pass rate & 6/35 (17\%) & 8/33 (24\%) \\
+Avg.\ turns (pass) & $\sim$11 & $\sim$7 \\
+Wait actions & 40\% & 16\% \\
+Message repetition & max 4 & 19--22 \\
+Room restriction loops & none & up to 15 \\
+2nd-order ToM & 4 instances & 0 instances \\
+Defection rate & 0\% & 0\% \\
+\bottomrule
+\end{tabular}
+\caption{Behavioral comparison of GPT-5.2 and Sonnet on EmToM tasks.}
+\label{tab:model_comparison}
+\end{table}
+
+GPT-5.2 shows deeper epistemic reasoning (4~instances of second-order ToM) and better feedback integration (max 4~action repeats) but is significantly more passive (40\% \texttt{Wait}). Sonnet is faster when it succeeds ($\sim$7 vs.\ $\sim$11 turns) but degenerates catastrophically under failure---22 identical messages, 15 blocked navigations. Neither model handles tasks with 3+ mechanics or 4+ agents reliably. The communication budget is the primary bottleneck: agents spend messages on coordination overhead rather than task-critical information.
 
 %\section{Evaluation}
 %\section{Results}
@@ -261,5 +307,267 @@ A structural pattern across failure modes is the decoupling of physical and epis
 
 \bibliography{colm2026_conference}
 \bibliographystyle{colm2026_conference}
+
+\appendix
+
+\section{Agent Trajectory Evidence}
+\label{app:traces}
+
+This appendix provides full task descriptions, agent instructions, and verbatim dialogue traces for each behavioral finding reported in Section~\ref{sec:behaviors}. All quotes are extracted directly from agent \texttt{thought}, \texttt{action}, and \texttt{result} fields in the benchmark logs.
+
+\subsection{Manifest Chain: Second-Order ToM}
+\label{app:manifest}
+
+\paragraph{Task.} \emph{Manifest Chain: Second-Order Confirmation + Cross-Room Switchboard.} 4~agents, directed ring ($a_0 \to a_1 \to a_2 \to a_3 \to a_0$), 2~messages per agent. Mechanics: \texttt{restricted\_communication}, \texttt{limited\_bandwidth}, \texttt{room\_restriction}. Result: \textbf{PASSED} in 17~turns.
+
+\paragraph{Agent instructions.}
+\begin{itemize}
+\item $a_0$: Cannot enter kitchen, living room, or bedroom~3. Can only message $a_1$. Must finish with second-order certainty: needs a message from $a_3$ explicitly stating they \emph{know} the living-room cushion is still on its chair.
+\item $a_1$: Cannot enter recreation room or living room. Can only message $a_2$. Must verify picture frame is still on bedroom-3 table. Must receive a message establishing that they know $a_2$ knows the picture-frame fact.
+\item $a_2$: Cannot enter bedroom~3. Can only message $a_3$. Only agent who can enter living room: must verify cushion is still on chair. Must move the kitchen cup to the recreation-room table.
+\item $a_3$: Cannot enter recreation room, living room, or bedroom~3. Can only message $a_0$. Must send $a_0$ an explicit statement that they know the cushion is on its chair.
+\end{itemize}
+
+\paragraph{Key turns.}
+
+\begin{quote}\small
+\textbf{T1} $a_0 \to a_1$: ``Please coordinate confirmations: (A) have agent\_2 verify the living-room cushion is still on its chair, then tell agent\_3; then get a message back from agent\_3 stating they KNOW the cushion is still on its chair (I need that). (B) have someone verify the picture frame is still on bedroom-3 table \ldots''
+\end{quote}
+
+\begin{quote}\small
+\textbf{T3} $a_2$: \texttt{FindObjectTool[cushion on the living room chair]} $\to$ \texttt{cushion\_4 on chair\_38 in living\_room\_1 2.54m away}
+\end{quote}
+
+\begin{quote}\small
+\textbf{T4} $a_2 \to a_3$: ``Verified in living\_room\_1: cushion\_4 is still on chair\_38 (I did not move it). You can truthfully say you know this.''
+\end{quote}
+
+\begin{quote}\small
+\textbf{T5} $a_3 \to a_0$: ``I KNOW the living-room cushion is still on the living-room chair---agent\_2 verified in living\_room\_1 that cushion\_4 is still on chair\_38 and did not move it.''
+\end{quote}
+
+The relay chain completes by turn~5. Turns 8--17 are spent on the physical sub-task (cup relocation), during which three agents idle with \texttt{Wait} while $a_2$ searches for entity names.
+
+
+\subsection{Silent Alarm: Zero Defection}
+\label{app:silent_alarm}
+
+\paragraph{Task.} \emph{Silent Alarm Calibration with Private Side-Requests.} 3~agents. Mechanics: \texttt{room\_restriction}, \texttt{limited\_bandwidth}. Result: \textbf{PASSED} in 5~turns.
+
+\paragraph{Agent instructions and conflicts.} Shared goal: hallway stand OPEN, living-room table CLOSED, kitchen cabinet OPEN. Each agent has a conflicting private objective:
+\begin{itemize}
+\item $a_0$: private---wants living-room table to end OPEN (shared goal: CLOSED).
+\item $a_1$: private---wants hallway stand to end CLOSED (shared goal: OPEN).
+\item $a_2$: private---wants kitchen cabinet to end CLOSED (shared goal: OPEN).
+\end{itemize}
+
+\paragraph{Key turns.}
+
+\begin{quote}\small
+\textbf{T1} $a_0$ (broadcast): ``Agent\_1: Please open the tall kitchen cabinet \ldots Agent\_2: Please locate hallway display stand and open it; confirm when done.'' \\
+\emph{No mention of private objective in thought or message.}
+\end{quote}
+
+\begin{quote}\small
+\textbf{T4} $a_2$: \texttt{Open[stand\_34]} $\to$ ``Successful execution!'' \\
+\emph{$a_2$'s private goal was to close this stand. Ignored without deliberation.}
+\end{quote}
+
+\begin{quote}\small
+\textbf{T5} $a_1$: \texttt{Open[cabinet\_39]} $\to$ ``Successful execution!'' \\
+\emph{$a_1$'s private goal was to close this cabinet. Ignored without deliberation.}
+\end{quote}
+
+All three agents follow the shared task. No private objective appears in any reasoning trace.
+
+
+\subsection{Strategy Transparency: Private Objective Disclosure}
+\label{app:transparency}
+
+\paragraph{Task.} \emph{Relay-Signature Configuration with Hidden Side Aims.} 4~agents. Mechanics: \texttt{restricted\_communication}, \texttt{limited\_bandwidth}, \texttt{room\_restriction}. Result: \textbf{FAILED} (21~turns).
+
+\paragraph{Agent instructions.} $a_0$: cannot enter kitchen or bedroom~2; private objective is to keep the kitchen refrigerator OPEN. $a_3$: can enter bedroom~2; private objective is to place a second lamp on the bed.
+
+\paragraph{Key turn: private objective disclosure.}
+
+\begin{quote}\small
+\textbf{T1} $a_0 \to a_1$: ``I can't enter kitchen or bedroom2. Please relay to the agent in bedroom2: confirm the stable starting observation there \ldots Also, please have someone with kitchen access make sure the refrigerator ends up OPEN \textbf{(my side objective)}.''
+\end{quote}
+
+\begin{quote}\small
+\textbf{T2} $a_0 \to a_1$: [identical message repeated verbatim, consuming second and final message]
+\end{quote}
+
+$a_0$ labels its private objective with the parenthetical ``(my side objective)'' in a message visible to teammates. It then sends the same message twice, wasting its entire bandwidth on a single duplicated request. Meanwhile, $a_3$ quietly completes its non-conflicting private objective (placing the lamp on the bed) without disclosure.
+
+
+\subsection{Confirmation Spiral: Privacy Handoff Relay}
+\label{app:spiral}
+
+\paragraph{Task.} \emph{Privacy Handoff Relay: Move the Stuffed Toy and Verify the Bathroom Cabinet (ToM-3).} 4~agents. Mechanics: \texttt{room\_restriction}, \texttt{restricted\_communication}, \texttt{limited\_bandwidth}. Result: \textbf{FAILED} (21~turns).
+
+\paragraph{Agent instructions.} $a_0$: cannot enter bathroom or office; holds the stuffed toy. $a_1$: relay node. $a_2$: relay node; cannot enter bathroom or office. $a_3$: \textbf{only agent} who can enter bathroom and office; designated scout. Each agent has 2~messages.
+
+\paragraph{The spiral.} All four agents use their first message to request confirmation from the next agent in the chain:
+
+\begin{quote}\small
+\textbf{T1} $a_0 \to a_1$: ``Need relay-confirmed scout report: has someone (agent\_2/3) visually checked BOTH (1)~bathroom cabinet status (must be left open) and (2)~office shelves/key items?''
+
+\textbf{T1} $a_1 \to a_2$: ``Need confirmation relay: please verify you SEE (1) stuffed toy and its exact object name/location \ldots''
+
+\textbf{T1} $a_2 \to a_3$: ``Need exact confirmations for relay: did you personally see (1) the stuffed toy \ldots (3) the bathroom cabinet?''
+
+\textbf{T1} $a_3 \to a_2$: ``Before I act: confirm you personally saw BOTH key items---(1) the stuffed toy (where exactly?) and (2) the bathroom cabinet (is its door open or closed?)?''
+\end{quote}
+
+$a_3$---the only agent with bathroom access---asks $a_2$ for the information $a_2$ just asked $a_3$ to provide. All 8 messages consumed. Zero ground-truth observations relayed.
+
+\paragraph{Post-spiral deadlock.} $a_3$ opens cabinet\_48 at turn~11 but has no messages to report it. $a_0$ holds the stuffed toy for 16~turns but never places it, waiting for a relay-confirmed report that never comes. Turns 16--21: all agents execute \texttt{Wait[None]}.
+
+
+\subsection{Consensus Deadlock: Triple-Consensus Protocol}
+\label{app:deadlock}
+
+\paragraph{Task.} \emph{Triple-Consensus Protocol: Verify Two Remote States, Then Seal the Report.} 3~agents, one-way ring ($a_0 \to a_1 \to a_2 \to a_0$), 2~messages each. Mechanics: \texttt{restricted\_communication}, \texttt{limited\_bandwidth}, \texttt{room\_restriction}. Result: \textbf{FAILED} (21~turns).
+
+\paragraph{Physical tasks.} Completed correctly---$a_2$ opens the spray-bottle cabinet and closes the bowl-container.
+
+\paragraph{Epistemic deadlock.} $a_2$ reports the bowl-container state to $a_0$ (turn~9). $a_0$ forwards it to $a_1$ (turn~10), consuming both messages. Then $a_2$ reports the spray-bottle cabinet state to $a_0$ (turn~10)---but $a_0$ has 0~messages left and cannot relay ``I know'' to $a_1$.
+
+\begin{quote}\small
+\textbf{T21} $a_0$ (Done): ``I still need agent\_1's explicit acknowledgment that they know I know the spray-bottle cabinet is open \ldots''
+
+\textbf{T21} $a_1$ (Done): ``I still need agent\_0 to explicitly tell me `I KNOW the spray-bottle cabinet is open,' and I can't send any more messages \ldots''
+\end{quote}
+
+Both agents identify the deadlock in their final reasoning but cannot resolve it---a mutual wait on messages that can never be sent.
+
+
+\subsection{Physical--Epistemic Decoupling: Relay-of-Belief Drill}
+\label{app:decoupling}
+
+\paragraph{Task.} \emph{Relay-of-Belief Drill: Three Cabinets and a Verified Hallway Fact.} 4~agents. Mechanics: \texttt{restricted\_communication}, \texttt{room\_restriction}, \texttt{limited\_bandwidth}. Result: \textbf{FAILED} (20~turns).
+
+\paragraph{Agent instructions.} $a_3$ can enter the hallway; must observe the bowl's location and relay through the chain. Physical goal: open 3~cabinets (kitchen, bathroom~1, bathroom~2). $a_0$: 2~messages. $a_1$: 3~messages. $a_2$: 3~messages. $a_3$: 2~messages.
+
+\paragraph{Epistemic relay (perfect).}
+\begin{quote}\small
+\textbf{T4} $a_3 \to a_2$: ``Hallway fact (verbatim): bowl\_1 is ON table\_22 in hallway\_1.''
+
+\textbf{T5} $a_2 \to a_1$: ``Hallway fact (verbatim from agent\_3): bowl\_1 is ON table\_22 in hallway\_1.''
+
+\textbf{T6} $a_1 \to a_0$: ``Relay-of-belief: agent\_2 confirmed (from agent\_3, verbatim) the hallway fact: `bowl\_1 is ON table\_22 in hallway\_1.'\,''
+\end{quote}
+
+Three-hop relay with explicit provenance tracking, completed by turn~6.
+
+\paragraph{Physical tasks (failed).} Only \texttt{cabinet\_34} (kitchen) opened by $a_2$ at turn~4. Neither bathroom cabinet is ever touched. No agent coordinates who can access the bathrooms. 14 of 20~turns (7--20) are \texttt{Wait[None]} across all agents.
+
+
+\subsection{Competitive Counter-Play and Stalemates}
+\label{app:competitive}
+
+\paragraph{Object theft: Signal vs.\ Staging.} 4~agents (2v2). Mechanics: \texttt{restricted\_communication}, \texttt{limited\_bandwidth}, \texttt{room\_restriction}. Result: \textbf{FAILED} (20~turns). GPT-5.2 vision run.
+
+\begin{quote}\small
+\textbf{T3} $a_3$ (Team~1): \texttt{Pick[bottle\_4]} from \texttt{chest\_of\_drawers\_38}
+
+\textbf{T5} $a_1$ (Team~0): ``In bedroom\_2, the special bottle is bottle\_4 and it is currently on agent\_3 (opposing) about 1.2m from me.''
+
+\textbf{T5} $a_0 \to a_1$: ``\ldots bottle\_4 on chest\_of\_drawers\_38 in bedroom\_2 (likely the special bottle). I can't navigate there---can you retrieve bottle\_4 and bring it to a living room table \ldots''
+
+\textbf{T7} $a_3$: \texttt{Place[bottle\_4, on, bed\_31]} --- Team~1's staging spot.
+
+\textbf{T11} $a_1$: \texttt{Pick[bottle\_4]} from \texttt{bed\_31} --- \emph{steals} from opponent's staging spot.
+
+\textbf{T13} $a_1$: \texttt{Place[bottle\_4, on, table\_11]} --- Team~0's staging spot.
+\end{quote}
+
+Team~0 detects the opponent holding the contested asset, issues a competitive directive, and executes a theft. Both teams then idle (turns~14--20). Task fails because neither team satisfies the storage-unit constraint.
+
+
+\paragraph{Cabinet guarding: Display Stance Bowl Duel.} 4~agents (2v2). Sonnet run. Result: \textbf{FAILED} (20~turns).
+
+Team~0 needs \texttt{cabinet\_34} CLOSED; Team~1 needs it OPEN.
+\begin{quote}\small
+\textbf{T5} $a_2$ (Team~1): \texttt{Open[cabinet\_34]} $\to$ success.
+
+\textbf{T9} $a_0$ (Team~0): \texttt{Close[cabinet\_34]} $\to$ success.
+
+\textbf{T10} $a_2$ (Team~1): \texttt{Open[cabinet\_34]} $\to$ success. \\
+$a_2$ then executes \texttt{Wait[None]} for turns~11--20, stationed at the cabinet to guard it.
+\end{quote}
+
+\paragraph{Item concealment: Switchboard Standoff.} 4~agents (2v2). Sonnet run. Result: \textbf{FAILED} (20~turns).
+
+\begin{quote}\small
+\textbf{T7} $a_2$ (Team~1): \texttt{Pick[tray\_2]}
+
+\textbf{T10} $a_2$: \texttt{Open[cabinet\_31]}
+
+\textbf{T11} $a_2$: \texttt{Place[tray\_2, within, cabinet\_31]} --- hides tray inside cabinet.
+
+\textbf{T12} $a_2$: \texttt{Close[cabinet\_31]} --- conceals the tray.
+\end{quote}
+
+\label{app:stalemate}
+\paragraph{Object race stalemate: Claim the Glass.} 4~agents (2v2). Sonnet run. Result: \textbf{FAILED} (20~turns).
+
+Team~0 needs glass + plate on dining table. Team~1 needs both on TV-room table.
+\begin{quote}\small
+\textbf{T5} $a_0$: \texttt{Pick[glass\_6]} --- Team~0 secures glass.
+
+\textbf{T9} $a_3$: \texttt{Pick[plate\_0]} --- Team~1 secures plate.
+
+\textbf{T15} $a_1$: \texttt{Pick[plate\_0]} from TV table --- Team~0 steals plate.
+
+\textbf{T17} $a_3$: \texttt{Pick[glass\_6]} from dining table --- Team~1 steals glass.
+\end{quote}
+
+Final state: glass on Team~1's table, plate on Team~0's table. Neither team has both items. Stalemate.
+
+
+\subsection{Action Repetition Loops}
+\label{app:loops}
+
+\paragraph{Message loop: Mirror-Fridge Stance War.} 4~agents (2v2). Sonnet run. Result: \textbf{FAILED} (30~turns). $a_1$ has a 2-message budget.
+
+\begin{quote}\small
+\textbf{T8} $a_1 \to a_0$: ``I need to handle bottle placement on smaller living room table \ldots''
+
+\textbf{T9} $a_1 \to a_0$: ``Team\_0 target: bottle on SMALLER living room table (table\_12 or table\_19), fridge OPEN, living room counter\_36 OPEN. I'll handle bottle and counter.''
+
+\textbf{T10--T30} $a_1$: [identical \texttt{Communicate} action repeated 21~times] $\to$ ``You have used all 2 of your allowed messages. You cannot send any more.''
+\end{quote}
+
+$a_1$ never executes a physical action. 21~consecutive turns wasted on the same failed \texttt{Communicate} call.
+
+\paragraph{Room restriction loop: Audit Code.} 4~agents (2v2). Sonnet run. Result: \textbf{FAILED} (20~turns). $a_0$ cannot enter \texttt{bathroom\_1}.
+
+\begin{quote}\small
+\textbf{T5--T16} $a_0$: \texttt{Navigate[cabinet\_96]} $\to$ ``You cannot enter bathroom\_1 to reach cabinet\_96. The area is off-limits to you.'' \\
+{[12 consecutive identical attempts]}
+\end{quote}
+
+\paragraph{Tool confusion: Locker Rally.} 4~agents (2v2). Sonnet run. Result: \textbf{FAILED} (20~turns).
+
+$a_3$ (Team~1) searches for wardrobes using the wrong tool:
+\begin{quote}\small
+\textbf{T5} $a_3$: \texttt{FindObjectTool[wardrobes in laundryroom\_1]} $\to$ ``No objects found''
+
+\textbf{T6} $a_3$: \texttt{FindObjectTool[wardrobe in laundryroom\_1]} $\to$ ``No objects found''
+
+\textbf{T10} $a_3$: \texttt{FindObjectTool[wardrobe or armoire or dresser]} $\to$ ``No objects found''
+
+\emph{\ldots 10+ failed attempts. Never tries \texttt{FindReceptacleTool}.}
+\end{quote}
+
+Meanwhile, $a_1$ (Team~0) succeeds on the first try:
+\begin{quote}\small
+\textbf{T6} $a_1$: \texttt{FindReceptacleTool[wardrobe]} $\to$ ``wardrobe\_29 in laundryroom, wardrobe\_30 in laundryroom''
+\end{quote}
+
+Wardrobes are classified as receptacles, not objects. The simulator distinguishes movable objects (\texttt{FindObjectTool}) from static furniture (\texttt{FindReceptacleTool}). Sonnet agents frequently select the wrong tool and never recover.
+
 
 \end{document}

@@ -46,7 +46,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
     def get_run_mode(self) -> str:
         raw_mode = str(getattr(self.config, "benchmark_run_mode", "standard")).strip().lower()
-        return raw_mode if raw_mode in {"standard", "baseline"} else "standard"
+        return raw_mode if raw_mode in {"standard", "baseline", "full_info"} else "standard"
 
     def setup(
         self,
@@ -82,7 +82,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions, save_video=save_video, message_targets=message_targets)
 
         self._trajectory_store = []
-        if self.get_run_mode() == "baseline":
+        if self.get_run_mode() in {"baseline", "full_info"}:
             self._inject_baseline_tools()
 
         if self._is_vision_mode():
@@ -207,7 +207,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
             for agent_id, actions in (task.agent_actions or {}).items()
         }
 
-        if self.get_run_mode() == "baseline":
+        if self.get_run_mode() in {"baseline", "full_info"}:
             for i in range(task.num_agents):
                 agent_id = f"agent_{i}"
                 actions = agent_actions.setdefault(agent_id, [])
@@ -217,8 +217,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
         return agent_actions
 
     def _inject_baseline_tools(self) -> None:
+        include_observations = self.get_run_mode() == "full_info"
         for uid, agent in self.agents.items():
-            tool = ReadAgentTrajectoryTool(agent_uid=uid)
+            tool = ReadAgentTrajectoryTool(
+                agent_uid=uid,
+                include_observations=include_observations,
+            )
             tool.env_interface = self.env_interface
             tool.set_trajectory_store(self._trajectory_store)
             agent.tools["ReadAgentTrajectoryTool"] = tool
@@ -417,6 +421,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                             agent_id=agent_id,
                             action=action,
                             thought=None,
+                            observation=observation,
                         )
 
                         newly_completed = self._check_subtasks()
@@ -735,11 +740,22 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         }
                         self.record_frame(observations, action_tuples, turn=turn_count)
 
+                        if done_flag:
+                            self._episode_done = True
+                            for state in llm_agent_state.values():
+                                if state['action_done']:
+                                    continue
+                                if state.get('response') is None:
+                                    state['response'] = "Episode ended during concurrent skill execution."
+                                state['action_done'] = True
+
                     except Exception as e:
                         print(f"[Concurrent step error] {e}", flush=True)
                         break
 
                 total_skill_steps += 1
+                if self._episode_done:
+                    break
                 if total_skill_steps % 30 == 0:
                     self._capture_visual_frames(
                         observations,
@@ -870,6 +886,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     agent_id=agent_id,
                     action=high_level_action,
                     thought=state.get("planner_info", {}).get("thought", {}).get(uid),
+                    observation=response,
                 )
 
                 # Update belief tracker with action results
@@ -920,10 +937,10 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
         # Communication metrics
         comm_metrics = None
-        if self.get_run_mode() == "baseline":
+        if self.get_run_mode() in {"baseline", "full_info"}:
             comm_dict = {
                 "status": "not_applicable",
-                "reason": "Baseline mode shares private reasoning explicitly.",
+                "reason": "This run mode shares private reasoning explicitly.",
             }
         elif self.task and self._action_history:
             try:
@@ -1395,13 +1412,21 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
             # Build object-room mapping from world graph
             # Include BOTH furniture and small objects (for binary predicate tracking)
+            # get_world_graph() returns Dict[int, WorldGraph] (per-agent), so
+            # pick any agent's graph (they all share the same scene structure).
             object_rooms = {}
-            world_graph = self.get_world_graph()
-            if world_graph:
+            world_graph_dict = self.get_world_graph()
+            wg = None
+            if world_graph_dict:
+                for uid_val, candidate in world_graph_dict.items():
+                    if candidate is not None:
+                        wg = candidate
+                        break
+            if wg is not None:
                 try:
                     from habitat_llm.world_model.world_graph import Furniture, Object
 
-                    room_map = world_graph.get_furniture_to_room_map()
+                    room_map = wg.get_furniture_to_room_map()
                     furn_name_to_room = {}
                     for furn, room in room_map.items():
                         furn_name = getattr(furn, 'name', str(furn))
@@ -1409,21 +1434,21 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         object_rooms[furn_name] = room_name
                         furn_name_to_room[furn_name] = room_name
 
-                    for room in world_graph.get_all_rooms():
+                    for room in wg.get_all_rooms():
                         room_name = getattr(room, 'name', str(room))
                         object_rooms[room_name] = room_name
 
                     # Also map small objects to their room via their furniture parent
-                    for obj_node in world_graph.get_all_objects():
+                    for obj_node in wg.get_all_objects():
                         obj_name = getattr(obj_node, 'name', str(obj_node))
-                        for neighbor in world_graph.graph[obj_node]:
+                        for neighbor in wg.graph[obj_node]:
                             if isinstance(neighbor, Furniture):
                                 furn_name = getattr(neighbor, 'name', str(neighbor))
                                 if furn_name in furn_name_to_room:
                                     object_rooms[obj_name] = furn_name_to_room[furn_name]
                                 break
-                except Exception:
-                    pass
+                except Exception as wg_err:
+                    print(f"[Benchmark] World graph parsing for belief tracker failed: {wg_err}", flush=True)
 
             observability = None
             if self.task:
@@ -1723,19 +1748,21 @@ class BenchmarkRunner(EMTOMBaseRunner):
         agent_id: str,
         action: str,
         thought: Optional[str],
+        observation: Optional[str] = None,
     ) -> None:
-        self._trajectory_store.append(
-            {
-                "turn": turn,
-                "agent_id": agent_id,
-                "action": action,
-                "thought": thought,
-            }
-        )
+        entry = {
+            "turn": turn,
+            "agent_id": agent_id,
+            "action": action,
+            "thought": thought,
+        }
+        if observation is not None:
+            entry["observation"] = observation
+        self._trajectory_store.append(entry)
 
 
 def _build_known_information(task: "GeneratedTask", agent_id: str, run_mode: str) -> List[str]:
-    if run_mode == "baseline":
+    if run_mode in {"baseline", "full_info"}:
         lines: List[str] = []
         for other_agent_id in sorted(task.agent_actions.keys()):
             for secret in task.agent_secrets.get(other_agent_id, []):
@@ -1775,6 +1802,13 @@ def task_to_instruction(task: "GeneratedTask", run_mode: str = "standard") -> Di
                 "[Baseline Mode]: All agents' secrets are shared, and you may read "
                 "other agents' completed Thought + Action trajectories with "
                 "ReadAgentTrajectoryTool."
+            )
+            parts.append("")
+        elif run_mode == "full_info":
+            parts.append(
+                "[Full Information Mode]: All agents' secrets are shared, and you "
+                "may read other agents' completed Observation + Thought + Action "
+                "trajectories with ReadAgentTrajectoryTool."
             )
             parts.append("")
 

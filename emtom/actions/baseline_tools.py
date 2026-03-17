@@ -16,13 +16,14 @@ class ReadAgentTrajectoryTool(PerceptionTool):
     """
     Read another agent's completed trajectory in baseline benchmark mode.
 
-    The tool intentionally exposes only thought and action to isolate the
-    effect of private reasoning / hidden intent from other benchmark factors.
+    The tool can expose completed prior-turn traces as Thought + Action, or
+    Observation + Thought + Action in full-information mode.
     """
 
-    def __init__(self, agent_uid: int = 0):
+    def __init__(self, agent_uid: int = 0, include_observations: bool = False):
         super().__init__("ReadAgentTrajectoryTool", agent_uid_arg=agent_uid)
         self._trajectory_store: Optional[Sequence[Dict[str, Any]]] = None
+        self._include_observations = include_observations
 
     def set_trajectory_store(self, trajectory_store: Sequence[Dict[str, Any]]) -> None:
         self._trajectory_store = trajectory_store
@@ -32,6 +33,12 @@ class ReadAgentTrajectoryTool(PerceptionTool):
 
     @property
     def description(self) -> str:
+        if self._include_observations:
+            return (
+                "ReadAgentTrajectoryTool[agent_id]: Read another agent's completed "
+                "trajectory as Observation + Thought + Action entries from prior "
+                "turns only. Example: ReadAgentTrajectoryTool[agent_1]"
+            )
         return (
             "ReadAgentTrajectoryTool[agent_id]: Read another agent's completed "
             "trajectory as Thought + Action pairs from prior turns only. "
@@ -67,11 +74,14 @@ class ReadAgentTrajectoryTool(PerceptionTool):
         lines = [f"{target} completed trajectory:"]
         for entry in records:
             turn = entry.get("turn", "?")
+            observation = str(entry.get("observation") or "").strip()
             raw_thought = str(entry.get("thought") or "None")
             thought = raw_thought
             if raw_thought.startswith("Thought:"):
                 thought = raw_thought.split("Thought:", 1)[1].strip() or "None"
             action = str(entry.get("action") or "")
+            if self._include_observations and observation:
+                lines.append(f"Turn {turn}: Observation: {observation}")
             lines.append(f"Turn {turn}: Thought: {thought}")
             lines.append(f"Turn {turn}: Action: {action}")
 

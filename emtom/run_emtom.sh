@@ -156,7 +156,7 @@ STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
 REPORT_FILE=""  # Optional JSON report output path for static verification
 NO_CALIBRATION=false  # Don't write benchmark results back into source task JSONs
 OBSERVATION_MODE="text"  # Benchmark observation mode: text or vision
-RUN_MODE="standard"  # Benchmark run mode: standard or baseline
+RUN_MODE="standard"  # Benchmark run mode: standard, baseline, or full_info
 SELECTOR_MIN_FRAMES=1
 SELECTOR_MAX_FRAMES=5
 SELECTOR_MAX_CANDIDATES=12
@@ -252,7 +252,7 @@ print_usage() {
     echo "  --team-model-map MAP Team->model mapping for competitive tasks"
     echo "                       Format: team_0=sonnet,team_1=gpt-5"
     echo "  --observation-mode MODE  Benchmark observation mode: text|vision (default: $OBSERVATION_MODE)"
-    echo "  --run-mode MODE      Benchmark run mode: standard|baseline (default: $RUN_MODE)"
+    echo "  --run-mode MODE      Benchmark run mode: standard|baseline|full_info (default: $RUN_MODE)"
     echo "  --selector-min-frames N  Vision mode selector minimum frames (default: $SELECTOR_MIN_FRAMES)"
     echo "  --selector-max-frames N  Vision mode selector maximum frames (default: $SELECTOR_MAX_FRAMES)"
     echo "  --selector-max-candidates N  Vision mode selector candidate pool size (default: $SELECTOR_MAX_CANDIDATES)"
@@ -318,6 +318,7 @@ print_usage() {
     echo "  ./emtom/run_emtom.sh benchmark --task data/emtom/tasks/my_task.json --model gpt-5 --observation-mode vision"
     echo "  ./emtom/run_emtom.sh benchmark --team-model-map team_0=sonnet,team_1=gpt-5"
     echo "  ./emtom/run_emtom.sh benchmark --run-mode baseline"
+    echo "  ./emtom/run_emtom.sh benchmark --run-mode full_info"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
     echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_emtom.sh verify --task data/emtom/tasks/my_task.json"
@@ -1157,8 +1158,8 @@ while [[ $# -gt 0 ]]; do
             ;;
         --run-mode)
             RUN_MODE=$2
-            if [[ "$RUN_MODE" != "standard" && "$RUN_MODE" != "baseline" ]]; then
-                echo "Error: --run-mode must be 'standard' or 'baseline'"
+            if [[ "$RUN_MODE" != "standard" && "$RUN_MODE" != "baseline" && "$RUN_MODE" != "full_info" ]]; then
+                echo "Error: --run-mode must be 'standard', 'baseline', or 'full_info'"
                 exit 1
             fi
             shift 2

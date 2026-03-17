@@ -18,6 +18,7 @@ EMTOM is a benchmark for embodied Theory of Mind. A task is good if success requ
 
 - `standard`: task secrets are private and agents only observe normal benchmark channels.
 - `baseline`: all task secrets are shared with all agents, and agents may read other agents' completed Thought+Action trajectories through a runtime benchmark tool.
+- `full_info`: all task secrets are shared with all agents, and agents may read other agents' completed Observation+Thought+Action trajectories through a runtime benchmark tool.
 
 ## Code Ownership
 
