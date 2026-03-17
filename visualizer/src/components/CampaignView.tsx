@@ -8,12 +8,13 @@ import type {
   TaskDetail,
 } from "../types";
 import TaskView from "./TaskView";
+import { downloadJson } from "../download";
 
 interface Props {
   onImageClick: (src: string) => void;
 }
 
-type Panel = "leaderboard" | "runs" | "run-detail" | "task-detail";
+type Panel = "leaderboard" | "run-detail" | "task-detail";
 
 const MODEL_COLORS: Record<string, string> = {
   "gpt-5.2": "#10b981",
@@ -57,6 +58,12 @@ export default function CampaignView({ onImageClick }: Props) {
   );
   const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [downloadingRunKey, setDownloadingRunKey] = useState<string | null>(
+    null,
+  );
+  const [downloadingTaskKey, setDownloadingTaskKey] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     Promise.all([
@@ -68,6 +75,15 @@ export default function CampaignView({ onImageClick }: Props) {
       setLoading(false);
     });
   }, []);
+
+  const fetchCampaignTask = useCallback(
+    async (runKey: string, taskId: string): Promise<TaskDetail> => {
+      const response = await fetch(`/data/campaign-task/${runKey}/${taskId}.json`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    },
+    [],
+  );
 
   const openRun = useCallback((runKey: string) => {
     setSelectedRunKey(runKey);
@@ -86,15 +102,59 @@ export default function CampaignView({ onImageClick }: Props) {
     (taskId: string) => {
       setTaskDetail(null);
       setPanel("task-detail");
-      fetch(`/data/campaign-task/${selectedRunKey}/${taskId}.json`)
-        .then((r) => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r.json();
-        })
+      fetchCampaignTask(selectedRunKey, taskId)
         .then(setTaskDetail)
         .catch(() => setTaskDetail(null));
     },
-    [selectedRunKey],
+    [fetchCampaignTask, selectedRunKey],
+  );
+
+  const downloadTask = useCallback(
+    async (runKey: string, taskId: string) => {
+      const downloadKey = `${runKey}:${taskId}`;
+      setDownloadingTaskKey(downloadKey);
+      try {
+        const task = await fetchCampaignTask(runKey, taskId);
+        downloadJson(task, `${taskId}.json`);
+      } catch (error) {
+        console.error("Failed to download task trajectory", runKey, taskId, error);
+      } finally {
+        setDownloadingTaskKey(null);
+      }
+    },
+    [fetchCampaignTask],
+  );
+
+  const downloadRunTasks = useCallback(
+    async (
+      runKey: string,
+      runDef: Campaign["runs"][string],
+      summary: CampaignBenchmarkSummary,
+    ) => {
+      setDownloadingRunKey(runKey);
+      try {
+        const tasks = await Promise.all(
+          summary.results.map(async (result) => ({
+            task_id: result.task_id,
+            task: await fetchCampaignTask(runKey, result.task_id),
+          })),
+        );
+        downloadJson(
+          {
+            run_key: runKey,
+            run: runDef,
+            summary,
+            tasks,
+          },
+          `${runKey}-trajectories.json`,
+        );
+      } catch (error) {
+        console.error("Failed to download run trajectories", runKey, error);
+      } finally {
+        setDownloadingRunKey(null);
+      }
+    },
+    [fetchCampaignTask],
   );
 
   if (loading) {
@@ -126,10 +186,6 @@ export default function CampaignView({ onImageClick }: Props) {
   const runEntries = Object.entries(campaign.runs);
   const soloRuns = runEntries.filter(([, r]) => r.type === "solo");
   const matchupRuns = runEntries.filter(([, r]) => r.type === "matchup");
-  const completedCount = runEntries.filter(
-    ([, r]) => r.status === "complete",
-  ).length;
-  const totalCount = runEntries.length;
 
   return (
     <div className="campaign-root">
@@ -140,12 +196,6 @@ export default function CampaignView({ onImageClick }: Props) {
           onClick={() => setPanel("leaderboard")}
         >
           Leaderboard
-        </button>
-        <button
-          className={`campaign-nav-btn ${panel === "runs" ? "active" : ""}`}
-          onClick={() => setPanel("runs")}
-        >
-          All Runs
         </button>
         {panel === "run-detail" && (
           <>
@@ -211,19 +261,16 @@ export default function CampaignView({ onImageClick }: Props) {
           onRunClick={openRun}
         />
       )}
-      {panel === "runs" && (
-        <RunsPanel
-          soloRuns={soloRuns}
-          matchupRuns={matchupRuns}
-          onRunClick={openRun}
-        />
-      )}
       {panel === "run-detail" && (
         <RunDetailPanel
           runKey={selectedRunKey}
           runDef={campaign.runs[selectedRunKey]}
           summary={runSummary}
           onTaskClick={openTask}
+          onTaskDownload={downloadTask}
+          onDownloadAll={downloadRunTasks}
+          downloadingRunKey={downloadingRunKey}
+          downloadingTaskKey={downloadingTaskKey}
         />
       )}
       {panel === "task-detail" && (
@@ -522,90 +569,28 @@ function MatchupPreviewGrid({
   );
 }
 
-/* ─── Runs Panel ─── */
-
-function RunsPanel({
-  soloRuns,
-  matchupRuns,
-  onRunClick,
-}: {
-  soloRuns: [string, any][];
-  matchupRuns: [string, any][];
-  onRunClick: (k: string) => void;
-}) {
-  return (
-    <div className="campaign-panel">
-      <div className="campaign-section">
-        <h3 className="campaign-section-title">
-          Solo Runs ({soloRuns.length})
-        </h3>
-        <div className="campaign-runs-list">
-          {soloRuns.map(([key, r]) => (
-            <button
-              key={key}
-              className="campaign-run-row"
-              onClick={() => onRunClick(key)}
-            >
-              {statusDot(r.status)}
-              <span
-                className="campaign-model-dot"
-                style={{ background: modelColor(r.model) }}
-              />
-              <span className="campaign-run-row-model">{r.model}</span>
-              <span className="campaign-run-row-mode">{r.mode}</span>
-              <span className={`category-badge ${r.category}`}>
-                {r.category}
-              </span>
-              <span className="campaign-run-row-status">{r.status}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="campaign-section">
-        <h3 className="campaign-section-title">
-          Matchup Runs ({matchupRuns.length})
-        </h3>
-        <div className="campaign-runs-list">
-          {matchupRuns.map(([key, r]) => (
-            <button
-              key={key}
-              className="campaign-run-row"
-              onClick={() => onRunClick(key)}
-            >
-              {statusDot(r.status)}
-              <span
-                className="campaign-model-dot"
-                style={{ background: modelColor(r.model_a) }}
-              />
-              <span className="campaign-run-row-model">{r.team_0}</span>
-              <span className="campaign-run-row-vs">vs</span>
-              <span
-                className="campaign-model-dot"
-                style={{ background: modelColor(r.model_b) }}
-              />
-              <span className="campaign-run-row-model">{r.team_1}</span>
-              <span className="campaign-run-row-mode">{r.mode}</span>
-              <span className="campaign-run-row-status">{r.status}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ─── Run Detail Panel ─── */
-
 function RunDetailPanel({
   runKey,
   runDef,
   summary,
   onTaskClick,
+  onTaskDownload,
+  onDownloadAll,
+  downloadingRunKey,
+  downloadingTaskKey,
 }: {
   runKey: string;
   runDef: any;
   summary: CampaignBenchmarkSummary | null;
   onTaskClick: (taskId: string) => void;
+  onTaskDownload: (runKey: string, taskId: string) => void;
+  onDownloadAll: (
+    runKey: string,
+    runDef: any,
+    summary: CampaignBenchmarkSummary,
+  ) => void;
+  downloadingRunKey: string | null;
+  downloadingTaskKey: string | null;
 }) {
   if (!runDef) {
     return <div className="campaign-panel">Run not found: {runKey}</div>;
@@ -641,9 +626,26 @@ function RunDetailPanel({
             </>
           )}
         </h3>
-        <div className="campaign-run-detail-status">
-          {statusDot(runDef.status)}
-          {runDef.status}
+        <div className="campaign-run-detail-actions">
+          {summary && (
+            <button
+              className="download-btn campaign-download-all-btn"
+              title="Download all trajectories in this run"
+              disabled={downloadingRunKey === runKey}
+              onClick={() => onDownloadAll(runKey, runDef, summary)}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>
+                {downloadingRunKey === runKey
+                  ? "Downloading..."
+                  : "Download All"}
+              </span>
+            </button>
+          )}
+          <div className="campaign-run-detail-status">
+            {statusDot(runDef.status)}
+            {runDef.status}
+          </div>
         </div>
       </div>
 
@@ -686,32 +688,43 @@ function RunDetailPanel({
 
           {/* Task results list */}
           <div className="campaign-section">
-            <h3 className="campaign-section-title">
-              Tasks ({summary.results.length})
-            </h3>
+            <div className="campaign-section-header">
+              <h3 className="campaign-section-title">
+                Tasks ({summary.results.length})
+              </h3>
+            </div>
             <div className="campaign-task-list">
               {summary.results.map((r: CampaignRunResult) => (
-                <button
-                  key={r.task_id}
-                  className="campaign-task-row"
-                  onClick={() => onTaskClick(r.task_id)}
-                >
-                  <span
-                    className={`task-status ${r.success ? "success" : "failure"}`}
-                  />
-                  <span className="campaign-task-row-title">{r.title}</span>
-                  <span className={`category-badge ${r.category}`}>
-                    {r.category}
-                  </span>
-                  <span className="campaign-task-row-meta">
-                    {r.turns}t · {r.steps}s
-                  </span>
-                  {r.evaluation && (
-                    <span className="campaign-task-row-progress">
-                      {(r.evaluation.percent_complete * 100).toFixed(0)}%
+                <div key={r.task_id} className="campaign-task-row">
+                  <button
+                    className="campaign-task-row-main"
+                    onClick={() => onTaskClick(r.task_id)}
+                  >
+                    <span
+                      className={`task-status ${r.success ? "success" : "failure"}`}
+                    />
+                    <span className="campaign-task-row-title">{r.title}</span>
+                    <span className={`category-badge ${r.category}`}>
+                      {r.category}
                     </span>
-                  )}
-                </button>
+                    <span className="campaign-task-row-meta">
+                      {r.turns}t · {r.steps}s
+                    </span>
+                    {r.evaluation && (
+                      <span className="campaign-task-row-progress">
+                        {(r.evaluation.percent_complete * 100).toFixed(0)}%
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    className="download-btn campaign-task-row-download"
+                    title="Download this trajectory JSON"
+                    disabled={downloadingTaskKey === `${runKey}:${r.task_id}`}
+                    onClick={() => onTaskDownload(runKey, r.task_id)}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  </button>
+                </div>
               ))}
             </div>
           </div>

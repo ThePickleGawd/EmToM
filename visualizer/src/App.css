@@ -731,6 +731,11 @@ body {
   background: var(--accent-light);
 }
 
+.download-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 /* ─── Scrollbar ─── */
 
 .task-list::-webkit-scrollbar,
@@ -916,6 +921,13 @@ body {
 .campaign-section {
   display: flex;
   flex-direction: column;
+  gap: 12px;
+}
+
+.campaign-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
 
@@ -1199,61 +1211,6 @@ body {
 
 /* ─── Runs list ─── */
 
-.campaign-runs-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.campaign-run-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  background: var(--surface);
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  cursor: pointer;
-  font-size: 13px;
-  transition: all 0.12s ease;
-  width: 100%;
-  text-align: left;
-}
-
-.campaign-run-row:hover {
-  border-color: var(--border);
-  background: var(--surface-hover);
-}
-
-.campaign-run-row-model {
-  font-family: "IBM Plex Mono", monospace;
-  font-weight: 600;
-  font-size: 12px;
-}
-
-.campaign-run-row-vs {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.campaign-run-row-mode {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 11px;
-  color: var(--text-secondary);
-  padding: 1px 6px;
-  background: var(--bg);
-  border-radius: 3px;
-}
-
-.campaign-run-row-status {
-  margin-left: auto;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-/* ─── Run detail ─── */
-
 .campaign-run-detail-header {
   display: flex;
   align-items: center;
@@ -1286,6 +1243,21 @@ body {
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.campaign-run-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.campaign-download-all-btn {
+  width: auto;
+  padding: 0 10px;
+  gap: 8px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .campaign-run-stats {
@@ -1330,6 +1302,12 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.campaign-task-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 12px;
   background: var(--surface);
   border: 1px solid transparent;
@@ -1339,9 +1317,10 @@ body {
   transition: all 0.12s ease;
   width: 100%;
   text-align: left;
+  border: 1px solid transparent;
 }
 
-.campaign-task-row:hover {
+.campaign-task-row-main:hover {
   border-color: var(--border);
   background: var(--surface-hover);
 }
@@ -1368,6 +1347,10 @@ body {
   color: var(--text-secondary);
   min-width: 32px;
   text-align: right;
+}
+
+.campaign-task-row-download {
+  margin-left: auto;
 }
 
 /* ─── Campaign empty state ─── */
