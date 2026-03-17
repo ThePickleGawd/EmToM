@@ -179,12 +179,8 @@ export default function CampaignView({ onImageClick }: Props) {
             <span className="campaign-stat-value">{campaign.task_total}</span>
             <span className="campaign-stat-label">Tasks</span>
           </div>
-          <div className="campaign-stat">
-            <span className="campaign-stat-value">
-              {completedCount}/{totalCount}
-            </span>
-            <span className="campaign-stat-label">Runs Done</span>
-          </div>
+          {/* Runs Done stat hidden — confusing on campaign tab since it
+              counts legacy benchmark dirs, not campaign runs */}
           <div className="campaign-stat">
             <span className="campaign-stat-value">
               {campaign.modes.join(" + ")}
@@ -280,6 +276,7 @@ function LeaderboardPanel({
                 <tr>
                   <th>Model</th>
                   <th>Mode</th>
+                  <th>Tasks</th>
                   <th>Overall</th>
                   {["cooperative", "mixed"].map((cat) => (
                     <th key={cat}>{cat}</th>
@@ -303,6 +300,9 @@ function LeaderboardPanel({
                         <td className="campaign-mode-cell">{mode}</td>
                         {entry ? (
                           <>
+                            <td className="campaign-tasks-cell">
+                              {entry.overall?.passed ?? 0}/{entry.overall?.total ?? 0}
+                            </td>
                             <td className="campaign-rate-cell">
                               <RateBar rate={entry.overall?.pass_rate ?? entry.pass_rate ?? 0} />
                             </td>
@@ -321,7 +321,7 @@ function LeaderboardPanel({
                           </>
                         ) : (
                           <>
-                            <td colSpan={3} className="campaign-pending-cell">
+                            <td colSpan={4} className="campaign-pending-cell">
                               pending
                             </td>
                           </>
@@ -375,7 +375,9 @@ function LeaderboardPanel({
                       {group.model_b}
                     </span>
                   </div>
-                  {group.modes.map((entry) => (
+                  {group.modes.map((entry) => {
+                    const total = (entry.combined?.model_a_wins ?? 0) + (entry.combined?.model_b_wins ?? 0) + (entry.combined?.draws ?? 0);
+                    return (
                     <div key={entry.mode} className="campaign-matchup-mode-row">
                       <span className="campaign-matchup-mode">{entry.mode}</span>
                       <div className="campaign-matchup-bar-wrap">
@@ -388,12 +390,14 @@ function LeaderboardPanel({
                         />
                       </div>
                       <div className="campaign-matchup-stats">
-                        <span>{entry.combined?.model_a_wins ?? 0} win</span>
-                        <span>{entry.combined?.draws ?? 0} draw</span>
-                        <span>{entry.combined?.model_b_wins ?? 0} win</span>
+                        <span>{entry.combined?.model_a_wins ?? 0}W</span>
+                        <span>{entry.combined?.draws ?? 0}D</span>
+                        <span>{entry.combined?.model_b_wins ?? 0}W</span>
+                        <span className="campaign-matchup-total">{total} tasks</span>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ));
             })()}

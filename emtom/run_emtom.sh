@@ -156,6 +156,7 @@ STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
 REPORT_FILE=""  # Optional JSON report output path for static verification
 NO_CALIBRATION=false  # Don't write benchmark results back into source task JSONs
 OBSERVATION_MODE="text"  # Benchmark observation mode: text or vision
+RUN_MODE="standard"  # Benchmark run mode: standard or baseline
 SELECTOR_MIN_FRAMES=1
 SELECTOR_MAX_FRAMES=5
 SELECTOR_MAX_CANDIDATES=12
@@ -251,6 +252,7 @@ print_usage() {
     echo "  --team-model-map MAP Team->model mapping for competitive tasks"
     echo "                       Format: team_0=sonnet,team_1=gpt-5"
     echo "  --observation-mode MODE  Benchmark observation mode: text|vision (default: $OBSERVATION_MODE)"
+    echo "  --run-mode MODE      Benchmark run mode: standard|baseline (default: $RUN_MODE)"
     echo "  --selector-min-frames N  Vision mode selector minimum frames (default: $SELECTOR_MIN_FRAMES)"
     echo "  --selector-max-frames N  Vision mode selector maximum frames (default: $SELECTOR_MAX_FRAMES)"
     echo "  --selector-max-candidates N  Vision mode selector candidate pool size (default: $SELECTOR_MAX_CANDIDATES)"
@@ -315,6 +317,7 @@ print_usage() {
     echo "  ./emtom/run_emtom.sh benchmark --category competitive"
     echo "  ./emtom/run_emtom.sh benchmark --task data/emtom/tasks/my_task.json --model gpt-5 --observation-mode vision"
     echo "  ./emtom/run_emtom.sh benchmark --team-model-map team_0=sonnet,team_1=gpt-5"
+    echo "  ./emtom/run_emtom.sh benchmark --run-mode baseline"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
     echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_emtom.sh verify --task data/emtom/tasks/my_task.json"
@@ -516,6 +519,7 @@ run_benchmark() {
     fi
 
     OBSERVATION_MODE_OVERRIDE="++benchmark_observation_mode=$OBSERVATION_MODE"
+    RUN_MODE_OVERRIDE="++benchmark_run_mode=$RUN_MODE"
     VISION_SELECTOR_OVERRIDES=""
     if [ "$OBSERVATION_MODE" = "vision" ]; then
         VISION_SELECTOR_OVERRIDES="++benchmark_vision.selector_min_frames=$SELECTOR_MIN_FRAMES ++benchmark_vision.selector_max_frames=$SELECTOR_MAX_FRAMES ++benchmark_vision.selector_max_candidates=$SELECTOR_MAX_CANDIDATES"
@@ -548,6 +552,7 @@ run_benchmark() {
         echo "Agents: $TASK_NUM_AGENTS (from task)"
         echo "Max simulation steps: $MAX_SIM_STEPS"
         echo "Observation mode: $OBSERVATION_MODE"
+        echo "Run mode: $RUN_MODE"
         if [ -n "$CATEGORY" ]; then
             echo "Category filter: $CATEGORY"
         fi
@@ -580,6 +585,7 @@ run_benchmark() {
             $REPLANNING_OVERRIDES \
             $SAVE_VIDEO_OVERRIDE \
             $OBSERVATION_MODE_OVERRIDE \
+            $RUN_MODE_OVERRIDE \
             $VISION_SELECTOR_OVERRIDES \
             $CATEGORY_OVERRIDE \
             +task=$TASK_FILE \
@@ -633,6 +639,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
     echo "Task source: $TASK_DIR ($TASK_COUNT tasks)"
     echo "Agent counts: $AGENT_COUNTS"
     echo "Observation mode: $OBSERVATION_MODE"
+    echo "Run mode: $RUN_MODE"
     if [ -n "$CATEGORY" ]; then
         echo "Category: $CATEGORY"
     fi
@@ -659,6 +666,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
             --model $MODEL_SHORT \
             --output-dir $OUTPUT_BASE \
             --max-workers $MAX_WORKERS \
+            --run-mode $RUN_MODE \
             --observation-mode $OBSERVATION_MODE \
             --selector-min-frames $SELECTOR_MIN_FRAMES \
             --selector-max-frames $SELECTOR_MAX_FRAMES \
@@ -704,6 +712,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
                 $REPLANNING_OVERRIDES \
                 $SAVE_VIDEO_OVERRIDE \
                 $OBSERVATION_MODE_OVERRIDE \
+                $RUN_MODE_OVERRIDE \
                 $VISION_SELECTOR_OVERRIDES \
                 $CATEGORY_OVERRIDE \
                 +num_agents_filter=$NUM_AGENTS \
@@ -1142,6 +1151,14 @@ while [[ $# -gt 0 ]]; do
             OBSERVATION_MODE=$2
             if [[ "$OBSERVATION_MODE" != "text" && "$OBSERVATION_MODE" != "vision" ]]; then
                 echo "Error: --observation-mode must be 'text' or 'vision'"
+                exit 1
+            fi
+            shift 2
+            ;;
+        --run-mode)
+            RUN_MODE=$2
+            if [[ "$RUN_MODE" != "standard" && "$RUN_MODE" != "baseline" ]]; then
+                echo "Error: --run-mode must be 'standard' or 'baseline'"
                 exit 1
             fi
             shift 2

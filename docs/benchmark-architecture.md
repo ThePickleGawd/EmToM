@@ -14,6 +14,11 @@ EMTOM is a benchmark for embodied Theory of Mind. A task is good if success requ
 4. Judge whether the task genuinely requires ToM reasoning.
 5. Benchmark agents on the final task.
 
+## Benchmark Modes
+
+- `standard`: task secrets are private and agents only observe normal benchmark channels.
+- `baseline`: all task secrets are shared with all agents, and agents may read other agents' completed Thought+Action trajectories through a runtime benchmark tool.
+
 ## Code Ownership
 
 - `emtom/pddl/`: goal language, epistemic compilation, belief tracking, and solvability checks.

@@ -347,6 +347,8 @@ def ensure_benchmark_observation_config(config: DictConfig) -> None:
     with open_dict(config):
         if not hasattr(config, "benchmark_observation_mode"):
             config.benchmark_observation_mode = "text"
+        if not hasattr(config, "benchmark_run_mode"):
+            config.benchmark_run_mode = "standard"
         if not hasattr(config, "benchmark_vision") or config.benchmark_vision is None:
             config.benchmark_vision = OmegaConf.create(
                 {
@@ -532,7 +534,8 @@ def run_single_task(
     )
 
     # Build instruction
-    instruction = task_to_instruction(task)
+    run_mode = str(getattr(config, "benchmark_run_mode", "standard")).strip().lower()
+    instruction = task_to_instruction(task, run_mode=run_mode)
 
     print(f"\nPer-agent instructions:")
     for agent_id, instr in instruction.items():
@@ -562,6 +565,7 @@ def run_single_task(
         "task_id": task_id,
         "title": task.title,
         "category": task.category,
+        "run_mode": run_mode,
         "skipped": False,
         "success": False,
         "steps": 0,
@@ -778,6 +782,7 @@ def main(config: DictConfig) -> None:
     cprint("=" * 60, "blue")
     cprint(f"LLM: {llm_provider} ({model})", "blue")
     cprint(f"Observation mode: {config.benchmark_observation_mode}", "blue")
+    cprint(f"Run mode: {config.benchmark_run_mode}", "blue")
     if team_model_specs:
         cprint(f"Team model mapping requested: {team_model_map_requested}", "blue")
         for team_id, spec in sorted(team_model_specs.items()):
@@ -940,6 +945,7 @@ def main(config: DictConfig) -> None:
             "model": model,
             "llm_provider": llm_provider,
             "benchmark_observation_mode": config.benchmark_observation_mode,
+            "run_mode": config.benchmark_run_mode,
             "task_category_filter": task_category_filter,
             "team_model_map_requested": team_model_map_requested,
             "team_model_map_resolved": team_model_specs,

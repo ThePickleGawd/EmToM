@@ -18,6 +18,7 @@ def find_calibration_entry(
     calibration,
     model: Optional[str] = None,
     agent_models: Optional[dict] = None,
+    run_mode: str = "standard",
 ) -> Optional[dict]:
     """Find a calibration entry matching the given criteria.
 
@@ -37,6 +38,9 @@ def find_calibration_entry(
     best = None
     for entry in calibration:
         entry_agent_models = entry.get("agent_models", {})
+        entry_run_mode = str(entry.get("run_mode", "standard") or "standard")
+        if entry_run_mode != run_mode:
+            continue
 
         if agent_models is not None:
             if entry_agent_models == agent_models:
@@ -220,6 +224,7 @@ class TaskResult:
     error: Optional[str]
     evaluation: dict
     category: str = ""
+    run_mode: str = "standard"
     team_model_mapping: Optional[dict] = None
     agent_model_mapping: Optional[dict] = None
     results_dir: str = ""
@@ -241,6 +246,7 @@ def run_benchmark(
     output_dir: str,
     no_video: bool = True,
     category: Optional[str] = None,
+    run_mode: str = "standard",
     observation_mode: str = "text",
     selector_min_frames: int = 1,
     selector_max_frames: int = 5,
@@ -264,6 +270,7 @@ def run_benchmark(
         "--tasks-dir", str(tasks_dir),
         "--model", model,
         "--output-dir", str(output_dir),
+        "--run-mode", run_mode,
         "--observation-mode", observation_mode,
         "--selector-min-frames", str(selector_min_frames),
         "--selector-max-frames", str(selector_max_frames),
@@ -336,6 +343,7 @@ def parse_benchmark_results(output_dir: str, model: str) -> BenchmarkResults:
                 error=r.get("error"),
                 evaluation=evaluation,
                 category=r.get("category", ""),
+                run_mode=r.get("run_mode", summary.get("run_mode", "standard")),
                 team_model_mapping=r.get("team_model_mapping"),
                 agent_model_mapping=r.get("agent_model_mapping"),
                 results_dir=f"{results_base_dir}/{task_id}" if task_id else "",
@@ -388,6 +396,7 @@ def run_benchmark_parallel(
     no_video: bool = True,
     category: Optional[str] = None,
     team_model_map: Optional[str] = None,
+    run_mode: str = "standard",
     extra_args: Optional[List[str]] = None,
     write_calibration: bool = True,
     observation_mode: str = "text",
@@ -523,6 +532,7 @@ def run_benchmark_parallel(
                     "--tasks-dir", task_input,
                     "--model", model,
                     "--output-dir", bench_out,
+                    "--run-mode", run_mode,
                     "--observation-mode", observation_mode,
                     "--selector-min-frames", str(selector_min_frames),
                     "--selector-max-frames", str(selector_max_frames),
@@ -748,6 +758,7 @@ def update_calibration_from_benchmark(
 
         entry: Dict[str, Any] = {
             "tested_at": datetime.now().isoformat(),
+            "run_mode": result.run_mode or "standard",
             "agent_models": agent_models,
             "steps": result.steps,
             "results": results_block,
@@ -762,7 +773,8 @@ def update_calibration_from_benchmark(
         # Deduplicate: replace existing entry with same agent_models, else append
         replaced = False
         for i, existing in enumerate(calibration):
-            if existing.get("agent_models") == agent_models:
+            existing_run_mode = str(existing.get("run_mode", "standard") or "standard")
+            if existing.get("agent_models") == agent_models and existing_run_mode == entry["run_mode"]:
                 calibration[i] = entry
                 replaced = True
                 break

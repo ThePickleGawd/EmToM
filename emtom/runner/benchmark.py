@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 
 from omegaconf import DictConfig
 
+from emtom.actions.baseline_tools import ReadAgentTrajectoryTool
 from emtom.vision import VisualObservationStore
 
 from .base import EMTOMBaseRunner
@@ -41,6 +42,11 @@ class BenchmarkRunner(EMTOMBaseRunner):
         self.human_agents: Set[str] = set()
         self._completed_subtasks: Set[str] = set()
         self._visual_store: Optional[VisualObservationStore] = None
+        self._trajectory_store: List[Dict[str, Any]] = []
+
+    def get_run_mode(self) -> str:
+        raw_mode = str(getattr(self.config, "benchmark_run_mode", "standard")).strip().lower()
+        return raw_mode if raw_mode in {"standard", "baseline"} else "standard"
 
     def setup(
         self,
@@ -70,10 +76,14 @@ class BenchmarkRunner(EMTOMBaseRunner):
         if task:
             task_data = self._task_to_mechanics_dict(task)
 
-        agent_actions = task.agent_actions if task else None
+        agent_actions = self._resolve_agent_actions(task)
         message_targets = self._resolve_message_targets(task)
 
         super().setup(env_interface, task_data, output_dir, agent_actions=agent_actions, save_video=save_video, message_targets=message_targets)
+
+        self._trajectory_store = []
+        if self.get_run_mode() == "baseline":
+            self._inject_baseline_tools()
 
         if self._is_vision_mode():
             vision_cfg = getattr(self.config, "benchmark_vision", None)
@@ -184,6 +194,34 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 return derived
 
         return None
+
+    def _resolve_agent_actions(
+        self,
+        task: Optional["GeneratedTask"],
+    ) -> Optional[Dict[str, List[str]]]:
+        if task is None:
+            return None
+
+        agent_actions = {
+            agent_id: list(actions or [])
+            for agent_id, actions in (task.agent_actions or {}).items()
+        }
+
+        if self.get_run_mode() == "baseline":
+            for i in range(task.num_agents):
+                agent_id = f"agent_{i}"
+                actions = agent_actions.setdefault(agent_id, [])
+                if "ReadAgentTrajectoryTool" not in actions:
+                    actions.append("ReadAgentTrajectoryTool")
+
+        return agent_actions
+
+    def _inject_baseline_tools(self) -> None:
+        for uid, agent in self.agents.items():
+            tool = ReadAgentTrajectoryTool(agent_uid=uid)
+            tool.env_interface = self.env_interface
+            tool.set_trajectory_store(self._trajectory_store)
+            agent.tools["ReadAgentTrajectoryTool"] = tool
 
     def _task_to_mechanics_dict(self, task: "GeneratedTask") -> Dict[str, Any]:
         """Convert GeneratedTask to task data for GameStateManager."""
@@ -373,6 +411,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
                                 result=observation,
                                 mode="human",
                             )
+                        )
+                        self._append_trajectory_entry(
+                            turn=turn_count,
+                            agent_id=agent_id,
+                            action=action,
+                            thought=None,
                         )
 
                         newly_completed = self._check_subtasks()
@@ -821,6 +865,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         thought=state.get("planner_info", {}).get("thought", {}).get(uid),
                     )
                 )
+                self._append_trajectory_entry(
+                    turn=turn_count,
+                    agent_id=agent_id,
+                    action=high_level_action,
+                    thought=state.get("planner_info", {}).get("thought", {}).get(uid),
+                )
 
                 # Update belief tracker with action results
                 self._update_beliefs_for_action(agent_id, high_level_action, response)
@@ -870,7 +920,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
         # Communication metrics
         comm_metrics = None
-        if self.task and self._action_history:
+        if self.get_run_mode() == "baseline":
+            comm_dict = {
+                "status": "not_applicable",
+                "reason": "Baseline mode shares private reasoning explicitly.",
+            }
+        elif self.task and self._action_history:
             try:
                 from emtom.evaluation_comms import evaluate_communication
                 comm_metrics = evaluate_communication(
@@ -899,6 +954,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         )
 
         result = {
+            "run_mode": self.get_run_mode(),
             "steps": self._step_count,
             "turns": turn_count,
             "done": done,
@@ -1550,6 +1606,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         log_data = {
             "task_id": task_id,
             "task_title": self.task.title if self.task else "Unknown",
+            "run_mode": self.get_run_mode(),
             "instruction": instruction,
             "mechanics_active": self.game_manager.get_state().active_mechanics if self.game_manager else [],
             "steps": sim_steps,
@@ -1659,8 +1716,42 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 metrics[f"agent_{uid}"] = planner.get_selector_metrics()
         return metrics
 
+    def _append_trajectory_entry(
+        self,
+        *,
+        turn: int,
+        agent_id: str,
+        action: str,
+        thought: Optional[str],
+    ) -> None:
+        self._trajectory_store.append(
+            {
+                "turn": turn,
+                "agent_id": agent_id,
+                "action": action,
+                "thought": thought,
+            }
+        )
 
-def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
+
+def _build_known_information(task: "GeneratedTask", agent_id: str, run_mode: str) -> List[str]:
+    if run_mode == "baseline":
+        lines: List[str] = []
+        for other_agent_id in sorted(task.agent_actions.keys()):
+            for secret in task.agent_secrets.get(other_agent_id, []):
+                lines.append(f"{other_agent_id} knows: {secret}")
+        return lines
+
+    secrets = list(task.agent_secrets.get(agent_id, []))
+
+    teammate_info = _build_teammate_info(agent_id, sorted(task.agent_actions.keys()), task.teams)
+    if teammate_info and not any("team" in s.lower() and "agent_" in s.lower() for s in secrets):
+        secrets.insert(0, teammate_info)
+
+    return secrets
+
+
+def task_to_instruction(task: "GeneratedTask", run_mode: str = "standard") -> Dict[str, str]:
     """Convert GeneratedTask to per-agent instructions."""
     instructions = {}
 
@@ -1679,17 +1770,18 @@ def task_to_instruction(task: "GeneratedTask") -> Dict[str, str]:
             parts.append(f"[Task]: {task.task}")
             parts.append("")
 
-        # Known Information - what this agent knows
-        secrets = list(task.agent_secrets.get(agent_id, []))
+        if run_mode == "baseline":
+            parts.append(
+                "[Baseline Mode]: All agents' secrets are shared, and you may read "
+                "other agents' completed Thought + Action trajectories with "
+                "ReadAgentTrajectoryTool."
+            )
+            parts.append("")
 
-        # Prepend teammate info if not already present in secrets
-        teammate_info = _build_teammate_info(agent_id, all_agents, task.teams)
-        if teammate_info and not any("team" in s.lower() and "agent_" in s.lower() for s in secrets):
-            secrets.insert(0, teammate_info)
-
-        if secrets:
+        known_information = _build_known_information(task, agent_id, run_mode)
+        if known_information:
             parts.append("[Known Information]:")
-            for s in secrets:
+            for s in known_information:
                 parts.append(f"- {s}")
 
         # Active mechanic constraints — warn agents about mechanics that

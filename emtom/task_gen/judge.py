@@ -979,6 +979,17 @@ The user specifically requested:
             suggestions=suggestions,
         )
 
+    @staticmethod
+    def _is_infra_failure(judgment: "Judgment") -> bool:
+        """Check if a judgment failed due to infrastructure (not task quality)."""
+        reason = (judgment.overall_reasoning or "").lower()
+        markers = (
+            "429", "too_many_requests", "overloaded", "rate limit",
+            "connection error", "could not connect", "timed out",
+            "endpoint url", "name resolution", "error:",
+        )
+        return judgment.overall_score == 0.0 and any(m in reason for m in markers)
+
     def _failed_judgment(self, reason: str, category: str = "cooperative") -> Judgment:
         """Create a failed judgment for parse errors."""
         criteria_names = CATEGORY_CRITERIA.get(category, SHARED_CRITERIA)
@@ -997,6 +1008,20 @@ The user specifically requested:
 
     def _aggregate(self, judgments: Dict[str, Judgment]) -> CouncilVerdict:
         """Aggregate judgments from multiple models."""
+        # If ANY model failed due to infrastructure, the council verdict is
+        # unreliable. Kill the process — we need all models for consistent quality.
+        infra_failures = {
+            m: j for m, j in judgments.items()
+            if self._is_infra_failure(j)
+        }
+        if infra_failures:
+            raise RuntimeError(
+                "Judge council incomplete: "
+                f"{', '.join(infra_failures.keys())} failed due to infrastructure errors. "
+                "All council models are required for consistent task quality. "
+                "Check API keys, billing, and network connectivity."
+            )
+
         # Check if all models pass
         all_pass = all(j.is_valid for j in judgments.values())
 

@@ -1587,6 +1587,7 @@ SUMMARY:"""
 
         calibration_entry = {
             "tested_at": datetime.now().isoformat(),
+            "run_mode": "standard",
             "agent_models": agent_models,
             "steps": results.get("steps", 0),
             "results": results_block,
@@ -1600,7 +1601,8 @@ SUMMARY:"""
         # Deduplicate: replace existing entry with same agent_models, else append
         replaced = False
         for i, existing in enumerate(calibration):
-            if existing.get("agent_models") == agent_models:
+            existing_run_mode = str(existing.get("run_mode", "standard") or "standard")
+            if existing.get("agent_models") == agent_models and existing_run_mode == "standard":
                 calibration[i] = calibration_entry
                 replaced = True
                 break

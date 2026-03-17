@@ -117,33 +117,15 @@ def run(
             scene_data=scene_data,
             trajectory_dir=traj_path,
         )
+    except RuntimeError as e:
+        # RuntimeError from _aggregate means judge council is incomplete due to
+        # infrastructure (429, timeout, etc.). Re-raise to kill the process
+        # rather than letting the agent waste iterations on a non-task issue.
+        if "council incomplete" in str(e) or "All judge models failed" in str(e):
+            raise
+        return failure(f"Evaluation failed: {e}")
     except Exception as e:
         return failure(f"Evaluation failed: {e}")
-
-    # If every council model failed due connectivity/provider issues,
-    # fail fast with infrastructure error (no non-LLM fallback).
-    connectivity_markers = (
-        "connection error",
-        "could not connect",
-        "endpoint url",
-        "timed out",
-        "name resolution",
-    )
-    if verdict.judgments:
-        infra_failures = 0
-        for j in verdict.judgments.values():
-            reason = (j.overall_reasoning or "").lower()
-            if any(m in reason for m in connectivity_markers):
-                infra_failures += 1
-        all_models_unreachable = infra_failures == len(verdict.judgments)
-    else:
-        all_models_unreachable = False
-
-    if all_models_unreachable:
-        return failure(
-            "LLM judge unavailable: all configured judge models failed to respond. "
-            "No deterministic fallback is permitted."
-        )
 
     # Build result
     result_data: Dict[str, Any] = {
