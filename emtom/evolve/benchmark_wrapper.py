@@ -65,7 +65,7 @@ def _build_trajectory_from_log(results_dir: str) -> List[Dict[str, Any]]:
     from collections import defaultdict
 
     results_path = Path(results_dir)
-    log_files = sorted(results_path.glob("planner-log-*.json"))
+    log_files = sorted(results_path.glob("planner-log/planner-log-*.json"))
     if not log_files:
         return []
 

@@ -1767,9 +1767,23 @@ def _build_known_information(task: "GeneratedTask", agent_id: str, run_mode: str
         for other_agent_id in sorted(task.agent_actions.keys()):
             for secret in task.agent_secrets.get(other_agent_id, []):
                 lines.append(f"{other_agent_id} knows: {secret}")
+        if task.team_secrets:
+            for team_id, team_secs in sorted(task.team_secrets.items()):
+                for ts in team_secs:
+                    lines.append(f"{team_id} knows: {ts}")
         return lines
 
     secrets = list(task.agent_secrets.get(agent_id, []))
+
+    # Surface team_secrets for competitive tasks — each agent sees their
+    # team's shared secrets (e.g., which appliance to target).
+    if task.team_secrets and task.teams:
+        for team_id, members in task.teams.items():
+            if agent_id in members:
+                for ts in task.team_secrets.get(team_id, []):
+                    if ts not in secrets:
+                        secrets.append(ts)
+                break
 
     teammate_info = _build_teammate_info(agent_id, sorted(task.agent_actions.keys()), task.teams)
     if teammate_info and not any("team" in s.lower() and "agent_" in s.lower() for s in secrets):
