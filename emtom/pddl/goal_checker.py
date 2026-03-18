@@ -11,15 +11,12 @@ can undo progress.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from emtom.pddl.dsl import (
     Formula, Literal, And, Or, Not, Knows, Believes, EpistemicFormula,
     parse_goal_string,
 )
-
-if TYPE_CHECKING:
-    from emtom.pddl.belief_tracker import BeliefStateTracker
 
 
 class PDDLGoalChecker:
@@ -38,9 +35,9 @@ class PDDLGoalChecker:
         can undo progress. A winner is declared when any branch is fully
         satisfied.
 
-    If a belief_tracker is provided, epistemic goals (K/B) are evaluated
-    using the belief model. Otherwise, falls back to conservative evaluation
-    (K(a, phi) = phi is true in the world).
+    Runtime benchmark evaluation uses the functional (non-epistemic) projection
+    of the task goal by default. Design-time PDDL verification still uses the
+    full original goal elsewhere in the pipeline.
     """
 
     def __init__(
@@ -48,7 +45,6 @@ class PDDLGoalChecker:
         goal: Formula,
         ordering: Optional[List[Dict[str, str]]] = None,
         owners: Optional[Dict[str, str]] = None,
-        belief_tracker: Optional["BeliefStateTracker"] = None,
     ):
         """
         Args:
@@ -56,7 +52,6 @@ class PDDLGoalChecker:
             ordering: List of {"before": "(pred ...)", "after": "(pred ...)"} constraints
             owners: Map from goal literal string to owner (e.g., "team_0", "agent_0")
                    Literals not in this map default to required (cooperative).
-            belief_tracker: Optional tracker for epistemic goal evaluation
         """
         self.goal = goal
 
@@ -108,9 +103,6 @@ class PDDLGoalChecker:
                     self.conjuncts.append(formula)
                     self._owners[new_idx] = owner
 
-        # Belief tracker for proper K/B evaluation
-        self._belief_tracker = belief_tracker
-
     def _build_ordering(self, ordering: List[Dict[str, str]]) -> None:
         """Build prerequisite map from ordering constraints."""
         conjunct_strs = [c.to_pddl() for c in self.conjuncts]
@@ -131,11 +123,7 @@ class PDDLGoalChecker:
                 self._prerequisites.setdefault(after_idx, set()).add(before_idx)
 
     def _evaluate_conjunct(self, conjunct: Formula, check_predicate: Callable) -> bool:
-        """Evaluate a single conjunct using belief tracker or fallback."""
-        if self._belief_tracker and isinstance(conjunct, EpistemicFormula):
-            return self._belief_tracker.evaluate_epistemic(
-                conjunct, check_predicate
-            )
+        """Evaluate a single conjunct against runtime predicate checks."""
         return conjunct.evaluate(check_predicate)
 
     def update(self, check_predicate: Callable) -> Dict[str, Any]:
@@ -354,7 +342,8 @@ class PDDLGoalChecker:
     def from_task_data(
         cls,
         task_data: Dict[str, Any],
-        belief_tracker: Optional["BeliefStateTracker"] = None,
+        *,
+        functional_only: bool = True,
     ) -> Optional["PDDLGoalChecker"]:
         """Create from raw task JSON data containing problem_pddl."""
         problem_pddl = task_data.get("problem_pddl")
@@ -362,11 +351,19 @@ class PDDLGoalChecker:
             return None
 
         from emtom.pddl.problem_pddl import parse_problem_pddl
+        from emtom.pddl.runtime_projection import project_runtime_from_parsed_problem
 
         parsed = parse_problem_pddl(problem_pddl)
+        goal = parsed.goal_formula
+        owners = parsed.owners or {}
+        if functional_only:
+            projection = project_runtime_from_parsed_problem(parsed)
+            if projection.functional_goal is None:
+                return None
+            goal = projection.functional_goal
+            owners = projection.functional_owners
         return cls(
-            goal=parsed.goal_formula,
+            goal=goal,
             ordering=[],
-            owners=parsed.owners or {},
-            belief_tracker=belief_tracker,
+            owners=owners,
         )

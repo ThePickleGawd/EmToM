@@ -99,6 +99,7 @@ def validate(
         from emtom.pddl.domain import EMTOM_DOMAIN
         from emtom.pddl.dsl import validate_goal_predicates
         from emtom.pddl.problem_pddl import validate_problem_pddl_self_contained
+        from emtom.pddl.runtime_projection import project_runtime_from_parsed_problem
 
         parsed = parse_problem_pddl(task_data["problem_pddl"])
         declared_domain = task_data.get("pddl_domain", "")
@@ -127,6 +128,19 @@ def validate(
             return failure(
                 "problem_pddl must be self-contained: "
                 + "; ".join(self_contained_errors)
+            )
+
+        projection = project_runtime_from_parsed_problem(parsed)
+        if not projection.is_valid:
+            return failure(
+                "Runtime functional projection is invalid: "
+                + "; ".join(projection.invalid_reasons)
+            )
+        unsupported_probes = [probe.source_pddl for probe in projection.probes if not probe.supported]
+        if unsupported_probes:
+            return failure(
+                "Unsupported runtime literal-ToM probe formulas: "
+                + "; ".join(unsupported_probes)
             )
     except Exception as e:
         return failure(f"Invalid problem_pddl: {e}")

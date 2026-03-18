@@ -6,6 +6,10 @@ This file is the source of truth for the benchmark architecture. Keep it short a
 
 EMTOM is a benchmark for embodied Theory of Mind. A task is good if success requires agents to act under asymmetric information, communicate, and reason about what other agents know.
 
+Runtime benchmark scoring separates:
+- `functional_success`: physical and owned task completion under asymmetric information.
+- `literal_tom_probe`: end-of-episode probes derived from `K()` goals that measure whether agents can explicitly report who knows what.
+
 ## Pipeline
 
 1. Explore a scene and discover useful mechanics.
@@ -22,7 +26,7 @@ EMTOM is a benchmark for embodied Theory of Mind. A task is good if success requ
 
 ## Code Ownership
 
-- `emtom/pddl/`: goal language, epistemic compilation, belief tracking, and solvability checks.
+- `emtom/pddl/`: goal language, runtime goal projection, epistemic compilation, and solvability checks.
 - `emtom/task_gen/`: task generation, validation, calibration, and submission gates.
 - `emtom/runner/`: execution in the environment.
 - `emtom/cli/`: stable command surfaces for operators and agents.
@@ -34,5 +38,9 @@ EMTOM is a benchmark for embodied Theory of Mind. A task is good if success requ
 - Keep one clear implementation path.
 - Prefer direct data flow over hidden coupling.
 - Treat verification as a hard gate, not a warning system.
-- Treat higher-order knowledge conservatively. If the system cannot prove a `K()` goal, it should reject it.
+- Keep `problem_pddl` as the single authored source of epistemic structure.
+- Runtime task success ignores `K()` and uses the projected non-epistemic goal only.
+- End-of-episode literal ToM probes are derived deterministically from `K()` formulas and reported separately from task success.
+- Benchmark `percent_complete` should track the same success-relevant functional scope; mixed tasks may expose separate all-goal progress for diagnostics.
+- Golden trajectories are physical-only and do not include epistemic-only communication steps.
 - Update this file whenever the benchmark structure or invariants change.

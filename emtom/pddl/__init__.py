@@ -25,14 +25,15 @@ from emtom.pddl.dsl import (
 from emtom.pddl.epistemic import ObservabilityModel
 from emtom.pddl.compiler import compile_task
 from emtom.pddl.goal_checker import PDDLGoalChecker
-from emtom.pddl.belief_tracker import BeliefStateTracker
 from emtom.pddl.describe import describe_task
 from emtom.pddl.goal_spec import GoalEntry, GoalSpec
 from emtom.pddl.problem_pddl import (
     ParsedProblemPDDL,
     parse_problem_pddl,
     extract_goal_from_problem_pddl,
+    replace_goal_in_problem_pddl,
 )
+from emtom.pddl.runtime_projection import LiteralToMProbe, RuntimeProjection
 
 __all__ = [
     "Type",
@@ -53,11 +54,13 @@ __all__ = [
     "ObservabilityModel",
     "compile_task",
     "PDDLGoalChecker",
-    "BeliefStateTracker",
     "describe_task",
     "GoalEntry",
     "GoalSpec",
     "ParsedProblemPDDL",
     "parse_problem_pddl",
     "extract_goal_from_problem_pddl",
+    "replace_goal_in_problem_pddl",
+    "LiteralToMProbe",
+    "RuntimeProjection",
 ]

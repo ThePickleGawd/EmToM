@@ -109,6 +109,28 @@ def extract_goal_from_problem_pddl(problem_pddl: str) -> str:
     return _extract_goal(raw)
 
 
+def replace_goal_in_problem_pddl(problem_pddl: str, new_goal_pddl: str) -> str:
+    """Replace the `:goal` formula in an inline problem string."""
+    raw = _strip_comments(problem_pddl or "").strip()
+    if not raw:
+        raise ValueError("problem_pddl is empty")
+
+    lower = raw.lower()
+    needle = "(:goal"
+    idx = lower.find(needle)
+    if idx < 0:
+        raise ValueError("problem_pddl is missing (:goal ...)")
+
+    pos = idx + len(needle)
+    while pos < len(raw) and raw[pos].isspace():
+        pos += 1
+    if pos >= len(raw) or raw[pos] != "(":
+        raise ValueError("(:goal ...) must contain a parenthesized formula")
+
+    end = _find_matching_paren(raw, pos)
+    return raw[:pos] + new_goal_pddl.strip() + raw[end + 1 :]
+
+
 def collect_object_ids_from_formula(formula: Formula) -> Set[str]:
     """Collect grounded object IDs referenced in a formula."""
     out: Set[str] = set()

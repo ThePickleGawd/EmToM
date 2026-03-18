@@ -124,6 +124,18 @@ def _compute_tom_metadata(
     return result
 
 
+def _apply_runtime_metadata(task_data: Dict[str, Any]) -> None:
+    """Backfill functional runtime metadata derived from problem_pddl."""
+    from emtom.pddl.runtime_projection import build_runtime_metadata, project_runtime_from_problem
+
+    projection = project_runtime_from_problem(task_data["problem_pddl"])
+    if not projection.is_valid:
+        reasons = "; ".join(projection.invalid_reasons) or "unknown runtime projection error"
+        raise ValueError(f"Invalid runtime functional projection: {reasons}")
+
+    task_data.update(build_runtime_metadata(task_data))
+
+
 def run(
     task_file: str,
     output_dir: str,
@@ -190,6 +202,7 @@ def run(
             task_data["tom_reasoning"] = tom_meta["tom_reasoning"]
         else:
             task_data.pop("tom_reasoning", None)
+        _apply_runtime_metadata(task_data)
     except Exception as e:
         return failure(f"Failed to compute tom_level during submit: {e}")
 

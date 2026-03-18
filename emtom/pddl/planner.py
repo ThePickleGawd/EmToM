@@ -619,6 +619,8 @@ def generate_deterministic_trajectory(
         Dict with keys: trajectory, planned_literals, ignored_literals, planner_notes.
     """
     from emtom.pddl.dsl import Literal
+    from emtom.pddl.problem_pddl import replace_goal_in_problem_pddl
+    from emtom.pddl.runtime_projection import project_runtime_from_problem
 
     num_agents = int(task_data.get("num_agents", 2) or 2)
     problem_pddl = task_data.get("problem_pddl")
@@ -627,17 +629,30 @@ def generate_deterministic_trajectory(
             "Cannot generate deterministic golden trajectory: missing problem_pddl."
         )
 
+    projection = project_runtime_from_problem(problem_pddl)
+    if not projection.functional_goal_pddl:
+        reasons = "; ".join(projection.invalid_reasons) or "no functional goal remains"
+        raise ValueError(
+            "Cannot generate deterministic golden trajectory from epistemic-only goal: "
+            f"{reasons}."
+        )
+
+    runtime_task_data = dict(task_data)
+    runtime_task_data["problem_pddl"] = replace_goal_in_problem_pddl(
+        problem_pddl,
+        projection.functional_goal_pddl,
+    )
+
     problem, observability, solver_result = _solve_task_for_trajectory(
-        task_data,
+        runtime_task_data,
         scene_data,
     )
 
     relation_by_pair = _collect_goal_relation_preferences(problem.goal)
-    leaf_facts, nested_k_map = _build_epistemic_message_maps(problem.goal, observability)
     object_types = dict(problem.objects)
     plan = solver_result.plan or []
     trajectory: List[Dict[str, Any]] = []
-    communication_derived = False
+    ignored_epistemic_steps = 0
 
     def require_type(name: str, expected: str, step: str) -> None:
         actual = object_types.get(name)
@@ -657,20 +672,12 @@ def generate_deterministic_trajectory(
 
     for step in plan:
         if _INFORM_RE.search(step):
-            inform = parse_fd_inform_actions([step])[0]
-            trajectory.append(
-                _build_communicate_action(
-                    inform,
-                    num_agents,
-                    leaf_facts,
-                    nested_k_map,
-                )
-            )
-            communication_derived = True
+            ignored_epistemic_steps += 1
             continue
 
         step_name, args = _parse_plan_step(step)
         if step_name.startswith("observe_knows_"):
+            ignored_epistemic_steps += 1
             continue
 
         if step_name == "open" and len(args) == 3:
@@ -764,8 +771,14 @@ def generate_deterministic_trajectory(
         "Deterministic golden trajectory derived from strict Fast Downward plan.",
         f"Translated {len(plan)} planner step(s) into {len(trajectory)} golden step(s).",
     ]
-    if communication_derived:
-        planner_notes.append("Communicate steps were derived directly from epistemic inform actions.")
+    if projection.epistemic_conjuncts_removed:
+        planner_notes.append(
+            f"Runtime golden semantics removed {projection.epistemic_conjuncts_removed} epistemic conjunct(s)."
+        )
+    if ignored_epistemic_steps:
+        planner_notes.append(
+            f"Ignored {ignored_epistemic_steps} epistemic planner step(s) while building the physical-only golden trajectory."
+        )
     if solver_result.belief_depth:
         planner_notes.append(
             f"Strict solver proved belief depth {solver_result.belief_depth}."
@@ -776,7 +789,9 @@ def generate_deterministic_trajectory(
         "planned_literals": planned_literals,
         "ignored_literals": [],
         "planner_notes": planner_notes,
-        "communication_derived": communication_derived,
+        "communication_derived": False,
+        "ignored_epistemic_steps": ignored_epistemic_steps,
+        "functional_goal_pddl": projection.functional_goal_pddl,
     }
 
 
@@ -818,13 +833,15 @@ def regenerate_golden_trajectory(
 
     metadata.update({
         "planner": "strict_fd_translator",
-        "planner_version": "v5_solver_backed",
+        "planner_version": "v6_functional_runtime",
         "source": source,
         "spec_hash": spec_hash,
         "trajectory_hash": trajectory_hash,
         "generated_at": datetime.now().isoformat(),
         "num_steps": len(trajectory),
         "communication_derived": communication_derived,
+        "ignored_epistemic_steps": plan_result.get("ignored_epistemic_steps", 0),
+        "functional_goal_pddl": plan_result.get("functional_goal_pddl"),
         "planned_literals": plan_result.get("planned_literals", []),
         "ignored_literals": plan_result.get("ignored_literals", []),
         "planner_notes": plan_result.get("planner_notes", []),

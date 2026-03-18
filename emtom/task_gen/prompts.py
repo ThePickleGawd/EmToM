@@ -325,7 +325,8 @@ they need to acquire first.
 - Every K() goal must pair with a physical goal that depends on that knowledge
 - Never use K() on facts the agent can directly observe (no blocking mechanic)
 - K() goals ARE part of strict ToM verification and determine the minimum solvable depth
-- The evaluator still unwraps K() when checking the underlying world fact, but strict verification also requires the epistemic goal structure to be solvable
+- Runtime benchmark success ignores K() and evaluates only the non-epistemic projection of the task
+- K() goals are still used for strict ToM verification and end-of-episode literal-ToM probes
 
 ### Example: K=0 (no epistemic reasoning)
 ```json
@@ -383,19 +384,16 @@ Use `judge[]` to see the computed minimal ToM depth from its strict PDDL-verific
 You should focus on editing spec fields (`problem_pddl`, mechanics, constraints, secrets).
 
 The deterministic planner generates **physical actions only** (Navigate, Open, Close, Pick, Place, UseItem).
-It does NOT generate Communicate actions. K() epistemic goals are unwrapped to their inner
-world-state literals for planning — communication is how LLM agents satisfy K() goals at runtime,
-but the golden trajectory only verifies that the physical end state is achievable.
+It does NOT generate Communicate or other epistemic-only steps. Runtime task success is evaluated
+on the non-epistemic projection of `problem_pddl` only, while `K()` goals are used separately for
+ToM depth verification and end-of-episode literal-ToM probes.
 This means the planner respects `room_restriction` (assigns agents to reachable targets) and
 `remote_control` (uses trigger objects for `is_unlocked` goals), but K() goals add no extra
-trajectory steps. Design K() goals to express *what agents must learn*, not *physical actions*.
+golden-trajectory steps. Design K() goals to express *what agents must learn*, not *physical actions*.
 
-**CRITICAL: K() inner literals must be true at end-state.** The evaluator checks K(agent, fact)
-by verifying the inner fact is true in the final world state. If the fact references an object that
-gets moved during the episode (e.g., `K agent_1 (is_on_top cup_3 toilet_33)` but the cup is moved
-to the bed), the goal will FAIL. Design K() goals about **stable facts** — objects that remain
-in their initial position throughout the episode. Use SEPARATE objects for K() knowledge goals
-vs. physical manipulation goals.
+**CRITICAL: K() goals are probe targets, not runtime success conditions.** They should still be
+meaningful and backed by real information asymmetry, but the golden trajectory only proves the
+physical/owned task can be completed.
 
 ## Structural Diversity
 {diversity_section}"""

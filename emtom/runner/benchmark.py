@@ -7,6 +7,7 @@ as human or LLM via the human_agents parameter.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -889,9 +890,6 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     observation=response,
                 )
 
-                # Update belief tracker with action results
-                self._update_beliefs_for_action(agent_id, high_level_action, response)
-
                 self.check_and_inject_item_tools(uid)
 
                 if state['planner_done']:
@@ -934,6 +932,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
         # Final evaluation
         evaluation = self._check_task_completion() or {}
+        evaluation["functional_success"] = evaluation.get("success", False)
+        probe_metrics = self._run_literal_tom_probes(instruction)
+        if probe_metrics:
+            evaluation["literal_tom_probe_score"] = probe_metrics.get("score")
+            evaluation["literal_tom_probe_results"] = probe_metrics.get("results", [])
+            evaluation["literal_tom_probe_summary"] = probe_metrics.get("summary", {})
 
         # Communication metrics
         comm_metrics = None
@@ -1341,6 +1345,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
             return {
                 "success": winner is not None,
+                "functional_success": winner is not None,
                 "winner": winner,
                 "team_status": team_status,
                 "team_progress": team_progress,
@@ -1373,13 +1378,27 @@ class BenchmarkRunner(EMTOMBaseRunner):
 
             total = len(checker.conjuncts)
             completed = len(checker.completed)
+            completed_required_ids = [
+                checker.conjuncts.index(c)
+                for c in required
+                if checker.is_conjunct_completed(checker.conjuncts.index(c))
+            ]
+            required_total = len(required)
             return {
                 "success": main_goal_success,
+                "functional_success": main_goal_success,
                 "main_goal_success": main_goal_success,
                 "agent_subgoal_status": agent_subgoal_status,
-                "completed_subtasks": list(checker.completed),
-                "total_subtasks": total,
-                "percent_complete": completed / total if total else 0.0,
+                # Mixed-task progress should reflect the success-relevant
+                # functional goal scope, not optional/private side goals.
+                "completed_subtasks": completed_required_ids,
+                "total_subtasks": required_total,
+                "percent_complete": (
+                    required_done / required_total if required_total else 0.0
+                ),
+                "completed_all_subtasks": list(checker.completed),
+                "total_all_subtasks": total,
+                "all_goal_percent_complete": completed / total if total else 0.0,
             }
 
         else:
@@ -1389,6 +1408,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
             all_complete = completed == total
             return {
                 "success": all_complete,
+                "functional_success": all_complete,
                 "completed_subtasks": list(checker.completed),
                 "total_subtasks": total,
                 "percent_complete": completed / total if total else 0.0,
@@ -1400,144 +1420,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
             return []
         return self._check_pddl_goals()
 
-    def _get_belief_tracker(self):
-        """Get or create the belief state tracker for epistemic goal evaluation."""
-        if hasattr(self, '_belief_tracker'):
-            return self._belief_tracker
-
-        self._belief_tracker = None
-        try:
-            from emtom.pddl.belief_tracker import BeliefStateTracker
-            from emtom.pddl.epistemic import ObservabilityModel
-
-            # Build object-room mapping from world graph
-            # Include BOTH furniture and small objects (for binary predicate tracking)
-            # get_world_graph() returns Dict[int, WorldGraph] (per-agent), so
-            # pick any agent's graph (they all share the same scene structure).
-            object_rooms = {}
-            world_graph_dict = self.get_world_graph()
-            wg = None
-            if world_graph_dict:
-                for uid_val, candidate in world_graph_dict.items():
-                    if candidate is not None:
-                        wg = candidate
-                        break
-            if wg is not None:
-                try:
-                    from habitat_llm.world_model.world_graph import Furniture, Object
-
-                    room_map = wg.get_furniture_to_room_map()
-                    furn_name_to_room = {}
-                    for furn, room in room_map.items():
-                        furn_name = getattr(furn, 'name', str(furn))
-                        room_name = getattr(room, 'name', str(room))
-                        object_rooms[furn_name] = room_name
-                        furn_name_to_room[furn_name] = room_name
-
-                    for room in wg.get_all_rooms():
-                        room_name = getattr(room, 'name', str(room))
-                        object_rooms[room_name] = room_name
-
-                    # Also map small objects to their room via their furniture parent
-                    for obj_node in wg.get_all_objects():
-                        obj_name = getattr(obj_node, 'name', str(obj_node))
-                        for neighbor in wg.graph[obj_node]:
-                            if isinstance(neighbor, Furniture):
-                                furn_name = getattr(neighbor, 'name', str(neighbor))
-                                if furn_name in furn_name_to_room:
-                                    object_rooms[obj_name] = furn_name_to_room[furn_name]
-                                break
-                except Exception as wg_err:
-                    print(f"[Benchmark] World graph parsing for belief tracker failed: {wg_err}", flush=True)
-
-            observability = None
-            if self.task:
-                observability = ObservabilityModel.from_task(self.task)
-
-            self._belief_tracker = BeliefStateTracker.from_scene_and_observability(
-                object_rooms=object_rooms,
-                observability=observability,
-                num_agents=getattr(self.task, 'num_agents', 2),
-            )
-        except Exception as e:
-            print(f"[Benchmark] Could not create belief tracker: {e}", flush=True)
-
-        return self._belief_tracker
-
-    def _update_beliefs_for_action(
-        self, agent_id: str, action: str, result: str
-    ) -> None:
-        """Update belief tracker after an action completes."""
-        tracker = self._get_belief_tracker()
-        if tracker is None:
-            return
-
-        # Parse action name and target
-        action_name, target = self._parse_action_to_tuple(action)
-        if not action_name:
-            return
-
-        # Skip failed actions
-        if any(phrase in (result or "").lower() for phrase in [
-            "too far", "occluded", "failed to", "unexpected failure",
-            "cannot", "blocked",
-        ]):
-            return
-
-        def check_fn(pred, args):
-            prop = {"property": pred}
-            if args:
-                prop["entity"] = args[0]
-            if len(args) > 1:
-                prop["target"] = args[1]
-            res = self.evaluate_task({"required_states": [prop]})
-            return res and res.get("success", False)
-
-        if action_name == "Navigate" and target:
-            # Resolve furniture/object targets to their room
-            # (Navigate targets are often furniture like table_29, not rooms)
-            room = tracker.object_rooms.get(target, target)
-            tracker.record_room_entry(agent_id, room, check_fn)
-
-        elif action_name == "Communicate" and target:
-            # Parse Communicate["message", recipient]
-            import re
-            comm_match = re.match(r'Communicate\[(["\'])(.*?)\1,\s*(.*?)\]', action)
-            if comm_match:
-                message = comm_match.group(2)
-                recipient = comm_match.group(3).strip()
-                if recipient == "all":
-                    for i in range(getattr(self.task, 'num_agents', 2)):
-                        other = f"agent_{i}"
-                        if other != agent_id:
-                            tracker.record_communication(
-                                agent_id, other, message, check_fn
-                            )
-                else:
-                    tracker.record_communication(
-                        agent_id, recipient, message, check_fn
-                    )
-
-        elif action_name in ("Open", "Close", "Pick", "Place", "Clean", "Fill",
-                             "PowerOn", "PowerOff", "UseItem"):
-            # State-changing action — agents in same room observe it
-            if target:
-                change_room = tracker.object_rooms.get(target)
-                # Record for all agents in the same room
-                for pred in ("is_open", "is_closed", "is_on_top", "is_inside",
-                             "is_clean", "is_dirty", "is_unlocked"):
-                    if check_fn(pred, (target,)):
-                        tracker.record_state_change(pred, (target,), change_room)
-
     def _check_pddl_goals(self) -> List[str]:
         """Check PDDL goal conjuncts and return newly completed ones."""
         if not hasattr(self, '_pddl_checker') or self._pddl_checker is None:
-            belief_tracker = self._get_belief_tracker()
             self._pddl_checker = self.task.get_pddl_goal_checker()
             if self._pddl_checker is None:
                 return []
-            # Inject belief tracker into checker
-            self._pddl_checker._belief_tracker = belief_tracker
 
         def check_predicate(pred_name, args):
             prop = {"property": pred_name}
@@ -1589,6 +1477,159 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 print(f"{'─'*50}", flush=True)
 
         return newly_completed
+
+    def _run_literal_tom_probes(
+        self,
+        instruction: Dict[str, str],
+    ) -> Optional[Dict[str, Any]]:
+        """Run deterministic end-of-episode literal-ToM probes."""
+        if not self.task:
+            return None
+
+        from emtom.pddl.runtime_projection import (
+            evaluate_literal_tom_probe,
+            load_literal_tom_probes,
+        )
+
+        probes = load_literal_tom_probes(self.task.get_literal_tom_probes())
+        if not probes:
+            return {
+                "score": None,
+                "results": [],
+                "summary": {"probe_count": 0, "supported_probe_count": 0, "passed_count": 0},
+            }
+
+        def check_fn(pred_name: str, args: Tuple[str, ...]) -> bool:
+            prop = {"property": pred_name}
+            if args:
+                prop["entity"] = args[0]
+            if len(args) > 1:
+                prop["target"] = args[1]
+            result = self.evaluate_task({"required_states": [prop]})
+            return bool(result and result.get("success", False))
+
+        results: List[Dict[str, Any]] = []
+        supported_count = 0
+        passed_count = 0
+
+        for probe in probes:
+            result_entry: Dict[str, Any] = {
+                "probe_id": probe.probe_id,
+                "agent_id": probe.agent_id,
+                "source_pddl": probe.source_pddl,
+                "question": probe.question,
+                "supported": probe.supported,
+            }
+            if not probe.supported:
+                result_entry["status"] = "unsupported"
+                result_entry["reason"] = probe.unsupported_reason
+                results.append(result_entry)
+                continue
+
+            supported_count += 1
+            planner = self.planners.get(int(probe.agent_id.split("_", 1)[1])) if probe.agent_id else None
+            if planner is None or not hasattr(planner, "llm"):
+                result_entry["status"] = "unavailable"
+                result_entry["reason"] = "No LLM planner available for probed agent."
+                results.append(result_entry)
+                continue
+
+            probe_prompt = self._build_literal_tom_probe_prompt(
+                probe.agent_id,
+                probe.question,
+                instruction,
+            )
+
+            try:
+                raw_response = planner.llm.generate(probe_prompt)
+            except Exception as exc:
+                result_entry["status"] = "error"
+                result_entry["reason"] = f"Probe generation failed: {exc}"
+                results.append(result_entry)
+                continue
+
+            response_data = self._extract_probe_json(raw_response)
+            passed, details = evaluate_literal_tom_probe(probe, response_data, check_fn)
+            if passed:
+                passed_count += 1
+            result_entry.update({
+                "status": "passed" if passed else "failed",
+                "raw_response": raw_response,
+                "details": details,
+            })
+            results.append(result_entry)
+
+        score = (passed_count / supported_count) if supported_count else None
+        return {
+            "score": score,
+            "results": results,
+            "summary": {
+                "probe_count": len(probes),
+                "supported_probe_count": supported_count,
+                "passed_count": passed_count,
+            },
+        }
+
+    def _build_literal_tom_probe_prompt(
+        self,
+        agent_id: str,
+        question: str,
+        instruction: Dict[str, str],
+    ) -> str:
+        """Build a deterministic post-episode probe prompt."""
+        uid = int(agent_id.split("_", 1)[1])
+        planner = self.planners.get(uid)
+        if planner is not None and getattr(planner, "curr_prompt", ""):
+            context = str(planner.curr_prompt)
+        else:
+            context = self._build_probe_context_fallback(agent_id, instruction)
+        return (
+            f"{context}\n\n"
+            "The episode is over. Do not propose any more actions.\n"
+            "Answer the following post-episode evaluation question using only the episode context above.\n"
+            f"{question}\n"
+        )
+
+    def _build_probe_context_fallback(
+        self,
+        agent_id: str,
+        instruction: Dict[str, str],
+    ) -> str:
+        """Fallback probe context when the planner prompt is unavailable."""
+        agent_instruction = instruction.get(agent_id, "")
+        history_lines = []
+        for entry in self._action_history:
+            if entry.get("agent_id") != agent_id and entry.get("agent") != agent_id:
+                continue
+            action = entry.get("action", "")
+            observation = entry.get("observation") or entry.get("result") or ""
+            history_lines.append(f"- Action: {action}")
+            if observation:
+                history_lines.append(f"  Observation: {observation}")
+        history_text = "\n".join(history_lines) if history_lines else "- No recorded actions."
+        return (
+            f"Task instruction for {agent_id}:\n{agent_instruction}\n\n"
+            f"Episode history for {agent_id}:\n{history_text}"
+        )
+
+    @staticmethod
+    def _extract_probe_json(raw_response: Any) -> Dict[str, Any]:
+        """Extract the first JSON object from a probe response."""
+        if isinstance(raw_response, dict):
+            return raw_response
+        text = str(raw_response or "").strip()
+        if not text:
+            return {}
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            if not match:
+                return {}
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return {}
 
     def _extract_high_level_action(self, planner_info: Dict, uid: int) -> Optional[str]:
         """Extract high-level action from planner info."""

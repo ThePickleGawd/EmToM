@@ -119,6 +119,9 @@ class GeneratedTask:
     # THEORY OF MIND
     tom_level: int = 0
     tom_reasoning: Optional[str] = None
+    functional_goal_pddl: Optional[str] = None
+    literal_tom_probes: List[Dict[str, Any]] = field(default_factory=list)
+    runtime_semantics_version: Optional[str] = None
 
     # MESSAGE TARGETING (optional, restricts who each agent can message)
     message_targets: Optional[Dict[str, List[str]]] = None
@@ -196,6 +199,9 @@ class GeneratedTask:
         active_mechanics = data.get("active_mechanics", [])
         if not isinstance(active_mechanics, list):
             active_mechanics = []
+        literal_tom_probes = data.get("literal_tom_probes", [])
+        if not isinstance(literal_tom_probes, list):
+            literal_tom_probes = []
 
         return cls(
             task_id=data.get("task_id", "unknown"),
@@ -216,6 +222,9 @@ class GeneratedTask:
             initial_states=initial_states,
             tom_level=data.get("tom_level", 0),
             tom_reasoning=data.get("tom_reasoning"),
+            functional_goal_pddl=data.get("functional_goal_pddl"),
+            literal_tom_probes=literal_tom_probes,
+            runtime_semantics_version=data.get("runtime_semantics_version"),
             message_targets=message_targets,
             teams=teams,
             team_secrets=team_secrets,
@@ -228,11 +237,14 @@ class GeneratedTask:
         """Check if this task has a PDDL goal."""
         return self.problem_pddl is not None
 
-    def get_pddl_goal_checker(self):
+    def get_pddl_goal_checker(self, functional_only: bool = True):
         """Create a PDDLGoalChecker for this task."""
         from emtom.pddl.goal_checker import PDDLGoalChecker
 
-        return PDDLGoalChecker.from_task_data(self.to_dict())
+        return PDDLGoalChecker.from_task_data(
+            self.to_dict(),
+            functional_only=functional_only,
+        )
 
     def compute_tom_level(self, scene_data=None) -> int:
         """Compute ToM level from PDDL. Returns stored tom_level if no PDDL."""
@@ -248,6 +260,15 @@ class GeneratedTask:
         if checker:
             return checker.to_propositions()
         return []
+
+    def get_literal_tom_probes(self) -> List[Dict[str, Any]]:
+        """Get persisted or derived literal-ToM probes for this task."""
+        if self.literal_tom_probes:
+            return list(self.literal_tom_probes)
+        from emtom.pddl.runtime_projection import build_runtime_metadata
+
+        metadata = build_runtime_metadata(self.to_dict())
+        return list(metadata.get("literal_tom_probes", []))
 
     def get_required_pddl_propositions(self) -> List[Dict[str, Any]]:
         """Get only required (non-owned) propositions."""

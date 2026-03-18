@@ -187,6 +187,7 @@ print_usage() {
     echo "  test-task      Run LLM agents on a task (requires GPU)"
     echo "  new-scene      Load a new Habitat scene (requires GPU)"
     echo "  submit-task    Submit a validated task to output directory"
+    echo "  migrate-literal-tom  Migrate tasks to physical-success + literal-ToM-probe semantics"
     echo "  evolve         Run evolutionary difficulty generation (model ladder)"
     echo "  all            Run full pipeline: explore -> generate -> benchmark"
     echo ""
@@ -899,10 +900,38 @@ PY
 
     python3 - <<PY
 import json
+import re
 from pathlib import Path
+
 p = Path("$VERIFY_RESULT_FILE")
-data = json.load(p.open())
-valid = bool(data.get("valid", False))
+raw = p.read_text()
+
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    matches = re.findall(r"\{.*\}", raw, flags=re.DOTALL)
+    data = None
+    for candidate in reversed(matches):
+        try:
+            data = json.loads(candidate)
+            break
+        except json.JSONDecodeError:
+            continue
+    if data is None:
+        data = {
+            "valid": False,
+            "error": "Verification output did not contain a parseable JSON result.",
+            "raw_output_tail": raw[-4000:],
+        }
+        p.write_text(json.dumps(data, indent=2) + "\\n")
+
+if "valid" in data:
+    valid = bool(data.get("valid", False))
+else:
+    valid = bool(data.get("success", False))
+    nested = data.get("data")
+    if isinstance(nested, dict) and "valid" in nested:
+        valid = valid and bool(nested.get("valid", False))
 print(json.dumps(data, indent=2))
 if valid:
     print("\\nVerification: PASS")
@@ -1013,6 +1042,11 @@ run_submit_task() {
     python -m emtom.cli.submit_task "${SUBMIT_ARGS[@]}"
 }
 
+run_migrate_literal_tom() {
+    MIGRATE_ARGS=(--tasks-dir "${TASKS_DIR:-data/emtom/tasks}" --output-dir "${OUTPUT_DIR:-data/emtom/tasks_literal_tom_v1}")
+    python -m emtom.scripts.migrate_literal_tom_tasks "${MIGRATE_ARGS[@]}"
+}
+
 # Parse command line arguments
 COMMAND=""
 EVOLVE_ARGS=()
@@ -1031,7 +1065,7 @@ while [[ $# -gt 0 ]]; do
             python -m emtom.scripts.campaign "$@"
             exit $?
             ;;
-        explore|generate|benchmark|test|judge|verify|verify-static|verify-pddl|validate-task|test-task|new-scene|submit-task|all)
+        explore|generate|benchmark|test|judge|verify|verify-static|verify-pddl|validate-task|test-task|new-scene|submit-task|migrate-literal-tom|all)
             COMMAND=$1
             shift
             ;;
@@ -1362,6 +1396,9 @@ case $COMMAND in
         ;;
     submit-task)
         run_submit_task
+        ;;
+    migrate-literal-tom)
+        run_migrate_literal_tom
         ;;
     evolve)
         run_evolve
