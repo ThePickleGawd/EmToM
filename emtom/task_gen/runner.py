@@ -35,6 +35,7 @@ import hydra
 from omegaconf import DictConfig
 
 from habitat_llm.utils import cprint, setup_config, fix_config
+from emtom.task_gen.seed_sanitizer import sanitize_task_for_seeding
 
 
 def parse_extra_args():
@@ -107,9 +108,13 @@ def _is_task_like_json(path: Path) -> bool:
 
 
 def _copy_sample_with_aliases(src_path: Path, sampled_tasks_dir: Path, index: int) -> None:
-    """Copy sampled task with both unpadded and zero-padded filenames."""
-    shutil.copy(src_path, sampled_tasks_dir / f"task_{index}.json")
-    shutil.copy(src_path, sampled_tasks_dir / f"task_{index:03d}.json")
+    """Copy a sanitized sampled task with both unpadded and zero-padded filenames."""
+    with open(src_path) as f:
+        task_data = json.load(f)
+    sanitized = sanitize_task_for_seeding(task_data)
+    for filename in (f"task_{index}.json", f"task_{index:03d}.json"):
+        with open(sampled_tasks_dir / filename, "w") as f:
+            json.dump(sanitized, f, indent=2)
 
 
 def populate_sampled_tasks_dir(

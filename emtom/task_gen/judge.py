@@ -274,12 +274,12 @@ CRITERIA_DESCRIPTIONS = {
     },
     "pddl_solvability": {
         "name": "Formal Goal Quality & Epistemic Coherence",
-        "description": "Does the self-contained `problem_pddl` define a formally meaningful task for this benchmark? Treat hard formal invalidity as a near-automatic fail. When the task is formally valid, focus on whether the epistemic and physical goals create a coherent benchmark challenge. For K() goals specifically: (1) is there a concrete blocking mechanic preventing direct observation, and (2) does that knowledge genuinely matter for accomplishing a physical objective?",
-        "rubric": """0.0: Raw problem_pddl is invalid, not self-contained, contradictory, or obviously impossible; or K() goals are fake/decorative
-0.3: Task is barely formalizable but weak: trivially satisfied, poorly grounded, or K() goals have little real purpose
-0.5: Formally valid task, but the epistemic structure is weak, category logic is shaky, or knowledge goals feel loosely attached
-0.7: Formally well-structured and benchmark-relevant; K() goals are mostly meaningful information prerequisites with only minor weaknesses
-1.0: Self-contained, formally coherent, and benchmark-meaningful: the physical and epistemic goals work together cleanly, and every K() goal captures a genuine information prerequisite""",
+        "description": "Does the self-contained `problem_pddl` define a formally meaningful task for this benchmark under the current split semantics? Treat hard formal invalidity as a near-automatic fail. Judge the physical functional core after removing epistemic conjuncts, and separately judge whether the K() structure yields meaningful literal-ToM probes grounded in genuine information asymmetry.",
+        "rubric": """0.0: Raw problem_pddl is invalid, contradictory, or impossible; or the functional projection becomes vacuous/single-agent/trivial; or K() goals are fake/decorative
+0.3: Barely benchmark-meaningful: weak functional core, shaky category logic, or K() probes are loosely attached to irrelevant facts
+0.5: Formally valid task, but either the functional projection is weak after dropping K(), or the epistemic structure is shallow / weakly grounded
+0.7: Strong functional core plus mostly meaningful K()-derived probes, with only minor weaknesses in grounding or interdependence
+1.0: Self-contained, formally coherent, and benchmark-meaningful under split semantics: the functional projection remains strong, and every K() goal becomes a grounded, information-rich literal-ToM probe""",
     },
     "mechanic_utilization": {
         "name": "Mechanic Utilization & Balance",
@@ -438,13 +438,22 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 - Secrets must be actionable (room/furniture/key/constraint) and required
 - Secrets must be natural language (no IDs) and not step-by-step
 - Single-format goal source is `problem_pddl`
+- Runtime semantics are split:
+  - functional benchmark success uses the non-epistemic projection only
+  - `K()` goals are design-time / probe-time only and become end-of-episode literal-ToM probes
 - Category intent must be reflected in `problem_pddl` objective structure
 - Raw `problem_pddl` should be self-contained: required symbols belong in `:objects`, relevant room grounding belongs in `:init`
 - **Mechanic consistency**: Every mechanic referenced in `task` or `agent_secrets` (e.g., "the handle is reversed", "you have limited messages") MUST have a corresponding entry in `mechanic_bindings`. If secrets describe constraints that aren't in bindings, the simulator won't enforce them.
 - **K() goal backing**: Every `K()` goal in `problem_pddl` (or legacy goal field) must be backed by a mechanic that prevents the agent from directly observing the fact (e.g., `room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). If the agent could just walk there and see, the K() goal is fake.
+- **Functional projection quality**: Penalize tasks whose non-epistemic projection becomes vacuous, trivial, effectively single-agent, or no longer reflects the intended coordination challenge.
+- **Probe quality**: Reward K() goals when they probe who knows functionally relevant facts under real asymmetry. Do NOT require K() to be part of runtime pass/fail.
 - Distinguish **formal validity** from **design quality**:
   - If the formal task is invalid, contradictory, or not self-contained, score `Formal Goal Quality & Epistemic Coherence` near 0.
-  - If the formal task is valid, judge whether the goal design is actually meaningful for the benchmark rather than merely technically valid.
+  - If the formal task is valid, judge whether both the functional projection and the literal-ToM probe structure are meaningful for the benchmark rather than merely technically valid.
+
+## Derived Runtime View
+Use this derived runtime view when judging split-semantics quality.
+{runtime_semantics_section}
 
 ## Evaluation Criteria
 Score each criterion from 0.0 to 1.0.
@@ -464,7 +473,7 @@ Respond with ONLY valid JSON. Keep reasoning brief (under 15 words each).
 }}
 
 ## Suggestion Requirements
-Be specific and only use available system capabilities. Prioritize the most important fixes.
+Be specific and only use available system capabilities. Prioritize the most important fixes. Prefer suggestions that strengthen the functional projection after dropping K(), or that make K()-derived probes more grounded and informative without making them runtime success conditions.
 """
 
 # Category descriptions for the prompt
@@ -542,6 +551,45 @@ def _build_response_format(category: str, user_query: Optional[str] = None) -> s
     lines = []
     for criterion in criteria:
         lines.append(f'  "{criterion}": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},')
+    return "\n".join(lines)
+
+
+def _build_runtime_semantics_section(task_dict: Dict[str, Any]) -> str:
+    """Summarize the derived functional goal and literal-ToM probes for judge prompts."""
+    functional_goal = task_dict.get("functional_goal_pddl")
+    probes = task_dict.get("literal_tom_probes")
+
+    if not functional_goal or probes is None:
+        try:
+            from emtom.pddl.runtime_projection import build_runtime_metadata
+
+            derived = build_runtime_metadata(task_dict)
+            functional_goal = functional_goal or derived.get("functional_goal_pddl")
+            probes = probes if probes is not None else derived.get("literal_tom_probes", [])
+        except Exception:
+            probes = probes or []
+
+    lines = []
+    if functional_goal:
+        lines.append("Functional goal projection used for runtime success:")
+        lines.append(functional_goal)
+    else:
+        lines.append("Functional goal projection: <unavailable>")
+
+    if probes:
+        lines.append("Literal-ToM probes derived from K() goals:")
+        for probe in probes[:8]:
+            source = probe.get("source_pddl", "<unknown>")
+            agent = probe.get("agent_id", "<unknown>")
+            question = probe.get("question", "").strip().splitlines()[0] if probe.get("question") else ""
+            lines.append(f"- {agent}: {source}")
+            if question:
+                lines.append(f"  Probe question stem: {question}")
+        if len(probes) > 8:
+            lines.append(f"- ... {len(probes) - 8} more probes")
+    else:
+        lines.append("Literal-ToM probes: none derived")
+
     return "\n".join(lines)
 
 
@@ -898,6 +946,7 @@ The user specifically requested:
             category_description=CATEGORY_PROMPT_DESCRIPTIONS.get(category, ""),
             difficulty_section=difficulty_section,
             user_requirements_section=user_requirements_section,
+            runtime_semantics_section=_build_runtime_semantics_section(task_dict),
             criteria_section=_build_criteria_section(category, self.user_query),
             response_format=_build_response_format(category, self.user_query),
             task_json=task_json,

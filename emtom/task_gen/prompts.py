@@ -113,6 +113,7 @@ Assigned!
 - Secrets create asymmetry; agents must communicate to combine clues
 - Natural language only; no object/item IDs in `task` or secrets
 - Each agent's secrets MUST include which other agents are on their team (e.g., "You are on a team with agent_1." for cooperative, or "You are on team_0 with agent_1. The opposing team is agent_2." for competitive)
+- Do NOT describe K() goals as runtime success conditions in `task`, `agent_secrets`, or `team_secrets`. Never write phrases like "must know", "knowledge is required", "final knows check", or "epistemic requirement". Instead phrase these as information needs or likely probe topics, e.g. "you may need a confirmation from agent_1" or "be ready to report whether the fridge was opened by the end."
 - Do NOT use positive `is_inside` goals unless the object is already inside in `:init` and meant to remain there. Prefer `is_on_top` for movable-placement goals.
 - Do NOT use `has_most` or `has_at_least` in `problem_pddl` goals; they are not part of deterministic PDDL solvability checks in this pipeline.
 - `judge[]` automatically runs strict PDDL verification first. Do not call a separate PDDL-verification tool.
@@ -302,13 +303,15 @@ The evaluator tracks: (1) shared goal progress, (2) which agents achieved their 
 Cooperative tasks do NOT need `:goal-owners` — all goals are shared by default.
 
 ## When to Use K() Goals
-K() goals describe **information prerequisites** — knowledge an agent must acquire
-before they can accomplish a physical goal. For every K() goal, there must be a
-corresponding physical goal that DEPENDS on that knowledge.
+K() goals describe **probe-worthy information asymmetry** — facts an agent should
+reasonably learn, infer, or keep track of by the end of the episode. They are NOT
+runtime success conditions. For every K() goal, there should still be a
+corresponding physical goal that makes the fact meaningful for planning,
+coordination, or post-episode reporting.
 
-Pattern: If a physical goal requires agent_X to act on an object they cannot observe
-(due to room_restriction, hidden mechanic, etc.), add a K() goal for the knowledge
-they need to acquire first.
+Pattern: If a physical goal forces agent_X to rely on another agent's observation,
+action, or report (due to room_restriction, hidden mechanic, etc.), add a K() goal
+about the fact they should end up understanding.
 
 **Good K()** — knowledge enables a physical action:
 - Physical goal: `(is_on_top trophy_1 table_8)` (agent_0 must place trophy on table)
@@ -322,7 +325,7 @@ they need to acquire first.
 - `(K agent_0 (is_on_top cushion_1 table_15))` — decorative, not a prerequisite
 
 **Rules:**
-- Every K() goal must pair with a physical goal that depends on that knowledge
+- Every K() goal must pair with a meaningful physical goal plus real information asymmetry
 - Never use K() on facts the agent can directly observe (no blocking mechanic)
 - K() goals ARE part of strict ToM verification and determine the minimum solvable depth
 - Runtime benchmark success ignores K() and evaluates only the non-epistemic projection of the task
@@ -333,13 +336,13 @@ they need to acquire first.
 "problem_pddl": "(define (problem task_k0)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent kitchen_1 - room bottle_4 - object cabinet_27 table_13 - furniture)\\n  (:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1) (is_in_room bottle_4 kitchen_1) (is_in_room cabinet_27 kitchen_1) (is_in_room table_13 kitchen_1))\\n  (:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))\\n)"
 ```
 
-### Example: K=1 (agent must acquire knowledge via communication)
+### Example: K=1 (first-order knowledge probe via communication)
 ```json
 "problem_pddl": "(define (problem task_k1)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent kitchen_0 dining_room_0 - room trophy_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 dining_room_0) (agent_in_room agent_1 kitchen_0) (is_in_room trophy_1 kitchen_0) (is_in_room table_8 dining_room_0) (is_restricted agent_0 kitchen_0) (can_communicate agent_1 agent_0))\\n  (:goal (and (K agent_0 (is_in_room trophy_1 kitchen_0)) (is_on_top trophy_1 table_8)))\\n)"
 ```
 Scenario: agent_0 is restricted from kitchen. agent_1 observes trophy_1 in kitchen and communicates location. agent_0 uses this knowledge to coordinate retrieval.
 
-### Example: K=2 (agent must reason about another's beliefs)
+### Example: K=2 (second-order knowledge probe)
 ```json
 "problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent bedroom_0 hallway_0 - room gem_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 hallway_0) (agent_in_room agent_1 bedroom_0) (is_in_room gem_1 bedroom_0) (is_in_room table_8 hallway_0) (is_restricted agent_0 bedroom_0) (can_communicate agent_1 agent_0))\\n  (:goal (and (K agent_0 (K agent_1 (is_in_room gem_1 bedroom_0))) (is_on_top gem_1 table_8)))\\n)"
 ```
@@ -348,9 +351,9 @@ Scenario: agent_0 is restricted from bedroom. agent_1 can directly observe the g
 ## Theory of Mind
 ToM depth is computed as the **minimum solvable belief depth** under strict verification.
 - **Depth 0**: Task is solvable with a purely physical plan and no epistemic reasoning
-- **Depth 1**: First-order knowledge is required
-- **Depth 2**: Second-order nested knowledge is required
-- **Depth 3**: Third-order nested knowledge is required
+- **Depth 1**: First-order knowledge is encoded and probed
+- **Depth 2**: Second-order nested knowledge is encoded and probed
+- **Depth 3**: Third-order nested knowledge is encoded and probed
 
 Use `judge[]` to see the computed minimal ToM depth from its strict PDDL-verification step. Design explicit epistemic goals plus information asymmetry to increase ToM requirements:
 - `room_restriction`: creates private knowledge (agent can't observe directly)

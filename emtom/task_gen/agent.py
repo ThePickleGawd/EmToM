@@ -27,6 +27,7 @@ from omegaconf import DictConfig
 from .prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
 from .judge import Judge, Judgment, CouncilVerdict, Colors
 from .diversity import DiversityTracker
+from .seed_sanitizer import sanitize_task_for_seeding
 from .spec_validator import (
     validate_blocking_spec,
     validate_room_restriction_trajectory,
@@ -470,7 +471,8 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
 A seed task will be loaded into working_task.json as your starting point.
 Use it as a foundation and modify it based on the query/requirements above.
 After calling `new_scene[N]`, view it with: `bash[cat {self.task_file}]`
-The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adapt it to the new scene and any requested changes.
+The seed task is intentionally structure-only: natural-language fields are scrubbed before loading.
+Always rewrite `title`, `task`, `agent_secrets`, and `team_secrets` from scratch for the current scene and current runtime semantics.
 """
 
         # Build extra sections string and persist for context resets.
@@ -680,6 +682,7 @@ The seed task's structure (subtasks, secrets, mechanics) is pre-populated - adap
             # Use seed task's num_agents if not overridden
             if num_agents == self.agents_max and "num_agents" in task:
                 num_agents = task["num_agents"]
+            task = sanitize_task_for_seeding(task, num_agents=num_agents)
         else:
             with open(self.template_file) as f:
                 task = json.load(f)
