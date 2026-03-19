@@ -631,6 +631,48 @@ def _build_category_stats(all_results: list) -> dict:
             )
         return float(progress)
 
+    def _literal_tom_stats(results: list) -> dict:
+        scored_task_count = 0
+        fallback_score_sum = 0.0
+        probe_count = 0
+        supported_probe_count = 0
+        passed_probe_count = 0
+
+        for result in results:
+            evaluation = result.get("evaluation", {})
+            if not isinstance(evaluation, dict):
+                continue
+
+            probe_summary = evaluation.get("literal_tom_probe_summary", {})
+            if isinstance(probe_summary, dict):
+                probe_count += int(probe_summary.get("probe_count", 0) or 0)
+                supported = int(probe_summary.get("supported_probe_count", 0) or 0)
+                passed = int(probe_summary.get("passed_count", 0) or 0)
+                supported_probe_count += supported
+                passed_probe_count += passed
+                if supported > 0:
+                    scored_task_count += 1
+                    continue
+
+            score = evaluation.get("literal_tom_probe_score")
+            if isinstance(score, (int, float)):
+                scored_task_count += 1
+                fallback_score_sum += float(score)
+
+        score_pct = None
+        if supported_probe_count > 0:
+            score_pct = passed_probe_count / supported_probe_count * 100
+        elif scored_task_count > 0:
+            score_pct = fallback_score_sum / scored_task_count * 100
+
+        return {
+            "literal_tom_score": round(score_pct, 1) if score_pct is not None else None,
+            "literal_tom_task_count": scored_task_count,
+            "literal_tom_probe_count": probe_count,
+            "literal_tom_supported_probe_count": supported_probe_count,
+            "literal_tom_passed_probe_count": passed_probe_count,
+        }
+
     # Group results by category (skip skipped tasks)
     by_category = {}
     for r in all_results:
@@ -657,6 +699,7 @@ def _build_category_stats(all_results: list) -> dict:
             "avg_steps": round(avg_steps, 1),
             "timed_out": timed_out,
         }
+        cat_stats.update(_literal_tom_stats(results))
 
         if cat == "cooperative":
             # Nothing extra beyond the common stats
@@ -733,6 +776,14 @@ def _print_category_stats(category_stats: dict) -> None:
         cprint(f"\n--- {cat.upper()} ---", "cyan")
         cprint(f"  Tasks: {stats['total']}  |  Passed: {stats['passed']}  |  Pass rate: {stats['pass_rate']:.1f}%", "cyan")
         cprint(f"  Avg progress: {stats['avg_progress']:.1%}  |  Avg steps: {stats['avg_steps']:.0f}  |  Timed out: {stats['timed_out']}", "cyan")
+        if stats.get("literal_tom_score") is not None:
+            cprint(
+                "  Literal ToM: "
+                f"{stats['literal_tom_score']:.1f}%"
+                f" ({stats.get('literal_tom_passed_probe_count', 0)}/"
+                f"{stats.get('literal_tom_supported_probe_count', 0)} supported probes)",
+                "cyan",
+            )
 
         if cat == "competitive":
             cprint(f"  Team 0 wins: {stats['team_0_wins']}  |  Team 1 wins: {stats['team_1_wins']}  |  Draws: {stats['draws']}", "cyan")
@@ -906,6 +957,42 @@ def main(config: DictConfig) -> None:
 
     # Build category-specific statistics
     category_stats = _build_category_stats(all_results)
+    literal_tom_stats = {}
+    if category_stats:
+        total_supported = sum(
+            stats.get("literal_tom_supported_probe_count", 0)
+            for stats in category_stats.values()
+        )
+        total_passed_probes = sum(
+            stats.get("literal_tom_passed_probe_count", 0)
+            for stats in category_stats.values()
+        )
+        total_probe_count = sum(
+            stats.get("literal_tom_probe_count", 0)
+            for stats in category_stats.values()
+        )
+        total_literal_tasks = sum(
+            stats.get("literal_tom_task_count", 0)
+            for stats in category_stats.values()
+        )
+        literal_tom_stats = {
+            "literal_tom_score": (
+                round(total_passed_probes / total_supported * 100, 1)
+                if total_supported > 0 else None
+            ),
+            "literal_tom_task_count": total_literal_tasks,
+            "literal_tom_probe_count": total_probe_count,
+            "literal_tom_supported_probe_count": total_supported,
+            "literal_tom_passed_probe_count": total_passed_probes,
+        }
+    else:
+        literal_tom_stats = {
+            "literal_tom_score": None,
+            "literal_tom_task_count": 0,
+            "literal_tom_probe_count": 0,
+            "literal_tom_supported_probe_count": 0,
+            "literal_tom_passed_probe_count": 0,
+        }
 
     # Print summary
     cprint("\n" + "=" * 60, "blue")
@@ -925,6 +1012,14 @@ def main(config: DictConfig) -> None:
     if total > 0:
         pass_rate = passed / (total - skipped) * 100 if (total - skipped) > 0 else 0
         cprint(f"\nPass rate: {pass_rate:.1f}%", "green" if pass_rate > 50 else "red")
+        if literal_tom_stats.get("literal_tom_score") is not None:
+            cprint(
+                "Literal ToM: "
+                f"{literal_tom_stats['literal_tom_score']:.1f}%"
+                f" ({literal_tom_stats['literal_tom_passed_probe_count']}/"
+                f"{literal_tom_stats['literal_tom_supported_probe_count']} supported probes)",
+                "blue",
+            )
 
     # Print category-specific stats
     _print_category_stats(category_stats)
@@ -954,6 +1049,7 @@ def main(config: DictConfig) -> None:
             "failed": failed,
             "skipped": skipped,
             "pass_rate": pass_rate if total > 0 else 0,
+            **literal_tom_stats,
             "category_stats": category_stats,
             "results": all_results,
         }, f, indent=2)

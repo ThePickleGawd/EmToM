@@ -11,6 +11,192 @@ const PROJECT_ROOT = path.resolve(__dirname, "..");
 const OUTPUTS_DIR = path.join(PROJECT_ROOT, "outputs", "emtom");
 const TASKS_DIR = path.join(PROJECT_ROOT, "data", "emtom", "tasks");
 const RESULTS_DIR = path.join(PROJECT_ROOT, "data", "emtom", "results");
+const ARCHIVES_DIR = path.join(RESULTS_DIR, "archives");
+
+function normalizeCampaignId(rawCampaignId: string): string | null {
+  if (!rawCampaignId || rawCampaignId.includes("/") || rawCampaignId.includes("..")) {
+    return null;
+  }
+  return rawCampaignId;
+}
+
+function resolveCampaignRoot(rawCampaignId: string): string | null {
+  const campaignId = normalizeCampaignId(rawCampaignId);
+  if (!campaignId) return null;
+  if (campaignId === "active") return RESULTS_DIR;
+  return path.join(ARCHIVES_DIR, campaignId);
+}
+
+function readJsonIfExists(filePath: string): Record<string, any> | null {
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+function literalTomStats(results: Record<string, any>[]): Record<string, any> {
+  let scoredTaskCount = 0;
+  let fallbackScoreSum = 0;
+  let probeCount = 0;
+  let supportedProbeCount = 0;
+  let passedProbeCount = 0;
+
+  for (const result of results) {
+    if (result.skipped) continue;
+    const evaluation = result.evaluation;
+    if (!evaluation || typeof evaluation !== "object") continue;
+
+    const probeSummary = evaluation.literal_tom_probe_summary;
+    if (probeSummary && typeof probeSummary === "object") {
+      const taskProbeCount = Number(probeSummary.probe_count || 0);
+      const supported = Number(probeSummary.supported_probe_count || 0);
+      const passed = Number(probeSummary.passed_count || 0);
+      probeCount += Number.isFinite(taskProbeCount) ? taskProbeCount : 0;
+      supportedProbeCount += Number.isFinite(supported) ? supported : 0;
+      passedProbeCount += Number.isFinite(passed) ? passed : 0;
+      if (supported > 0) {
+        scoredTaskCount += 1;
+        continue;
+      }
+    }
+
+    const score = evaluation.literal_tom_probe_score;
+    if (typeof score === "number" && Number.isFinite(score)) {
+      scoredTaskCount += 1;
+      fallbackScoreSum += score;
+    }
+  }
+
+  let literalTomScore: number | null = null;
+  if (supportedProbeCount > 0) {
+    literalTomScore = (passedProbeCount / supportedProbeCount) * 100;
+  } else if (scoredTaskCount > 0) {
+    literalTomScore = (fallbackScoreSum / scoredTaskCount) * 100;
+  }
+
+  return {
+    literal_tom_score:
+      literalTomScore === null ? null : Math.round(literalTomScore * 10) / 10,
+    literal_tom_task_count: scoredTaskCount,
+    literal_tom_probe_count: probeCount,
+    literal_tom_supported_probe_count: supportedProbeCount,
+    literal_tom_passed_probe_count: passedProbeCount,
+  };
+}
+
+function buildCategoryStats(results: Record<string, any>[]): Record<string, any> {
+  const grouped: Record<string, Record<string, any>[]> = {};
+  for (const result of results) {
+    if (result.skipped) continue;
+    const category = result.category || "unknown";
+    grouped[category] ||= [];
+    grouped[category].push(result);
+  }
+
+  const categoryStats: Record<string, any> = {};
+  for (const [category, categoryResults] of Object.entries(grouped)) {
+    const total = categoryResults.length;
+    const passed = categoryResults.filter((result) => result.success).length;
+    const avgSteps = total
+      ? categoryResults.reduce((sum, result) => sum + Number(result.steps || 0), 0) / total
+      : 0;
+    const avgProgress = total
+      ? categoryResults.reduce(
+          (sum, result) =>
+            sum + Number(result.evaluation?.percent_complete ?? (result.success ? 1 : 0)),
+          0,
+        ) / total
+      : 0;
+    const timedOut = categoryResults.filter(
+      (result) => result.done === false && result.episode_over === true,
+    ).length;
+
+    categoryStats[category] = {
+      total,
+      passed,
+      pass_rate: total ? (passed / total) * 100 : 0,
+      avg_progress: avgProgress,
+      avg_steps: avgSteps,
+      timed_out: timedOut,
+      ...literalTomStats(categoryResults),
+    };
+  }
+
+  return categoryStats;
+}
+
+function normalizeSummary(summary: Record<string, any>): Record<string, any> {
+  if (!Array.isArray(summary.results)) return summary;
+
+  const results = summary.results;
+  const total = results.length;
+  const skipped = results.filter((result: Record<string, any>) => result.skipped).length;
+  const passed = results.filter((result: Record<string, any>) => result.success).length;
+  const evaluated = total - skipped;
+  const failed = results.filter(
+    (result: Record<string, any>) => !result.skipped && !result.success,
+  ).length;
+
+  summary.total = total;
+  summary.skipped = skipped;
+  summary.passed = passed;
+  summary.failed = failed;
+  summary.pass_rate = evaluated > 0 ? (passed / evaluated) * 100 : 0;
+  summary.category_stats = buildCategoryStats(results);
+  Object.assign(summary, literalTomStats(results));
+  return summary;
+}
+
+function buildCampaignIndex(): Record<string, any> {
+  const campaigns: Record<string, any>[] = [];
+
+  const activeCampaign = readJsonIfExists(path.join(RESULTS_DIR, "campaign.json"));
+  if (activeCampaign) {
+    campaigns.push({
+      campaign_id: activeCampaign.campaign_id || "active",
+      label: activeCampaign.label || "Active Campaign",
+      status: "active",
+      created_at: activeCampaign.created_at,
+      updated_at: activeCampaign.updated_at,
+      archived_at: activeCampaign.archived_at,
+      archive_reason: activeCampaign.archive_reason || "",
+      task_total: activeCampaign.task_total || 0,
+      models: activeCampaign.models || [],
+      modes: activeCampaign.modes || [],
+    });
+  }
+
+  if (fs.existsSync(ARCHIVES_DIR)) {
+    const archiveDirs = fs
+      .readdirSync(ARCHIVES_DIR)
+      .filter((entry) => fs.statSync(path.join(ARCHIVES_DIR, entry)).isDirectory())
+      .sort()
+      .reverse();
+    for (const archiveId of archiveDirs) {
+      const campaign = readJsonIfExists(path.join(ARCHIVES_DIR, archiveId, "campaign.json"));
+      if (!campaign) continue;
+      campaigns.push({
+        campaign_id: campaign.campaign_id || archiveId,
+        label: campaign.label || archiveId,
+        status: "archived",
+        created_at: campaign.created_at,
+        updated_at: campaign.updated_at,
+        archived_at: campaign.archived_at,
+        archive_reason: campaign.archive_reason || "",
+        task_total: campaign.task_total || 0,
+        models: campaign.models || [],
+        modes: campaign.modes || [],
+      });
+    }
+  }
+
+  return {
+    active_campaign_id: activeCampaign ? (activeCampaign.campaign_id || "active") : null,
+    campaigns,
+  };
+}
 
 function makeRelativePath(absPath: string): string {
   const prefix = PROJECT_ROOT + "/";
@@ -405,6 +591,12 @@ export default function dynamicDataPlugin(): Plugin {
             return;
           }
 
+          if (urlPath === "/campaign-index.json") {
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(buildCampaignIndex()));
+            return;
+          }
+
           // GET /data/tasks/_library/{taskId}.json — library task detail
           const libMatch = urlPath.match(
             /^\/tasks\/_library\/(.+)\.json$/,
@@ -443,6 +635,23 @@ export default function dynamicDataPlugin(): Plugin {
             return;
           }
 
+          const scopedCampaignMatch = urlPath.match(
+            /^\/campaigns\/([^/]+)\/campaign\.json$/,
+          );
+          if (scopedCampaignMatch) {
+            const campaignRoot = resolveCampaignRoot(scopedCampaignMatch[1]);
+            if (!campaignRoot) {
+              res.statusCode = 400;
+              res.end("Invalid campaign id");
+              return;
+            }
+            const campaignFile = path.join(campaignRoot, "campaign.json");
+            const campaign = readJsonIfExists(campaignFile);
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(campaign));
+            return;
+          }
+
           // GET /data/leaderboard.json — leaderboard
           if (urlPath === "/leaderboard.json") {
             const lbFile = path.join(RESULTS_DIR, "leaderboard.json");
@@ -456,7 +665,51 @@ export default function dynamicDataPlugin(): Plugin {
             return;
           }
 
+          const scopedLeaderboardMatch = urlPath.match(
+            /^\/campaigns\/([^/]+)\/leaderboard\.json$/,
+          );
+          if (scopedLeaderboardMatch) {
+            const campaignRoot = resolveCampaignRoot(scopedLeaderboardMatch[1]);
+            if (!campaignRoot) {
+              res.statusCode = 400;
+              res.end("Invalid campaign id");
+              return;
+            }
+            const leaderboard = readJsonIfExists(path.join(campaignRoot, "leaderboard.json"));
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(leaderboard));
+            return;
+          }
+
           // GET /data/campaign-run/{runKey}.json — campaign run benchmark summary
+          const scopedCampaignRunMatch = urlPath.match(
+            /^\/campaign-run\/([^/]+)\/(.+)\.json$/,
+          );
+          if (scopedCampaignRunMatch) {
+            const [, campaignId, runKey] = scopedCampaignRunMatch;
+            const campaignRoot = resolveCampaignRoot(campaignId);
+            if (!campaignRoot) {
+              res.statusCode = 400;
+              res.end("Invalid campaign id");
+              return;
+            }
+            const summaryFile = path.join(
+              campaignRoot,
+              "runs",
+              runKey,
+              "benchmark_summary.json",
+            );
+            const summary = readJsonIfExists(summaryFile);
+            if (summary) {
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify(normalizeSummary(summary)));
+            } else {
+              res.statusCode = 404;
+              res.end("Not found");
+            }
+            return;
+          }
+
           const campaignRunMatch = urlPath.match(
             /^\/campaign-run\/(.+)\.json$/,
           );
@@ -469,51 +722,9 @@ export default function dynamicDataPlugin(): Plugin {
               "benchmark_summary.json",
             );
             if (fs.existsSync(summaryFile)) {
-              const summary = JSON.parse(
-                fs.readFileSync(summaryFile, "utf-8"),
+              const summary = normalizeSummary(
+                JSON.parse(fs.readFileSync(summaryFile, "utf-8")),
               );
-              // Compute category_stats if missing
-              if (!summary.category_stats && Array.isArray(summary.results)) {
-                const catStats: Record<
-                  string,
-                  {
-                    total: number;
-                    passed: number;
-                    pass_rate: number;
-                    avg_progress: number;
-                    avg_steps: number;
-                    timed_out: number;
-                  }
-                > = {};
-                for (const r of summary.results) {
-                  const cat = r.category || "unknown";
-                  if (!catStats[cat]) {
-                    catStats[cat] = {
-                      total: 0,
-                      passed: 0,
-                      pass_rate: 0,
-                      avg_progress: 0,
-                      avg_steps: 0,
-                      timed_out: 0,
-                    };
-                  }
-                  const s = catStats[cat];
-                  s.total++;
-                  if (r.success) s.passed++;
-                  s.avg_steps += r.steps || 0;
-                  s.avg_progress +=
-                    r.evaluation?.percent_complete ?? (r.success ? 1 : 0);
-                  if (r.done === false && r.episode_over === true) s.timed_out++;
-                }
-                for (const s of Object.values(catStats)) {
-                  if (s.total > 0) {
-                    s.pass_rate = (s.passed / s.total) * 100;
-                    s.avg_steps = s.avg_steps / s.total;
-                    s.avg_progress = s.avg_progress / s.total;
-                  }
-                }
-                summary.category_stats = catStats;
-              }
               res.setHeader("Content-Type", "application/json");
               res.end(JSON.stringify(summary));
             } else {
@@ -524,6 +735,54 @@ export default function dynamicDataPlugin(): Plugin {
           }
 
           // GET /data/campaign-task/{runKey}/{taskId}.json — campaign run task detail
+          const scopedCampaignTaskMatch = urlPath.match(
+            /^\/campaign-task\/([^/]+)\/([^/]+)\/(.+)\.json$/,
+          );
+          if (scopedCampaignTaskMatch) {
+            const [, campaignId, runKey, taskId] = scopedCampaignTaskMatch;
+            const campaignRoot = resolveCampaignRoot(campaignId);
+            if (!campaignRoot) {
+              res.statusCode = 400;
+              res.end("Invalid campaign id");
+              return;
+            }
+            const taskDir = path.join(
+              campaignRoot,
+              "runs",
+              runKey,
+              "tasks",
+              taskId,
+            );
+            if (fs.existsSync(taskDir)) {
+              const taskData = processTaskDir(taskDir);
+              if (taskData) {
+                res.setHeader("Content-Type", "application/json");
+                res.end(JSON.stringify(taskData));
+                return;
+              }
+            }
+            const campaign = readJsonIfExists(path.join(campaignRoot, "campaign.json"));
+            const runDef = campaign?.runs?.[runKey];
+            if (runDef?.output_dir) {
+              const outputRunDir = path.join(PROJECT_ROOT, runDef.output_dir);
+              const resultsDirs = findResultsDirs(outputRunDir);
+              for (const { resultsDir } of resultsDirs) {
+                const td = path.join(resultsDir, taskId);
+                if (fs.existsSync(td)) {
+                  const taskData = processTaskDir(td);
+                  if (taskData) {
+                    res.setHeader("Content-Type", "application/json");
+                    res.end(JSON.stringify(taskData));
+                    return;
+                  }
+                }
+              }
+            }
+            res.statusCode = 404;
+            res.end("Not found");
+            return;
+          }
+
           const campaignTaskMatch = urlPath.match(
             /^\/campaign-task\/([^/]+)\/(.+)\.json$/,
           );

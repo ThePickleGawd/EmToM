@@ -855,8 +855,35 @@ body {
 
 .campaign-header-actions {
   display: flex;
+  align-items: center;
+  gap: 10px;
   justify-content: flex-end;
   margin-bottom: 8px;
+}
+
+.campaign-selector-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.campaign-selector-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.campaign-selector {
+  min-width: 240px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 7px 10px;
 }
 
 .campaign-stat-row {
@@ -901,6 +928,12 @@ body {
   padding: 2px 8px;
   border: 1px solid;
   border-radius: var(--radius);
+}
+
+.campaign-archive-note {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .campaign-model-dot {
@@ -1365,6 +1398,13 @@ body {
   text-align: right;
 }
 
+.campaign-task-row-literal {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .campaign-task-row-download {
   margin-left: auto;
 }
@@ -1407,4 +1447,26 @@ body {
   font-size: 14px;
   padding: 32px 0;
   text-align: center;
+}
+
+@media (max-width: 800px) {
+  .campaign-header-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .campaign-selector {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .campaign-run-detail-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .campaign-run-stats {
+    flex-wrap: wrap;
+  }
 }

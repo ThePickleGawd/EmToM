@@ -82,6 +82,11 @@ export interface CampaignRunDef {
 }
 
 export interface Campaign {
+  campaign_id?: string;
+  label?: string;
+  status?: "active" | "archived";
+  archived_at?: string;
+  archive_reason?: string;
   created_at: string;
   updated_at: string;
   models: string[];
@@ -93,14 +98,40 @@ export interface Campaign {
   runs: Record<string, CampaignRunDef>;
 }
 
+export interface CampaignIndexEntry {
+  campaign_id: string;
+  label: string;
+  status: "active" | "archived";
+  created_at?: string;
+  updated_at?: string;
+  archived_at?: string;
+  archive_reason?: string;
+  task_total: number;
+  models: string[];
+  modes: string[];
+}
+
+export interface CampaignIndex {
+  active_campaign_id: string | null;
+  campaigns: CampaignIndexEntry[];
+}
+
+export interface LiteralToMStats {
+  literal_tom_score?: number | null;
+  literal_tom_task_count?: number;
+  literal_tom_probe_count?: number;
+  literal_tom_supported_probe_count?: number;
+  literal_tom_passed_probe_count?: number;
+}
+
 export interface LeaderboardSoloEntry {
   model: string;
   mode: string;
   pass_rate?: number;
   total?: number;
   passed?: number;
-  overall?: { pass_rate: number; total: number; passed: number };
-  categories: Record<string, { pass_rate: number; total: number; passed: number }>;
+  overall?: { pass_rate: number; total: number; passed: number } & LiteralToMStats;
+  categories: Record<string, { pass_rate: number; total: number; passed: number } & LiteralToMStats>;
 }
 
 export interface LeaderboardMatchupDirection {
@@ -131,6 +162,9 @@ export interface LeaderboardMatchup {
 
 export interface Leaderboard {
   generated_at: string;
+  campaign_id?: string;
+  label?: string;
+  status?: "active" | "archived";
   models: string[];
   modes: string[];
   solo: Record<string, LeaderboardSoloEntry>;
@@ -148,6 +182,12 @@ export interface CampaignRunResult {
     success: boolean;
     percent_complete: number;
     completed_required: number;
+    literal_tom_probe_score?: number | null;
+    literal_tom_probe_summary?: {
+      probe_count?: number;
+      supported_probe_count?: number;
+      passed_count?: number;
+    };
   };
 }
 
@@ -156,6 +196,7 @@ export interface CampaignBenchmarkSummary {
   total: number;
   passed: number;
   failed: number;
+  skipped?: number;
   pass_rate: number;
   category_stats: Record<string, {
     total: number;
@@ -164,6 +205,11 @@ export interface CampaignBenchmarkSummary {
     avg_progress: number;
     avg_steps: number;
     timed_out: number;
-  }>;
+  } & LiteralToMStats>;
+  literal_tom_score?: number | null;
+  literal_tom_task_count?: number;
+  literal_tom_probe_count?: number;
+  literal_tom_supported_probe_count?: number;
+  literal_tom_passed_probe_count?: number;
   results: CampaignRunResult[];
 }

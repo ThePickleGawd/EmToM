@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
 import type {
   Campaign,
+  CampaignIndex,
+  CampaignIndexEntry,
   Leaderboard,
   LeaderboardMatchup,
   CampaignBenchmarkSummary,
   CampaignRunResult,
   TaskDetail,
+  LiteralToMStats,
 } from "../types";
 import TaskView from "./TaskView";
 import { downloadJson } from "../download";
@@ -56,7 +59,40 @@ function statusDot(status: string) {
   );
 }
 
+function formatLiteralTomScore(stats?: LiteralToMStats | null): string {
+  if (typeof stats?.literal_tom_score !== "number") {
+    return "--";
+  }
+  return `${stats.literal_tom_score.toFixed(0)}%`;
+}
+
+function formatLiteralTomDetail(stats?: LiteralToMStats | null): string {
+  if (typeof stats?.literal_tom_score !== "number") {
+    return "no probes";
+  }
+  return `${stats.literal_tom_score.toFixed(1)}% · ${stats.literal_tom_passed_probe_count ?? 0}/${stats.literal_tom_supported_probe_count ?? 0} probes`;
+}
+
+function literalTomFromEvaluation(
+  evaluation?: CampaignRunResult["evaluation"],
+): LiteralToMStats | undefined {
+  if (!evaluation) return undefined;
+  return {
+    literal_tom_score:
+      typeof evaluation.literal_tom_probe_score === "number"
+        ? evaluation.literal_tom_probe_score * 100
+        : null,
+    literal_tom_probe_count: evaluation.literal_tom_probe_summary?.probe_count,
+    literal_tom_supported_probe_count:
+      evaluation.literal_tom_probe_summary?.supported_probe_count,
+    literal_tom_passed_probe_count:
+      evaluation.literal_tom_probe_summary?.passed_count,
+  };
+}
+
 export default function CampaignView({ onImageClick }: Props) {
+  const [campaignIndex, setCampaignIndex] = useState<CampaignIndex | null>(null);
+  const [selectedCampaignId, setSelectedCampaignId] = useState("active");
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [leaderboard, setLeaderboard] = useState<Leaderboard | null>(null);
   const [panel, setPanel] = useState<Panel>("leaderboard");
@@ -80,54 +116,93 @@ export default function CampaignView({ onImageClick }: Props) {
   const [downloadingEverything, setDownloadingEverything] = useState(false);
 
   useEffect(() => {
-    Promise.all([
-      fetch("/data/campaign.json").then((r) => r.json()),
-      fetch("/data/leaderboard.json").then((r) => r.json()),
-    ]).then(([c, l]) => {
-      setCampaign(c);
-      setLeaderboard(l);
-      setLoading(false);
-    });
+    fetch("/data/campaign-index.json")
+      .then((r) => r.json())
+      .then((data: CampaignIndex) => {
+        setCampaignIndex(data);
+        const initialId = data.active_campaign_id ?? data.campaigns[0]?.campaign_id ?? "";
+        if (!initialId) {
+          setCampaign(null);
+          setLeaderboard(null);
+          setLoading(false);
+          return;
+        }
+        setSelectedCampaignId(initialId);
+      })
+      .catch(() => {
+        setCampaignIndex({ active_campaign_id: null, campaigns: [] });
+        setCampaign(null);
+        setLeaderboard(null);
+        setLoading(false);
+      });
   }, []);
+
+  useEffect(() => {
+    if (!selectedCampaignId) return;
+    setLoading(true);
+    Promise.all([
+      fetch(`/data/campaigns/${encodeURIComponent(selectedCampaignId)}/campaign.json`).then((r) => r.json()),
+      fetch(`/data/campaigns/${encodeURIComponent(selectedCampaignId)}/leaderboard.json`).then((r) => r.json()),
+    ])
+      .then(([c, l]) => {
+        setCampaign(c);
+        setLeaderboard(l);
+        setPanel("leaderboard");
+        setSelectedModelDetail(null);
+        setSelectedRunKey("");
+        setRunSummary(null);
+        setTaskDetail(null);
+        setLoading(false);
+      })
+      .catch(() => {
+        setCampaign(null);
+        setLeaderboard(null);
+        setLoading(false);
+      });
+  }, [selectedCampaignId]);
 
   const fetchCampaignTask = useCallback(
     async (runKey: string, taskId: string): Promise<TaskDetail> => {
       const response = await fetch(
-        `/data/campaign-task/${runKey}/${taskId}.json`,
+        `/data/campaign-task/${encodeURIComponent(selectedCampaignId)}/${encodeURIComponent(runKey)}/${encodeURIComponent(taskId)}.json`,
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response.json();
     },
-    [],
+    [selectedCampaignId],
   );
 
   const loadRunSummary = useCallback(
     async (runKey: string): Promise<CampaignBenchmarkSummary | null> => {
-      if (summaryCache[runKey] !== undefined) {
-        return summaryCache[runKey] ?? null;
+      const cacheKey = `${selectedCampaignId}:${runKey}`;
+      if (summaryCache[cacheKey] !== undefined) {
+        return summaryCache[cacheKey] ?? null;
       }
       try {
-        const response = await fetch(`/data/campaign-run/${runKey}.json`);
+        const response = await fetch(
+          `/data/campaign-run/${encodeURIComponent(selectedCampaignId)}/${encodeURIComponent(runKey)}.json`,
+        );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data: CampaignBenchmarkSummary = await response.json();
-        setSummaryCache((prev) => ({ ...prev, [runKey]: data }));
+        setSummaryCache((prev) => ({ ...prev, [cacheKey]: data }));
         return data;
       } catch (error) {
         console.error("Failed to load run summary", runKey, error);
-        setSummaryCache((prev) => ({ ...prev, [runKey]: null }));
+        setSummaryCache((prev) => ({ ...prev, [cacheKey]: null }));
         return null;
       }
     },
-    [summaryCache],
+    [selectedCampaignId, summaryCache],
   );
 
   const openRun = useCallback((runKey: string) => {
+    const cacheKey = `${selectedCampaignId}:${runKey}`;
     setSelectedRunKey(runKey);
     setSelectedModelDetail(null);
     setPanel("run-detail");
-    setRunSummary(summaryCache[runKey] ?? null);
+    setRunSummary(summaryCache[cacheKey] ?? null);
     loadRunSummary(runKey).then(setRunSummary);
-  }, [loadRunSummary, summaryCache]);
+  }, [loadRunSummary, selectedCampaignId, summaryCache]);
 
   const openTask = useCallback(
     (runKey: string, taskId: string, parentPanel: TaskParentPanel) => {
@@ -139,7 +214,7 @@ export default function CampaignView({ onImageClick }: Props) {
         .then(setTaskDetail)
         .catch(() => setTaskDetail(null));
     },
-    [fetchCampaignTask],
+    [fetchCampaignTask, selectedCampaignId],
   );
 
   const openModelDetail = useCallback(
@@ -167,14 +242,14 @@ export default function CampaignView({ onImageClick }: Props) {
       setDownloadingTaskKey(downloadKey);
       try {
         const task = await fetchCampaignTask(runKey, taskId);
-        downloadJson(task, `${taskId}.json`);
+        downloadJson(task, `${selectedCampaignId}-${taskId}.json`);
       } catch (error) {
         console.error("Failed to download task trajectory", runKey, taskId, error);
       } finally {
         setDownloadingTaskKey(null);
       }
     },
-    [fetchCampaignTask],
+    [fetchCampaignTask, selectedCampaignId],
   );
 
   const downloadRunTasks = useCallback(
@@ -198,7 +273,7 @@ export default function CampaignView({ onImageClick }: Props) {
             summary,
             tasks,
           },
-          `${runKey}-trajectories.json`,
+          `${selectedCampaignId}-${runKey}-trajectories.json`,
         );
       } catch (error) {
         console.error("Failed to download run trajectories", runKey, error);
@@ -241,14 +316,14 @@ export default function CampaignView({ onImageClick }: Props) {
           leaderboard,
           runs,
         },
-        "emtom-campaign-everything.json",
+        `${selectedCampaignId}-emtom-campaign-everything.json`,
       );
     } catch (error) {
       console.error("Failed to download full campaign bundle", error);
     } finally {
       setDownloadingEverything(false);
     }
-  }, [campaign, fetchCampaignTask, leaderboard, loadRunSummary]);
+  }, [campaign, fetchCampaignTask, leaderboard, loadRunSummary, selectedCampaignId]);
 
   if (loading) {
     return (
@@ -270,12 +345,15 @@ export default function CampaignView({ onImageClick }: Props) {
         </div>
         <p>No campaign configured.</p>
         <code className="campaign-empty-cmd">
-          ./emtom/run_emtom.sh campaign create --models gpt-5.2 kimi-k2.5 --modes text vision
+          ./emtom/run_emtom.sh campaign add --models gpt-5.2 kimi-k2.5 --modes text vision
         </code>
       </div>
     );
   }
 
+  const selectedCampaignMeta = campaignIndex?.campaigns.find(
+    (entry) => entry.campaign_id === selectedCampaignId,
+  );
   const runEntries = Object.entries(campaign.runs);
   const soloRuns = runEntries.filter(([, r]) => r.type === "solo");
   const matchupRuns = runEntries.filter(([, r]) => r.type === "matchup");
@@ -326,6 +404,22 @@ export default function CampaignView({ onImageClick }: Props) {
       {/* Campaign header stats */}
       <div className="campaign-header">
         <div className="campaign-header-actions">
+          {campaignIndex && campaignIndex.campaigns.length > 0 && (
+            <label className="campaign-selector-wrap">
+              <span className="campaign-selector-label">Campaign</span>
+              <select
+                className="campaign-selector"
+                value={selectedCampaignId}
+                onChange={(event) => setSelectedCampaignId(event.target.value)}
+              >
+                {campaignIndex.campaigns.map((entry) => (
+                  <option key={entry.campaign_id} value={entry.campaign_id}>
+                    {entry.status === "active" ? "Active" : "Archive"} · {entry.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <button
             className="download-btn campaign-download-all-btn"
             disabled={downloadingEverything}
@@ -343,6 +437,14 @@ export default function CampaignView({ onImageClick }: Props) {
             <span className="campaign-stat-value">{campaign.models.length}</span>
             <span className="campaign-stat-label">Models</span>
           </div>
+          {selectedCampaignMeta && (
+            <div className="campaign-stat">
+              <span className="campaign-stat-value">
+                {selectedCampaignMeta.status === "active" ? "active" : "archived"}
+              </span>
+              <span className="campaign-stat-label">Status</span>
+            </div>
+          )}
           <div className="campaign-stat">
             <span className="campaign-stat-value">{campaign.task_total}</span>
             <span className="campaign-stat-label">Tasks</span>
@@ -367,6 +469,11 @@ export default function CampaignView({ onImageClick }: Props) {
             </span>
           ))}
         </div>
+        {selectedCampaignMeta?.archive_reason && (
+          <div className="campaign-archive-note">
+            Archived: {selectedCampaignMeta.archive_reason}
+          </div>
+        )}
       </div>
 
       {/* Panel content */}
@@ -510,6 +617,92 @@ function LeaderboardPanel({
                               pending
                             </td>
                           </>
+                        )}
+                      </tr>
+                    );
+                  }),
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <SoloPreviewGrid
+            models={models}
+            modes={modes}
+            soloRuns={soloRuns}
+            onRunClick={onRunClick}
+          />
+        )}
+      </div>
+
+      <div className="campaign-section">
+        <h3 className="campaign-section-title">Solo Literal ToM <span className="campaign-section-subtitle">supported end-of-episode probes</span></h3>
+        {hasSoloData ? (
+          <div className="campaign-table-wrap">
+            <table className="campaign-table">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th>Mode</th>
+                  <th>Probe Tasks</th>
+                  <th>Literal ToM</th>
+                  {["cooperative", "mixed"].map((cat) => (
+                    <th key={cat}>{cat}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {models.flatMap((model) =>
+                  modes.map((mode) => {
+                    const key = `${model}_${mode}`;
+                    const entry = leaderboard!.solo[key];
+                    const overall = entry?.overall;
+                    return (
+                      <tr key={`literal-${key}`}>
+                        <td>
+                          <button
+                            className="campaign-model-link"
+                            onClick={() => onModelClick(model, mode)}
+                          >
+                            <span
+                              className="campaign-model-dot"
+                              style={{ background: modelColor(model) }}
+                            />
+                            {model}
+                          </button>
+                        </td>
+                        <td className="campaign-mode-cell">{mode}</td>
+                        {entry ? (
+                          <>
+                            <td className="campaign-tasks-cell">
+                              <span className="campaign-tasks-done">{overall?.literal_tom_task_count ?? 0}</span>
+                              <span className="campaign-tasks-sep">/</span>
+                              <span className="campaign-tasks-total">{overall?.total ?? 0}</span>
+                            </td>
+                            <td className="campaign-rate-cell">
+                              {typeof overall?.literal_tom_score === "number" ? (
+                                <RateBar rate={overall.literal_tom_score} />
+                              ) : (
+                                <span className="campaign-na">--</span>
+                              )}
+                            </td>
+                            {["cooperative", "mixed"].map((cat) => {
+                              const cs = entry.categories[cat];
+                              return (
+                                <td key={cat} className="campaign-rate-cell">
+                                  {typeof cs?.literal_tom_score === "number" ? (
+                                    <RateBar rate={cs.literal_tom_score} />
+                                  ) : (
+                                    <span className="campaign-na">--</span>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </>
+                        ) : (
+                          <td colSpan={4} className="campaign-pending-cell">
+                            pending
+                          </td>
                         )}
                       </tr>
                     );
@@ -727,11 +920,13 @@ function ModelDetailPanel({
       run.mode === selection.mode,
   );
   const hasPendingSummaries = relevantRuns.some(
-    ([runKey, runDef]) => runDef.status === "complete" && summaryCache[runKey] === undefined,
+    ([runKey, runDef]) =>
+      runDef.status === "complete" &&
+      summaryCache[`${campaign.campaign_id || "active"}:${runKey}`] === undefined,
   );
 
   const rows = relevantRuns.flatMap(([runKey, runDef]) => {
-    const summary = summaryCache[runKey];
+    const summary = summaryCache[`${campaign.campaign_id || "active"}:${runKey}`];
     if (!summary) return [];
     return summary.results.map((result) => ({
       runKey,
@@ -798,6 +993,9 @@ function ModelDetailPanel({
                           {(result.evaluation.percent_complete * 100).toFixed(0)}%
                         </span>
                       )}
+                      <span className="campaign-task-row-literal">
+                        LitToM {formatLiteralTomScore(literalTomFromEvaluation(result.evaluation))}
+                      </span>
                     </button>
                     <button
                       className="download-btn campaign-task-row-download"
@@ -912,6 +1110,12 @@ function RunDetailPanel({
             </div>
             <div className="campaign-stat">
               <span className="campaign-stat-value">
+                {formatLiteralTomScore(summary)}
+              </span>
+              <span className="campaign-stat-label">Literal ToM</span>
+            </div>
+            <div className="campaign-stat">
+              <span className="campaign-stat-value">
                 {summary.passed}/{summary.total}
               </span>
               <span className="campaign-stat-label">Passed</span>
@@ -932,6 +1136,8 @@ function RunDetailPanel({
                   <span className="campaign-cat-stat-detail">
                     {stats.passed}/{stats.total} · avg {stats.avg_steps.toFixed(0)} steps
                     {stats.timed_out > 0 && ` · ${stats.timed_out} timed out`}
+                    {typeof stats.literal_tom_score === "number" &&
+                      ` · lit ${stats.literal_tom_score.toFixed(0)}%`}
                   </span>
                 </div>
               ))}
@@ -967,6 +1173,9 @@ function RunDetailPanel({
                         {(r.evaluation.percent_complete * 100).toFixed(0)}%
                       </span>
                     )}
+                    <span className="campaign-task-row-literal">
+                      LitToM {formatLiteralTomScore(literalTomFromEvaluation(r.evaluation))}
+                    </span>
                   </button>
                   <button
                     className="download-btn campaign-task-row-download"

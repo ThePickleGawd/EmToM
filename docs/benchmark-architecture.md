@@ -18,6 +18,13 @@ Runtime benchmark scoring separates:
 4. Judge whether the task genuinely requires ToM reasoning.
 5. Benchmark agents on the final task.
 
+## Campaigns
+
+- Keep exactly one active benchmark campaign in `data/emtom/results/`.
+- When benchmark semantics change enough to invalidate comparability, archive the active campaign into `data/emtom/results/archives/<campaign_id>/` before starting a new one.
+- The visualizer should expose both the active campaign and archived campaigns, but never merge their leaderboards.
+- Campaign reporting must keep `pass_rate` and `literal_tom_score` separate. They answer different questions and should be shown side by side, not collapsed into one metric.
+
 ## Benchmark Modes
 
 - `standard`: task secrets are private and agents only observe normal benchmark channels.

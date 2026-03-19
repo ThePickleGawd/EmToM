@@ -2,20 +2,24 @@
 """
 Campaign system for organized benchmark evaluation.
 
-One persistent campaign that tracks all models, modes, and matchups.
-Incrementally benchmarks new tasks and prunes deleted ones — safe to
-run repeatedly as the task pool grows.
+One active campaign tracks all models, modes, and matchups.
+Invalidated campaigns can be archived for the visualizer and replaced
+with a fresh active campaign.
 
-The campaign lives at data/emtom/results/:
+The active campaign lives at data/emtom/results/:
   campaign.json          — definition + run status + per-run completed_tasks
   leaderboard.json       — aggregated results matrix
   runs/                  — clean per-run results (summaries + planner logs)
 
+Archived campaigns live at data/emtom/results/archives/<campaign_id>/.
+
 Usage:
     python -m emtom.scripts.campaign add --models gpt-5.2 kimi-k2.5 --modes text vision
-    python -m emtom.scripts.campaign run                              # benchmark new tasks
+    python -m emtom.scripts.campaign archive --campaign-id pre_literal_tom --label "Pre literal ToM"
+    python -m emtom.scripts.campaign run
     python -m emtom.scripts.campaign run --only kimi-k2.5_text_cooperative
-    python -m emtom.scripts.campaign status                           # show new/stale counts
+    python -m emtom.scripts.campaign status
+    python -m emtom.scripts.campaign list
     python -m emtom.scripts.campaign report
 """
 
@@ -37,7 +41,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 RESULTS_DIR = PROJECT_ROOT / "data" / "emtom" / "results"
 CAMPAIGN_FILE = RESULTS_DIR / "campaign.json"
+LEADERBOARD_FILE = RESULTS_DIR / "leaderboard.json"
 RUNS_DIR = RESULTS_DIR / "runs"
+ARCHIVES_DIR = RESULTS_DIR / "archives"
 TASKS_DIR = PROJECT_ROOT / "data" / "emtom" / "tasks"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs" / "emtom"
 
@@ -47,6 +53,201 @@ CATEGORIES = ["cooperative", "competitive", "mixed"]
 # ---------------------------------------------------------------------------
 # Campaign definition
 # ---------------------------------------------------------------------------
+
+SUMMARY_CORE_KEYS = {
+    "model",
+    "llm_provider",
+    "benchmark_observation_mode",
+    "run_mode",
+    "task_category_filter",
+    "team_model_map_requested",
+    "team_model_map_resolved",
+    "total",
+    "passed",
+    "failed",
+    "skipped",
+    "pass_rate",
+    "literal_tom_score",
+    "literal_tom_task_count",
+    "literal_tom_probe_count",
+    "literal_tom_supported_probe_count",
+    "literal_tom_passed_probe_count",
+    "category_stats",
+    "results",
+}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_campaign_metadata(
+    campaign: Dict[str, Any],
+    *,
+    campaign_id: str = "active",
+    label: Optional[str] = None,
+    status: str = "active",
+) -> Dict[str, Any]:
+    campaign["campaign_id"] = campaign.get("campaign_id", campaign_id)
+    campaign["label"] = campaign.get("label", label or "Active Campaign")
+    campaign["status"] = campaign.get("status", status)
+    return campaign
+
+
+def _archive_campaign_dir(campaign_id: str) -> Path:
+    return ARCHIVES_DIR / campaign_id
+
+
+def _coerce_number(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _literal_tom_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Aggregate literal-ToM scores from per-task evaluation payloads."""
+    scored_task_count = 0
+    fallback_score_sum = 0.0
+    probe_count = 0
+    supported_probe_count = 0
+    passed_probe_count = 0
+
+    for result in results:
+        if result.get("skipped"):
+            continue
+        evaluation = result.get("evaluation")
+        if not isinstance(evaluation, dict):
+            continue
+
+        probe_summary = evaluation.get("literal_tom_probe_summary")
+        if isinstance(probe_summary, dict):
+            raw_probe_count = _coerce_number(probe_summary.get("probe_count")) or 0.0
+            raw_supported = _coerce_number(probe_summary.get("supported_probe_count")) or 0.0
+            raw_passed = _coerce_number(probe_summary.get("passed_count")) or 0.0
+            probe_count += int(raw_probe_count)
+            supported_probe_count += int(raw_supported)
+            passed_probe_count += int(raw_passed)
+            if raw_supported > 0:
+                scored_task_count += 1
+                continue
+
+        score = _coerce_number(evaluation.get("literal_tom_probe_score"))
+        if score is not None:
+            scored_task_count += 1
+            fallback_score_sum += score
+
+    score_pct: Optional[float] = None
+    if supported_probe_count > 0:
+        score_pct = passed_probe_count / supported_probe_count * 100
+    elif scored_task_count > 0:
+        score_pct = fallback_score_sum / scored_task_count * 100
+
+    return {
+        "literal_tom_score": round(score_pct, 1) if score_pct is not None else None,
+        "literal_tom_task_count": scored_task_count,
+        "literal_tom_probe_count": probe_count,
+        "literal_tom_supported_probe_count": supported_probe_count,
+        "literal_tom_passed_probe_count": passed_probe_count,
+    }
+
+
+def _category_stats(results: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Build simple per-category aggregate stats for campaign summaries."""
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for result in results:
+        if result.get("skipped"):
+            continue
+        category = result.get("category", "unknown")
+        grouped.setdefault(category, []).append(result)
+
+    stats: Dict[str, Dict[str, Any]] = {}
+    for category, cat_results in grouped.items():
+        total = len(cat_results)
+        passed = sum(1 for r in cat_results if r.get("success"))
+        timed_out = sum(1 for r in cat_results if not r.get("done", True))
+        avg_steps = sum(float(r.get("steps", 0) or 0) for r in cat_results) / total if total else 0.0
+        avg_progress = 0.0
+        for result in cat_results:
+            evaluation = result.get("evaluation")
+            if isinstance(evaluation, dict):
+                avg_progress += float(evaluation.get("percent_complete", 0.0) or 0.0)
+        avg_progress = avg_progress / total if total else 0.0
+
+        cat_stats = {
+            "total": total,
+            "passed": passed,
+            "pass_rate": passed / total * 100 if total else 0.0,
+            "avg_progress": round(avg_progress, 3),
+            "avg_steps": round(avg_steps, 1),
+            "timed_out": timed_out,
+        }
+        cat_stats.update(_literal_tom_metrics(cat_results))
+        stats[category] = cat_stats
+
+    return stats
+
+
+def _summary_payload(
+    results: List[Dict[str, Any]],
+    *,
+    model: str = "",
+    base_summary: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build a normalized benchmark summary payload from per-task results."""
+    summary = dict(base_summary or {})
+    total = len(results)
+    skipped = sum(1 for r in results if r.get("skipped"))
+    passed = sum(1 for r in results if r.get("success"))
+    evaluated = total - skipped
+    failed = sum(1 for r in results if not r.get("skipped") and not r.get("success"))
+
+    summary.update({
+        "model": model or summary.get("model", ""),
+        "total": total,
+        "passed": passed,
+        "failed": failed,
+        "skipped": skipped,
+        "pass_rate": (passed / evaluated * 100) if evaluated > 0 else 0,
+        "category_stats": _category_stats(results),
+        "results": results,
+    })
+    summary.update(_literal_tom_metrics(results))
+    return summary
+
+
+def _load_campaign(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _list_archived_campaigns() -> List[Dict[str, Any]]:
+    archives: List[Dict[str, Any]] = []
+    if not ARCHIVES_DIR.exists():
+        return archives
+    for archive_dir in sorted(ARCHIVES_DIR.iterdir(), reverse=True):
+        if not archive_dir.is_dir():
+            continue
+        campaign = _load_campaign(archive_dir / "campaign.json")
+        if not campaign:
+            continue
+        archives.append({
+            "campaign_id": campaign.get("campaign_id", archive_dir.name),
+            "label": campaign.get("label", archive_dir.name),
+            "status": campaign.get("status", "archived"),
+            "created_at": campaign.get("created_at"),
+            "updated_at": campaign.get("updated_at"),
+            "archived_at": campaign.get("archived_at"),
+            "archive_reason": campaign.get("archive_reason", ""),
+            "task_total": campaign.get("task_total", 0),
+            "models": campaign.get("models", []),
+            "modes": campaign.get("modes", []),
+        })
+    return archives
 
 def _count_tasks_by_category(tasks_dir: Path) -> Dict[str, int]:
     counts: Dict[str, int] = {}
@@ -86,7 +287,7 @@ def _backfill_completed_tasks(run_key: str) -> List[str]:
 
 def _merge_results(
     summary_path: Path,
-    new_results: List[Dict[str, Any]],
+    new_summary: Dict[str, Any],
     model: str,
 ) -> None:
     """Merge new per-task results into an existing benchmark_summary.json."""
@@ -100,22 +301,19 @@ def _merge_results(
 
     all_results = existing.get("results", [])
     # Deduplicate: new results replace any existing entries with same task_id
+    new_results = new_summary.get("results", [])
     new_ids = {r["task_id"] for r in new_results if r.get("task_id")}
     all_results = [r for r in all_results if r.get("task_id") not in new_ids]
     all_results.extend(new_results)
-
-    passed = sum(1 for r in all_results if r.get("success"))
-    failed = sum(1 for r in all_results if not r.get("skipped") and not r.get("success"))
-    total = len(all_results)
-
-    merged = {
-        "model": model or existing.get("model", ""),
-        "total": total,
-        "passed": passed,
-        "failed": failed,
-        "pass_rate": (passed / total * 100) if total > 0 else 0,
-        "results": all_results,
-    }
+    merged_base = {k: v for k, v in existing.items() if k not in SUMMARY_CORE_KEYS}
+    for key, value in new_summary.items():
+        if key not in SUMMARY_CORE_KEYS:
+            merged_base[key] = value
+    merged = _summary_payload(
+        all_results,
+        model=model or new_summary.get("model", "") or existing.get("model", ""),
+        base_summary=merged_base,
+    )
     with open(summary_path, "w") as f:
         json.dump(merged, f, indent=2)
 
@@ -134,14 +332,8 @@ def _prune_results(
             return
 
         results = [r for r in summary.get("results", []) if r.get("task_id") not in stale_ids]
-        passed = sum(1 for r in results if r.get("success"))
-        failed = sum(1 for r in results if not r.get("skipped") and not r.get("success"))
-        total = len(results)
-        summary["results"] = results
-        summary["total"] = total
-        summary["passed"] = passed
-        summary["failed"] = failed
-        summary["pass_rate"] = (passed / total * 100) if total > 0 else 0
+        base = {k: v for k, v in summary.items() if k not in SUMMARY_CORE_KEYS}
+        summary = _summary_payload(results, model=summary.get("model", ""), base_summary=base)
 
         with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
@@ -259,9 +451,9 @@ def cmd_add(args: argparse.Namespace) -> None:
 
     task_counts = _count_tasks_by_category(TASKS_DIR)
 
-    campaign = {
-        "created_at": existing.get("created_at", datetime.now(timezone.utc).isoformat()),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+    campaign = _ensure_campaign_metadata({
+        "created_at": existing.get("created_at", _now_iso()),
+        "updated_at": _now_iso(),
         "models": models,
         "modes": modes,
         "competitive_matchups": [list(m) for m in matchups],
@@ -269,7 +461,7 @@ def cmd_add(args: argparse.Namespace) -> None:
         "task_counts": task_counts,
         "task_total": sum(task_counts.values()),
         "runs": new_runs,
-    }
+    })
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     with open(CAMPAIGN_FILE, "w") as f:
@@ -375,7 +567,7 @@ def _collect_results(output_dir: str, run_key: str, model: str = "", append: boo
         if append:
             with open(flat_summary) as f:
                 new_data = json.load(f)
-            _merge_results(summary_dest, new_data.get("results", []), model)
+            _merge_results(summary_dest, new_data, model)
         else:
             shutil.copy2(str(flat_summary), str(summary_dest))
         results_dir = flat_summary.parent
@@ -419,7 +611,7 @@ def _collect_results(output_dir: str, run_key: str, model: str = "", append: boo
     agg = _aggregate_parallel_summaries(output_dir, model)
     if agg:
         if append:
-            _merge_results(summary_dest, agg.get("results", []), model)
+            _merge_results(summary_dest, agg, model)
         else:
             with open(summary_dest, "w") as f:
                 json.dump(agg, f, indent=2)
@@ -450,18 +642,7 @@ def _aggregate_parallel_summaries(output_dir: str, model: str) -> Optional[Dict[
     if not all_results:
         return None
 
-    passed = sum(1 for r in all_results if r.get("success"))
-    failed = sum(1 for r in all_results if not r.get("skipped") and not r.get("success"))
-    total = len(all_results)
-
-    return {
-        "model": model,
-        "total": total,
-        "passed": passed,
-        "failed": failed,
-        "pass_rate": (passed / total * 100) if total > 0 else 0,
-        "results": all_results,
-    }
+    return _summary_payload(all_results, model=model)
 
 
 def _sync_run(
@@ -645,6 +826,9 @@ def cmd_status(args: argparse.Namespace) -> None:
     """Print campaign status, including new/stale task counts."""
     if not CAMPAIGN_FILE.exists():
         print("No campaign found. Run 'campaign add --models ...' first.")
+        archives = _list_archived_campaigns()
+        if archives:
+            print(f"Archived campaigns: {len(archives)}")
         sys.exit(1)
 
     with open(CAMPAIGN_FILE) as f:
@@ -658,7 +842,8 @@ def cmd_status(args: argparse.Namespace) -> None:
         by_status[s] = by_status.get(s, 0) + 1
 
     task_counts = _count_tasks_by_category(tasks_dir)
-    print(f"Campaign: {len(runs)} runs")
+    print(f"Campaign: {campaign.get('label', 'Active Campaign')} ({campaign.get('campaign_id', 'active')})")
+    print(f"  Runs:     {len(runs)}")
     print(f"  Complete: {by_status['complete']}")
     print(f"  Pending:  {by_status['pending']}")
     print(f"  Failed:   {by_status['failed']}")
@@ -698,6 +883,37 @@ def cmd_status(args: argparse.Namespace) -> None:
         for key in sorted(matchup_runs.keys()):
             print(f"  {_status_label(key, matchup_runs[key])}")
 
+    archives = _list_archived_campaigns()
+    if archives:
+        print(f"\nArchived campaigns: {len(archives)}")
+
+
+def cmd_list(args: argparse.Namespace) -> None:
+    """List the active and archived campaigns."""
+    active = _load_campaign(CAMPAIGN_FILE)
+    if active:
+        print("Active:")
+        print(
+            f"  {active.get('campaign_id', 'active')}: "
+            f"{active.get('label', 'Active Campaign')} "
+            f"({len(active.get('runs', {}))} runs, {active.get('task_total', 0)} tasks)"
+        )
+    else:
+        print("Active:\n  <none>")
+
+    archives = _list_archived_campaigns()
+    print("Archived:")
+    if not archives:
+        print("  <none>")
+        return
+    for archive in archives:
+        reason = f" — {archive['archive_reason']}" if archive.get("archive_reason") else ""
+        print(
+            f"  {archive['campaign_id']}: {archive['label']} "
+            f"({archive.get('task_total', 0)} tasks, archived {archive.get('archived_at', 'unknown')})"
+            f"{reason}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Report / Leaderboard
@@ -713,6 +929,17 @@ def _read_run_summary(run_key: str) -> Optional[Dict[str, Any]]:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def _category_literal_metrics(
+    results: List[Dict[str, Any]],
+    category: Optional[str] = None,
+) -> Dict[str, Any]:
+    scoped = [
+        result for result in results
+        if category is None or result.get("category") == category
+    ]
+    return _literal_tom_metrics(scoped)
 
 
 def _generate_report(campaign: Dict[str, Any]) -> None:
@@ -735,20 +962,43 @@ def _generate_report(campaign: Dict[str, Any]) -> None:
 
         if model_mode not in solo_results:
             solo_results[model_mode] = {"model": model, "mode": mode, "categories": {}}
+        category_literal = _category_literal_metrics(summary.get("results", []), category)
         solo_results[model_mode]["categories"][category] = {
             "total": summary.get("total", 0),
             "passed": summary.get("passed", 0),
             "pass_rate": summary.get("pass_rate", 0),
+            **category_literal,
         }
 
     # Compute overall pass rates
     for model_mode, data in solo_results.items():
         total = sum(c["total"] for c in data["categories"].values())
         passed = sum(c["passed"] for c in data["categories"].values())
+        supported_probe_count = sum(
+            c.get("literal_tom_supported_probe_count", 0)
+            for c in data["categories"].values()
+        )
+        passed_probe_count = sum(
+            c.get("literal_tom_passed_probe_count", 0)
+            for c in data["categories"].values()
+        )
+        task_count = sum(
+            c.get("literal_tom_task_count", 0)
+            for c in data["categories"].values()
+        )
+        literal_score = (
+            passed_probe_count / supported_probe_count * 100
+            if supported_probe_count > 0
+            else None
+        )
         data["overall"] = {
             "total": total,
             "passed": passed,
             "pass_rate": (passed / total * 100) if total > 0 else 0,
+            "literal_tom_score": round(literal_score, 1) if literal_score is not None else None,
+            "literal_tom_task_count": task_count,
+            "literal_tom_supported_probe_count": supported_probe_count,
+            "literal_tom_passed_probe_count": passed_probe_count,
         }
 
     # Matchup results
@@ -816,15 +1066,17 @@ def _generate_report(campaign: Dict[str, Any]) -> None:
         }
 
     leaderboard = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": _now_iso(),
+        "campaign_id": campaign.get("campaign_id", "active"),
+        "label": campaign.get("label", "Active Campaign"),
+        "status": campaign.get("status", "active"),
         "models": campaign["models"],
         "modes": campaign["modes"],
         "solo": solo_results,
         "matchups": matchup_results,
     }
 
-    leaderboard_file = RESULTS_DIR / "leaderboard.json"
-    with open(leaderboard_file, "w") as f:
+    with open(LEADERBOARD_FILE, "w") as f:
         json.dump(leaderboard, f, indent=2)
 
     # Print leaderboard
@@ -833,9 +1085,8 @@ def _generate_report(campaign: Dict[str, Any]) -> None:
     print(f"{'=' * 70}")
 
     if solo_results:
-        # Table header
         cats = ["cooperative", "mixed"]
-        header = f"{'Model':<30} {'Overall':>8}"
+        header = f"{'Model':<30} {'Pass':>8} {'LitToM':>8}"
         for cat in cats:
             header += f" {cat[:5]:>8}"
         print(header)
@@ -844,7 +1095,9 @@ def _generate_report(campaign: Dict[str, Any]) -> None:
         for model_mode in sorted(solo_results.keys()):
             data = solo_results[model_mode]
             overall = data["overall"]
-            row = f"{model_mode:<30} {overall['pass_rate']:>7.1f}%"
+            literal = overall.get("literal_tom_score")
+            literal_text = f"{literal:>7.1f}%" if literal is not None else "     -- "
+            row = f"{model_mode:<30} {overall['pass_rate']:>7.1f}% {literal_text}"
             for cat in cats:
                 cat_data = data["categories"].get(cat, {})
                 pr = cat_data.get("pass_rate", 0)
@@ -864,7 +1117,49 @@ def _generate_report(campaign: Dict[str, Any]) -> None:
                 f"{c.get('model_a_win_rate', 0):>7.1f}%"
             )
 
-    print(f"\nSaved to: {leaderboard_file}")
+    print(f"\nSaved to: {LEADERBOARD_FILE}")
+
+
+def cmd_archive(args: argparse.Namespace) -> None:
+    """Archive the active campaign and clear active results."""
+    if not CAMPAIGN_FILE.exists():
+        print("No active campaign found.")
+        sys.exit(1)
+
+    with open(CAMPAIGN_FILE) as f:
+        campaign = json.load(f)
+
+    campaign_id = args.campaign_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_dir = _archive_campaign_dir(campaign_id)
+    if archive_dir.exists():
+        print(f"Archive already exists: {archive_dir}")
+        sys.exit(1)
+
+    archive_dir.mkdir(parents=True, exist_ok=False)
+
+    if not LEADERBOARD_FILE.exists():
+        _generate_report(campaign)
+
+    archived_campaign = dict(campaign)
+    archived_campaign["campaign_id"] = campaign_id
+    archived_campaign["label"] = args.label or campaign.get("label") or campaign_id
+    archived_campaign["status"] = "archived"
+    archived_campaign["archived_at"] = _now_iso()
+    archived_campaign["archive_reason"] = args.reason or ""
+
+    with open(archive_dir / "campaign.json", "w") as f:
+        json.dump(archived_campaign, f, indent=2)
+
+    if LEADERBOARD_FILE.exists():
+        shutil.move(str(LEADERBOARD_FILE), str(archive_dir / "leaderboard.json"))
+    if RUNS_DIR.exists():
+        shutil.move(str(RUNS_DIR), str(archive_dir / "runs"))
+    CAMPAIGN_FILE.unlink(missing_ok=True)
+
+    print(f"Archived active campaign to: {archive_dir}")
+    print(f"  Label:  {archived_campaign['label']}")
+    if archived_campaign["archive_reason"]:
+        print(f"  Reason: {archived_campaign['archive_reason']}")
 
 
 def cmd_remove(args: argparse.Namespace) -> None:
@@ -941,6 +1236,13 @@ def main():
     p_add.add_argument("--models", nargs="+", required=True, help="Models to add")
     p_add.add_argument("--modes", nargs="+", default=["text"], help="Observation modes to add (text, vision)")
 
+    p_archive = sub.add_parser("archive", help="Archive the active campaign and clear active results")
+    p_archive.add_argument("--campaign-id", default=None, help="Archive id (default: timestamp)")
+    p_archive.add_argument("--label", default=None, help="Human-readable label for the archive")
+    p_archive.add_argument("--reason", default="", help="Why this campaign was archived")
+
+    sub.add_parser("list", help="List active and archived campaigns")
+
     # remove
     p_rm = sub.add_parser("remove", help="Remove models from the campaign")
     p_rm.add_argument("--models", nargs="+", required=True, help="Models to remove")
@@ -961,6 +1263,10 @@ def main():
 
     if args.command == "add":
         cmd_add(args)
+    elif args.command == "archive":
+        cmd_archive(args)
+    elif args.command == "list":
+        cmd_list(args)
     elif args.command == "remove":
         cmd_remove(args)
     elif args.command == "run":
