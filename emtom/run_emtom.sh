@@ -144,6 +144,7 @@ SEED_TASK=""  # Path to existing task to use as seed
 RANDOM_SEED_TASK=false  # Use a random existing task as seed on each new_scene[]
 NO_VIDEO=true  # Disable video saving (default: true for speed)
 MAX_WORKERS=""  # Parallel benchmark: max concurrent processes (empty = sequential)
+NUM_GPUS=8  # GPU count for round-robin subprocess assignment
 TASKS_DIR=""  # Custom tasks directory for benchmark
 TEAM_MODEL_MAP=""  # Optional team -> model mapping for benchmark competitive tasks
 SAMPLED_TASKS_DIR=""  # Pre-built sampled_tasks directory (skips random sampling)
@@ -157,6 +158,8 @@ REPORT_FILE=""  # Optional JSON report output path for static verification
 NO_CALIBRATION=false  # Don't write benchmark results back into source task JSONs
 OBSERVATION_MODE="text"  # Benchmark observation mode: text or vision
 RUN_MODE="standard"  # Benchmark run mode: standard, baseline, or full_info
+LIMIT=0  # Optional task limit for salvage-style commands
+SKIP_BACKUP=false  # Skip backup creation for salvage flow
 SELECTOR_MIN_FRAMES=1
 SELECTOR_MAX_FRAMES=5
 SELECTOR_MAX_CANDIDATES=12
@@ -187,7 +190,9 @@ print_usage() {
     echo "  test-task      Run LLM agents on a task (requires GPU)"
     echo "  new-scene      Load a new Habitat scene (requires GPU)"
     echo "  submit-task    Submit a validated task to output directory"
+    echo "  migrate-room-restrictions  Canonicalize room restrictions into mechanic_bindings"
     echo "  migrate-literal-tom  Migrate tasks to physical-success + literal-ToM-probe semantics"
+    echo "  salvage-literal-tom  Backup, migrate, verify, judge, and keep only salvaged tasks"
     echo "  evolve         Run evolutionary difficulty generation (model ladder)"
     echo "  all            Run full pipeline: explore -> generate -> benchmark"
     echo ""
@@ -254,10 +259,13 @@ print_usage() {
     echo "                       Format: team_0=sonnet,team_1=gpt-5"
     echo "  --observation-mode MODE  Benchmark observation mode: text|vision (default: $OBSERVATION_MODE)"
     echo "  --run-mode MODE      Benchmark run mode: standard|baseline|full_info (default: $RUN_MODE)"
+    echo "  --limit N            Optional task limit for salvage-style commands (default: all)"
+    echo "  --skip-backup        Skip creating a backup copy during salvage"
     echo "  --selector-min-frames N  Vision mode selector minimum frames (default: $SELECTOR_MIN_FRAMES)"
     echo "  --selector-max-frames N  Vision mode selector maximum frames (default: $SELECTOR_MAX_FRAMES)"
     echo "  --selector-max-candidates N  Vision mode selector candidate pool size (default: $SELECTOR_MAX_CANDIDATES)"
     echo "  --max-workers N      Run benchmark in parallel (N concurrent processes, GPU round-robin)"
+    echo "  --num-gpus N         Number of GPUs for round-robin assignment (default: $NUM_GPUS)"
     echo "  --no-video           Disable video recording (default: on)"
     echo "  --no-calibration     Don't write results back into source task JSONs"
     echo ""
@@ -1042,9 +1050,31 @@ run_submit_task() {
     python -m emtom.cli.submit_task "${SUBMIT_ARGS[@]}"
 }
 
+run_migrate_room_restrictions() {
+    MIGRATE_ARGS=(--tasks-dir "${TASKS_DIR:-data/emtom/tasks}")
+    python -m emtom.scripts.migrate_room_restrictions "${MIGRATE_ARGS[@]}"
+}
+
 run_migrate_literal_tom() {
     MIGRATE_ARGS=(--tasks-dir "${TASKS_DIR:-data/emtom/tasks}" --output-dir "${OUTPUT_DIR:-data/emtom/tasks_literal_tom_v1}")
     python -m emtom.scripts.migrate_literal_tom_tasks "${MIGRATE_ARGS[@]}"
+}
+
+run_salvage_literal_tom() {
+    SALVAGE_ARGS=(--tasks-dir "${TASKS_DIR:-data/emtom/tasks}" --work-dir "${OUTPUT_DIR:-outputs/literal_tom_salvage_full}" --judge-threshold "$THRESHOLD")
+    if [ "$LIMIT" -gt 0 ]; then
+        SALVAGE_ARGS+=(--limit "$LIMIT")
+    fi
+    if [ "$SKIP_BACKUP" = true ]; then
+        SALVAGE_ARGS+=(--skip-backup)
+    fi
+    if [ -n "$MAX_WORKERS" ]; then
+        SALVAGE_ARGS+=(--max-workers "$MAX_WORKERS")
+    fi
+    if [ -n "$NUM_GPUS" ]; then
+        SALVAGE_ARGS+=(--num-gpus "$NUM_GPUS")
+    fi
+    python -m emtom.scripts.salvage_literal_tom_tasks "${SALVAGE_ARGS[@]}"
 }
 
 # Parse command line arguments
@@ -1065,7 +1095,7 @@ while [[ $# -gt 0 ]]; do
             python -m emtom.scripts.campaign "$@"
             exit $?
             ;;
-        explore|generate|benchmark|test|judge|verify|verify-static|verify-pddl|validate-task|test-task|new-scene|submit-task|migrate-literal-tom|all)
+        explore|generate|benchmark|test|judge|verify|verify-static|verify-pddl|validate-task|test-task|new-scene|submit-task|migrate-room-restrictions|migrate-literal-tom|salvage-literal-tom|all)
             COMMAND=$1
             shift
             ;;
@@ -1271,6 +1301,10 @@ while [[ $# -gt 0 ]]; do
             MAX_WORKERS=$2
             shift 2
             ;;
+        --num-gpus)
+            NUM_GPUS=$2
+            shift 2
+            ;;
         --llm-agents)
             # Collect all agents until next flag or end
             shift
@@ -1303,6 +1337,14 @@ while [[ $# -gt 0 ]]; do
         --output-dir)
             OUTPUT_DIR=$2
             shift 2
+            ;;
+        --limit)
+            LIMIT=$2
+            shift 2
+            ;;
+        --skip-backup)
+            SKIP_BACKUP=true
+            shift
             ;;
         --scene-data)
             SCENE_DATA_FILE=$2
@@ -1397,8 +1439,14 @@ case $COMMAND in
     submit-task)
         run_submit_task
         ;;
+    migrate-room-restrictions)
+        run_migrate_room_restrictions
+        ;;
     migrate-literal-tom)
         run_migrate_literal_tom
+        ;;
+    salvage-literal-tom)
+        run_salvage_literal_tom
         ;;
     evolve)
         run_evolve

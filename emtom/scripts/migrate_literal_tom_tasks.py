@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -35,18 +36,22 @@ def _write_json(path: Path, data: Dict[str, Any]) -> None:
         f.write("\n")
 
 
-def _verify_task_file(task_file: Path) -> Dict[str, Any]:
+def _verify_task_file(task_file: Path, gpu_id: int | None = None) -> Dict[str, Any]:
     cmd = [
         sys.executable,
         "-m",
         "emtom.cli.verify_trajectory",
         str(task_file),
     ]
+    env = os.environ.copy()
+    if gpu_id is not None:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     proc = subprocess.run(
         cmd,
         cwd=str(PROJECT_ROOT),
         capture_output=True,
         text=True,
+        env=env,
     )
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
@@ -54,14 +59,29 @@ def _verify_task_file(task_file: Path) -> Dict[str, Any]:
     try:
         payload = json.loads(stdout) if stdout else {}
     except json.JSONDecodeError:
-        payload = {"success": False, "error": stdout or "verify_trajectory did not return JSON"}
+        payload = {}
+        lines = stdout.splitlines()
+        for start in range(len(lines)):
+            candidate = "\n".join(lines[start:]).strip()
+            if not candidate:
+                continue
+            try:
+                payload = json.loads(candidate)
+                break
+            except json.JSONDecodeError:
+                continue
+        if not payload:
+            payload = {
+                "success": False,
+                "error": stdout or "verify_trajectory did not return JSON",
+            }
     if stderr:
         payload["stderr"] = stderr[-4000:]
     payload["returncode"] = proc.returncode
     return payload
 
 
-def migrate_task(task_path: Path, output_path: Path, verify: bool) -> Dict[str, Any]:
+def migrate_task(task_path: Path, output_path: Path, verify: bool, gpu_id: int | None = None) -> Dict[str, Any]:
     from emtom.cli.validate_task import validate
     from emtom.pddl.planner import regenerate_golden_trajectory
     from emtom.pddl.runtime_projection import build_runtime_metadata
@@ -84,8 +104,10 @@ def migrate_task(task_path: Path, output_path: Path, verify: bool) -> Dict[str, 
 
     verify_result = None
     if verify:
-        verify_result = _verify_task_file(output_path)
-        if not verify_result.get("success", False):
+        verify_result = _verify_task_file(output_path, gpu_id=gpu_id)
+        verify_success = bool(verify_result.get("success", False))
+        verify_valid = bool(verify_result.get("data", {}).get("valid", False))
+        if not (verify_success and verify_valid):
             return {
                 "task": str(task_path),
                 "status": "failed",

@@ -588,3 +588,79 @@ class TestCompilerCanCommunicate:
         ]
         # Should only have the one from init, not add defaults
         assert len(can_comm) == 1
+
+
+class TestCompilerRoomRestrictions:
+    def _make_task(self, mechanic_bindings=None, problem_pddl=None):
+        from unittest.mock import MagicMock
+
+        task = MagicMock()
+        task.task_id = "test_room_restrictions"
+        task.num_agents = 2
+        task.items = []
+        task.initial_states = {}
+        task.mechanic_bindings = mechanic_bindings or []
+        task.locked_containers = {}
+        task.message_targets = None
+        task.problem_pddl = problem_pddl or (
+            "(define (problem test_room_restrictions)\n"
+            "  (:domain emtom)\n"
+            "  (:objects agent_0 agent_1 - agent kitchen_1 living_room_1 - room cabinet_27 - furniture)\n"
+            "  (:init (agent_in_room agent_0 living_room_1) (agent_in_room agent_1 kitchen_1) "
+            "         (is_in_room cabinet_27 kitchen_1))\n"
+            "  (:goal (is_open cabinet_27))\n"
+            ")"
+        )
+        return task
+
+    def test_room_restrictions_derived_from_mechanics(self):
+        from emtom.pddl.compiler import compile_task
+        from emtom.task_gen.task_generator import MechanicBinding
+
+        task = self._make_task(
+            mechanic_bindings=[
+                MechanicBinding(
+                    mechanic_type="room_restriction",
+                    restricted_rooms=["kitchen_1"],
+                    for_agents=["agent_0"],
+                )
+            ]
+        )
+
+        problem = compile_task(task)
+        restrictions = [
+            l for l in problem.init if l.predicate == "is_restricted"
+        ]
+
+        assert len(restrictions) == 1
+        assert restrictions[0].args == ("agent_0", "kitchen_1")
+
+    def test_existing_is_restricted_not_duplicated(self):
+        from emtom.pddl.compiler import compile_task
+        from emtom.task_gen.task_generator import MechanicBinding
+
+        task = self._make_task(
+            mechanic_bindings=[
+                MechanicBinding(
+                    mechanic_type="room_restriction",
+                    restricted_rooms=["kitchen_1"],
+                    for_agents=["agent_0"],
+                )
+            ],
+            problem_pddl=(
+                "(define (problem test_room_restrictions)\n"
+                "  (:domain emtom)\n"
+                "  (:objects agent_0 agent_1 - agent kitchen_1 living_room_1 - room cabinet_27 - furniture)\n"
+                "  (:init (agent_in_room agent_0 living_room_1) (agent_in_room agent_1 kitchen_1) "
+                "         (is_in_room cabinet_27 kitchen_1) (is_restricted agent_0 kitchen_1))\n"
+                "  (:goal (is_open cabinet_27))\n"
+                ")"
+            ),
+        )
+
+        problem = compile_task(task)
+        restrictions = [
+            l for l in problem.init if l.predicate == "is_restricted"
+        ]
+
+        assert len(restrictions) == 1

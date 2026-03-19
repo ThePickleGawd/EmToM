@@ -30,6 +30,51 @@ if TYPE_CHECKING:
     from emtom.task_gen.scene_loader import SceneData
 
 
+ID_PATTERN = re.compile(r"\b[a-z_]+_\d+\b")
+
+
+def _extract_known_task_ids(task_data: Dict[str, Any]) -> set[str]:
+    """
+    Best-effort fallback for IDs referenced by the task spec itself.
+
+    This mirrors the static task-gen verifier so trajectory validation does not
+    reject planner-generated IDs when the loaded scene inventory is incomplete.
+    """
+    ids: set[str] = set()
+
+    for item in task_data.get("items", []):
+        if isinstance(item, dict):
+            item_id = item.get("item_id")
+            if isinstance(item_id, str) and item_id:
+                ids.add(item_id)
+
+    def collect_from_value(value: Any) -> None:
+        if isinstance(value, str):
+            ids.update(ID_PATTERN.findall(value))
+        elif isinstance(value, dict):
+            for nested in value.values():
+                collect_from_value(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect_from_value(nested)
+
+    for key in (
+        "task",
+        "title",
+        "problem_pddl",
+        "tom_reasoning",
+        "initial_states",
+        "locked_containers",
+        "subtasks",
+        "mechanic_bindings",
+        "agent_secrets",
+        "team_secrets",
+    ):
+        collect_from_value(task_data.get(key))
+
+    return ids
+
+
 def validate(
     task_data: Dict[str, Any],
     scene_data: Optional["SceneData"] = None,
@@ -332,6 +377,7 @@ def static_validate_trajectory(
         if item.get("item_id")
     }
     valid_ids.update(defined_items)
+    valid_ids.update(_extract_known_task_ids(task_data))
 
     for step_idx, step in enumerate(golden):
         actions = step.get("actions", [])

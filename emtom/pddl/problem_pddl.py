@@ -131,6 +131,23 @@ def replace_goal_in_problem_pddl(problem_pddl: str, new_goal_pddl: str) -> str:
     return raw[:pos] + new_goal_pddl.strip() + raw[end + 1 :]
 
 
+def replace_init_in_problem_pddl(problem_pddl: str, new_init_pddl: str) -> str:
+    """Replace the `:init` block in an inline problem string."""
+    raw = _strip_comments(problem_pddl or "").strip()
+    if not raw:
+        raise ValueError("problem_pddl is empty")
+
+    lower = raw.lower()
+    needle = "(:init"
+    idx = lower.find(needle)
+    if idx < 0:
+        raise ValueError("problem_pddl is missing (:init ...)")
+
+    pos = idx + len(needle)
+    end = _find_matching_paren(raw, idx)
+    return raw[:pos] + "\n    " + new_init_pddl.strip() + "\n  " + raw[end:]
+
+
 def collect_object_ids_from_formula(formula: Formula) -> Set[str]:
     """Collect grounded object IDs referenced in a formula."""
     out: Set[str] = set()

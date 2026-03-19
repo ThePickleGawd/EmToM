@@ -443,3 +443,32 @@ class TestStaticValidateTrajectory:
         )
         # No scene data, so object IDs aren't checked
         assert len(errors) == 0
+
+    def test_accepts_ids_referenced_in_problem_pddl_when_scene_inventory_is_incomplete(self):
+        from emtom.cli.validate_task import static_validate_trajectory
+        from emtom.task_gen.scene_loader import SceneData
+
+        scene_data = SceneData(
+            episode_id="1",
+            scene_id="scene_1",
+            rooms=["kitchen_1"],
+            furniture=["table_1"],
+            objects=[],
+        )
+        task_data = {
+            "num_agents": 2,
+            "problem_pddl": (
+                "(define (problem test) (:domain emtom) "
+                "(:goal (and (is_on_top box_5 table_1))))"
+            ),
+        }
+        golden = [{
+            "actions": [
+                {"agent": "agent_0", "action": "Pick[box_5]"},
+                {"agent": "agent_1", "action": "Wait[]"},
+            ]
+        }]
+
+        errors = static_validate_trajectory(task_data, golden, scene_data=scene_data)
+
+        assert not any("Unknown object 'box_5'" in e for e in errors)

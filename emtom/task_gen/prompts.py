@@ -202,7 +202,7 @@ The most common source of judge failures is mismatches between `problem_pddl` an
 
 1. **`:objects` section must list only scene IDs**: Every agent, object, furniture, and room in `:objects` must exist in the current scene data. Never invent IDs.
 2. **`:init` must reflect actual scene state**: If an object is on table_29 in the scene, write `(is_on_top object table_29)` in `:init`. Do NOT invent initial locations.
-3. **`room_restriction` in `:init`**: For each `room_restriction` mechanic binding, add `(is_restricted agent_X room_Y)` to `:init` to match.
+3. **Do not duplicate room restrictions in `problem_pddl`**: Author room restrictions only in `mechanic_bindings`. The planner derives `(is_restricted agent_X room_Y)` automatically at compile time.
 4. **Furniture-room consistency**: If a goal requires placing an object on furniture_X in room_Y, verify that furniture_X is actually in room_Y by checking the scene data room listings.
 5. **Secrets must match `:init`**: If a secret says "the cup is in the bedroom drawer," the `:init` must have `(is_on_top cup_X drawer_Y)` or `(is_inside cup_X drawer_Y)` where drawer_Y is in a bedroom. Mismatches cause judge "narrative_consistency" failures.
 
@@ -258,7 +258,7 @@ These are the most frequent failure patterns. Avoid them:
 ## PDDL Goal Format
 Use `problem_pddl` as the single goal source. It must contain a full PDDL problem:
 - Required sections: `(:domain ...)`, `(:objects ...)`, `(:init ...)`, `(:goal ...)`
-- `problem_pddl` must be **self-contained**. Do not rely on scene augmentation during verification.
+- `problem_pddl` must be **self-contained for scene/world facts**. Do not rely on scene augmentation during verification. Mechanic-derived init facts such as room restrictions come from `mechanic_bindings`, not handwritten `(is_restricted ...)`.
 - Every goal/mechanic-relevant object or furniture must have explicit room grounding in `:init` via `is_in_room`.
 - Every declared agent must have an explicit `agent_in_room` fact in `:init`.
 - Communication constraints must be encoded in `:init` with `can_communicate`.
@@ -338,13 +338,13 @@ about the fact they should end up understanding.
 
 ### Example: K=1 (first-order knowledge probe via communication)
 ```json
-"problem_pddl": "(define (problem task_k1)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent kitchen_0 dining_room_0 - room trophy_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 dining_room_0) (agent_in_room agent_1 kitchen_0) (is_in_room trophy_1 kitchen_0) (is_in_room table_8 dining_room_0) (is_restricted agent_0 kitchen_0) (can_communicate agent_1 agent_0))\\n  (:goal (and (K agent_0 (is_in_room trophy_1 kitchen_0)) (is_on_top trophy_1 table_8)))\\n)"
+"problem_pddl": "(define (problem task_k1)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent kitchen_0 dining_room_0 - room trophy_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 dining_room_0) (agent_in_room agent_1 kitchen_0) (is_in_room trophy_1 kitchen_0) (is_in_room table_8 dining_room_0) (can_communicate agent_1 agent_0))\\n  (:goal (and (K agent_0 (is_in_room trophy_1 kitchen_0)) (is_on_top trophy_1 table_8)))\\n)"
 ```
 Scenario: agent_0 is restricted from kitchen. agent_1 observes trophy_1 in kitchen and communicates location. agent_0 uses this knowledge to coordinate retrieval.
 
 ### Example: K=2 (second-order knowledge probe)
 ```json
-"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent bedroom_0 hallway_0 - room gem_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 hallway_0) (agent_in_room agent_1 bedroom_0) (is_in_room gem_1 bedroom_0) (is_in_room table_8 hallway_0) (is_restricted agent_0 bedroom_0) (can_communicate agent_1 agent_0))\\n  (:goal (and (K agent_0 (K agent_1 (is_in_room gem_1 bedroom_0))) (is_on_top gem_1 table_8)))\\n)"
+"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent bedroom_0 hallway_0 - room gem_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 hallway_0) (agent_in_room agent_1 bedroom_0) (is_in_room gem_1 bedroom_0) (is_in_room table_8 hallway_0) (can_communicate agent_1 agent_0))\\n  (:goal (and (K agent_0 (K agent_1 (is_in_room gem_1 bedroom_0))) (is_on_top gem_1 table_8)))\\n)"
 ```
 Scenario: agent_0 is restricted from bedroom. agent_1 can directly observe the gem in bedroom and can communicate to agent_0. The goal requires agent_0 to reason not just about the gem's location, but about agent_1's knowledge of that location.
 

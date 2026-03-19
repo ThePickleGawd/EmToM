@@ -442,7 +442,7 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
   - functional benchmark success uses the non-epistemic projection only
   - `K()` goals are design-time / probe-time only and become end-of-episode literal-ToM probes
 - Category intent must be reflected in `problem_pddl` objective structure
-- Raw `problem_pddl` should be self-contained: required symbols belong in `:objects`, relevant room grounding belongs in `:init`
+- Raw `problem_pddl` should be self-contained for scene/world facts: required symbols belong in `:objects`, relevant room grounding belongs in `:init`, while mechanic-derived init facts like room restrictions should come from `mechanic_bindings`
 - **Mechanic consistency**: Every mechanic referenced in `task` or `agent_secrets` (e.g., "the handle is reversed", "you have limited messages") MUST have a corresponding entry in `mechanic_bindings`. If secrets describe constraints that aren't in bindings, the simulator won't enforce them.
 - **K() goal backing**: Every `K()` goal in `problem_pddl` (or legacy goal field) must be backed by a mechanic that prevents the agent from directly observing the fact (e.g., `room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). If the agent could just walk there and see, the K() goal is fake.
 - **Functional projection quality**: Penalize tasks whose non-epistemic projection becomes vacuous, trivial, effectively single-agent, or no longer reflects the intended coordination challenge.

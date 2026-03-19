@@ -39,6 +39,7 @@ Runtime benchmark scoring separates:
 - Prefer direct data flow over hidden coupling.
 - Treat verification as a hard gate, not a warning system.
 - Keep `problem_pddl` as the single authored source of epistemic structure.
+- Keep benchmark mechanics authored once in `mechanic_bindings`; derive planner-only init facts like `is_restricted` from those bindings instead of duplicating them in `problem_pddl`.
 - Runtime task success ignores `K()` and uses the projected non-epistemic goal only.
 - End-of-episode literal ToM probes are derived deterministically from `K()` formulas and reported separately from task success.
 - Benchmark `percent_complete` should track the same success-relevant functional scope; mixed tasks may expose separate all-goal progress for diagnostics.

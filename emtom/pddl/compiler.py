@@ -106,6 +106,8 @@ def compile_task(
             raise ValueError("; ".join(validation_errors))
         problem = parsed.to_problem()
 
+        # Mechanics are the single authored source for runtime constraints.
+        _ensure_room_restrictions(task, problem)
         # Add default init facts (e.g., furniture starts closed)
         _add_default_init_facts(problem)
 
@@ -135,6 +137,34 @@ def _add_default_init_facts(problem: Problem) -> None:
                 problem.init.append(Literal("is_closed", (obj_id,)))
 
 
+def _binding_value(binding: Any, key: str) -> Any:
+    if isinstance(binding, dict):
+        return binding.get(key)
+    return getattr(binding, key, None)
+
+
+def _ensure_room_restrictions(task: "GeneratedTask", problem: Problem) -> None:
+    """Populate is_restricted predicates from room_restriction mechanic bindings."""
+    existing = {(l.predicate, l.args) for l in problem.init}
+
+    for binding in getattr(task, "mechanic_bindings", []) or []:
+        if _binding_value(binding, "mechanic_type") != "room_restriction":
+            continue
+        rooms = _binding_value(binding, "restricted_rooms") or []
+        agents = _binding_value(binding, "for_agents") or []
+        for agent in agents:
+            if not isinstance(agent, str):
+                continue
+            for room in rooms:
+                if not isinstance(room, str):
+                    continue
+                fact = ("is_restricted", (agent, room))
+                if fact in existing:
+                    continue
+                problem.init.append(Literal("is_restricted", (agent, room)))
+                existing.add(fact)
+
+
 def _ensure_can_communicate(task: "GeneratedTask", problem: Problem) -> None:
     """Populate can_communicate predicates in problem init.
 
@@ -155,9 +185,10 @@ def _ensure_can_communicate(task: "GeneratedTask", problem: Problem) -> None:
     # Check for restricted_communication mechanic
     restricted_targets = None
     for binding in task.mechanic_bindings:
-        if binding.mechanic_type == "restricted_communication":
-            if binding.allowed_targets:
-                restricted_targets = binding.allowed_targets
+        if _binding_value(binding, "mechanic_type") == "restricted_communication":
+            allowed_targets = _binding_value(binding, "allowed_targets")
+            if allowed_targets:
+                restricted_targets = allowed_targets
             break
 
     # Check for message_targets
