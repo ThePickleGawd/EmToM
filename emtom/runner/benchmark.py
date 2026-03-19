@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 
@@ -1512,52 +1513,65 @@ class BenchmarkRunner(EMTOMBaseRunner):
         supported_count = 0
         passed_count = 0
 
+        probe_groups: Dict[str, List[Any]] = defaultdict(list)
         for probe in probes:
-            result_entry: Dict[str, Any] = {
-                "probe_id": probe.probe_id,
-                "agent_id": probe.agent_id,
-                "source_pddl": probe.source_pddl,
-                "question": probe.question,
-                "supported": probe.supported,
-            }
-            if not probe.supported:
-                result_entry["status"] = "unsupported"
-                result_entry["reason"] = probe.unsupported_reason
+            probe_groups[probe.agent_id].append(probe)
+
+        for agent_id, agent_probes in probe_groups.items():
+            batch_raw_response: Any = None
+            batch_answers: Dict[str, Dict[str, Any]] = {}
+            batch_error: Optional[str] = None
+
+            supported_agent_probes = [probe for probe in agent_probes if probe.supported]
+            if supported_agent_probes:
+                planner = self.planners.get(int(agent_id.split("_", 1)[1])) if agent_id else None
+                if planner is None or not hasattr(planner, "llm"):
+                    batch_error = "No LLM planner available for probed agent."
+                else:
+                    probe_prompt = self._build_literal_tom_probe_prompt(
+                        agent_id,
+                        supported_agent_probes,
+                        instruction,
+                    )
+                    try:
+                        batch_raw_response = planner.llm.generate(probe_prompt)
+                        response_data = self._extract_probe_json(batch_raw_response)
+                        batch_answers = self._extract_probe_answers(response_data)
+                    except Exception as exc:
+                        batch_error = f"Probe generation failed: {exc}"
+
+            for probe in agent_probes:
+                result_entry: Dict[str, Any] = {
+                    "probe_id": probe.probe_id,
+                    "agent_id": probe.agent_id,
+                    "source_pddl": probe.source_pddl,
+                    "question": probe.question,
+                    "supported": probe.supported,
+                }
+                if not probe.supported:
+                    result_entry["status"] = "unsupported"
+                    result_entry["reason"] = probe.unsupported_reason
+                    results.append(result_entry)
+                    continue
+
+                supported_count += 1
+                if batch_error is not None:
+                    result_entry["status"] = "error"
+                    result_entry["reason"] = batch_error
+                    result_entry["raw_response"] = batch_raw_response
+                    results.append(result_entry)
+                    continue
+
+                response_data = batch_answers.get(probe.probe_id, {})
+                passed, details = evaluate_literal_tom_probe(probe, response_data, check_fn)
+                if passed:
+                    passed_count += 1
+                result_entry.update({
+                    "status": "passed" if passed else "failed",
+                    "raw_response": batch_raw_response,
+                    "details": details,
+                })
                 results.append(result_entry)
-                continue
-
-            supported_count += 1
-            planner = self.planners.get(int(probe.agent_id.split("_", 1)[1])) if probe.agent_id else None
-            if planner is None or not hasattr(planner, "llm"):
-                result_entry["status"] = "unavailable"
-                result_entry["reason"] = "No LLM planner available for probed agent."
-                results.append(result_entry)
-                continue
-
-            probe_prompt = self._build_literal_tom_probe_prompt(
-                probe.agent_id,
-                probe.question,
-                instruction,
-            )
-
-            try:
-                raw_response = planner.llm.generate(probe_prompt)
-            except Exception as exc:
-                result_entry["status"] = "error"
-                result_entry["reason"] = f"Probe generation failed: {exc}"
-                results.append(result_entry)
-                continue
-
-            response_data = self._extract_probe_json(raw_response)
-            passed, details = evaluate_literal_tom_probe(probe, response_data, check_fn)
-            if passed:
-                passed_count += 1
-            result_entry.update({
-                "status": "passed" if passed else "failed",
-                "raw_response": raw_response,
-                "details": details,
-            })
-            results.append(result_entry)
 
         score = (passed_count / supported_count) if supported_count else None
         return {
@@ -1573,7 +1587,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
     def _build_literal_tom_probe_prompt(
         self,
         agent_id: str,
-        question: str,
+        probes: List[Any],
         instruction: Dict[str, str],
     ) -> str:
         """Build a deterministic post-episode probe prompt."""
@@ -1583,11 +1597,18 @@ class BenchmarkRunner(EMTOMBaseRunner):
             context = str(planner.curr_prompt)
         else:
             context = self._build_probe_context_fallback(agent_id, instruction)
+        probe_lines = ["Report one structured answer per probe."]
+        probe_lines.append(
+            'Respond with JSON only: {"answers":[{"probe_id":"k_probe_X","predicate":"<predicate_name>|unknown","holds":true|false|null,"args":["entity_or_target", ...]}, ...]}'
+        )
+        probe_lines.append("Use predicate \"unknown\" with holds null and empty args if the agent does not know.")
+        for probe in probes:
+            probe_lines.append(f"- {probe.question}")
         return (
             f"{context}\n\n"
             "The episode is over. Do not propose any more actions.\n"
-            "Answer the following post-episode evaluation question using only the episode context above.\n"
-            f"{question}\n"
+            "Using only the episode context above, provide the requested structured report.\n"
+            f"{chr(10).join(probe_lines)}\n"
         )
 
     def _build_probe_context_fallback(
@@ -1630,6 +1651,26 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 return json.loads(match.group(0))
             except json.JSONDecodeError:
                 return {}
+
+    @staticmethod
+    def _extract_probe_answers(response_data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """Normalize a batch probe response into probe_id -> answer mapping."""
+        if not isinstance(response_data, dict):
+            return {}
+        raw_answers = response_data.get("answers")
+        if not isinstance(raw_answers, list):
+            probe_id = str(response_data.get("probe_id", "")).strip()
+            return {probe_id: response_data} if probe_id else {}
+
+        answers: Dict[str, Dict[str, Any]] = {}
+        for raw in raw_answers:
+            if not isinstance(raw, dict):
+                continue
+            probe_id = str(raw.get("probe_id", "")).strip()
+            if not probe_id:
+                continue
+            answers[probe_id] = raw
+        return answers
 
     def _extract_high_level_action(self, planner_info: Dict, uid: int) -> Optional[str]:
         """Extract high-level action from planner info."""

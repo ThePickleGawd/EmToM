@@ -8,7 +8,7 @@ EMTOM is a benchmark for embodied Theory of Mind. A task is good if success requ
 
 Runtime benchmark scoring separates:
 - `functional_success`: physical and owned task completion under asymmetric information.
-- `literal_tom_probe`: end-of-episode probes derived from `K()` goals that measure whether agents can explicitly report who knows what.
+- `literal_tom_probe`: end-of-episode probes derived from `K()` goals that measure whether agents can explicitly report the predicate and entities they believe are known, or abstain with `unknown`.
 
 ## Pipeline
 

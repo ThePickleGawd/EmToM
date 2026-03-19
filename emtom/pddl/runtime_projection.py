@@ -11,7 +11,17 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from emtom.pddl.describe import goal_to_natural_language
-from emtom.pddl.dsl import And, Believes, EpistemicFormula, Formula, Knows, Literal, Not, Or
+from emtom.pddl.dsl import (
+    And,
+    Believes,
+    EpistemicFormula,
+    Formula,
+    Knows,
+    Literal,
+    Not,
+    Or,
+    parse_goal_string,
+)
 from emtom.pddl.problem_pddl import ParsedProblemPDDL, parse_problem_pddl
 
 
@@ -194,26 +204,43 @@ def evaluate_literal_tom_probe(
             "reason": probe.unsupported_reason or "Unsupported probe.",
         }
 
-    answer = str(response_data.get("answer", "")).strip().lower()
-    fact = str(response_data.get("fact", "")).strip()
-    subject_agents = tuple(str(x).strip() for x in response_data.get("subject_agents", []) or [])
+    predicate = str(response_data.get("predicate", "")).strip()
+    holds_raw = response_data.get("holds")
+    raw_args = response_data.get("args", []) or []
+    args = tuple(str(x).strip() for x in raw_args)
+    expected_predicate, expected_args, expected_negated = _probe_expected_literal(probe)
+    expected_holds = not expected_negated
+
+    if isinstance(holds_raw, bool):
+        holds = holds_raw
+    elif isinstance(holds_raw, str):
+        lowered = holds_raw.strip().lower()
+        if lowered == "true":
+            holds = True
+        elif lowered == "false":
+            holds = False
+        else:
+            holds = None
+    else:
+        holds = None
 
     fact_true = _evaluate_fact_pddl(probe.fact_pddl, check_fn)
     passed = (
-        answer == "yes"
-        and fact == probe.fact_pddl
-        and subject_agents == tuple(probe.subject_agents)
+        predicate == expected_predicate
+        and args == expected_args
+        and holds == expected_holds
         and fact_true
     )
 
     details = {
         "expected_response": dict(probe.expected_response),
         "parsed_response": {
-            "answer": answer,
-            "fact": fact,
-            "subject_agents": list(subject_agents),
+            "predicate": predicate,
+            "holds": holds,
+            "args": list(args),
         },
         "fact_true": fact_true,
+        "expected_negated": expected_negated,
     }
     return passed, details
 
@@ -262,24 +289,23 @@ def _build_probe(formula: Knows, *, probe_idx: int, owner: Optional[str]) -> Lit
     subject_agents = tuple(agents[1:])
     fact_pddl = fact_formula.to_pddl()
     fact_nl = goal_to_natural_language(fact_formula)
+    predicate, args, negated = _fact_formula_to_probe_fields(fact_formula)
+    target_entities = ", ".join(args) if args else "(none)"
+    relation_text = (
+        f"{outer_agent} knows that {subject_agents[0]} knows"
+        if len(subject_agents) == 1
+        else f"{outer_agent} knows the nested chain {' -> '.join(subject_agents)} knows"
+        if subject_agents
+        else f"{outer_agent} knows"
+    )
 
-    if subject_agents:
-        subject_text = subject_agents[0]
-        for nested_agent in subject_agents[1:]:
-            subject_text = f"{subject_text} knows that {nested_agent}"
-        question = (
-            "Post-episode literal ToM probe.\n"
-            f"Does {outer_agent} know that {subject_text} knows this fact: {fact_pddl}?\n"
-            f"Fact in natural language: {fact_nl}\n"
-            'Respond with JSON only: {"answer":"yes"|"no","fact":"<fact_pddl>","subject_agents":["agent_x", ...]}'
-        )
-    else:
-        question = (
-            "Post-episode literal ToM probe.\n"
-            f"Does {outer_agent} know this fact: {fact_pddl}?\n"
-            f"Fact in natural language: {fact_nl}\n"
-            'Respond with JSON only: {"answer":"yes"|"no","fact":"<fact_pddl>","subject_agents":[]}'
-        )
+    question = (
+        f"Probe {probe_idx}: {relation_text} a fact about ordered entities [{target_entities}]. "
+        "Report which benchmark predicate applies to those entities and whether it holds. "
+        "The expected argument order is fixed as listed. "
+        'If unknown, return predicate "unknown" and holds null. '
+        'JSON shape: {"probe_id":"k_probe_X","predicate":"<predicate_name>|unknown","holds":true|false|null,"args":["entity_or_target", ...]}'
+    )
 
     return LiteralToMProbe(
         probe_id=f"k_probe_{probe_idx}",
@@ -290,9 +316,9 @@ def _build_probe(formula: Knows, *, probe_idx: int, owner: Optional[str]) -> Lit
         source_pddl=formula.to_pddl(),
         question=question,
         expected_response={
-            "answer": "yes",
-            "fact": fact_pddl,
-            "subject_agents": list(subject_agents),
+            "predicate": predicate,
+            "holds": not negated,
+            "args": list(args),
         },
         depth=len(agents),
         owner=owner,
@@ -320,6 +346,25 @@ def _build_unsupported_probe(
         supported=False,
         unsupported_reason=reason,
     )
+
+
+def _fact_formula_to_probe_fields(formula: Formula) -> Tuple[str, Tuple[str, ...], bool]:
+    if isinstance(formula, Literal):
+        return formula.predicate, formula.args, formula.negated
+    if isinstance(formula, Not) and isinstance(formula.operand, Literal):
+        lit = formula.operand
+        return lit.predicate, lit.args, not lit.negated
+    parsed = parse_goal_string(formula.to_pddl())
+    if isinstance(parsed, Literal):
+        return parsed.predicate, parsed.args, parsed.negated
+    if isinstance(parsed, Not) and isinstance(parsed.operand, Literal):
+        lit = parsed.operand
+        return lit.predicate, lit.args, not lit.negated
+    raise ValueError(f"Unsupported probe fact formula: {formula.to_pddl()}")
+
+
+def _probe_expected_literal(probe: LiteralToMProbe) -> Tuple[str, Tuple[str, ...], bool]:
+    return _fact_formula_to_probe_fields(parse_goal_string(probe.fact_pddl))
 
 
 def _unwrap_nested_knowledge(formula: Knows) -> Tuple[List[str], Formula]:

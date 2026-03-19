@@ -3,6 +3,7 @@ from emtom.pddl.planner import generate_deterministic_trajectory
 from emtom.pddl.problem_pddl import parse_problem_pddl
 from emtom.pddl.runtime_projection import (
     derive_literal_tom_probes,
+    evaluate_literal_tom_probe,
     project_runtime_from_parsed_problem,
 )
 
@@ -70,7 +71,12 @@ def test_runtime_projection_derives_nested_probe():
     assert outer.agent_id == "agent_0"
     assert outer.subject_agents == ("agent_1",)
     assert outer.fact_pddl == "(is_open cabinet_27)"
-    assert outer.expected_response["answer"] == "yes"
+    assert outer.expected_response["predicate"] == "is_open"
+    assert outer.expected_response["holds"] is True
+    assert outer.expected_response["args"] == ["cabinet_27"]
+    assert "Post-episode literal ToM probe" not in outer.question
+    assert '"answer"' not in outer.question
+    assert 'predicate "unknown"' in outer.question
     assert inner.agent_id == "agent_1"
 
 
@@ -94,3 +100,17 @@ def test_golden_trajectory_ignores_epistemic_steps():
     assert all("Communicate" not in action for action in actions)
     assert result["communication_derived"] is False
     assert result["functional_goal_pddl"] == "(and (is_open cabinet_27) (is_on_top bottle_4 table_5))"
+
+
+def test_literal_probe_unknown_response_fails_cleanly():
+    parsed = parse_problem_pddl(_task_with_nested_k()["problem_pddl"])
+    probe = next(p for p in derive_literal_tom_probes(parsed.goal_formula, owners=parsed.owners) if p.depth == 1)
+
+    passed, details = evaluate_literal_tom_probe(
+        probe,
+        {"predicate": "unknown", "args": [], "subject_agents": []},
+        lambda pred, args: pred == "is_open" and args == ("cabinet_27",),
+    )
+
+    assert passed is False
+    assert details["parsed_response"]["predicate"] == "unknown"
