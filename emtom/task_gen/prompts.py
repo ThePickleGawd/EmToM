@@ -91,7 +91,7 @@ Assigned!
 - **Each agent MUST also have a personal objective** encoded in `:goal-owners` (see "Goal Ownership" section)
 - Personal objectives are SEPARATE from the main `:goal` — they can conflict with it or with other agents' objectives
 - Personal objectives create tension: agents must cooperate on the shared task while secretly pursuing their own interests
-- `agent_secrets` should hint at each agent's personal objective in natural language (derived from the PDDL goals)
+- `agent_secrets` should state each agent's personal objective explicitly, using exact target IDs/states when relevant (derived from the PDDL goals)
 - Public `task` describes ONLY the shared objective; do NOT reveal personal objectives
 
 ## Message Targeting
@@ -107,14 +107,18 @@ Assigned!
 - **NEVER reference objects with unknown locations.** Only use objects listed in the scene data with a known furniture parent (shown as "object (on furniture)"). If an object has no location, it does not exist for task purposes.
 - `current_scene.json` schema: `objects` is a list of object IDs (strings), not dicts. Use `objects_on_furniture` (object->furniture via reverse map) and `furniture_in_rooms` to resolve locations.
 - Every agent essential; **no assigned roles**
-- `task` is GLOBAL; keep high-level; do not leak secret targets (competitive/mixed)
+- `task` is GLOBAL and should stay high-level; it may describe the shared objective vaguely without exact IDs
 - Secrets must be actionable (room/furniture/key/constraint) and not prescriptive (no step-by-step instructions)
 - Secrets MUST include hints about active mechanics that affect an agent's area. If a cabinet has `inverse_state`, at least one agent's secret must mention "the handle is reversed — opening closes it and closing opens it." If `remote_control` links two objects, a secret should hint "operating the cabinet in the office seems to affect something in the kitchen." Without these hints, agents cannot discover mechanics through trial-and-error.
 - Secrets create asymmetry; agents must communicate to combine clues
-- Natural language only; no object/item IDs in `task` or secrets
-- The `task` field (and cooperative/mixed `agent_secrets`) MUST explicitly state the target state (open/close/on-top-of/etc.) for every goal object. NEVER use ambiguous words like "adjust", "seal", "configure", "set to the correct state", or "specified configuration" when you mean open or close. Write "leave the cabinet open" or "close the fridge", not "adjust the cabinet" or "seal the fridge." Agents cannot infer the intended state from vague descriptions and will guess wrong.
-- When a scene has multiple furniture of the same type in the same room or nearby rooms (e.g., two cabinets in the kitchen), descriptions MUST include a distinguishing feature visible to agents: "the cabinet with the canned food on top" or "the cabinet closest to the fridge." Agents use FindObjectTool to resolve descriptions—ambiguous references cause them to act on the wrong instance.
-- For competitive tasks: each team's `agent_secrets` MUST explicitly state the target state for that team's goal objects. Write "your team needs cabinet X open and the cup on the table" not "handle the kitchen-side state requirement." The global `task` field stays neutral, but secrets must be actionable.
+- Use explicit scene IDs for goal-critical objects, furniture, and rooms in `agent_secrets` and `team_secrets`. Natural language can supplement the IDs, but should not replace them for targets that must be acted on precisely.
+- The `task` field should describe the shared objective and desired end-state clearly, but it does NOT need to name exact IDs. The `agent_secrets` MUST carry the exact actionable IDs/states. NEVER use ambiguous words like "adjust", "seal", "configure", "set to the correct state", or "specified configuration" when you mean open or close. Write "leave the cabinet open" or "close the fridge" in the public task, and put the exact `cabinet_27` / `fridge_44` references in secrets.
+- When a scene has multiple furniture of the same type in the same room or nearby rooms, the public task may stay generic, but the secrets must disambiguate with the exact target ID.
+- For competitive tasks: each team's `agent_secrets` MUST explicitly state the target state for that team's goal objects. The global `task` field stays neutral and high-level, but secrets must be actionable and exact.
+- A good ToM pattern is: an agent is blocked from entering a room, but its secret still names the exact object/furniture ID in that room, so the challenge is reasoning and coordination rather than grounding ambiguity.
+- Prefer FUNCTIONAL ToM over literal relay tasks. The best action should depend on modeling a partner's private access, private objective, message budget, or likely next move. Hidden facts alone are not enough.
+- Design at least one critical decision where an agent must choose between plausible partners, routes, or message contents based on who can actually act on the information. Penalize yourself if the task reduces to "someone sees a fact and repeats it."
+- Good functional-ToM pressure: one message can go to only one teammate; one teammate can act but cannot observe; another can observe but cannot act; a mixed-task partner may sacrifice the shared plan for a private goal; a relay path changes which teammate will know enough to act next.
 - Each agent's secrets MUST include which other agents are on their team (e.g., "You are on a team with agent_1." for cooperative, or "You are on team_0 with agent_1. The opposing team is agent_2." for competitive)
 - Do NOT describe K() goals as runtime success conditions in `task`, `agent_secrets`, or `team_secrets`. Never write phrases like "must know", "knowledge is required", "final knows check", or "epistemic requirement". Instead phrase these as information needs or likely probe topics, e.g. "you may need a confirmation from agent_1" or "be ready to report whether the fridge was opened by the end."
 - Do NOT use positive `is_inside` goals unless the object is already inside in `:init` and meant to remain there. Prefer `is_on_top` for movable-placement goals.
@@ -123,6 +127,33 @@ Assigned!
 - Avoid `python3 -c "..."` commands that include literal `\\n` escapes.
 - For multi-line JSON edits, prefer heredocs (e.g., `python3 - <<'PY' ... PY`) or `apply_patch`.
 
+## Functional ToM Patterns
+Use at least one of these as the core difficulty driver. Do not reduce them to simple fact relay.
+
+1. **Delegation choice**
+   - One agent has limited communication and must choose WHICH teammate to inform.
+   - Only one teammate can actually exploit the information because of room access, mechanic access, or inventory access.
+   - Bad version: either teammate could do the same thing after hearing the fact.
+
+2. **Sequencing choice**
+   - The right order of actions depends on what a teammate already knows, can verify, or can do after receiving one update.
+   - Example: deciding whether to open the trigger object first or move the target item first depends on whether the teammate can capitalize on the state change before the final message is used.
+
+3. **Relay choice**
+   - A sender cannot contact the acting agent directly and must choose a relay path.
+   - The best relay depends on who will understand the message, still have bandwidth left, and be able to act on it next.
+   - Bad version: any relay path is equally good.
+
+4. **Mixed-motive cooperation**
+   - In mixed tasks, private objectives should change how useful or reliable a teammate is.
+   - The best shared-task policy should depend on anticipating who may delay, hoard a resource, or divert effort toward a private goal.
+   - Bad version: private goals exist but teammates can ignore them completely.
+
+5. **Competitive blocking**
+   - In competitive tasks, best play should depend on inferring which branch the opponent is likely to pursue.
+   - Use contested resources, asymmetric access, and communication limits so blocking the wrong branch has a real cost.
+   - Bad version: both sides just race independently with no need to model the opponent.
+
 ## Mechanic Usage Guidelines
 
 ### Mechanic Count: Quality Over Quantity
@@ -130,6 +161,7 @@ Assigned!
 - **2 mechanics** (e.g., `limited_bandwidth` + `room_restriction`): highest pass rate for easy/medium tasks
 - **3-4 mechanics**: appropriate for complex tasks where each mechanic serves a distinct purpose
 - Every mechanic must create a unique coordination challenge that the others don't — don't stack mechanics for complexity's sake
+- For HARD tasks, do not default to 2 mechanics if that makes the plan a simple relay. Add a third or fourth mechanic when it creates a real partner-modeling decision about who can act, who can verify, or who can relay next.
 
 ### `limited_bandwidth` — Strongest ToM Driver
 Use `limited_bandwidth` only when communication scarcity is truly required. It forces agents to:
@@ -241,7 +273,7 @@ These are the most frequent failure patterns. Avoid them:
 {{
   "category": "cooperative|competitive|mixed",
   "num_agents": N,
-  "task": "Natural language description (no IDs, no roles)",
+  "task": "High-level shared objective (can stay vague; avoid unnecessary exact IDs; no hidden roles)",
   "agent_secrets": {{"agent_0": [...], "agent_1": [...]}},
   "team_secrets": {{"team_0": [...], "team_1": [...]}},
   "agent_actions": {{"agent_0": [...], "agent_1": [...]}},
@@ -316,16 +348,25 @@ Pattern: If a physical goal forces agent_X to rely on another agent's observatio
 action, or report (due to room_restriction, hidden mechanic, etc.), add a K() goal
 about the fact they should end up understanding.
 
-**Good K()** — knowledge enables a physical action:
+Important: K() should track information that changes a rational action choice.
+If the same physical plan would still be optimal without modeling the partner's
+knowledge, the task is likely only measuring literal ToM.
+
+**Good K()** — knowledge enables or changes a physical action:
 - Physical goal: `(is_on_top trophy_1 table_8)` (agent_0 must place trophy on table)
 - Agent_0 is room-restricted from the kitchen where trophy_1 starts
 - K() goal: `(K agent_0 (is_in_room trophy_1 kitchen_0))` — agent_0 must learn
   where the trophy is (via communication from agent_1) before they can plan retrieval
+- Better still: there are multiple plausible teammates to inform, but only one can
+  actually retrieve or stage the trophy under the current restrictions, so the
+  sender must model who can use the information.
 
 **Bad K()** — knowledge serves no purpose:
 - `(K agent_0 (is_open safe_3))` — why does agent_0 need to *know* the safe is open?
   No downstream action depends on this knowledge.
 - `(K agent_0 (is_on_top cushion_1 table_15))` — decorative, not a prerequisite
+- Relay-only pattern: agent_1 sees `cabinet_27` open and tells agent_0, but that
+  message does not affect which action anyone should take next.
 
 **Rules:**
 - Every K() goal must pair with a meaningful physical goal plus real information asymmetry
@@ -339,17 +380,23 @@ about the fact they should end up understanding.
 "problem_pddl": "(define (problem task_k0)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent kitchen_1 - room bottle_4 - object cabinet_27 table_13 - furniture)\\n  (:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1) (is_in_room bottle_4 kitchen_1) (is_in_room cabinet_27 kitchen_1) (is_in_room table_13 kitchen_1))\\n  (:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))\\n)"
 ```
 
-### Example: K=1 (first-order knowledge probe via communication)
+### Example: K=1 (first-order functional ToM)
 ```json
-"problem_pddl": "(define (problem task_k1)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent kitchen_0 dining_room_0 - room trophy_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 dining_room_0) (agent_in_room agent_1 kitchen_0) (is_in_room trophy_1 kitchen_0) (is_in_room table_8 dining_room_0) (can_communicate agent_1 agent_0))\\n  (:goal (and (K agent_0 (is_in_room trophy_1 kitchen_0)) (is_on_top trophy_1 table_8)))\\n)"
+"problem_pddl": "(define (problem task_k1)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 agent_2 - agent kitchen_0 dining_room_0 hall_0 - room trophy_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 hall_0) (agent_in_room agent_1 kitchen_0) (agent_in_room agent_2 dining_room_0) (is_in_room trophy_1 kitchen_0) (is_in_room table_8 dining_room_0) (can_communicate agent_0 agent_1) (can_communicate agent_0 agent_2))\\n  (:goal (and (K agent_0 (is_in_room trophy_1 kitchen_0)) (is_on_top trophy_1 table_8)))\\n)"
 ```
-Scenario: agent_0 is restricted from kitchen. agent_1 observes trophy_1 in kitchen and communicates location. agent_0 uses this knowledge to coordinate retrieval.
+Scenario: agent_0 must decide whether to spend the only message on agent_1 or agent_2. Only agent_1 can observe/retrieve the trophy from the kitchen, while agent_2 can only finish the placement. The functional challenge is choosing the right partner and sequencing actions accordingly.
 
-### Example: K=2 (second-order knowledge probe)
+### Example: K=2 (second-order functional ToM)
 ```json
-"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 - agent bedroom_0 hallway_0 - room gem_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 hallway_0) (agent_in_room agent_1 bedroom_0) (is_in_room gem_1 bedroom_0) (is_in_room table_8 hallway_0) (can_communicate agent_1 agent_0))\\n  (:goal (and (K agent_0 (K agent_1 (is_in_room gem_1 bedroom_0))) (is_on_top gem_1 table_8)))\\n)"
+"problem_pddl": "(define (problem task_k2)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 agent_2 - agent bedroom_0 hallway_0 office_0 - room gem_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 hallway_0) (agent_in_room agent_1 bedroom_0) (agent_in_room agent_2 office_0) (is_in_room gem_1 bedroom_0) (is_in_room table_8 hallway_0) (can_communicate agent_1 agent_0) (can_communicate agent_0 agent_2))\\n  (:goal (and (K agent_0 (K agent_1 (is_in_room gem_1 bedroom_0))) (is_on_top gem_1 table_8)))\\n)"
 ```
-Scenario: agent_0 is restricted from bedroom. agent_1 can directly observe the gem in bedroom and can communicate to agent_0. The goal requires agent_0 to reason not just about the gem's location, but about agent_1's knowledge of that location.
+Scenario: agent_0 cannot enter the bedroom and must decide whether agent_2 should wait for a handoff or pursue another branch. That choice depends on agent_0 reasoning that agent_1 has already learned where gem_1 is and can complete the first stage of the plan.
+
+### Example: K=3 (third-order functional ToM)
+```json
+"problem_pddl": "(define (problem task_k3)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 agent_2 agent_3 - agent kitchen_0 office_0 hall_0 dining_room_0 - room sample_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 hall_0) (agent_in_room agent_1 kitchen_0) (agent_in_room agent_2 office_0) (agent_in_room agent_3 dining_room_0) (is_in_room sample_1 kitchen_0) (is_in_room table_8 dining_room_0) (can_communicate agent_1 agent_0) (can_communicate agent_0 agent_2) (can_communicate agent_2 agent_3))\\n  (:goal (and (K agent_3 (K agent_2 (K agent_0 (is_in_room sample_1 kitchen_0)))) (is_on_top sample_1 table_8)))\\n)"
+```
+Scenario: agent_1 is the only agent who can directly inspect `sample_1`, agent_0 chooses whether and when to relay that update onward, agent_2 is the only bridge to agent_3, and agent_3 can complete the final placement. The challenge is not just passing along the fact, but coordinating the chain so the right downstream agent acts at the right time.
 
 ## Theory of Mind
 ToM depth is computed as the **minimum solvable belief depth** under strict verification.
@@ -360,10 +407,11 @@ ToM depth is computed as the **minimum solvable belief depth** under strict veri
 
 Use `judge[]` to see the computed minimal ToM depth from its strict PDDL-verification step. Design explicit epistemic goals plus information asymmetry to increase ToM requirements:
 - `room_restriction`: creates private knowledge (agent can't observe directly)
-- `remote_control`: use cautiously for ToM calibration; `room_restriction` is the most reliable way to create verifier-provable K() goals
+- `remote_control`: useful when it changes who can causally affect a distant target; prefer cases where agents must infer which teammate can exploit the discovered coupling
 - `limited_bandwidth`: forces strategic info sharing under constraint
 - `restricted_communication`: constrains who can inform whom, but always confirm the intended K-level with `judge[]`
 - `unreliable_communication`: ambiguous delivery forces ACK protocols — sender must model whether recipient received the message
+- `mixed` personal goals: use them to create partner-modeling pressure, not just extra side quests. A strong mixed task makes the best cooperative plan depend on anticipating who is likely to deviate, delay, or hoard information.
 
 ## Success Conditions
 - Spatial: `is_on_top`, `is_in_room` (need `target`). Use `is_inside` only for stable/initialized containment.

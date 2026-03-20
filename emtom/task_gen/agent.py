@@ -2301,8 +2301,8 @@ working_task.json reset."""
         # Guidance about IDs vs natural language
         lines.append("**ID Usage Rules:**")
         lines.append("- `problem_pddl`, `mechanic_bindings`, `locked_containers`: Use EXACT object IDs from this list")
-        lines.append("- `task` description: Use NATURAL LANGUAGE (e.g., 'the microwave', 'a toy airplane') - agents use FindObjectTool")
-        lines.append("- `agent_secrets`: Use NATURAL LANGUAGE (e.g., 'a drawer in the bedroom') - no object IDs\n")
+        lines.append("- `task` description: Keep it high-level and non-leaking; natural language is preferred and exact IDs are optional")
+        lines.append("- `agent_secrets`: Use EXACT scene IDs for goal-critical objects, furniture, and rooms whenever the agent needs precise grounding\n")
 
         # Build reverse mappings
         obj_locations = {}

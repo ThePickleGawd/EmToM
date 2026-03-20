@@ -36,6 +36,16 @@ function readJsonIfExists(filePath: string): Record<string, any> | null {
   }
 }
 
+function normalizeSecretsText(secrets: unknown): string {
+  if (Array.isArray(secrets)) {
+    return secrets
+      .filter((entry): entry is string => typeof entry === "string")
+      .join("\n");
+  }
+  if (typeof secrets === "string") return secrets;
+  return "";
+}
+
 function literalTomStats(results: Record<string, any>[]): Record<string, any> {
   let scoredTaskCount = 0;
   let fallbackScoreSum = 0;
@@ -331,7 +341,7 @@ function processTaskFile(taskFile: string): Record<string, any> | null {
   for (const [agentId, secrets] of Object.entries(
     data.agent_secrets || {},
   )) {
-    instruction[agentId] = (secrets as string[]).join("\n");
+    instruction[agentId] = normalizeSecretsText(secrets);
   }
 
   const mechanics = [

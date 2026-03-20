@@ -13,6 +13,14 @@ TASKS_DIR = PROJECT_ROOT / "data" / "emtom" / "tasks"
 DATA_DIR = Path(__file__).resolve().parent.parent / "public" / "data"
 
 
+def normalize_secrets_text(secrets) -> str:
+    if isinstance(secrets, list):
+        return "\n".join(s for s in secrets if isinstance(s, str))
+    if isinstance(secrets, str):
+        return secrets
+    return ""
+
+
 def make_relative_path(abs_path: str) -> str:
     """Convert absolute path to web-relative path under /outputs/."""
     prefix = str(PROJECT_ROOT) + "/"
@@ -128,7 +136,7 @@ def process_task_file(task_file: Path) -> Optional[dict]:
     # Build instruction from agent_secrets
     instruction = {}
     for agent_id, secrets in data.get("agent_secrets", {}).items():
-        instruction[agent_id] = "\n".join(secrets)
+        instruction[agent_id] = normalize_secrets_text(secrets)
 
     # Extract mechanic types from bindings
     mechanics = list({b.get("mechanic_type", "") for b in data.get("mechanic_bindings", []) if b.get("mechanic_type")})

@@ -237,21 +237,21 @@ CRITERIA_DESCRIPTIONS = {
     },
     "secret_quality": {
         "name": "Secret Quality",
-        "description": "Are secrets actionable, natural-language, and non-leaking? They must be required to solve the task.",
-        "rubric": """0.0: Secrets leak targets OR use IDs OR are useless/vague
-0.3: Secrets are too vague, too prescriptive, or partially leak key info
-0.5: Mostly OK but still broad, redundant, or weakly necessary
-0.7: Actionable, natural, and mostly non-leaking with minor redundancy
-1.0: Each secret is essential, actionable, natural-language, and does not leak public targets""",
+        "description": "Are secrets actionable, explicit, and non-leaking? They must be required to solve the task.",
+        "rubric": """0.0: Secrets are vague, misleading, or useless
+0.3: Secrets hide the exact target state/object, are too prescriptive, or leak irrelevant info
+0.5: Mostly workable but still broad, redundant, or weakly necessary
+0.7: Actionable and explicit, with clear target IDs/states and minor redundancy
+1.0: Each secret is essential, explicit about the exact target IDs/states, and reveals only the information needed""",
     },
     "task_naturalness": {
-        "name": "Task Description Natural Language",
-        "description": "Does the `task` field and `agent_secrets` use natural language instead of object IDs? Agents use FindObjectTool to resolve descriptions. Check ONLY `task` and `agent_secrets` text — NOT `problem_pddl` / legacy goal fields or `golden_trajectory` (machine-readable fields can contain IDs).",
-        "rubric": """0.0: `task` or `agent_secrets` contain many object IDs (toy_airplane_0, microwave_29) or a 'Grounding note' with IDs
-0.3: `task` or `agent_secrets` have some object IDs mixed with natural descriptions
-0.5: Mostly natural language in task/secrets but a few IDs slip through
-0.7: Natural language throughout task/secrets, minor specificity issues
-1.0: Pure natural language in `task` and `agent_secrets` — agents discover IDs via FindObjectTool. (IDs in problem_pddl/trajectory are expected and should not lower this score.)""",
+        "name": "Public/Secret Grounding Split",
+        "description": "Does the public `task` stay high-level while `agent_secrets` provide exact actionable grounding? The public task may be vague and should not read like a machine spec. Secrets should name exact IDs/states for goal-critical targets, especially when an agent cannot directly observe them.",
+        "rubric": """0.0: Public task leaks exact machine-style targets and secrets are still vague or generic
+0.3: Either the public task is overly specific, or the secrets still fail to identify exact target IDs/states
+0.5: Split is partly right, but public task still over-specifies some targets or secrets are inconsistent in explicitness
+0.7: Public task is mostly high-level and secrets are usually explicit, with only minor leakage or ambiguity
+1.0: Public task is clean, high-level, and non-leaking; secrets carry the exact actionable IDs/states agents need""",
     },
     # Task quality criteria
     "narrative_consistency": {
@@ -274,12 +274,12 @@ CRITERIA_DESCRIPTIONS = {
     },
     "pddl_solvability": {
         "name": "Formal Goal Quality & Epistemic Coherence",
-        "description": "Does the self-contained `problem_pddl` define a formally meaningful task for this benchmark under the current split semantics? Treat hard formal invalidity as a near-automatic fail. Judge the physical functional core after removing epistemic conjuncts, and separately judge whether the K() structure yields meaningful literal-ToM probes grounded in genuine information asymmetry.",
+        "description": "Does the self-contained `problem_pddl` define a formally meaningful task for this benchmark under the current split semantics? Treat hard formal invalidity as a near-automatic fail. Judge the physical functional core after removing epistemic conjuncts, and separately judge whether the K() structure yields meaningful literal-ToM probes grounded in genuine information asymmetry. Strong scores require FUNCTIONAL ToM pressure: success should depend on choosing actions based on partner-specific private information, not just relaying hidden facts.",
         "rubric": """0.0: Raw problem_pddl is invalid, contradictory, or impossible; or the functional projection becomes vacuous/single-agent/trivial; or K() goals are fake/decorative
-0.3: Barely benchmark-meaningful: weak functional core, shaky category logic, or K() probes are loosely attached to irrelevant facts
-0.5: Formally valid task, but either the functional projection is weak after dropping K(), or the epistemic structure is shallow / weakly grounded
-0.7: Strong functional core plus mostly meaningful K()-derived probes, with only minor weaknesses in grounding or interdependence
-1.0: Self-contained, formally coherent, and benchmark-meaningful under split semantics: the functional projection remains strong, and every K() goal becomes a grounded, information-rich literal-ToM probe""",
+0.3: Barely benchmark-meaningful: weak functional core, shaky category logic, or K() probes are loosely attached to irrelevant facts / pure relay events
+0.5: Formally valid task, but either the functional projection is weak after dropping K(), or the epistemic structure is mostly literal hidden-fact reporting rather than partner-dependent action choice
+0.7: Strong functional core plus mostly meaningful K()-derived probes, with some genuine partner-modeling pressure and only minor weaknesses
+1.0: Self-contained, formally coherent, and benchmark-meaningful under split semantics: the functional projection remains strong, and the task requires adapting to partner-specific knowledge, access, incentives, or communication limits rather than merely forwarding facts""",
     },
     "mechanic_utilization": {
         "name": "Mechanic Utilization & Balance",
@@ -293,12 +293,12 @@ CRITERIA_DESCRIPTIONS = {
     # Cooperative-specific
     "task_interdependence": {
         "name": "Task Interdependence",
-        "description": "Do agents genuinely NEED each other to succeed?",
+        "description": "Do agents genuinely NEED each other to succeed, and does the best plan depend on modeling what specific teammates can or will do?",
         "rubric": """0.0: One agent can complete the entire task alone
-0.3: Agents help but aren't required (parallel independent work)
-0.5: Some interdependence but key steps can be done solo
-0.7: Strong interdependence with minor exceptions
-1.0: Impossible for any single agent to succeed - must coordinate and share information""",
+0.3: Agents help but aren't required, or interdependence is just a hidden-fact relay
+0.5: Some interdependence but key steps can be done solo or without modeling which teammate is best positioned
+0.7: Strong interdependence with partner-specific dependencies, though some steps are still generic handoffs
+1.0: Impossible for any single agent to succeed, and rational success depends on choosing actions based on what specific teammates know, can access, or are likely to prioritize""",
     },
     # Competitive-specific
     "goal_opposition": {
@@ -322,12 +322,12 @@ CRITERIA_DESCRIPTIONS = {
     # Mixed-specific
     "subgoal_tension": {
         "name": "Subgoal Tension",
-        "description": "Does every agent have a personal objective in `:goal-owners`, and do they create meaningful tension?",
+        "description": "Does every agent have a personal objective in `:goal-owners`, and do they create meaningful tension that changes how teammates should coordinate with them?",
         "rubric": """0.0: No personal objectives in :goal-owners, or goals trivially satisfied
-0.3: Some agents have personal objectives but they don't conflict with anything
-0.5: Personal objectives exist for most agents with minor tension
-0.7: Every agent has a personal objective; meaningful conflicts require strategic choices
-1.0: Every agent has a personal objective; real dilemmas where pursuing them risks the main goal or conflicts with others""",
+0.3: Some agents have personal objectives but they do not affect partner expectations or coordination
+0.5: Personal objectives exist for most agents with minor tension, but teammates can mostly ignore them
+0.7: Every agent has a personal objective; meaningful conflicts require strategic choices about who to trust, inform, or rely on
+1.0: Every agent has a personal objective; real dilemmas where pursuing them risks the main goal, and success depends on modeling which teammate is likely to deviate or cooperate""",
     },
     # User requirements (added dynamically when query is provided)
     "user_requirements_alignment": {
@@ -436,7 +436,7 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 ## Checks
 - `task` is GLOBAL; for competitive/mixed it must not leak secret targets or team-specific objectives
 - Secrets must be actionable (room/furniture/key/constraint) and required
-- Secrets must be natural language (no IDs) and not step-by-step
+- Secrets must be explicit and actionable, ideally naming exact target IDs/states, and not step-by-step
 - Single-format goal source is `problem_pddl`
 - Runtime semantics are split:
   - functional benchmark success uses the non-epistemic projection only
@@ -447,6 +447,7 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 - **K() goal backing**: Every `K()` goal in `problem_pddl` (or legacy goal field) must be backed by a mechanic that prevents the agent from directly observing the fact (e.g., `room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). If the agent could just walk there and see, the K() goal is fake.
 - **Functional projection quality**: Penalize tasks whose non-epistemic projection becomes vacuous, trivial, effectively single-agent, or no longer reflects the intended coordination challenge.
 - **Probe quality**: Reward K() goals when they probe who knows functionally relevant facts under real asymmetry. Do NOT require K() to be part of runtime pass/fail.
+- **Functional ToM quality**: Reward tasks where the best action depends on a partner-specific model (who can act, who will relay, who may prioritize a private goal, who has the last message). Penalize tasks that reduce to "agent A sees a hidden fact and tells agent B."
 - Distinguish **formal validity** from **design quality**:
   - If the formal task is invalid, contradictory, or not self-contained, score `Formal Goal Quality & Epistemic Coherence` near 0.
   - If the formal task is valid, judge whether both the functional projection and the literal-ToM probe structure are meaningful for the benchmark rather than merely technically valid.
@@ -473,7 +474,7 @@ Respond with ONLY valid JSON. Keep reasoning brief (under 15 words each).
 }}
 
 ## Suggestion Requirements
-Be specific and only use available system capabilities. Prioritize the most important fixes. Prefer suggestions that strengthen the functional projection after dropping K(), or that make K()-derived probes more grounded and informative without making them runtime success conditions.
+Be specific and only use available system capabilities. Prioritize the most important fixes. Prefer suggestions that strengthen the functional projection after dropping K(), make K()-derived probes more grounded and informative without making them runtime success conditions, and increase partner-dependent action choice rather than fact relay.
 """
 
 # Category descriptions for the prompt

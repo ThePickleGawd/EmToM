@@ -10,6 +10,10 @@ Runtime benchmark scoring separates:
 - `functional_success`: physical and owned task completion under asymmetric information.
 - `literal_tom_probe`: end-of-episode probes derived from `K()` goals that measure whether agents can explicitly report the predicate and entities they believe are known, or abstain with `unknown`.
 
+Task generation should optimize for functional ToM, not just literal ToM:
+- good tasks make success depend on adapting actions to partner-specific private information, access, incentives, or communication limits
+- weak tasks only hide a fact and ask one agent to relay it
+
 ## Pipeline
 
 1. Explore a scene and discover useful mechanics.
@@ -47,6 +51,7 @@ Runtime benchmark scoring separates:
 - Treat verification as a hard gate, not a warning system.
 - Keep `problem_pddl` as the single authored source of epistemic structure.
 - Keep benchmark mechanics authored once in `mechanic_bindings`; derive planner-only init facts like `is_restricted` from those bindings instead of duplicating them in `problem_pddl`.
+- Keep the public `task` high-level and non-leaking; use exact scene IDs in `agent_secrets` and `team_secrets` for goal-critical targets so private grounding remains precise.
 - Runtime task success ignores `K()` and uses the projected non-epistemic goal only.
 - End-of-episode literal ToM probes are derived deterministically from `K()` formulas and reported separately from task success.
 - Benchmark `percent_complete` should track the same success-relevant functional scope; mixed tasks may expose separate all-goal progress for diagnostics.

@@ -17,3 +17,4 @@
 - `emtom/task_gen/` owns task authoring, validation, and calibration flow.
 - `emtom/runner/` and `emtom/cli/` own execution surfaces and user-facing commands.
 - `docs/*.md` should describe the intended system shape. If the code and docs disagree, fix one immediately.
+- When asked about functional or literal ToM, the definition comes from here: https://arxiv.org/html/2412.19726v4

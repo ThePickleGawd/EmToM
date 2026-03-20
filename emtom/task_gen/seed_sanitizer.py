@@ -15,11 +15,13 @@ _TASK_PLACEHOLDER = (
 _AGENT_SECRET_PLACEHOLDER = (
     "Rewrite from scratch for the current scene. Mention team membership, "
     "access/communication constraints, mechanic hints, and relevant private "
-    "information. Do not say that knowledge is required for task success."
+    "information. Use exact scene IDs for goal-critical targets. Do not say "
+    "that knowledge is required for task success."
 )
 _TEAM_SECRET_PLACEHOLDER = (
     "Rewrite from scratch for the current scene. Mention team-level private "
-    "context if needed, but do not describe K() knowledge as a runtime success "
+    "context if needed, using exact scene IDs when the team needs precise "
+    "grounding, but do not describe K() knowledge as a runtime success "
     "condition."
 )
 
