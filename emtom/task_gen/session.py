@@ -194,6 +194,7 @@ def default_state(
 class TaskGenSession:
     def __init__(self, working_dir: str):
         self.working_dir = Path(working_dir)
+        self.project_root = Path(__file__).resolve().parent.parent.parent
         self.state_path = self.working_dir / "taskgen_state.json"
         self.task_file = self.working_dir / "working_task.json"
         self.template_file = self.working_dir / "template.json"
@@ -201,6 +202,49 @@ class TaskGenSession:
         self.submitted_tasks_dir = self.working_dir / "submitted_tasks"
         self.scene_file = self.working_dir / "current_scene.json"
         self.state = self._read_state()
+
+    def _resolve_asset_path(self, path: str) -> str:
+        """Resolve an asset/dataset path relative to the project root.
+
+        Taskgen subprocesses run with cwd=project_root, but some libraries may
+        compute relative paths using the process cwd or assume the caller's
+        workspace. In practice, the taskgen working dir is nested under
+        partnr-planner/tmp/task_gen/..., and relative-path existence checks can
+        fail even when the assets exist in the repository.
+
+        This helper normalizes the common relative paths used by Habitat LLM
+        configs (e.g. `data/hssd-hab`) to absolute paths under project_root.
+        """
+
+        if not path:
+            return path
+        p = Path(path)
+        if p.is_absolute():
+            return path
+        return str((self.project_root / p).resolve())
+
+    def _with_project_root_assets(self, env: Dict[str, str]) -> Dict[str, str]:
+        """Populate env with absolute asset paths if the caller didn't specify them.
+
+        Habitat/Partnr configs sometimes rely on repo-relative paths like
+        `data/hssd-hab` or `data/datasets/...`. When taskgen runs from the nested
+        workspace directory, those relative checks fail even though the assets
+        exist under the repository root.
+
+        We set a few common env vars to absolute paths under project_root.
+        """
+
+        out = dict(env)
+        out.setdefault(
+            "HABITAT_SIM_V0_SCENE_DATASET",
+            self._resolve_asset_path("data/hssd-hab/hssd-hab-partnr.scene_dataset_config.json"),
+        )
+        out.setdefault("HABITAT_DATA_PATH", self._resolve_asset_path("data"))
+        out.setdefault(
+            "PARTNR_EPISODES_PATH",
+            self._resolve_asset_path("data/datasets/partnr_episodes/v0_0/train_2k.json.gz"),
+        )
+        return out
 
     def _read_state(self) -> Dict[str, Any]:
         with open(self.state_path) as f:
@@ -297,13 +341,19 @@ class TaskGenSession:
     def _resolve_seed_task_path(self) -> Optional[Path]:
         seed_task = self.state.get("seed_task")
         if seed_task:
-            return Path(seed_task)
+            # Seed task paths stored in state/prompt are often repo-relative
+            # (e.g. `data/emtom/tasks/...`). When taskgen runs inside a nested
+            # workspace, relative paths resolve against the current working dir
+            # and can fail even though the file exists in the repository.
+            # Normalize to an absolute path under the project root.
+            resolved = Path(self._resolve_asset_path(seed_task))
+            return resolved
 
         seed_tasks_dir = self.state.get("seed_tasks_dir")
         if not seed_tasks_dir:
             return None
 
-        seed_dir = Path(seed_tasks_dir)
+        seed_dir = Path(self._resolve_asset_path(seed_tasks_dir))
         if not seed_dir.exists():
             return None
 
@@ -385,6 +435,10 @@ class TaskGenSession:
         for _ in range(max_scene_retries):
             from habitat_llm.utils import get_random_seed
 
+            # Ensure subprocess sees the same project-root-relative asset paths
+            # regardless of the caller's current working directory.
+            env = os.environ.copy()
+            env = self._with_project_root_assets(env)
             cmd = [
                 sys.executable,
                 "-m",
@@ -398,7 +452,14 @@ class TaskGenSession:
             if scene_id:
                 cmd.extend(["--scene-id", scene_id])
 
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=1800,
+                cwd=str(self.project_root),
+                env=env,
+            )
             try:
                 stdout = proc.stdout
                 json_start = stdout.find("{")
@@ -633,7 +694,13 @@ class TaskGenSession:
             cmd.extend(["--team-model-map", f"team_0={base_model},team_1={opponent}"])
 
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=1200,
+                cwd=str(self.project_root),
+            )
         except subprocess.TimeoutExpired:
             return {
                 "steps": 0,
@@ -790,7 +857,13 @@ class TaskGenSession:
             f"examples/emtom_{num_agents}_robots",
         ]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=1200,
+                cwd=str(self.project_root),
+            )
             stdout = proc.stdout
             json_start = stdout.find("{")
             if json_start >= 0:

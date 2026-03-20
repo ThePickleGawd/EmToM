@@ -18,10 +18,7 @@ import shutil
 import sys
 import uuid
 from pathlib import Path
-from typing import Optional
-
-import hydra
-from omegaconf import DictConfig
+from typing import Any, Dict, Optional
 
 from emtom.actions import ActionRegistry
 from emtom.mechanics import get_mechanics_for_task_generation
@@ -76,6 +73,44 @@ def parse_extra_args():
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
     return args
+
+
+def parse_runner_args(argv: list[str]) -> Dict[str, Any]:
+    config: Dict[str, Any] = {
+        "num_tasks": 1,
+        "model": None,
+        "llm_provider": None,
+        "output_dir": "data/emtom/tasks",
+        "subtasks_min": 2,
+        "subtasks_max": 5,
+        "agents_min": 2,
+        "agents_max": 2,
+        "quiet": False,
+        "config_name": None,
+    }
+
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--config-name":
+            if i + 1 >= len(argv):
+                raise SystemExit("Error: --config-name requires a value.")
+            config["config_name"] = argv[i + 1]
+            i += 2
+            continue
+        if arg.startswith("+") and "=" in arg:
+            key, value = arg[1:].split("=", 1)
+            if key in {"num_tasks", "subtasks_min", "subtasks_max", "agents_min", "agents_max"}:
+                config[key] = int(value)
+            elif key == "quiet":
+                config[key] = value.lower() == "true"
+            elif key in {"model", "llm_provider", "output_dir"}:
+                config[key] = value
+            i += 1
+            continue
+        i += 1
+
+    return config
 
 
 def _infer_task_tom_level(task_data: dict) -> Optional[int]:
@@ -325,19 +360,19 @@ def _write_bootstrap_files(
     (working_dir / "bootstrap_prompt.txt").write_text(bootstrap_text)
 
 
-@hydra.main(version_base=None, config_path="../../habitat_llm/conf")
-def main(config: DictConfig) -> None:
+def main() -> None:
     extra_args = getattr(main, "_extra_args", None)
+    runner_args = parse_runner_args(sys.argv[1:])
 
-    num_tasks = config.get("num_tasks", 1)
-    model = config.get("model", None)
-    llm_provider = config.get("llm_provider", None)
-    output_dir = config.get("output_dir", "data/emtom/tasks")
-    subtasks_min = config.get("subtasks_min", 2)
-    subtasks_max = config.get("subtasks_max", 5)
-    agents_min = config.get("agents_min", 2)
-    agents_max = config.get("agents_max", 2)
-    quiet = config.get("quiet", False)
+    num_tasks = runner_args["num_tasks"]
+    model = runner_args["model"]
+    llm_provider = runner_args["llm_provider"]
+    output_dir = runner_args["output_dir"]
+    subtasks_min = runner_args["subtasks_min"]
+    subtasks_max = runner_args["subtasks_max"]
+    agents_min = runner_args["agents_min"]
+    agents_max = runner_args["agents_max"]
+    quiet = runner_args["quiet"]
 
     if not model:
         raise SystemExit("Error: model is required.")

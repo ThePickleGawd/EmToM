@@ -23,4 +23,4 @@ Generation now launches an external SWE-agent CLI (`mini`, `claude`, or `codex`)
 
 ## Environment
 
-Create a `.env` file in the repo root with the provider credentials you need, such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or AWS Bedrock credentials. If you use `--task-gen-agent mini`, install `mini-swe-agent` in the main operator environment first so the `mini` executable is available on `PATH`. The agent still executes its shell commands inside the isolated repo-local task-gen virtualenv under `tmp/task_gen/.venv`.
+Create a `.env` file in the repo root with the provider credentials you need, such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or AWS Bedrock credentials. If you use `--task-gen-agent mini`, install `mini-swe-agent` in the main operator environment first so the `mini` executable is available on `PATH`. Each task-generation run executes its shell commands inside its own isolated repo-local virtualenv under `tmp/task_gen/<run_id>/.venv`.

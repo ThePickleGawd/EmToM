@@ -31,7 +31,13 @@ def test_external_agent_launcher_builds_backend_commands(tmp_path):
         model="o3",
     )
 
-    assert mini_cmd == ["/tmp/mini", "-y", "-m", "gpt-5", "-t", "read the prompt"]
+    assert mini_cmd[:5] == ["/tmp/mini", "-c", "mini.yaml", "-c", "environment.timeout=1200"]
+    assert "-y" in mini_cmd
+    assert "--exit-immediately" in mini_cmd
+    assert "-m" in mini_cmd
+    assert "openai/gpt-5" in mini_cmd
+    assert str(tmp_path / "mini_trajectory.json") in mini_cmd
+    assert mini_cmd[-1] == "read the prompt"
     assert "--model" in claude_cmd and "sonnet" in claude_cmd
     assert claude_cmd[-1] == "read the prompt"
     assert codex_cmd[:5] == ["/tmp/codex", "exec", "--sandbox", "workspace-write", "--ask-for-approval"]
@@ -40,9 +46,9 @@ def test_external_agent_launcher_builds_backend_commands(tmp_path):
 
 def test_build_agent_env_clears_conda_and_prefers_workspace(tmp_path):
     launcher = ExternalAgentLauncher(tmp_path)
-    launcher.agent_env_dir.mkdir(parents=True)
     workspace_dir = tmp_path / "workspace"
     (workspace_dir / "bin").mkdir(parents=True)
+    launcher.agent_env_dir(workspace_dir).mkdir(parents=True)
 
     env = launcher.build_agent_env(
         workspace_dir=workspace_dir,
@@ -56,24 +62,27 @@ def test_build_agent_env_clears_conda_and_prefers_workspace(tmp_path):
     assert "CONDA_PREFIX" not in env
     assert "CONDA_DEFAULT_ENV" not in env
     assert env["PATH"].split(":")[0] == str(workspace_dir / "bin")
-    assert env["VIRTUAL_ENV"] == str(launcher.agent_env_dir)
+    assert env["VIRTUAL_ENV"] == str(launcher.agent_env_dir(workspace_dir))
 
 
 def test_ensure_agent_environment_only_creates_sandbox_env(monkeypatch, tmp_path):
     launcher = ExternalAgentLauncher(tmp_path)
     calls = []
+    workspace_dir = tmp_path / "workspace"
 
     def fake_run_bootstrap(cmd, description):
         calls.append((cmd, description))
-        launcher.agent_env_dir.mkdir(parents=True, exist_ok=True)
-        (launcher.agent_env_dir / "bin").mkdir(exist_ok=True)
-        (launcher.agent_env_dir / "bin" / "python").write_text("")
+        env_dir = launcher.agent_env_dir(workspace_dir)
+        env_dir.mkdir(parents=True, exist_ok=True)
+        (env_dir / "bin").mkdir(exist_ok=True)
+        (env_dir / "bin" / "python").write_text("")
 
     monkeypatch.setattr(launcher, "_run_bootstrap", fake_run_bootstrap)
-    launcher.ensure_agent_environment("mini")
+    launcher.ensure_agent_environment(workspace_dir)
 
     assert len(calls) == 1
     assert calls[0][1] == "create task-gen agent environment"
+    assert str(launcher.agent_env_dir(workspace_dir)) in calls[0][0]
 
 
 def test_build_external_prompt_rewrites_taskgen_commands():
