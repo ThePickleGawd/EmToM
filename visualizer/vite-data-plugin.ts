@@ -262,6 +262,8 @@ function processTaskDir(taskDir: string): Record<string, any> | null {
 
   const actions = (data.action_history || []).map(processAction);
 
+  const evaluation = data.evaluation || {};
+
   return {
     task_id: data.task_id || path.basename(taskDir),
     task_title: data.task_title || "",
@@ -274,6 +276,7 @@ function processTaskDir(taskDir: string): Record<string, any> | null {
     llm_agents: data.llm_agents || [],
     human_agents: data.human_agents || [],
     action_history: actions,
+    literal_tom_probe_results: evaluation.literal_tom_probe_results || [],
   };
 }
 

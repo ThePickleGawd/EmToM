@@ -1540,6 +1540,11 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     except Exception as exc:
                         batch_error = f"Probe generation failed: {exc}"
 
+                    # Append probe prompt + response to the agent's prompt file
+                    self._append_probe_to_prompt_file(
+                        agent_id, probe_prompt, batch_raw_response, batch_error,
+                    )
+
             for probe in agent_probes:
                 result_entry: Dict[str, Any] = {
                     "probe_id": probe.probe_id,
@@ -1610,6 +1615,28 @@ class BenchmarkRunner(EMTOMBaseRunner):
             "Using only the episode context above, provide the requested structured report.\n"
             f"{chr(10).join(probe_lines)}\n"
         )
+
+    def _append_probe_to_prompt_file(
+        self,
+        agent_id: str,
+        probe_prompt: str,
+        raw_response: Any,
+        error: Optional[str],
+    ) -> None:
+        """Append the literal ToM probe prompt and response to the agent's prompt file."""
+        uid = agent_id.split("_")[-1] if "_" in agent_id else agent_id
+        prompt_dir = os.path.join(self.output_dir, "prompts", uid)
+        if not os.path.isdir(prompt_dir):
+            return
+        prompt_files = sorted(
+            f for f in os.listdir(prompt_dir) if f.startswith("prompt-") and f.endswith(".txt")
+        )
+        if not prompt_files:
+            return
+        prompt_file = os.path.join(prompt_dir, prompt_files[-1])
+        with open(prompt_file, "a") as f:
+            f.write(probe_prompt)
+            f.write(str(raw_response or error or ""))
 
     def _build_probe_context_fallback(
         self,

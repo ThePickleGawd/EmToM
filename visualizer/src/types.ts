@@ -17,6 +17,23 @@ export interface CalibrationMeta {
   progress: number;
 }
 
+export interface LiteralTomProbeResult {
+  probe_id: string;
+  agent_id: string;
+  source_pddl: string;
+  question: string;
+  supported: boolean;
+  status: "passed" | "failed" | "unsupported" | "error";
+  raw_response?: string;
+  reason?: string;
+  details?: {
+    expected_response: { predicate: string; holds: boolean; args: string[] };
+    parsed_response: { predicate: string; holds: boolean | null; args: string[] };
+    fact_true: boolean;
+    expected_negated: boolean;
+  };
+}
+
 export interface TaskDetail {
   task_id: string;
   task_title: string;
@@ -35,6 +52,7 @@ export interface TaskDetail {
   tom_level?: number;
   tom_reasoning?: string;
   calibration_meta?: CalibrationMeta | null;
+  literal_tom_probe_results?: LiteralTomProbeResult[];
 }
 
 export interface TaskSummary {

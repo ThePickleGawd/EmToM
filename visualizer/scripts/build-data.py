@@ -65,6 +65,7 @@ def process_task_dir(task_dir: Path) -> Optional[dict]:
         return None
 
     actions = [process_action(a) for a in data.get("action_history", [])]
+    evaluation = data.get("evaluation", {})
 
     return {
         "task_id": data.get("task_id", task_dir.name),
@@ -78,6 +79,7 @@ def process_task_dir(task_dir: Path) -> Optional[dict]:
         "llm_agents": data.get("llm_agents", []),
         "human_agents": data.get("human_agents", []),
         "action_history": actions,
+        "literal_tom_probe_results": evaluation.get("literal_tom_probe_results", []),
     }
 
 

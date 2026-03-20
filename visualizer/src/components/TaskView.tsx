@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { TaskDetail } from "../types";
+import type { TaskDetail, LiteralTomProbeResult } from "../types";
 import AgentTimeline from "./AgentTimeline";
 import { downloadJson } from "../download";
 
@@ -120,6 +120,63 @@ export default function TaskView({ task, onImageClick }: Props) {
           {showPddl && (
             <pre className="pddl-block">{task.problem_pddl}</pre>
           )}
+        </div>
+      )}
+
+      {(task.literal_tom_probe_results?.length ?? 0) > 0 && (
+        <div className="literal-tom-probes">
+          <div className="instruction-label">
+            Literal ToM Probes
+            <span className="literal-tom-summary">
+              {task.literal_tom_probe_results!.filter((p) => p.status === "passed").length}
+              /{task.literal_tom_probe_results!.filter((p) => p.supported).length} passed
+            </span>
+          </div>
+          {task.literal_tom_probe_results!.map((probe) => (
+            <div
+              key={probe.probe_id}
+              className={`literal-tom-probe ${probe.status}`}
+            >
+              <div className="probe-header">
+                <span className={`probe-status-badge ${probe.status}`}>
+                  {probe.status.toUpperCase()}
+                </span>
+                <span className="probe-agent">{probe.agent_id}</span>
+                <code className="probe-source">{probe.source_pddl}</code>
+              </div>
+              <div className="probe-question">{probe.question}</div>
+              {probe.details && (
+                <div className="probe-details">
+                  <div className="probe-expected">
+                    <span className="probe-detail-label">Expected:</span>
+                    <code>
+                      {probe.details.expected_response.predicate}(
+                      {probe.details.expected_response.args.join(", ")}) ={" "}
+                      {String(probe.details.expected_response.holds)}
+                    </code>
+                  </div>
+                  <div className="probe-actual">
+                    <span className="probe-detail-label">Got:</span>
+                    <code>
+                      {probe.details.parsed_response.predicate || "(empty)"}
+                      {probe.details.parsed_response.args.length > 0
+                        ? `(${probe.details.parsed_response.args.join(", ")})`
+                        : ""}
+                      {probe.details.parsed_response.holds !== null
+                        ? ` = ${String(probe.details.parsed_response.holds)}`
+                        : ""}
+                    </code>
+                  </div>
+                </div>
+              )}
+              {probe.raw_response && (
+                <details className="probe-raw">
+                  <summary>Raw response</summary>
+                  <pre>{probe.raw_response}</pre>
+                </details>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
