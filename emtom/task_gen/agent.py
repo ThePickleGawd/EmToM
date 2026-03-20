@@ -28,6 +28,7 @@ from .prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
 from .judge import Judge, Judgment, CouncilVerdict, Colors
 from .diversity import DiversityTracker
 from .seed_sanitizer import sanitize_task_for_seeding
+from .seed_selector import SeedSelectionConfig, build_seed_candidates, select_seed_tasks
 from .spec_validator import (
     validate_blocking_spec,
     validate_room_restriction_trajectory,
@@ -193,6 +194,7 @@ class TaskGeneratorAgent:
         calibration_stats: Optional[Dict[str, Any]] = None,
         category: Optional[str] = None,
         seed_task: Optional[str] = None,
+        seed_tasks_dir: Optional[str] = None,
         random_seed_task: bool = False,
         judge_threshold: Optional[float] = None,
         difficulty: Optional[str] = None,
@@ -220,7 +222,8 @@ class TaskGeneratorAgent:
             calibration_stats: Dataset calibration stats (pass rate, target rate) for difficulty guidance
             category: Task category to generate: "cooperative", "competitive", or "mixed" (None = random)
             seed_task: Optional path to existing task JSON to use as seed instead of blank template
-            random_seed_task: If True, each new_scene[] loads a random existing task as the seed
+            seed_tasks_dir: Task pool used for per-scene seed selection
+            random_seed_task: If True, each new_scene[] samples uniformly from the seed pool
         """
         self.llm = llm_client
         self.config = config
@@ -239,9 +242,9 @@ class TaskGeneratorAgent:
         self.calibration_stats = calibration_stats or {}
         self.category = category  # None means random selection
         self.seed_task = seed_task  # Path to existing task to use as seed
+        self.seed_tasks_dir = Path(seed_tasks_dir) if seed_tasks_dir else None
         self.random_seed_task = random_seed_task
-        self.random_seed_tasks_dir = Path("data/emtom/tasks")
-        self.difficulty = difficulty  # Difficulty level for evolve pipeline
+        self.difficulty = difficulty  # Difficulty level override for judge guidance
         self.test_model = test_model  # Override model for test_task calibration
 
         # K-level enforcement: list of allowed levels, or None = random per task.
@@ -302,10 +305,8 @@ class TaskGeneratorAgent:
         self.task_memories: List[str] = []  # Learnings from completed tasks
         self.consecutive_tom_failures = 0  # Track failures to suggest new_scene
         self.diversity_tracker = DiversityTracker(llm=self.llm)  # Track task patterns for diversity
-        # When difficulty is set (evolution mode), the query describes the
-        # generation *process* (e.g. "study benchmark results"), not a task
-        # design requirement. Don't pass it to the judge as user_query —
-        # the difficulty parameter already constrains quality expectations.
+        # When difficulty is set, treat it as an explicit generation target and
+        # don't also inject the raw query into the judge context.
         judge_query = query if not difficulty else None
         judge_kwargs = dict(
             verbose=verbose,
@@ -506,8 +507,8 @@ Your previous task did not pass the ToM verification. You MUST address these iss
         # Build calibration/difficulty guidance section
         calibration_section = ""
         if self.difficulty:
-            # When difficulty is explicitly set (evolve pipeline), use it directly
-            # and skip calibration stats to avoid conflicting guidance
+            # When difficulty is explicitly set, use it directly and skip
+            # target-model calibration stats to avoid conflicting guidance.
             difficulty_guidance = {
                 "easy": (
                     "## Difficulty: EASY\n"
@@ -554,7 +555,7 @@ Your previous task did not pass the ToM verification. You MUST address these iss
                     "### Anti-patterns (these break tasks or make them easy):\n"
                     "- 1 message per agent with K≥2 goals (UNSOLVABLE — not enough bandwidth)\n"
                     "- Secrets that say 'tell agent_X: ...' or 'relay to agent_X'\n"
-                    "- Physical goals solvable by 1-2 agents (agent_necessity fails)\n"
+                    "- Plans where 1-2 agents do all meaningful work while others only relay or mirror generic actions (agent_necessity fails)\n"
                     "- More than 3 mechanics (causes unsolvable PDDL)\n"
                 ),
             }
@@ -603,11 +604,16 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
 
         # Build seed task section if using a seed
         seed_section = ""
-        if self.seed_task or self.random_seed_task:
+        if self.seed_task or self.seed_tasks_dir:
+            target_model = self.calibration_stats.get("model") or self.test_model or "unknown"
+            selection_mode = "uniform random" if self.random_seed_task else "target-model calibrated"
+            seed_pool = self.seed_task or (str(self.seed_tasks_dir) if self.seed_tasks_dir else "seed pool")
             seed_section = f"""
 ## Seed Task
-A seed task will be loaded into working_task.json as your starting point.
-Use it as a foundation and modify it based on the query/requirements above.
+A seed task from `{seed_pool}` will be loaded into working_task.json as your starting point.
+`new_scene[N]` re-samples a seed each time so you keep building from the task pool instead of starting blank.
+Selection mode: {selection_mode}. Target model: {target_model}.
+Use the loaded seed as a foundation and modify it based on the query/requirements above.
 After calling `new_scene[N]`, view it with: `bash[cat {self.task_file}]`
 The seed task is intentionally structure-only: natural-language fields are scrubbed before loading.
 Always rewrite `title`, `task`, `agent_secrets`, and `team_secrets` from scratch for the current scene and current runtime semantics.
@@ -798,7 +804,7 @@ Always rewrite `title`, `task`, `agent_secrets`, and `team_secrets` from scratch
     def _create_working_task_from_template(self, num_agents: Optional[int] = None) -> int:
         """Create working_task.json from template or seed task.
 
-        If self.seed_task or self.random_seed_task is set, loads a seed task instead
+        If self.seed_task or self.seed_tasks_dir is set, loads a seed task instead
         of the blank template.
         Scene fields (scene_id, episode_id, agent_spawns) are always updated from the current scene.
 
@@ -862,61 +868,51 @@ Always rewrite `title`, `task`, `agent_secrets`, and `team_secrets` from scratch
         return num_agents
 
     def _resolve_seed_task_path(self) -> Optional[Path]:
-        """Return an explicit seed task or a random compatible seed when enabled."""
+        """Return an explicit seed task or a selected compatible seed from the pool."""
         if self.seed_task:
             return Path(self.seed_task)
-        if not self.random_seed_task:
+        if self.seed_tasks_dir is None:
             return None
 
-        if not self.random_seed_tasks_dir.exists():
+        if not self.seed_tasks_dir.exists():
             self._log(
-                f"Random seed task requested but seed dir does not exist: "
-                f"{self.random_seed_tasks_dir}"
+                f"Seed selection requested but seed dir does not exist: "
+                f"{self.seed_tasks_dir}"
             )
             return None
 
-        task_files = sorted(self.random_seed_tasks_dir.glob("*.json"))
-        candidates: List[tuple[Path, dict]] = []
-        for path in task_files:
-            try:
-                with open(path) as f:
-                    data = json.load(f)
-            except Exception:
-                continue
-            if not isinstance(data, dict):
-                continue
-            if not all(k in data for k in ("title", "task", "agent_actions")):
-                continue
-            candidates.append((path, data))
-
+        target_model = self.calibration_stats.get("model") or self.test_model or "gpt-5.2"
+        selection_config = SeedSelectionConfig(
+            tasks_dir=self.seed_tasks_dir,
+            target_model=target_model,
+            target_pass_rate=self.calibration_stats.get("target_rate", 0.20),
+            current_pass_rate=self.calibration_stats.get("rate"),
+            category=self.category,
+            tom_level=self._current_k_level,
+        )
+        if self.random_seed_task:
+            candidates = build_seed_candidates(selection_config)
+        else:
+            candidates = select_seed_tasks(selection_config, count=1)
         if not candidates:
             self._log(
-                f"Random seed task requested but no task JSONs found in "
-                f"{self.random_seed_tasks_dir}"
+                f"Seed selection requested but no compatible task JSONs found in "
+                f"{self.seed_tasks_dir}"
             )
             return None
 
-        category_matches = candidates
-        if self.category:
-            filtered = [item for item in candidates if item[1].get("category") == self.category]
-            if filtered:
-                category_matches = filtered
-
-        k_matches = category_matches
-        if self._current_k_level is not None:
-            filtered = []
-            for path, data in category_matches:
-                stored_level = data.get("tom_level")
-                if isinstance(stored_level, int) and stored_level == self._current_k_level:
-                    filtered.append((path, data))
-            if filtered:
-                k_matches = filtered
-
-        chosen_path, chosen_data = random.choice(k_matches)
+        if self.random_seed_task:
+            chosen = random.choice(candidates)
+        else:
+            chosen = candidates[0]
+        chosen_path = chosen.path
+        chosen_data = chosen.task_data
         self._log(
-            "Randomly selected seed task "
+            "Selected seed task "
             f"{chosen_path} (category={chosen_data.get('category')}, "
-            f"tom_level={chosen_data.get('tom_level', 'unknown')})"
+            f"tom_level={chosen_data.get('tom_level', 'unknown')}, "
+            f"passed_{target_model}={chosen.passed_target_model}, "
+            f"progress={chosen.progress if chosen.progress is not None else 'unknown'})"
         )
         return chosen_path
 

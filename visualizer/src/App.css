@@ -321,6 +321,83 @@ body {
 
 /* ─── Calibration meta ─── */
 
+.calibration-panel-compact {
+  margin-bottom: 16px;
+}
+
+.calibration-mode-note {
+  margin-top: -6px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.calibration-panel {
+  margin-bottom: 16px;
+}
+
+.calibration-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.calibration-mode-switch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.calibration-mode-btn {
+  border: none;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.calibration-mode-btn + .calibration-mode-btn {
+  border-left: 1px solid var(--border);
+}
+
+.calibration-mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.calibration-mode-btn:hover:not(.active) {
+  background: var(--surface-hover);
+}
+
+.calibration-mode-description {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+
+.calibration-mode-tag {
+  flex-shrink: 0;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
 .calibration-meta {
   display: flex;
   gap: 8px;

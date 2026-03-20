@@ -280,31 +280,56 @@ function processTaskDir(taskDir: string): Record<string, any> | null {
   };
 }
 
-function flattenCalibration(calibration: any[]): any[] {
+function flattenCalibrationEntry(cal: Record<string, any>): any[] {
   const entries: any[] = [];
-  for (const cal of calibration) {
-    for (const turnData of cal.trajectory || []) {
-      const turn = turnData.turn || 0;
-      for (const [agentId, agentData] of Object.entries(
-        turnData.agents || {},
-      )) {
-        const ad = agentData as Record<string, any>;
-        const entry: Record<string, any> = {
-          turn,
-          sim_step: turn,
-          agent: agentId,
-          action: ad.action || "",
-          result: ad.observation || "",
-          skill_steps: 0,
-          selected_frames: [],
-          frame_paths: [],
-        };
-        if (ad.thought) entry.thought = ad.thought;
-        entries.push(entry);
-      }
+  for (const turnData of cal.trajectory || []) {
+    const turn = turnData.turn || 0;
+    for (const [agentId, agentData] of Object.entries(
+      turnData.agents || {},
+    )) {
+      const ad = agentData as Record<string, any>;
+      const entry: Record<string, any> = {
+        turn,
+        sim_step: turn,
+        agent: agentId,
+        action: ad.action || "",
+        result: ad.observation || "",
+        skill_steps: 0,
+        selected_frames: [],
+        frame_paths: [],
+      };
+      if (ad.thought) entry.thought = ad.thought;
+      entries.push(entry);
     }
   }
   return entries;
+}
+
+function calibrationProgress(cal: Record<string, any>): number {
+  const results = cal.results || {};
+  if (results.main_goal) {
+    return results.main_goal.progress || 0;
+  }
+  if (results.teams) {
+    return Math.max(
+      0,
+      ...Object.values(results.teams).map(
+        (team) => ((team as Record<string, any>).progress as number) || 0,
+      ),
+    );
+  }
+  return results.progress || 0;
+}
+
+function calibrationPassed(cal: Record<string, any>): boolean {
+  const results = cal.results || {};
+  if (results.main_goal) {
+    return !!results.main_goal.passed;
+  }
+  if ("winner" in results) {
+    return !!results.winner;
+  }
+  return !!results.passed;
 }
 
 function flattenGolden(golden: any[]): any[] {
@@ -356,14 +381,29 @@ function processTaskFile(taskFile: string): Record<string, any> | null {
   ];
 
   const calibration = data.calibration || [];
-  const calHistory = calibration.length
-    ? flattenCalibration(calibration)
-    : [];
   const goldenHistory = flattenGolden(data.golden_trajectory || []);
+  const calibrationByMode: Record<string, any> = {};
+  for (const cal of calibration) {
+    const runMode = String(cal.run_mode || "standard");
+    calibrationByMode[runMode] = {
+      run_mode: runMode,
+      tested_at: cal.tested_at || "",
+      agent_models: cal.agent_models || {},
+      passed: calibrationPassed(cal),
+      progress: calibrationProgress(cal),
+      steps: cal.steps || 0,
+      turns: (cal.trajectory || []).length,
+      trajectory: flattenCalibrationEntry(cal),
+    };
+  }
 
-  const lastCal = calibration.length ? calibration[calibration.length - 1] : null;
-  const calPassed = lastCal?.results?.passed || false;
-  const calSteps = lastCal?.steps || 0;
+  const defaultMode = calibrationByMode.standard
+    ? "standard"
+    : Object.keys(calibrationByMode)[0] || null;
+  const defaultCal = defaultMode ? calibrationByMode[defaultMode] : null;
+  const calHistory = defaultCal?.trajectory || [];
+  const calPassed = defaultCal?.passed || false;
+  const calSteps = defaultCal?.steps || 0;
 
   return {
     task_id: taskId,
@@ -373,7 +413,7 @@ function processTaskFile(taskFile: string): Record<string, any> | null {
     instruction,
     mechanics_active: mechanics,
     steps: calSteps,
-    turns: lastCal?.trajectory?.length || 0,
+    turns: defaultCal?.turns || 0,
     done: true,
     success: calPassed,
     llm_agents: agents,
@@ -383,14 +423,8 @@ function processTaskFile(taskFile: string): Record<string, any> | null {
     problem_pddl: data.problem_pddl || "",
     tom_level: data.tom_level,
     tom_reasoning: data.tom_reasoning,
-    calibration_meta: lastCal
-      ? {
-          tested_at: lastCal.tested_at || "",
-          agent_models: lastCal.agent_models || {},
-          passed: calPassed,
-          progress: lastCal.results?.progress || 0,
-        }
-      : null,
+    calibration_meta: defaultCal,
+    calibration_by_mode: calibrationByMode,
   };
 }
 

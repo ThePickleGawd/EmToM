@@ -11,10 +11,14 @@ export interface ActionEntry {
 }
 
 export interface CalibrationMeta {
+  run_mode: string;
   tested_at: string;
   agent_models: Record<string, string>;
   passed: boolean;
   progress: number;
+  steps?: number;
+  turns?: number;
+  trajectory?: ActionEntry[];
 }
 
 export interface LiteralTomProbeResult {
@@ -52,6 +56,7 @@ export interface TaskDetail {
   tom_level?: number;
   tom_reasoning?: string;
   calibration_meta?: CalibrationMeta | null;
+  calibration_by_mode?: Record<string, CalibrationMeta>;
   literal_tom_probe_results?: LiteralTomProbeResult[];
 }
 

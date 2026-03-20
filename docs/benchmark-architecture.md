@@ -17,10 +17,16 @@ Task generation should optimize for functional ToM, not just literal ToM:
 ## Pipeline
 
 1. Explore a scene and discover useful mechanics.
-2. Generate a task grounded in the current scene and mechanics.
-3. Verify the task statically and with runtime checks.
-4. Judge whether the task genuinely requires ToM reasoning.
-5. Benchmark agents on the final task in both `standard` and `baseline`, using `standard` for calibration and `baseline` as the full-info solvability check.
+2. Select seed tasks from the existing task pool for a target benchmark model, then load one into the generator.
+3. Generate a task grounded in the current scene, mechanics, and selected seed.
+4. Verify the task statically and with runtime checks.
+5. Judge whether the task genuinely requires ToM reasoning.
+6. Benchmark agents on the final task in both `standard` and `baseline`, using `standard` for calibration and `baseline` as the full-info solvability check.
+
+There is no separate evolution pipeline. Difficulty shaping happens inside normal task generation:
+- the seed selector uses target-model calibration data to bias the pool toward harder or easier seeds so the dataset moves toward the desired pass-rate
+- `new_scene` re-samples from the seed pool instead of treating seed reuse as a separate mode
+- sampled examples and the loaded working task should come from the same selector so seed tasks are emphasized in-context
 
 ## Campaigns
 
@@ -39,13 +45,13 @@ Task generation should optimize for functional ToM, not just literal ToM:
 
 - `verify_golden_trajectory` remains the canonical deterministic solvability gate. It proves the authored task spec is functionally solvable under the planner/runtime semantics.
 - `test_task` now runs both `standard` and `baseline` in parallel.
-- Dataset difficulty calibration uses the `standard` result only, with a target pass rate of 20%.
+- Dataset difficulty calibration uses the `standard` result only, with a target pass rate of 20% by default for the current target model.
 - `baseline` does not replace the planner/golden-trajectory check; it is an additional empirical check that the task becomes solvable when private information is removed.
 
 ## Code Ownership
 
 - `emtom/pddl/`: goal language, runtime goal projection, epistemic compilation, and solvability checks.
-- `emtom/task_gen/`: task generation, validation, calibration, and submission gates.
+- `emtom/task_gen/`: seed selection, task generation, validation, calibration, and submission gates.
 - `emtom/runner/`: execution in the environment.
 - `emtom/cli/`: stable command surfaces for operators and agents.
 - `README.md`: brief setup and command entrypoints.

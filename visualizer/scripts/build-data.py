@@ -83,27 +83,46 @@ def process_task_dir(task_dir: Path) -> Optional[dict]:
     }
 
 
-def flatten_calibration(calibration: list) -> list:
-    """Flatten calibration trajectory into action_history format."""
+def flatten_calibration_entry(cal: dict) -> list:
+    """Flatten one calibration trajectory into action_history format."""
     entries = []
-    for cal in calibration:
-        for turn_data in cal.get("trajectory", []):
-            turn = turn_data.get("turn", 0)
-            for agent_id, agent_data in turn_data.get("agents", {}).items():
-                entry = {
-                    "turn": turn,
-                    "sim_step": turn,
-                    "agent": agent_id,
-                    "action": agent_data.get("action", ""),
-                    "result": agent_data.get("observation", ""),
-                    "skill_steps": 0,
-                    "selected_frames": [],
-                    "frame_paths": [],
-                }
-                if agent_data.get("thought"):
-                    entry["thought"] = agent_data["thought"]
-                entries.append(entry)
+    for turn_data in cal.get("trajectory", []):
+        turn = turn_data.get("turn", 0)
+        for agent_id, agent_data in turn_data.get("agents", {}).items():
+            entry = {
+                "turn": turn,
+                "sim_step": turn,
+                "agent": agent_id,
+                "action": agent_data.get("action", ""),
+                "result": agent_data.get("observation", ""),
+                "skill_steps": 0,
+                "selected_frames": [],
+                "frame_paths": [],
+            }
+            if agent_data.get("thought"):
+                entry["thought"] = agent_data["thought"]
+            entries.append(entry)
     return entries
+
+
+def calibration_progress(cal: dict) -> float:
+    """Extract progress from a calibration entry across task categories."""
+    results = cal.get("results", {})
+    if "main_goal" in results:
+        return results.get("main_goal", {}).get("progress", 0)
+    if "teams" in results:
+        return max((team.get("progress", 0) for team in results.get("teams", {}).values()), default=0)
+    return results.get("progress", 0)
+
+
+def calibration_passed(cal: dict) -> bool:
+    """Extract pass/fail from a calibration entry across task categories."""
+    results = cal.get("results", {})
+    if "main_goal" in results:
+        return results.get("main_goal", {}).get("passed", False)
+    if "winner" in results:
+        return results.get("winner") is not None
+    return results.get("passed", False)
 
 
 def flatten_golden(golden: list) -> list:
@@ -144,14 +163,27 @@ def process_task_file(task_file: Path) -> Optional[dict]:
     mechanics = list({b.get("mechanic_type", "") for b in data.get("mechanic_bindings", []) if b.get("mechanic_type")})
 
     calibration = data.get("calibration", [])
-    cal_history = flatten_calibration(calibration) if calibration else []
     golden_history = flatten_golden(data.get("golden_trajectory", []))
+    calibration_by_mode = {}
+    for cal in calibration:
+        run_mode = str(cal.get("run_mode", "standard") or "standard")
+        calibration_by_mode[run_mode] = {
+            "run_mode": run_mode,
+            "tested_at": cal.get("tested_at", ""),
+            "agent_models": cal.get("agent_models", {}),
+            "passed": calibration_passed(cal),
+            "progress": calibration_progress(cal),
+            "steps": cal.get("steps", 0),
+            "turns": len(cal.get("trajectory", [])),
+            "trajectory": flatten_calibration_entry(cal),
+        }
 
-    cal_passed = False
-    cal_steps = 0
-    if calibration:
-        cal_passed = calibration[-1].get("results", {}).get("passed", False)
-        cal_steps = calibration[-1].get("steps", 0)
+    default_mode = "standard" if "standard" in calibration_by_mode else next(iter(calibration_by_mode), None)
+    default_cal = calibration_by_mode.get(default_mode) if default_mode else None
+    cal_history = default_cal.get("trajectory", []) if default_cal else []
+    cal_passed = default_cal.get("passed", False) if default_cal else False
+    cal_steps = default_cal.get("steps", 0) if default_cal else 0
+    cal_turns = default_cal.get("turns", 0) if default_cal else 0
 
     return {
         "task_id": task_id,
@@ -161,7 +193,7 @@ def process_task_file(task_file: Path) -> Optional[dict]:
         "instruction": instruction,
         "mechanics_active": mechanics,
         "steps": cal_steps,
-        "turns": len(calibration[-1].get("trajectory", [])) if calibration else 0,
+        "turns": cal_turns,
         "done": True,
         "success": cal_passed,
         "llm_agents": agents,
@@ -171,12 +203,8 @@ def process_task_file(task_file: Path) -> Optional[dict]:
         "problem_pddl": data.get("problem_pddl", ""),
         "tom_level": data.get("tom_level"),
         "tom_reasoning": data.get("tom_reasoning"),
-        "calibration_meta": {
-            "tested_at": calibration[-1].get("tested_at", "") if calibration else "",
-            "agent_models": calibration[-1].get("agent_models", {}) if calibration else {},
-            "passed": cal_passed,
-            "progress": calibration[-1].get("results", {}).get("progress", 0) if calibration else 0,
-        } if calibration else None,
+        "calibration_meta": default_cal,
+        "calibration_by_mode": calibration_by_mode,
     }
 
 

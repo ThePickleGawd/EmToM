@@ -36,6 +36,12 @@ from omegaconf import DictConfig
 
 from habitat_llm.utils import cprint, setup_config, fix_config
 from emtom.task_gen.seed_sanitizer import sanitize_task_for_seeding
+from emtom.task_gen.seed_selector import (
+    SeedSelectionConfig,
+    is_task_like_json,
+    resolve_seed_tasks_dir,
+    select_seed_tasks,
+)
 
 
 def parse_extra_args():
@@ -45,8 +51,10 @@ def parse_extra_args():
                         help="Seed query to guide task generation")
     parser.add_argument("--retry-verification", type=str, default=None,
                         help="Path to failed ToM verification JSON to retry with suggestions")
+    parser.add_argument("--target-model", type=str, default=None,
+                        help="Model this generation run is targeting (used for seed selection and calibration)")
     parser.add_argument("--calibration-model", type=str, default="gpt-5.2",
-                        help="Model to calibrate dataset difficulty against (default: gpt-5.2)")
+                        help="Deprecated alias for --target-model")
     parser.add_argument("--target-pass-rate", type=float, default=0.20,
                         help="Target pass rate for calibration model (default: 0.20 = 20%%)")
     parser.add_argument("--category", type=str, default=None,
@@ -54,8 +62,10 @@ def parse_extra_args():
                         help="Task category to generate (default: random)")
     parser.add_argument("--seed-task", type=str, default=None,
                         help="Path to existing task JSON to use as seed (instead of blank template)")
+    parser.add_argument("--seed-tasks-dir", type=str, default=None,
+                        help="Task pool used by the seed selector (default: output dir, then data/emtom/tasks)")
     parser.add_argument("--random-seed-task", action="store_true", default=False,
-                        help="On each new_scene[], start from a random existing task seed")
+                        help="On each new_scene[], sample uniformly from the seed pool instead of using the target-model selector")
     parser.add_argument("--sampled-tasks-dir", type=str, default=None,
                         help="Pre-built sampled_tasks directory (skips random sampling)")
     parser.add_argument("--judge-threshold", type=float, default=None,
@@ -93,20 +103,6 @@ def _infer_task_tom_level(task_data: dict) -> Optional[int]:
     return None
 
 
-def _is_task_like_json(path: Path) -> bool:
-    """Return True when a JSON file looks like an EMTOM task spec."""
-    try:
-        with open(path) as f:
-            data = json.load(f)
-    except Exception:
-        return False
-    if not isinstance(data, dict):
-        return False
-    # Minimal structural check.
-    required = ("title", "task", "agent_actions")
-    return all(k in data for k in required)
-
-
 def _copy_sample_with_aliases(src_path: Path, sampled_tasks_dir: Path, index: int) -> None:
     """Copy a sanitized sampled task with both unpadded and zero-padded filenames."""
     with open(src_path) as f:
@@ -119,45 +115,14 @@ def _copy_sample_with_aliases(src_path: Path, sampled_tasks_dir: Path, index: in
 
 def populate_sampled_tasks_dir(
     sampled_tasks_dir: Path,
-    primary_output_dir: str,
+    selection_config: SeedSelectionConfig,
     sample_count: int = 10,
 ) -> tuple[Optional[Path], int]:
-    """
-    Populate sampled_tasks from the best available source.
-
-    Priority order:
-    1) current output_dir (when it already has tasks)
-    2) canonical curated tasks dir
-    3) historical fallback curated dir
-    """
-    candidate_dirs = [
-        Path(primary_output_dir),
-        Path("data/emtom/tasks"),
-        Path("data/emtom/very_old_tasks/old_calibration_format_2_25_26"),
-    ]
-
-    # Dedupe while preserving order.
-    seen = set()
-    ordered_candidates = []
-    for d in candidate_dirs:
-        key = str(d.resolve()) if d.exists() else str(d)
-        if key in seen:
-            continue
-        seen.add(key)
-        ordered_candidates.append(d)
-
-    for source_dir in ordered_candidates:
-        if not source_dir.exists():
-            continue
-        task_files = [p for p in source_dir.glob("*.json") if _is_task_like_json(p)]
-        if not task_files:
-            continue
-        selected = random.sample(task_files, min(sample_count, len(task_files)))
-        for i, task_path in enumerate(selected, 1):
-            _copy_sample_with_aliases(task_path, sampled_tasks_dir, i)
-        return source_dir, len(selected)
-
-    return None, 0
+    """Populate sampled_tasks with selector-biased examples from the seed pool."""
+    selected = select_seed_tasks(selection_config, count=sample_count)
+    for i, candidate in enumerate(selected, 1):
+        _copy_sample_with_aliases(candidate.path, sampled_tasks_dir, i)
+    return selection_config.tasks_dir if selected else None, len(selected)
 
 
 def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
@@ -250,10 +215,15 @@ def main(config: DictConfig) -> None:
     # Get query from extra_args (parsed before Hydra to handle quoted strings)
     query = extra_args.query if extra_args else None
     retry_verification = extra_args.retry_verification if extra_args else None
-    calibration_model = extra_args.calibration_model if extra_args else "gpt-5.2"
+    target_model = None
+    if extra_args:
+        target_model = extra_args.target_model or extra_args.calibration_model
+    if not target_model:
+        target_model = "gpt-5.2"
     target_pass_rate = extra_args.target_pass_rate if extra_args else 0.20
     category = extra_args.category if extra_args else None
     seed_task = extra_args.seed_task if extra_args else None
+    seed_tasks_dir_arg = extra_args.seed_tasks_dir if extra_args else None
     random_seed_task = extra_args.random_seed_task if extra_args else False
     judge_threshold = extra_args.judge_threshold if extra_args else None
     difficulty = extra_args.difficulty if extra_args else None
@@ -276,8 +246,18 @@ def main(config: DictConfig) -> None:
     if seed_task and random_seed_task:
         cprint("ERROR: --seed-task and --random-seed-task cannot be used together", "red")
         sys.exit(1)
-    if random_seed_task:
-        cprint("Random seed task mode enabled (new_scene[] will load a random seed)", "green")
+    if not test_model:
+        test_model = target_model
+
+    seed_tasks_dir = resolve_seed_tasks_dir(seed_tasks_dir_arg, output_dir)
+    if seed_tasks_dir is not None:
+        selection_label = "uniform random" if random_seed_task else "target-model calibrated"
+        cprint(
+            f"Seed pool: {seed_tasks_dir} ({selection_label} selection on each new_scene[])",
+            "green",
+        )
+    elif seed_tasks_dir_arg:
+        cprint(f"WARNING: --seed-tasks-dir has no task JSONs: {seed_tasks_dir_arg}", "yellow")
 
     # Load failed verification suggestions if retrying
     verification_feedback = None
@@ -318,10 +298,15 @@ def main(config: DictConfig) -> None:
 
     sampled_tasks_override = extra_args.sampled_tasks_dir if extra_args else None
 
+    calibration_tasks_dir = str(seed_tasks_dir) if seed_tasks_dir is not None else output_dir
+    calibration_stats = compute_calibration_stats(calibration_tasks_dir, target_model)
+    calibration_stats["target_rate"] = target_pass_rate
+    calibration_stats["k_levels"] = k_levels
+
     if sampled_tasks_override:
         override_path = Path(sampled_tasks_override)
         if override_path.exists():
-            override_files = [p for p in override_path.glob("*.json") if _is_task_like_json(p)]
+            override_files = [p for p in override_path.glob("*.json") if is_task_like_json(p)]
             if override_files:
                 selected = sorted(override_files)[:10]
                 for i, f in enumerate(selected, 1):
@@ -344,13 +329,26 @@ def main(config: DictConfig) -> None:
             sampled_tasks_override = None
 
     if not sampled_tasks_override:
-        source_dir, count = populate_sampled_tasks_dir(
-            sampled_tasks_dir=sampled_tasks_dir,
-            primary_output_dir=output_dir,
-            sample_count=10,
-        )
+        source_dir = None
+        count = 0
+        if seed_tasks_dir is not None:
+            selection_config = SeedSelectionConfig(
+                tasks_dir=seed_tasks_dir,
+                target_model=target_model,
+                target_pass_rate=target_pass_rate,
+                current_pass_rate=calibration_stats["rate"],
+                category=category,
+            )
+            source_dir, count = populate_sampled_tasks_dir(
+                sampled_tasks_dir=sampled_tasks_dir,
+                selection_config=selection_config,
+                sample_count=10,
+            )
         if source_dir is not None:
-            cprint(f"Sampled {count} task examples from: {source_dir}", "green")
+            cprint(
+                f"Sampled {count} selector-biased task examples from: {source_dir}",
+                "green",
+            )
         else:
             cprint(
                 "WARNING: No task examples found for sampled_tasks/. "
@@ -376,12 +374,6 @@ def main(config: DictConfig) -> None:
     fix_config(config)
     config = setup_config(config, seed=seed or 47668090)
 
-    # Compute calibration stats from existing dataset
-    calibration_stats = compute_calibration_stats(output_dir, calibration_model)
-    calibration_stats["target_rate"] = target_pass_rate
-    # k_levels=None means random per task; otherwise only listed levels allowed.
-    calibration_stats["k_levels"] = k_levels
-
     cprint("=" * 60, "blue")
     cprint("EMTOM Task Generator (Live Scene Mode)", "blue")
     cprint("=" * 60, "blue")
@@ -396,7 +388,7 @@ def main(config: DictConfig) -> None:
     cprint(f"Output: {output_dir}", "blue")
 
     # Display calibration stats
-    cprint(f"Calibration: {calibration_model} (target: {target_pass_rate:.0%})", "blue")
+    cprint(f"Target model: {target_model} (target pass rate: {target_pass_rate:.0%})", "blue")
     if calibration_stats["rate"] is not None:
         cprint(f"  Current rate: {calibration_stats['rate']:.1%} ({calibration_stats['passed']}/{calibration_stats['total']})", "yellow")
     else:
@@ -459,6 +451,11 @@ def main(config: DictConfig) -> None:
         calibration_stats=calibration_stats,  # Dataset calibration stats for difficulty guidance
         category=category,  # Task category: cooperative, competitive, or mixed
         seed_task=seed_task,  # Existing task to use as seed instead of blank template
+        seed_tasks_dir=(
+            str(seed_tasks_dir)
+            if seed_tasks_dir is not None and seed_task is None
+            else None
+        ),
         random_seed_task=random_seed_task,  # Random seed task on each new_scene[]
         judge_threshold=judge_threshold,  # Override judge threshold (None = use default)
         difficulty=difficulty,  # Difficulty context for judge: easy/medium/hard

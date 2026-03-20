@@ -53,7 +53,7 @@ Assigned!
 
 ## Workflow
 1. `new_scene[N]` → load scene with N agents
-2. **Before first edit**, inspect examples in `{working_dir}/sampled_tasks/` (recent dataset examples + calibration signals)
+2. **Before first edit**, inspect examples in `{working_dir}/sampled_tasks/` (selector-curated seed tasks from the task pool)
 3. Edit `{task_file}` — write `problem_pddl` FIRST (inline full problem file), lock the formal task structure, then make `task`, `agent_secrets`, `team_secrets`, and mechanics match that spec
 4. `judge[]` → runs strict PDDL verification first, then LLM quality evaluation → fix → repeat until pass
 5. `verify_golden_trajectory[]` → deterministic regeneration + simulator check → fix spec → repeat until pass

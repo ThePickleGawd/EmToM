@@ -141,6 +141,7 @@ RETRY_VERIFICATION=""  # Path to failed ToM verification file
 NO_AUTO_RETRY=false  # Disable automatic retry on judge failure
 CATEGORY=""  # Task category: cooperative, competitive, or mixed
 SEED_TASK=""  # Path to existing task to use as seed
+SEED_TASKS_DIR=""  # Task pool used by the seed selector
 RANDOM_SEED_TASK=false  # Use a random existing task as seed on each new_scene[]
 NO_VIDEO=true  # Disable video saving (default: true for speed)
 MAX_WORKERS=""  # Parallel benchmark: max concurrent processes (empty = sequential)
@@ -151,7 +152,9 @@ SAMPLED_TASKS_DIR=""  # Pre-built sampled_tasks directory (skips random sampling
 OUTPUT_DIR=""  # Override output directory for generate/benchmark
 SCENE_DATA_FILE=""  # Optional scene data JSON for static verification
 DIFFICULTY=""  # Difficulty level for judge context: easy, medium, hard
-TEST_MODEL=""  # Override model used for test_task calibration (evolve pipeline)
+TARGET_MODEL="gpt-5.2"  # Model that generation is targeting for seed selection + calibration
+TARGET_PASS_RATE="0.20"  # Desired pass rate for TARGET_MODEL
+TEST_MODEL=""  # Override model used for test_task calibration
 K_LEVEL=""  # Allowed k-levels (e.g. "2 3"). Empty = random per task.
 STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
 REPORT_FILE=""  # Optional JSON report output path for static verification
@@ -194,7 +197,7 @@ print_usage() {
     echo "  migrate-canonical-mechanics  Canonicalize mechanic init facts and keep only strict survivors"
     echo "  migrate-literal-tom  Migrate tasks to physical-success + literal-ToM-probe semantics"
     echo "  salvage-literal-tom  Backup, migrate, verify, judge, and keep only salvaged tasks"
-    echo "  evolve         Run evolutionary difficulty generation (model ladder)"
+    echo "  evolve         Deprecated alias for generate"
     echo "  all            Run full pipeline: explore -> generate -> benchmark"
     echo ""
     echo -e "${BOLD}Agent Options:${NC}"
@@ -244,7 +247,10 @@ print_usage() {
     echo "  --retry-verification FILE  Retry generation using suggestions from failed ToM verification"
     echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
     echo "  --seed-task FILE     Use existing task JSON as seed instead of blank template"
-    echo "  --random-seed-task   On each new_scene[], load a random existing task seed"
+    echo "  --seed-tasks-dir DIR Task pool for seed selection (default: output dir, then data/emtom/tasks)"
+    echo "  --target-model MODEL Model the generator is targeting for calibration + seed selection (default: $TARGET_MODEL)"
+    echo "  --target-pass-rate R Desired pass rate for --target-model (default: $TARGET_PASS_RATE = 20%)"
+    echo "  --random-seed-task   On each new_scene[], sample uniformly from the seed pool"
     echo "  --sampled-tasks-dir DIR  Pre-built sampled_tasks directory (skips random sampling)"
     echo "  --k-level L [L ...]  Allowed ToM k-levels, e.g. --k-level 2 3 (default: random per task)"
     echo "  --tom-ratio-tolerance R  ToM ratio tolerance (default: $TOM_RATIO_TOLERANCE)"
@@ -288,25 +294,10 @@ print_usage() {
     echo "  --strict-object-ids  Fail on unknown object IDs in trajectory actions"
     echo "  --report-file FILE   Write JSON verification report to this path"
     echo ""
-    echo -e "${BOLD}Evolve Options:${NC}"
-    echo "  Quick start: ./emtom/run_emtom.sh evolve"
-    echo "  --model-ladder M1,M2,M3  Comma-separated model ladder (weakest to strongest)"
-    echo "  --generator-model MODEL  Model used to generate tasks (default: gpt-5.2)"
-    echo "  --tasks-per-round N      Tasks to generate per tier (default: 20)"
-    echo "  --seed-tasks-dir DIR     Source directory for seed tasks (default: data/emtom/tasks)"
-    echo "  --seed-pool-size N       Minimum seed pool size — generate if fewer (default: 30)"
-    echo "  --target-pass-rate N     Generate until pass rate drops to N% (default: 20.0)"
-    echo "  --judge-threshold N      Judge quality threshold (default: 0.7)"
-    echo "  --focus MODE             Upgrade objective: difficulty|tom|either (default: either)"
-    echo "  --category CAT           Generated categories: cooperative|competitive|mixed"
-    echo "                           Also supports comma lists and all/any (default: any)"
-    echo "  --tom-target-l1 R        ToM level 1 target ratio (default: 0.30)"
-    echo "  --tom-target-l2 R        ToM level 2 target ratio (default: 0.45)"
-    echo "  --tom-target-l3 R        ToM level 3 target ratio (default: 0.25)"
-    echo "  --tom-ratio-tolerance R  ToM ratio tolerance (default: 0.08)"
-    echo "  --max-workers N          Max parallel processes (default: 50)"
-    echo "  --output-dir DIR         Evolved task output directory (default: data/emtom/tasks)"
-    echo "  --resume DIR             Resume from existing output directory"
+    echo -e "${BOLD}Seed Loop:${NC}"
+    echo "  Evolution is now the normal generate loop."
+    echo "  Use --target-model, --target-pass-rate, and --seed-tasks-dir with generate."
+    echo "  ./emtom/run_emtom.sh evolve ... still works as a deprecated alias for generate."
     echo ""
     echo -e "${BOLD}Golden Verify Options:${NC}"
     echo "  --task FILE          Task JSON file to verify by executing golden trajectory (required)"
@@ -333,9 +324,8 @@ print_usage() {
     echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_emtom.sh verify --task data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_emtom.sh verify-static --task data/emtom/tasks/my_task.json"
-    echo "  ./emtom/run_emtom.sh evolve"
-    echo -e "  ./emtom/run_emtom.sh evolve --model-ladder gpt-5-mini,sonnet,gpt-5.2 --tasks-per-round 10"
-    echo "  ./emtom/run_emtom.sh evolve --focus tom --max-workers 24"
+    echo "  ./emtom/run_emtom.sh generate --target-model gpt-5-mini --seed-tasks-dir data/emtom/tasks"
+    echo "  ./emtom/run_emtom.sh evolve --target-model sonnet --seed-tasks-dir data/emtom/tasks"
 }
 
 # Get config name based on number of agents and type
@@ -443,6 +433,11 @@ run_generate() {
     echo "Subtasks: $SUBTASKS_MIN - $SUBTASKS_MAX"
     echo "Iterations per task: $ITERATIONS_PER_TASK"
     echo "K-level: ${K_LEVEL:-random per task}"
+    echo "Target model: $TARGET_MODEL"
+    echo "Target pass rate: $TARGET_PASS_RATE"
+    if [ -n "$SEED_TASKS_DIR" ]; then
+        echo "Seed pool: $SEED_TASKS_DIR"
+    fi
     if [ -n "$QUERY" ]; then
         echo "Query: $QUERY"
     fi
@@ -467,8 +462,17 @@ run_generate() {
     if [ -n "$CATEGORY" ]; then
         EXTRA_ARGS+=(--category "$CATEGORY")
     fi
+    if [ -n "$TARGET_MODEL" ]; then
+        EXTRA_ARGS+=(--target-model "$TARGET_MODEL")
+    fi
+    if [ -n "$TARGET_PASS_RATE" ]; then
+        EXTRA_ARGS+=(--target-pass-rate "$TARGET_PASS_RATE")
+    fi
     if [ -n "$SEED_TASK" ]; then
         EXTRA_ARGS+=(--seed-task "$SEED_TASK")
+    fi
+    if [ -n "$SEED_TASKS_DIR" ]; then
+        EXTRA_ARGS+=(--seed-tasks-dir "$SEED_TASKS_DIR")
     fi
     if [ "$RANDOM_SEED_TASK" = true ]; then
         EXTRA_ARGS+=(--random-seed-task)
@@ -803,13 +807,14 @@ run_test() {
 
 run_evolve() {
     echo "=============================================="
-    echo "Running EMTOM Evolutionary Difficulty Generation"
+    echo "Running EMTOM Generate Loop"
     echo "=============================================="
-    echo "Args: ${EVOLVE_ARGS[*]}"
+    echo "The separate evolve pipeline is deprecated."
+    echo "Forwarding to: ./emtom/run_emtom.sh generate ..."
     echo "=============================================="
     echo ""
 
-    python -m emtom.evolve.orchestrator "${EVOLVE_ARGS[@]}"
+    run_generate
 }
 
 run_all() {
@@ -1091,15 +1096,8 @@ run_salvage_literal_tom() {
 
 # Parse command line arguments
 COMMAND=""
-EVOLVE_ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
-        evolve)
-            COMMAND=evolve
-            shift
-            EVOLVE_ARGS=("$@")
-            break
-            ;;
         campaign)
             COMMAND=campaign
             shift
@@ -1107,7 +1105,7 @@ while [[ $# -gt 0 ]]; do
             python -m emtom.scripts.campaign "$@"
             exit $?
             ;;
-        explore|generate|benchmark|test|judge|verify|verify-static|verify-pddl|validate-task|test-task|new-scene|submit-task|migrate-room-restrictions|migrate-canonical-mechanics|migrate-literal-tom|salvage-literal-tom|all)
+        explore|generate|benchmark|test|judge|verify|verify-static|verify-pddl|validate-task|test-task|new-scene|submit-task|migrate-room-restrictions|migrate-canonical-mechanics|migrate-literal-tom|salvage-literal-tom|evolve|all)
             COMMAND=$1
             shift
             ;;
@@ -1264,6 +1262,14 @@ while [[ $# -gt 0 ]]; do
             TEST_MODEL=$2
             shift 2
             ;;
+        --target-model)
+            TARGET_MODEL=$2
+            shift 2
+            ;;
+        --target-pass-rate)
+            TARGET_PASS_RATE=$2
+            shift 2
+            ;;
         --tom-target-l1)
             TOM_TARGET_L1=$2
             TOM_L1_EXPLICIT=true
@@ -1336,6 +1342,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --seed-task)
             SEED_TASK=$2
+            shift 2
+            ;;
+        --seed-tasks-dir)
+            SEED_TASKS_DIR=$2
             shift 2
             ;;
         --random-seed-task)

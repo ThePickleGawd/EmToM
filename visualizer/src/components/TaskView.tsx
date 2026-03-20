@@ -1,5 +1,5 @@
-import { useState } from "react";
-import type { TaskDetail, LiteralTomProbeResult } from "../types";
+import { useEffect, useState } from "react";
+import type { TaskDetail, CalibrationMeta } from "../types";
 import AgentTimeline from "./AgentTimeline";
 import { downloadJson } from "../download";
 
@@ -21,23 +21,53 @@ interface Props {
   onImageClick: (src: string) => void;
 }
 
+const CALIBRATION_MODE_INFO: Record<string, { label: string; description: string }> = {
+  standard: {
+    label: "Standard",
+    description: "Private secrets only. Agents use the normal benchmark communication and observation channels.",
+  },
+  baseline: {
+    label: "Baseline",
+    description: "All secrets are shared. Agents may also read teammates' completed Thought+Action trajectories.",
+  },
+};
+
 export default function TaskView({ task, onImageClick }: Props) {
   const allAgents = task.llm_agents;
   const tabs = ["all", ...allAgents];
   const [activeTab, setActiveTab] = useState("all");
   const [trajectoryView, setTrajectoryView] = useState<
-    "calibration" | "golden"
-  >("calibration");
+    "calibration_standard" | "calibration_baseline" | "golden"
+  >("calibration_standard");
   const [showPddl, setShowPddl] = useState(false);
+  const calibrationByMode = task.calibration_by_mode || {};
+  const standardCalibration = calibrationByMode.standard || task.calibration_meta || null;
+  const baselineCalibration = calibrationByMode.baseline || null;
 
+  useEffect(() => {
+    setTrajectoryView(
+      standardCalibration
+        ? "calibration_standard"
+        : baselineCalibration
+          ? "calibration_baseline"
+          : "golden",
+    );
+    setActiveTab("all");
+  }, [task.task_id]);
+
+  const selectedCalibration: CalibrationMeta | null =
+    trajectoryView === "calibration_baseline"
+      ? baselineCalibration
+      : standardCalibration;
   const hasGolden = (task.golden_trajectory?.length ?? 0) > 0;
-  const hasCalibration = task.action_history.length > 0;
+  const hasCalibration =
+    (selectedCalibration?.trajectory?.length ?? task.action_history.length) > 0;
   const isLibrary = hasGolden || !!task.task_description;
 
   const history =
     trajectoryView === "golden" && hasGolden
       ? task.golden_trajectory!
-      : task.action_history;
+      : selectedCalibration?.trajectory || task.action_history;
 
   const filteredHistory =
     activeTab === "all"
@@ -48,8 +78,30 @@ export default function TaskView({ task, onImageClick }: Props) {
     activeTab !== "all" && task.instruction[activeTab]
       ? task.instruction[activeTab]
       : activeTab === "all"
-        ? Object.values(task.instruction)[0] || ""
-        : "";
+      ? Object.values(task.instruction)[0] || ""
+      : "";
+  const displaySuccess =
+    trajectoryView !== "golden" && selectedCalibration
+      ? selectedCalibration.passed
+      : task.success;
+  const displayTurns =
+    trajectoryView !== "golden" && selectedCalibration?.turns != null
+      ? selectedCalibration.turns
+      : task.turns;
+  const displaySteps =
+    trajectoryView !== "golden" && selectedCalibration?.steps != null
+      ? selectedCalibration.steps
+      : task.steps;
+  const displayResultLabel =
+    trajectoryView !== "golden" && selectedCalibration
+      ? `${(CALIBRATION_MODE_INFO[selectedCalibration.run_mode]?.label || selectedCalibration.run_mode).toUpperCase()} ${displaySuccess ? "PASSED" : "FAILED"}`
+      : displaySuccess
+        ? "PASSED"
+        : "FAILED";
+  const calibrationInfo = CALIBRATION_MODE_INFO[selectedCalibration?.run_mode || "standard"] || {
+    label: selectedCalibration?.run_mode || "standard",
+    description: "Calibration run mode.",
+  };
 
   return (
     <div>
@@ -66,12 +118,12 @@ export default function TaskView({ task, onImageClick }: Props) {
         </div>
         <div className="task-meta">
           <span
-            className={`task-result-badge ${task.success ? "success" : "failure"}`}
+            className={`task-result-badge ${displaySuccess ? "success" : "failure"}`}
           >
-            {task.success ? "PASSED" : "FAILED"}
+            {displayResultLabel}
           </span>
-          <span className="task-meta-chip">{task.turns} turns</span>
-          <span className="task-meta-chip">{task.steps} steps</span>
+          <span className="task-meta-chip">{displayTurns} turns</span>
+          <span className="task-meta-chip">{displaySteps} steps</span>
           <span className="task-meta-chip">
             {allAgents.length} agent{allAgents.length !== 1 ? "s" : ""}
           </span>
@@ -93,22 +145,38 @@ export default function TaskView({ task, onImageClick }: Props) {
         </div>
       )}
 
-      {task.calibration_meta && (
-        <div className="calibration-meta">
-          <span className="calibration-meta-item">
-            {task.calibration_meta.passed ? "Cal. passed" : "Cal. failed"}
-          </span>
-          <span className="calibration-meta-item">
-            {(task.calibration_meta.progress * 100).toFixed(0)}% progress
-          </span>
-          {Object.entries(task.calibration_meta.agent_models).slice(0, 1).map(([, model]) => (
-            <span key="model" className="calibration-meta-item">{model}</span>
-          ))}
-          {task.calibration_meta.tested_at && (
+      {selectedCalibration && (
+        <div className="calibration-panel-compact">
+          <div className="calibration-meta">
             <span className="calibration-meta-item">
-              {task.calibration_meta.tested_at.slice(0, 16)}
+              {selectedCalibration.passed ? "Cal. passed" : "Cal. failed"}
             </span>
-          )}
+            <span className="calibration-meta-item">
+              {calibrationInfo.label}
+            </span>
+            <span className="calibration-meta-item">
+              {(selectedCalibration.progress * 100).toFixed(0)}% progress
+            </span>
+            {selectedCalibration.steps != null && (
+              <span className="calibration-meta-item">
+                {selectedCalibration.steps} steps
+              </span>
+            )}
+            {selectedCalibration.turns != null && (
+              <span className="calibration-meta-item">
+                {selectedCalibration.turns} turns
+              </span>
+            )}
+            {Object.entries(selectedCalibration.agent_models).slice(0, 1).map(([, model]) => (
+              <span key="model" className="calibration-meta-item">{model}</span>
+            ))}
+            {selectedCalibration.tested_at && (
+              <span className="calibration-meta-item">
+                {selectedCalibration.tested_at.slice(0, 16)}
+              </span>
+            )}
+          </div>
+          <div className="calibration-mode-note">{calibrationInfo.description}</div>
         </div>
       )}
 
@@ -182,12 +250,20 @@ export default function TaskView({ task, onImageClick }: Props) {
 
       {isLibrary && (hasGolden || hasCalibration) && (
         <div className="trajectory-toggle">
-          {hasCalibration && (
+          {standardCalibration && (
             <button
-              className={`trajectory-toggle-btn ${trajectoryView === "calibration" ? "active" : ""}`}
-              onClick={() => setTrajectoryView("calibration")}
+              className={`trajectory-toggle-btn ${trajectoryView === "calibration_standard" ? "active" : ""}`}
+              onClick={() => setTrajectoryView("calibration_standard")}
             >
-              Calibration Trajectory
+              Standard Calibration
+            </button>
+          )}
+          {baselineCalibration && (
+            <button
+              className={`trajectory-toggle-btn ${trajectoryView === "calibration_baseline" ? "active" : ""}`}
+              onClick={() => setTrajectoryView("calibration_baseline")}
+            >
+              Baseline Calibration
             </button>
           )}
           {hasGolden && (
