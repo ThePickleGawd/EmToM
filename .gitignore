@@ -14,6 +14,7 @@ dataset_generation/benchmark_generation/logs/
 episode_checks/
 habitat_llm/outputs/
 outputs/
+tmp/
 third_party/detectron2/
 third_party/Detic/
 wandb/

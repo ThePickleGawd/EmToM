@@ -1,0 +1,892 @@
+from __future__ import annotations
+
+import json
+import os
+import random
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from emtom.cli import CLIResult, failure, success
+from emtom.cli.judge_task import run as judge_task_run
+from emtom.cli.submit_task import run as submit_task_run
+from emtom.cli.validate_task import static_validate_trajectory, validate
+from emtom.pddl.planner import regenerate_golden_trajectory
+from emtom.task_gen.scene_loader import SceneData
+from emtom.task_gen.seed_sanitizer import sanitize_task_for_seeding
+from emtom.task_gen.seed_selector import (
+    SeedSelectionConfig,
+    build_seed_candidates,
+    select_seed_tasks,
+)
+
+
+def _evaluation_passed(category: str, evaluation: Dict[str, Any]) -> bool:
+    if category == "competitive":
+        return evaluation.get("winner") is not None
+    if category == "mixed":
+        return evaluation.get("main_goal_success", False)
+    return evaluation.get("success", False)
+
+
+def _evaluation_progress(category: str, evaluation: Dict[str, Any]) -> float:
+    if category == "mixed":
+        return evaluation.get("main_goal_progress", evaluation.get("percent_complete", 0.0))
+    return evaluation.get("percent_complete", 0.0)
+
+
+def _build_results_block(category: str, evaluation: Dict[str, Any]) -> Dict[str, Any]:
+    if category == "competitive":
+        teams: Dict[str, Any] = {}
+        for team_id, prog in evaluation.get("team_progress", {}).items():
+            teams[team_id] = {"progress": prog}
+        for team_id, status in evaluation.get("team_status", {}).items():
+            teams.setdefault(team_id, {})["passed"] = status
+        return {"winner": evaluation.get("winner"), "teams": teams}
+
+    if category == "mixed":
+        agents = {
+            aid: {"subgoal_passed": passed}
+            for aid, passed in evaluation.get("agent_subgoal_status", {}).items()
+        }
+        return {
+            "main_goal": {
+                "passed": evaluation.get("main_goal_success", False),
+                "progress": _evaluation_progress(category, evaluation),
+            },
+            "agents": agents,
+        }
+
+    return {
+        "passed": evaluation.get("success", False),
+        "progress": _evaluation_progress(category, evaluation),
+    }
+
+
+def _standard_requirement(
+    current_rate: Optional[float],
+    target_rate: float,
+    tolerance: float = 0.05,
+) -> str:
+    if current_rate is None:
+        return "either"
+    if current_rate > target_rate + tolerance:
+        return "must_fail"
+    if current_rate < target_rate - tolerance:
+        return "must_pass"
+    return "either"
+
+
+def build_mode_comparison(
+    category: str,
+    standard: Dict[str, Any],
+    baseline: Dict[str, Any],
+    current_rate: Optional[float],
+    target_rate: float,
+    tolerance: float = 0.05,
+) -> Dict[str, Any]:
+    std_eval = standard.get("evaluation", {})
+    base_eval = baseline.get("evaluation", {})
+    standard_passed = _evaluation_passed(category, std_eval)
+    baseline_passed = _evaluation_passed(category, base_eval)
+    standard_progress = _evaluation_progress(category, std_eval)
+    baseline_progress = _evaluation_progress(category, base_eval)
+    requirement = _standard_requirement(current_rate, target_rate, tolerance=tolerance)
+
+    gate_passed = baseline_passed
+    reasons: List[str] = []
+    if not baseline_passed:
+        gate_passed = False
+        reasons.append(
+            "Baseline/full-info run must pass so the task is empirically solvable when information asymmetry is removed."
+        )
+    if requirement == "must_fail" and standard_passed:
+        gate_passed = False
+        reasons.append(
+            f"Standard run must fail because current pass rate ({current_rate:.1%}) is above the {target_rate:.0%} target."
+        )
+    elif requirement == "must_pass" and not standard_passed:
+        gate_passed = False
+        reasons.append(
+            f"Standard run must pass because current pass rate ({current_rate:.1%}) is below the {target_rate:.0%} target."
+        )
+
+    if not reasons:
+        reasons.append("Baseline passed and the standard result matches the current calibration target.")
+
+    return {
+        "gate_passed": gate_passed,
+        "functional_tom_signal": baseline_passed,
+        "standard_requirement": requirement,
+        "current_standard_pass_rate": current_rate,
+        "target_standard_pass_rate": target_rate,
+        "standard_passed": standard_passed,
+        "baseline_passed": baseline_passed,
+        "standard_progress": standard_progress,
+        "baseline_progress": baseline_progress,
+        "progress_delta": baseline_progress - standard_progress,
+        "standard_turns": standard.get("turns", 0),
+        "baseline_turns": baseline.get("turns", 0),
+        "turn_delta": standard.get("turns", 0) - baseline.get("turns", 0),
+        "standard_steps": standard.get("steps", 0),
+        "baseline_steps": baseline.get("steps", 0),
+        "step_delta": standard.get("steps", 0) - baseline.get("steps", 0),
+        "reasons": reasons,
+    }
+
+
+def default_state(
+    *,
+    working_dir: str,
+    output_dir: str,
+    num_tasks_target: int,
+    agents_min: int,
+    agents_max: int,
+    subtasks_min: int,
+    subtasks_max: int,
+    category: Optional[str],
+    seed_task: Optional[str],
+    seed_tasks_dir: Optional[str],
+    random_seed_task: bool,
+    judge_threshold: Optional[float],
+    difficulty: Optional[str],
+    test_model: Optional[str],
+    calibration_stats: Dict[str, Any],
+    task_gen_agent: str,
+    allowed_k_levels: Optional[List[int]],
+) -> Dict[str, Any]:
+    return {
+        "working_dir": working_dir,
+        "output_dir": output_dir,
+        "num_tasks_target": num_tasks_target,
+        "agents_min": agents_min,
+        "agents_max": agents_max,
+        "subtasks_min": subtasks_min,
+        "subtasks_max": subtasks_max,
+        "category": category,
+        "seed_task": seed_task,
+        "seed_tasks_dir": seed_tasks_dir,
+        "random_seed_task": random_seed_task,
+        "judge_threshold": judge_threshold,
+        "difficulty": difficulty,
+        "test_model": test_model,
+        "task_gen_agent": task_gen_agent,
+        "submitted_tasks": [],
+        "submitted_count": 0,
+        "current_task_index": 1,
+        "current_k_level": None,
+        "allowed_k_levels": allowed_k_levels,
+        "last_judge_passed": False,
+        "last_verify_passed": False,
+        "last_test_passed": False,
+        "consecutive_judge_failures": 0,
+        "finished": False,
+        "failed": False,
+        "fail_reason": "",
+        "scene_id": None,
+        "episode_id": None,
+        "calibration_stats": calibration_stats,
+    }
+
+
+class TaskGenSession:
+    def __init__(self, working_dir: str):
+        self.working_dir = Path(working_dir)
+        self.state_path = self.working_dir / "taskgen_state.json"
+        self.task_file = self.working_dir / "working_task.json"
+        self.template_file = self.working_dir / "template.json"
+        self.trajectories_dir = self.working_dir / "agent_trajectories"
+        self.submitted_tasks_dir = self.working_dir / "submitted_tasks"
+        self.scene_file = self.working_dir / "current_scene.json"
+        self.state = self._read_state()
+
+    def _read_state(self) -> Dict[str, Any]:
+        with open(self.state_path) as f:
+            return json.load(f)
+
+    def _write_state(self) -> None:
+        self.state["submitted_count"] = len(self.state.get("submitted_tasks", []))
+        self.state["current_task_index"] = self.state["submitted_count"] + 1
+        with open(self.state_path, "w") as f:
+            json.dump(self.state, f, indent=2)
+
+    def _load_scene_data(self) -> Optional[SceneData]:
+        if not self.scene_file.exists():
+            return None
+        with open(self.scene_file) as f:
+            scene_dict = json.load(f)
+        return SceneData(
+            episode_id=scene_dict["episode_id"],
+            scene_id=scene_dict["scene_id"],
+            rooms=scene_dict["rooms"],
+            furniture=scene_dict["furniture"],
+            objects=scene_dict["objects"],
+            articulated_furniture=scene_dict["articulated_furniture"],
+            furniture_in_rooms=scene_dict["furniture_in_rooms"],
+            objects_on_furniture=scene_dict["objects_on_furniture"],
+            agent_spawns=scene_dict.get("agent_spawns", {}),
+        )
+
+    def _pick_k_level(self) -> int:
+        allowed = self.state.get("allowed_k_levels") or [1, 2, 3]
+        return random.choice(allowed)
+
+    def _reset_gate_state(self) -> None:
+        self.state["last_judge_passed"] = False
+        self.state["last_verify_passed"] = False
+        self.state["last_test_passed"] = False
+        self.state["consecutive_judge_failures"] = 0
+
+    def status(self) -> CLIResult:
+        scene_data = self._load_scene_data()
+        data = {
+            "working_dir": str(self.working_dir),
+            "task_file": str(self.task_file),
+            "prompt_file": str(self.working_dir / "taskgen_prompt.md"),
+            "submitted_tasks": self.state.get("submitted_tasks", []),
+            "submitted_count": len(self.state.get("submitted_tasks", [])),
+            "num_tasks_target": self.state["num_tasks_target"],
+            "current_task_index": self.state.get("current_task_index"),
+            "current_k_level": self.state.get("current_k_level"),
+            "category": self.state.get("category"),
+            "finished": self.state.get("finished", False),
+            "failed": self.state.get("failed", False),
+            "fail_reason": self.state.get("fail_reason", ""),
+            "last_judge_passed": self.state.get("last_judge_passed", False),
+            "last_verify_passed": self.state.get("last_verify_passed", False),
+            "last_test_passed": self.state.get("last_test_passed", False),
+            "scene_loaded": scene_data is not None,
+        }
+        if scene_data is not None:
+            data.update(
+                {
+                    "scene_id": scene_data.scene_id,
+                    "episode_id": scene_data.episode_id,
+                    "rooms": scene_data.rooms,
+                    "objects": len(scene_data.objects),
+                    "furniture": len(scene_data.furniture),
+                }
+            )
+        return success(data)
+
+    def finish(self) -> CLIResult:
+        submitted = len(self.state.get("submitted_tasks", []))
+        target = self.state["num_tasks_target"]
+        if submitted < target:
+            return failure(
+                f"Cannot finish yet: submitted {submitted}/{target} tasks.",
+                data={"submitted": submitted, "target": target},
+            )
+        self.state["finished"] = True
+        self._write_state()
+        return success(
+            {
+                "message": f"Task generation finished with {submitted}/{target} tasks submitted.",
+                "submitted_tasks": self.state.get("submitted_tasks", []),
+            }
+        )
+
+    def fail(self, reason: str) -> CLIResult:
+        self.state["failed"] = True
+        self.state["fail_reason"] = reason
+        self._write_state()
+        return success({"message": f"Marked run as failed: {reason}"})
+
+    def _resolve_seed_task_path(self) -> Optional[Path]:
+        seed_task = self.state.get("seed_task")
+        if seed_task:
+            return Path(seed_task)
+
+        seed_tasks_dir = self.state.get("seed_tasks_dir")
+        if not seed_tasks_dir:
+            return None
+
+        seed_dir = Path(seed_tasks_dir)
+        if not seed_dir.exists():
+            return None
+
+        calibration_stats = self.state.get("calibration_stats") or {}
+        selection_config = SeedSelectionConfig(
+            tasks_dir=seed_dir,
+            target_model=calibration_stats.get("model") or self.state.get("test_model") or "gpt-5.2",
+            target_pass_rate=calibration_stats.get("target_rate", 0.20),
+            current_pass_rate=calibration_stats.get("rate"),
+            category=self.state.get("category"),
+            tom_level=self.state.get("current_k_level"),
+        )
+        if self.state.get("random_seed_task"):
+            candidates = build_seed_candidates(selection_config)
+            if not candidates:
+                return None
+            return random.choice(candidates).path
+
+        selected = select_seed_tasks(selection_config, count=1)
+        if not selected:
+            return None
+        return selected[0].path
+
+    def _create_working_task_from_template(self, num_agents: int) -> None:
+        seed_path = self._resolve_seed_task_path()
+        if seed_path is not None:
+            with open(seed_path) as f:
+                task = json.load(f)
+            task = sanitize_task_for_seeding(task, num_agents=num_agents)
+        else:
+            with open(self.template_file) as f:
+                task = json.load(f)
+            default_actions = [
+                "Navigate",
+                "Open",
+                "Close",
+                "Pick",
+                "Place",
+                "UseItem",
+                "FindObjectTool",
+                "FindReceptacleTool",
+                "FindRoomTool",
+                "Communicate",
+                "Wait",
+            ]
+            task["agent_secrets"] = {
+                f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"] for i in range(num_agents)
+            }
+            task["agent_actions"] = {
+                f"agent_{i}": default_actions.copy() for i in range(num_agents)
+            }
+
+        scene_data = self._load_scene_data()
+        if scene_data is not None:
+            task["scene_id"] = scene_data.scene_id
+            task["episode_id"] = scene_data.episode_id
+            if scene_data.agent_spawns:
+                task["agent_spawns"] = scene_data.agent_spawns
+        task["num_agents"] = num_agents
+        task["task_id"] = "REPLACE_WITH_UNIQUE_ID"
+
+        with open(self.task_file, "w") as f:
+            json.dump(task, f, indent=2)
+
+    def new_scene(self, num_agents: int, keep: bool = False) -> CLIResult:
+        if num_agents < 2 or num_agents > 10:
+            return failure(f"num_agents must be 2-10, got {num_agents}")
+
+        if self.state.get("current_k_level") is None:
+            self.state["current_k_level"] = self._pick_k_level()
+
+        scene_data = self._load_scene_data()
+        scene_id = scene_data.scene_id if keep and scene_data is not None else None
+        if keep and scene_data is None:
+            return failure("Cannot use --keep before a scene has been loaded.")
+
+        max_scene_retries = 5
+        last_error = ""
+        for _ in range(max_scene_retries):
+            from habitat_llm.utils import get_random_seed
+
+            cmd = [
+                sys.executable,
+                "-m",
+                "emtom.cli.new_scene",
+                str(num_agents),
+                "--working-dir",
+                str(self.working_dir),
+                "--seed",
+                str(get_random_seed()),
+            ]
+            if scene_id:
+                cmd.extend(["--scene-id", scene_id])
+
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            try:
+                stdout = proc.stdout
+                json_start = stdout.find("{")
+                if json_start >= 0:
+                    stdout = stdout[json_start:]
+                result = json.loads(stdout)
+            except (json.JSONDecodeError, ValueError):
+                last_error = proc.stderr or "Failed to parse new_scene output."
+                continue
+
+            if not result.get("success"):
+                last_error = result.get("error", "Unknown error")
+                continue
+
+            loaded_scene = self._load_scene_data()
+            if loaded_scene is None:
+                last_error = "Scene file was not written."
+                continue
+
+            min_objects = 4 if self.state.get("category") == "competitive" else 5
+            if len(loaded_scene.objects) < min_objects:
+                last_error = (
+                    f"Scene {loaded_scene.scene_id} has only {len(loaded_scene.objects)} locatable objects."
+                )
+                continue
+
+            furniture_to_room: Dict[str, str] = {}
+            for room_id, room_furniture in (loaded_scene.furniture_in_rooms or {}).items():
+                if isinstance(room_furniture, list):
+                    for furniture_id in room_furniture:
+                        if isinstance(furniture_id, str):
+                            furniture_to_room[furniture_id] = room_id
+
+            rooms_with_objects = set()
+            for furniture_id, objects_on_furniture in (loaded_scene.objects_on_furniture or {}).items():
+                if objects_on_furniture and furniture_id in furniture_to_room:
+                    rooms_with_objects.add(furniture_to_room[furniture_id])
+            if furniture_to_room and len(rooms_with_objects) < 2:
+                last_error = (
+                    f"Scene {loaded_scene.scene_id} has objects concentrated in {len(rooms_with_objects)} room(s)."
+                )
+                continue
+
+            self.state["scene_id"] = loaded_scene.scene_id
+            self.state["episode_id"] = loaded_scene.episode_id
+            self._reset_gate_state()
+
+            if keep and self.task_file.exists():
+                try:
+                    with open(self.task_file) as f:
+                        task_data = json.load(f)
+                except json.JSONDecodeError:
+                    self._create_working_task_from_template(num_agents)
+                else:
+                    task_data["num_agents"] = num_agents
+                    if loaded_scene.agent_spawns:
+                        task_data["agent_spawns"] = loaded_scene.agent_spawns
+                    with open(self.task_file, "w") as f:
+                        json.dump(task_data, f, indent=2)
+            else:
+                self._create_working_task_from_template(num_agents)
+
+            self._write_state()
+            return success(
+                {
+                    "message": "Scene loaded.",
+                    "scene_id": loaded_scene.scene_id,
+                    "episode_id": loaded_scene.episode_id,
+                    "num_agents": num_agents,
+                    "keep": keep,
+                    "rooms": loaded_scene.rooms,
+                    "objects": len(loaded_scene.objects),
+                    "furniture": len(loaded_scene.furniture),
+                    "current_k_level": self.state.get("current_k_level"),
+                    "task_file": str(self.task_file),
+                }
+            )
+
+        return failure(f"Failed to load a usable scene: {last_error}")
+
+    def _validate_task_structure(self, task_data: Dict[str, Any]) -> CLIResult:
+        result = validate(task_data, self._load_scene_data())
+        if result["success"]:
+            return success(result["data"])
+        return failure(result["error"], data={"valid": False})
+
+    def _build_trajectory(self, action_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        from collections import defaultdict
+
+        turns: Dict[int, Dict[str, Any]] = defaultdict(
+            lambda: {"agents": {}, "subtasks_completed": []}
+        )
+        for record in action_history:
+            turn = record.get("turn", 0)
+            if record.get("type") == "subtask_completion":
+                turns[turn]["subtasks_completed"].extend(record.get("subtasks_completed", []))
+                continue
+            agent_id = record.get("agent", "unknown")
+            turns[turn]["agents"][agent_id] = {
+                "action": record.get("action", ""),
+                "observation": record.get("result", ""),
+            }
+
+        trajectory = []
+        for turn_num in sorted(turns):
+            entry = turns[turn_num]
+            trajectory.append(
+                {
+                    "turn": turn_num,
+                    "agents": entry["agents"],
+                    "subtasks_completed": entry["subtasks_completed"],
+                }
+            )
+        return trajectory
+
+    def _save_calibration_result(self, task_data: Dict[str, Any], results: Dict[str, Any]) -> None:
+        from datetime import datetime
+
+        from emtom.evolve.benchmark_wrapper import _migrate_legacy_calibration
+
+        agent_models = getattr(self, "_last_agent_models", None)
+        if not agent_models:
+            model_name = self.state.get("test_model") or "unknown"
+            agent_models = {
+                f"agent_{i}": model_name for i in range(task_data.get("num_agents", 2))
+            }
+
+        category = task_data.get("category", "")
+        calibration = _migrate_legacy_calibration(task_data.get("calibration", []))
+        tested_at = datetime.now().isoformat()
+
+        for run_mode in ("standard", "baseline"):
+            run_result = results.get(run_mode)
+            if not isinstance(run_result, dict):
+                continue
+            calibration_entry = {
+                "tested_at": tested_at,
+                "run_mode": run_mode,
+                "agent_models": agent_models,
+                "steps": run_result.get("steps", 0),
+                "results": _build_results_block(category, run_result.get("evaluation", {})),
+                "trajectory": self._build_trajectory(run_result.get("action_history", [])),
+            }
+            replaced = False
+            for idx, existing in enumerate(calibration):
+                existing_run_mode = str(existing.get("run_mode", "standard") or "standard")
+                if existing.get("agent_models") == agent_models and existing_run_mode == run_mode:
+                    calibration[idx] = calibration_entry
+                    replaced = True
+                    break
+            if not replaced:
+                calibration.append(calibration_entry)
+
+        task_data["calibration"] = calibration
+        with open(self.task_file, "w") as f:
+            json.dump(task_data, f, indent=2)
+
+    def _determine_agent_models(self, task_data: Dict[str, Any]) -> Dict[str, str]:
+        num_agents = task_data.get("num_agents", 2)
+        if task_data.get("category") == "competitive":
+            base_model = self.state.get("test_model") or "gpt-5.2"
+            opponent = "sonnet" if base_model != "sonnet" else "gpt-5.2"
+            team_assignment = task_data.get("team_assignment", {})
+            agent_models: Dict[str, str] = {}
+            for team_id, agents in team_assignment.items():
+                model = base_model if team_id == "team_0" else opponent
+                for agent_id in agents:
+                    agent_models[agent_id] = model
+            if agent_models:
+                return agent_models
+        model_name = self.state.get("test_model") or "gpt-5.2"
+        return {f"agent_{i}": model_name for i in range(num_agents)}
+
+    def _parse_benchmark_subprocess(
+        self, proc: subprocess.CompletedProcess[str], run_dir: Path
+    ) -> Dict[str, Any]:
+        try:
+            stdout = proc.stdout
+            json_start = stdout.find("{")
+            if json_start >= 0:
+                stdout = stdout[json_start:]
+            result_data = json.loads(stdout)
+        except (json.JSONDecodeError, ValueError):
+            return {
+                "steps": 0,
+                "done": False,
+                "error": f"Failed to parse output: {proc.stderr[:500]}",
+                "trajectory_dir": str(run_dir),
+            }
+
+        if result_data.get("success"):
+            result = result_data["data"]
+        else:
+            result = {
+                "steps": 0,
+                "done": False,
+                "error": result_data.get("error", "Unknown error"),
+            }
+
+        result["trajectory_dir"] = str(run_dir)
+        result.pop("planner_traces", None)
+        return result
+
+    def _run_benchmark_mode(
+        self,
+        task_data: Dict[str, Any],
+        temp_task_file: str,
+        run_mode: str,
+        run_dir: Path,
+    ) -> Dict[str, Any]:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        num_agents = task_data.get("num_agents", 2)
+        cmd = [
+            sys.executable,
+            "-m",
+            "emtom.cli.test_task",
+            temp_task_file,
+            "--working-dir",
+            str(self.working_dir),
+            "--trajectory-dir",
+            str(run_dir),
+            "--config-name",
+            f"examples/emtom_{num_agents}_robots",
+            "--run-mode",
+            run_mode,
+        ]
+        if self.state.get("test_model"):
+            cmd.extend(["--test-model", self.state["test_model"]])
+        if task_data.get("category") == "competitive":
+            base_model = self.state.get("test_model") or "gpt-5.2"
+            opponent = "sonnet" if base_model != "sonnet" else "gpt-5.2"
+            cmd.extend(["--team-model-map", f"team_0={base_model},team_1={opponent}"])
+
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
+        except subprocess.TimeoutExpired:
+            return {
+                "steps": 0,
+                "done": False,
+                "error": "Test timed out",
+                "trajectory_dir": str(run_dir),
+                "run_mode": run_mode,
+            }
+        result = self._parse_benchmark_subprocess(proc, run_dir)
+        result["run_mode"] = run_mode
+        return result
+
+    def _run_benchmark(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        import tempfile
+
+        current_task_num = len(self.state.get("submitted_tasks", [])) + 1
+        run_count = self.state.get("_test_run_count", 0) + 1
+        self.state["_test_run_count"] = run_count
+        self._write_state()
+        run_dir = self.trajectories_dir / f"task_{current_task_num}" / f"run_{run_count}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        fd, temp_task_file = tempfile.mkstemp(suffix=".json")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(task_data, f)
+
+            self._last_agent_models = self._determine_agent_models(task_data)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {
+                    run_mode: executor.submit(
+                        self._run_benchmark_mode,
+                        task_data,
+                        temp_task_file,
+                        run_mode,
+                        run_dir / run_mode,
+                    )
+                    for run_mode in ("standard", "baseline")
+                }
+                mode_results = {
+                    run_mode: future.result() for run_mode, future in futures.items()
+                }
+        finally:
+            try:
+                os.unlink(temp_task_file)
+            except Exception:
+                pass
+
+        mode_errors = {
+            run_mode: result["error"]
+            for run_mode, result in mode_results.items()
+            if result.get("error")
+        }
+        if mode_errors:
+            return {
+                "error": "; ".join(f"{mode}: {err}" for mode, err in sorted(mode_errors.items())),
+                "mode_errors": mode_errors,
+                "trajectory_dir": str(run_dir),
+            }
+
+        calibration_stats = self.state.get("calibration_stats") or {}
+        comparison = build_mode_comparison(
+            task_data.get("category", ""),
+            mode_results["standard"],
+            mode_results["baseline"],
+            current_rate=calibration_stats.get("rate"),
+            target_rate=calibration_stats.get("target_rate", 0.20),
+        )
+        payload = {
+            "standard": mode_results["standard"],
+            "baseline": mode_results["baseline"],
+            "comparison": comparison,
+            "trajectory_dir": str(run_dir),
+        }
+        with open(run_dir / "comparison.json", "w") as f:
+            json.dump(payload, f, indent=2)
+        return payload
+
+    def test_task(self) -> CLIResult:
+        if not self.task_file.exists():
+            return failure("working_task.json does not exist.")
+
+        try:
+            with open(self.task_file) as f:
+                task_data = json.load(f)
+        except json.JSONDecodeError as e:
+            return failure(f"Invalid JSON in working_task.json: {e}")
+
+        validation_result = self._validate_task_structure(task_data)
+        if not validation_result["success"]:
+            return validation_result
+
+        try:
+            results = self._run_benchmark(task_data)
+        except Exception as e:
+            return failure(str(e), data=validation_result["data"])
+
+        if results.get("error"):
+            return failure(results["error"], data=results)
+
+        self._save_calibration_result(task_data, results)
+        self.state["last_test_passed"] = results["comparison"]["gate_passed"]
+        self._write_state()
+        payload = dict(validation_result["data"])
+        payload.update(results)
+        payload["gate"] = "PASSED" if self.state["last_test_passed"] else "REJECTED"
+        payload["gate_reason"] = " ".join(results["comparison"].get("reasons", []))
+        return success(payload)
+
+    def verify_golden_trajectory(self) -> CLIResult:
+        if not self.task_file.exists():
+            return failure("working_task.json does not exist.")
+
+        try:
+            with open(self.task_file) as f:
+                task_data = json.load(f)
+        except json.JSONDecodeError as e:
+            return failure(f"Invalid JSON: {e}")
+
+        try:
+            regenerate_golden_trajectory(
+                task_data,
+                scene_data=self._load_scene_data(),
+                source="verify",
+                task_file=str(self.task_file),
+            )
+        except Exception as e:
+            return failure(f"Failed to regenerate trajectory from task spec: {e}")
+
+        validation_result = self._validate_task_structure(task_data)
+        if not validation_result["success"]:
+            return validation_result
+
+        golden = task_data.get("golden_trajectory", [])
+        if not golden:
+            return failure("Deterministic planner produced empty trajectory.")
+
+        static_errors = static_validate_trajectory(task_data, golden, self._load_scene_data())
+        if static_errors:
+            return failure(
+                f"Static validation failed: {static_errors[0]}",
+                data={"all_errors": static_errors},
+            )
+
+        num_agents = task_data.get("num_agents", 2)
+        cmd = [
+            sys.executable,
+            "-m",
+            "emtom.cli.verify_trajectory",
+            str(self.task_file),
+            "--working-dir",
+            str(self.working_dir),
+            "--config-name",
+            f"examples/emtom_{num_agents}_robots",
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
+            stdout = proc.stdout
+            json_start = stdout.find("{")
+            if json_start >= 0:
+                stdout = stdout[json_start:]
+            result = json.loads(stdout)
+        except subprocess.TimeoutExpired:
+            return failure("Verification timed out (20 min). Possible navmesh issue.")
+        except (json.JSONDecodeError, ValueError):
+            return failure(f"Failed to parse verify output: {proc.stderr[:500]}")
+
+        if result.get("success") and result.get("data", {}).get("valid"):
+            self.state["last_verify_passed"] = True
+            self._write_state()
+            return success(result["data"])
+
+        data = result.get("data", {})
+        return failure(
+            result.get("error", "Unknown verification failure"),
+            data=data,
+        )
+
+    def judge(self) -> CLIResult:
+        if not self.task_file.exists():
+            return failure("working_task.json does not exist.")
+
+        current_task_num = len(self.state.get("submitted_tasks", [])) + 1
+        task_traj_dir = self.trajectories_dir / f"task_{current_task_num}"
+        trajectory_dir = None
+        if task_traj_dir.exists():
+            run_dirs = sorted(task_traj_dir.glob("run_*"), key=lambda p: p.name)
+            if run_dirs:
+                trajectory_dir = str(run_dirs[-1])
+
+        result = judge_task_run(
+            str(self.task_file),
+            working_dir=str(self.working_dir),
+            trajectory_dir=trajectory_dir,
+            threshold=self.state.get("judge_threshold") or 0.7,
+            difficulty=self.state.get("difficulty"),
+            required_tom_level=self.state.get("current_k_level"),
+        )
+        if not result["success"]:
+            return result
+
+        data = result["data"]
+        self.state["last_judge_passed"] = bool(data.get("passed"))
+        if self.state["last_judge_passed"]:
+            self.state["consecutive_judge_failures"] = 0
+            data["next_step"] = (
+                "Task passed judge. Run taskgen verify_golden_trajectory, then taskgen test_task, then taskgen submit_task."
+            )
+        else:
+            self.state["consecutive_judge_failures"] = (
+                self.state.get("consecutive_judge_failures", 0) + 1
+            )
+            data["failure_count"] = self.state["consecutive_judge_failures"]
+        self._write_state()
+        return success(data)
+
+    def submit_task(self) -> CLIResult:
+        if not self.state.get("last_verify_passed"):
+            return failure("Must run verify_golden_trajectory successfully before submitting.")
+        if not self.state.get("last_judge_passed"):
+            return failure("Must run judge successfully before submitting.")
+        if not self.state.get("last_test_passed"):
+            return failure("Must run test_task successfully before submitting.")
+
+        allowed_tom_levels = (
+            [self.state["current_k_level"]] if self.state.get("current_k_level") else None
+        )
+        result = submit_task_run(
+            str(self.task_file),
+            output_dir=str(self.state["output_dir"]),
+            working_dir=str(self.working_dir),
+            submitted_dir=str(self.submitted_tasks_dir),
+            subtasks_min=self.state["subtasks_min"],
+            subtasks_max=self.state["subtasks_max"],
+            agents_min=self.state["agents_min"],
+            agents_max=self.state["agents_max"],
+            allowed_tom_levels=allowed_tom_levels,
+        )
+        if not result["success"]:
+            return result
+
+        data = result["data"]
+        self.state.setdefault("submitted_tasks", []).append(data["output_path"])
+        self._reset_gate_state()
+        self.state["_test_run_count"] = 0
+        if len(self.state["submitted_tasks"]) < self.state["num_tasks_target"]:
+            self.state["current_k_level"] = self._pick_k_level()
+        self._write_state()
+
+        response = dict(data)
+        response["submitted_count"] = len(self.state["submitted_tasks"])
+        response["next_required_k_level"] = self.state.get("current_k_level")
+        response["message"] = (
+            f"Task submitted ({response['submitted_count']}/{self.state['num_tasks_target']})."
+        )
+        return success(response)

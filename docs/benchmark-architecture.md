@@ -23,6 +23,8 @@ Task generation should optimize for functional ToM, not just literal ToM:
 5. Judge whether the task genuinely requires ToM reasoning.
 6. Benchmark agents on the final task in both `standard` and `baseline`, using `standard` for calibration and `baseline` as the full-info solvability check.
 
+Task generation runs through an external SWE-agent CLI (`mini`, `claude`, or `codex`) inside a repo-local workspace under `tmp/task_gen/`. The agent executable may come from the operator environment, but all task-generation shell actions run inside the repo-owned sandbox environment in `tmp/task_gen/.venv`. The repo provides the prompt, sampled seed context, and a stable `taskgen` command surface for `new_scene`, `judge`, `verify_golden_trajectory`, `test_task`, `submit_task`, and `finish`.
+
 There is no separate evolution pipeline. Difficulty shaping happens inside normal task generation:
 - the seed selector uses target-model calibration data to bias the pool toward harder or easier seeds so the dataset moves toward the desired pass-rate
 - `new_scene` re-samples from the seed pool instead of treating seed reuse as a separate mode

@@ -1,4 +1,4 @@
-"""Consolidated system prompts for the agentic task generator."""
+"""Consolidated prompts for task generation."""
 
 SYSTEM_PROMPT = """You are a puzzle designer creating multi-agent collaboration challenges.
 
@@ -501,3 +501,118 @@ USER_PROMPT_TEMPLATE = """Generate {num_tasks} quality benchmark tasks.
 - Goal conjuncts: {subtasks_min}-{subtasks_max}
 
 **Start with `new_scene[N]` to load a scene.**"""
+
+
+def _rewrite_react_tool_syntax(text: str) -> str:
+    replacements = [
+        ("`new_scene[N, keep]`", "`taskgen new_scene N --keep`"),
+        ("`new_scene[N]`", "`taskgen new_scene N`"),
+        ("new_scene[N, keep]", "taskgen new_scene N --keep"),
+        ("new_scene[N]", "taskgen new_scene N"),
+        ("`judge[]`", "`taskgen judge`"),
+        ("judge[]", "taskgen judge"),
+        ("`verify_golden_trajectory[]`", "`taskgen verify_golden_trajectory`"),
+        ("verify_golden_trajectory[]", "taskgen verify_golden_trajectory"),
+        ("`test_task[]`", "`taskgen test_task`"),
+        ("test_task[]", "taskgen test_task"),
+        ("`submit_task[]`", "`taskgen submit_task`"),
+        ("submit_task[]", "taskgen submit_task"),
+        ("`fail[reason]`", "`taskgen fail \"reason\"`"),
+        ("fail[reason]", "taskgen fail \"reason\""),
+        ("**Start with `new_scene[N]` to load a scene.**", "**Start with `taskgen status` and then `taskgen new_scene N`.**"),
+    ]
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
+
+
+def build_external_taskgen_prompt(
+    *,
+    working_dir: str,
+    task_file: str,
+    category: str,
+    available_items: str,
+    available_mechanics: str,
+    available_predicates: str,
+    action_descriptions: str,
+    extra_sections: str,
+    num_tasks: int,
+    agents_min: int,
+    agents_max: int,
+    subtasks_min: int,
+    subtasks_max: int,
+) -> str:
+    category_index = SYSTEM_PROMPT.find("## Category:")
+    guidance = SYSTEM_PROMPT[category_index:] if category_index >= 0 else SYSTEM_PROMPT
+    guidance = _rewrite_react_tool_syntax(guidance)
+
+    replacements = {
+        "{task_file}": task_file,
+        "{working_dir}": working_dir,
+        "{available_items}": available_items,
+        "{available_mechanics}": available_mechanics,
+        "{available_predicates}": available_predicates,
+        "{category}": category.upper(),
+        "{action_descriptions}": action_descriptions,
+        "{diversity_section}": (
+            "Avoid repeating the same mechanic stacks, relay shapes, or target-object patterns across tasks in this run."
+        ),
+    }
+    for key, value in replacements.items():
+        guidance = guidance.replace(key, value)
+
+    constraints = USER_PROMPT_TEMPLATE.format(
+        num_tasks=num_tasks,
+        extra_sections=extra_sections,
+        agents_min=agents_min,
+        agents_max=agents_max,
+        subtasks_min=subtasks_min,
+        subtasks_max=subtasks_max,
+    )
+    constraints = _rewrite_react_tool_syntax(constraints)
+
+    header = f"""You are a puzzle designer creating multi-agent collaboration benchmark tasks.
+
+You are working inside a task-generation workspace at `{working_dir}`.
+Use normal shell commands for inspection and file edits.
+Use the repo-owned `taskgen` commands for pipeline actions instead of bespoke tool syntax.
+
+## Working Files
+- `{task_file}`: current working task JSON
+- `{working_dir}/current_scene.json`: current scene data after `taskgen new_scene`
+- `{working_dir}/sampled_tasks/`: sampled seed-task examples
+- `{working_dir}/sampled_trajectories/`: sampled exploration trajectories
+- `{working_dir}/template.json`: blank task template
+
+## Required Commands
+- `taskgen status`
+- `taskgen new_scene N`
+- `taskgen new_scene N --keep`
+- `taskgen judge`
+- `taskgen verify_golden_trajectory`
+- `taskgen test_task`
+- `taskgen submit_task`
+- `taskgen finish`
+- `taskgen fail "reason"`
+
+## Workflow
+1. Run `taskgen status`.
+2. Run `taskgen new_scene N` to load a scene.
+3. Inspect examples in `{working_dir}/sampled_tasks/`.
+4. Edit `{task_file}`. Author `problem_pddl` first, then make the natural-language fields and mechanics match it.
+5. Run `taskgen judge`, fix the task, and repeat until it passes.
+6. Run `taskgen verify_golden_trajectory`, fix the task, and repeat until it passes.
+7. Run `taskgen test_task`.
+8. Run `taskgen submit_task`.
+9. When you have submitted {num_tasks} tasks, run `taskgen finish`.
+
+## Command Rules
+- Work inside the current workspace.
+- Use `taskgen` commands for scene loading, judging, verification, testing, submission, and finish/fail.
+- `taskgen finish` must be the final command once the required number of tasks has been submitted.
+- Use `taskgen fail` only for unrecoverable infrastructure issues.
+- You may use shell tools like `cat`, `sed`, `jq`, `python`, and `apply_patch` to inspect and edit files.
+
+{constraints}
+"""
+    return f"{header}\n{guidance}"

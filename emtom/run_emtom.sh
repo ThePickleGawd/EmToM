@@ -135,6 +135,7 @@ ITERATIONS_PER_TASK=200
 AGENTS_MIN=2
 AGENTS_MAX=10
 AGENT_TYPE="robot"  # robot or human
+TASK_GEN_AGENT="mini"  # External task generation agent: mini, claude, or codex
 QUERY=""  # seed query for task generation
 THRESHOLD=0.7  # ToM judge threshold
 RETRY_VERIFICATION=""  # Path to failed ToM verification file
@@ -243,6 +244,7 @@ print_usage() {
     echo "  --subtasks-min N     Minimum subtasks per task (default: $SUBTASKS_MIN)"
     echo "  --subtasks-max N     Maximum subtasks per task (default: $SUBTASKS_MAX)"
     echo "  --iterations-per-task N   Max iterations per task (default: 100)"
+    echo "  --task-gen-agent NAME External generator agent: mini|claude|codex (default: $TASK_GEN_AGENT)"
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
     echo "  --retry-verification FILE  Retry generation using suggestions from failed ToM verification"
     echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
@@ -309,7 +311,7 @@ print_usage() {
     echo -e "  ./emtom/run_emtom.sh explore --steps 30 ${GREEN}--model gpt-5${NC}"
     echo -e "  ./emtom/run_emtom.sh explore --agents 3 ${GREEN}--model sonnet${NC}"
     echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model gpt-5${NC}"
-    echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model sonnet${NC} --num-tasks 5"
+    echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--task-gen-agent claude --model sonnet${NC} --num-tasks 5"
     echo -e "  ./emtom/run_emtom.sh generate --agents-min 2 --agents-max 4 ${GREEN}--model gpt-5${NC}"
     echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model mistral-large-3${NC} --query \"A task using the radio\""
     echo "  ./emtom/run_emtom.sh all"
@@ -406,13 +408,11 @@ run_exploration() {
 }
 
 run_generate() {
-    # Auto-detect LLM provider if not specified
+    # Keep provider detection best-effort for logging/backward compatibility.
     if [ -z "$LLM_PROVIDER" ]; then
         LLM_PROVIDER=$(detect_llm_provider "$MODEL")
         if [ -z "$LLM_PROVIDER" ]; then
-            echo -e "${RED}Error: Could not auto-detect provider for model '$MODEL'${NC}"
-            print_llm_options
-            exit 1
+            LLM_PROVIDER="external_cli"
         fi
     fi
 
@@ -429,6 +429,7 @@ run_generate() {
     echo "Target tasks: $NUM_TASKS"
     echo "Agents: $AGENTS_MIN - $AGENTS_MAX ($AGENT_TYPE)"
     echo "LLM: $LLM_PROVIDER ($MODEL)"
+    echo "Task-gen agent: $TASK_GEN_AGENT"
     echo "Category: ${CATEGORY:-random}"
     echo "Subtasks: $SUBTASKS_MIN - $SUBTASKS_MAX"
     echo "Iterations per task: $ITERATIONS_PER_TASK"
@@ -455,6 +456,9 @@ run_generate() {
     EXTRA_ARGS=()
     if [ -n "$QUERY" ]; then
         EXTRA_ARGS+=(--query "$QUERY")
+    fi
+    if [ -n "$TASK_GEN_AGENT" ]; then
+        EXTRA_ARGS+=(--task-gen-agent "$TASK_GEN_AGENT")
     fi
     if [ -n "$RETRY_VERIFICATION" ]; then
         EXTRA_ARGS+=(--retry-verification "$RETRY_VERIFICATION")
@@ -1152,6 +1156,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --iterations-per-task)
             ITERATIONS_PER_TASK=$2
+            shift 2
+            ;;
+        --task-gen-agent)
+            TASK_GEN_AGENT=$2
+            if [[ "$TASK_GEN_AGENT" != "mini" && "$TASK_GEN_AGENT" != "claude" && "$TASK_GEN_AGENT" != "codex" ]]; then
+                echo "Error: --task-gen-agent must be 'mini', 'claude', or 'codex'"
+                exit 1
+            fi
             shift 2
             ;;
         --query)
