@@ -228,12 +228,12 @@ CRITERIA_DESCRIPTIONS = {
     # Core agent design criteria (most important)
     "agent_necessity": {
         "name": "Agent Necessity",
-        "description": "Is EVERY agent essential? Could the task work with fewer agents?",
-        "rubric": """0.0: One or more agents are completely idle or removable
-0.3: Some agents do trivial work that others could handle
-0.5: All agents participate but some are only marginally needed
-0.7: Most agents essential, one could theoretically be merged
-1.0: Every agent is indispensable - removing any would make task impossible""",
+        "description": "Does every agent make a distinct, goal-relevant contribution? Judge based on whether each agent materially changes the optimal plan or reachable success path, not on a literal proof that removing one agent makes success impossible in all circumstances.",
+        "rubric": """0.0: One or more agents are idle, decorative, or obviously removable
+0.3: Some agents act, but their contribution is trivial or easily absorbed by others with no real plan change
+0.5: All agents participate and at least one extra agent matters somewhat, but one or more roles are still weak, redundant, or mostly relay-only
+0.7: Every agent makes a material, distinct contribution; removing one would significantly weaken the task or collapse an intended dependency, even if a convoluted fallback might still exist
+1.0: Every agent has a clear non-substitutable role in the intended solution; removing any agent would fundamentally break a required dependency, access path, or incentive structure""",
     },
     "secret_quality": {
         "name": "Secret Quality",

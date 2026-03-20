@@ -107,6 +107,7 @@ Assigned!
 - **NEVER reference objects with unknown locations.** Only use objects listed in the scene data with a known furniture parent (shown as "object (on furniture)"). If an object has no location, it does not exist for task purposes.
 - `current_scene.json` schema: `objects` is a list of object IDs (strings), not dicts. Use `objects_on_furniture` (object->furniture via reverse map) and `furniture_in_rooms` to resolve locations.
 - Every agent essential; **no assigned roles**
+- Agent-necessity target: each agent should contribute a DISTINCT required capability, access path, observation, inventory dependency, or private incentive. Do not aim for a brittle proof that success is mathematically impossible without them; aim for a design where removing one agent would materially collapse the intended plan.
 - `task` is GLOBAL and should stay high-level; it may describe the shared objective vaguely without exact IDs
 - Author `problem_pddl` FIRST. Treat it as the source of truth, then write the story/natural-language fields to match it exactly. Do not invent narrative requirements that are not in the formal spec.
 - Secrets state WHAT (constraints, roles, goals with exact IDs) but NEVER HOW (coordination strategy, relay chains, who to tell what)
@@ -117,8 +118,25 @@ Assigned!
 - When a scene has multiple furniture of the same type in the same room or nearby rooms, the public task may stay generic, but the secrets must disambiguate with the exact target ID.
 - For competitive tasks: each team's `agent_secrets` MUST explicitly state the target state for that team's goal objects. The global `task` field stays neutral and high-level, but secrets must be actionable and exact.
 - A good ToM pattern is: an agent is blocked from entering a room, but its secret still names the exact object/furniture ID in that room, so the challenge is reasoning and coordination rather than grounding ambiguity.
-- NEVER prescribe coordination strategy in secrets. Bad: "tell agent_1 about X", "forward the message to agent_0", "wait for agent_3 then relay". Good: state room restrictions, communication constraints, physical roles, and abstract epistemic goals. The agent must reason about the communication graph itself.
+- NEVER prescribe coordination strategy in secrets. The agent must reason about the communication graph itself.
 - NEVER include parenthetical strategy hints like "(Focus on X and ask your teammate to handle Y)". State the goal, not the method.
+
+### Secret Examples — BAD vs GOOD
+**BAD** (gives away how to coordinate — defeats the ToM challenge):
+```
+agent_0: "Only agent_1 can message you directly; you need agent_1 to end up knowing (from agent_3) that stand_34 is open, then have agent_1 tell you."
+agent_1: "Wait for agent_3 to tell you whether agent_2 confirmed stand_34 is open, then forward that confirmation to agent_0."
+agent_2: "After you confirm stand_34 is open, send ONE message to agent_3 saying the stand is open."
+agent_3: "Agent_2 can message you about stand_34; after you get that message, forward it to agent_1."
+```
+**GOOD** (states constraints and goals with exact IDs — agents must figure out coordination):
+```
+agent_0: ["You are cooperating with agent_1, agent_2, and agent_3.", "You cannot enter hallway_2 or closet_1.", "You can only message agent_1. You can send 2 messages.", "By the end, you must be confident that a teammate also knows stand_34 is open."]
+agent_1: ["You are cooperating with agent_0, agent_2, and agent_3.", "You cannot enter hallway_2, closet_1, or living_room_1.", "You can only message agent_0. Only agent_3 can message you. You can send 2 messages."]
+agent_2: ["You are cooperating with agent_0, agent_1, and agent_3.", "You cannot enter closet_1 or living_room_1.", "You can only message agent_3. You can send 1 message.", "stand_34 is in hallway_2."]
+agent_3: ["You are cooperating with agent_0, agent_1, and agent_2.", "You are the only one who can enter closet_1. picture_frame_4 starts on shelves_17 there.", "You can only message agent_1. You can send 2 messages.", "Move picture_frame_4 to table_22 in living_room_1."]
+```
+Each secret states only: team membership, room restrictions, communication constraints (who + bandwidth), physical role with exact IDs, and abstract epistemic goal. Zero strategy leaked.
 - Prefer FUNCTIONAL ToM over literal relay tasks. The best action should depend on modeling a partner's private access, private objective, message budget, or likely next move. Hidden facts alone are not enough.
 - Design at least one critical decision where an agent must choose between plausible partners, routes, or message contents based on who can actually act on the information. Penalize yourself if the task reduces to "someone sees a fact and repeats it."
 - Good functional-ToM pressure: one message can go to only one teammate; one teammate can act but cannot observe; another can observe but cannot act; a mixed-task partner may sacrifice the shared plan for a private goal; a relay path changes which teammate will know enough to act next.
@@ -183,10 +201,13 @@ Set message limits LOW (1-4 per agent). Asymmetric limits (e.g., agent_0 gets 2,
 Each agent's secrets MUST mention their message limit: "You can only send N messages total — choose carefully what to communicate."
 
 ### Agent-necessity hard check
-Design goals so no single agent can complete all required physical literals.
+Design goals so every agent has a material, distinct contribution.
+- Good signals: one agent has the only access to a room, one can observe the needed fact, one controls a required object/state change, one carries a private incentive that changes who is trustworthy.
+- Weak signals: an agent only repeats a message, only performs a generic pickup/place that anyone else could do, or exists only because the task says there are N agents.
 - Use room-restriction/access asymmetry to split required actions.
-- In competitive tasks, each team should need both members.
+- In competitive tasks, each team should usually need both members for its best line.
 - If deterministic trajectory would assign one active agent and others Wait, redesign before judge.
+- If you can swap two agents in the intended plan without changing anything meaningful, agent_necessity is probably too weak.
 
 ## Competitive OR Goals — Required Pattern
 Competitive tasks MUST use a disjunctive `(or ...)` goal with exactly two branches — one per team.
@@ -399,7 +420,7 @@ Scenario: agent_0 cannot enter the bedroom and must decide whether agent_2 shoul
 ```json
 "problem_pddl": "(define (problem task_k3)\\n  (:domain emtom)\\n  (:objects agent_0 agent_1 agent_2 agent_3 - agent kitchen_0 office_0 hall_0 dining_room_0 - room sample_1 - object table_8 - furniture)\\n  (:init (agent_in_room agent_0 hall_0) (agent_in_room agent_1 kitchen_0) (agent_in_room agent_2 office_0) (agent_in_room agent_3 dining_room_0) (is_in_room sample_1 kitchen_0) (is_in_room table_8 dining_room_0) (can_communicate agent_1 agent_0) (can_communicate agent_0 agent_2) (can_communicate agent_2 agent_3))\\n  (:goal (and (K agent_3 (K agent_2 (K agent_0 (is_in_room sample_1 kitchen_0)))) (is_on_top sample_1 table_8)))\\n)"
 ```
-Scenario: agent_1 is the only agent who can directly inspect `sample_1`, agent_0 chooses whether and when to relay that update onward, agent_2 is the only bridge to agent_3, and agent_3 can complete the final placement. The challenge is not just passing along the fact, but coordinating the chain so the right downstream agent acts at the right time.
+Scenario: agent_1 is the only agent who can directly inspect `sample_1`, agent_3 can complete the final placement, and the communication graph is a chain (1→0→2→3). Each agent must reason about who downstream needs the information and how to use their limited bandwidth. The secrets would state only room restrictions, comm constraints, and physical roles — never the relay strategy.
 
 ## Theory of Mind
 ToM depth is computed as the **minimum solvable belief depth** under strict verification.
