@@ -581,7 +581,6 @@ Use the repo-owned `taskgen` commands for pipeline actions instead of bespoke to
 - `{task_file}`: current working task JSON
 - `{working_dir}/current_scene.json`: current scene data after `taskgen new_scene`
 - `{working_dir}/sampled_tasks/`: sampled seed-task examples
-- `{working_dir}/sampled_trajectories/`: sampled exploration trajectories
 - `{working_dir}/template.json`: blank task template
 
 ## Required Commands

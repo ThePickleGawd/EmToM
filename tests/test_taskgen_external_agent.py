@@ -1,8 +1,10 @@
+from datetime import datetime
 import json
 from pathlib import Path
 
 from emtom.task_gen.external_agent import ExternalAgentLauncher
 from emtom.task_gen.prompts import build_external_taskgen_prompt
+from emtom.task_gen.runner import _copy_sample_with_aliases, build_workspace_id
 from emtom.task_gen.session import TaskGenSession, default_state
 
 
@@ -108,6 +110,29 @@ def test_build_external_prompt_rewrites_taskgen_commands():
     assert "taskgen finish" in prompt
     assert "judge[]" not in prompt
     assert "submit_task[]" not in prompt
+    assert "sampled_trajectories" not in prompt
+
+
+def test_sampled_task_aliases_preserve_original_text(tmp_path):
+    source = tmp_path / "seed.json"
+    original = {
+        "task": "Keep the original task description.",
+        "agent_secrets": {"agent_0": ["Original secret text."]},
+    }
+    source.write_text(json.dumps(original))
+
+    _copy_sample_with_aliases(source, tmp_path, 1)
+
+    copied = json.loads((tmp_path / "task_1.json").read_text())
+    padded = json.loads((tmp_path / "task_001.json").read_text())
+    assert copied == original
+    assert padded == original
+
+
+def test_build_workspace_id_starts_with_timestamp():
+    workspace_id = build_workspace_id("mini", now=datetime(2026, 3, 20, 16, 30, 45))
+
+    assert workspace_id.startswith("2026-03-20_16-30-45-mini-")
 
 
 def test_taskgen_session_finish_and_fail(tmp_path):

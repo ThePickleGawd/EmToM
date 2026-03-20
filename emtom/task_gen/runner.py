@@ -17,6 +17,7 @@ import random
 import shutil
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -25,7 +26,6 @@ from emtom.mechanics import get_mechanics_for_task_generation
 from emtom.pddl.domain import get_predicates_for_prompt
 from emtom.task_gen.external_agent import ExternalAgentError, ExternalAgentLauncher
 from emtom.task_gen.prompts import build_external_taskgen_prompt
-from emtom.task_gen.seed_sanitizer import sanitize_task_for_seeding
 from emtom.task_gen.seed_selector import (
     SeedSelectionConfig,
     is_task_like_json,
@@ -130,13 +130,14 @@ def _infer_task_tom_level(task_data: dict) -> Optional[int]:
     return None
 
 
+def build_workspace_id(task_gen_agent: str, now: Optional[datetime] = None) -> str:
+    timestamp = (now or datetime.now()).strftime("%Y-%m-%d_%H-%M-%S")
+    return f"{timestamp}-{task_gen_agent}-{uuid.uuid4().hex[:8]}"
+
+
 def _copy_sample_with_aliases(src_path: Path, sampled_tasks_dir: Path, index: int) -> None:
-    with open(src_path) as f:
-        task_data = json.load(f)
-    sanitized = sanitize_task_for_seeding(task_data)
     for filename in (f"task_{index}.json", f"task_{index:03d}.json"):
-        with open(sampled_tasks_dir / filename, "w") as f:
-            json.dump(sanitized, f, indent=2)
+        shutil.copy(src_path, sampled_tasks_dir / filename)
 
 
 def populate_sampled_tasks_dir(
@@ -405,13 +406,12 @@ def main() -> None:
     project_root = Path(__file__).resolve().parent.parent.parent
     workspace_root = project_root / "tmp" / "task_gen"
     workspace_root.mkdir(parents=True, exist_ok=True)
-    instance_id = f"{task_gen_agent}-{uuid.uuid4().hex[:8]}"
+    instance_id = build_workspace_id(task_gen_agent)
     working_dir = workspace_root / instance_id
     working_dir.mkdir(parents=True, exist_ok=True)
 
     sampled_tasks_dir = working_dir / "sampled_tasks"
     sampled_tasks_dir.mkdir(parents=True, exist_ok=True)
-    (working_dir / "sampled_trajectories").mkdir(parents=True, exist_ok=True)
     (working_dir / "agent_trajectories").mkdir(parents=True, exist_ok=True)
     (working_dir / "submitted_tasks").mkdir(parents=True, exist_ok=True)
 
@@ -440,14 +440,6 @@ def main() -> None:
             category=category,
         )
         populate_sampled_tasks_dir(sampled_tasks_dir, selection_config, sample_count=10)
-
-    trajectories_source = Path("outputs/emtom")
-    if trajectories_source.exists():
-        sampled_trajectories_dir = working_dir / "sampled_trajectories"
-        trajectory_files = list(trajectories_source.glob("*-exploration/results/trajectory_*.json"))
-        if trajectory_files:
-            for i, traj_path in enumerate(random.sample(trajectory_files, min(5, len(trajectory_files))), 1):
-                shutil.copy(traj_path, sampled_trajectories_dir / f"trajectory_{i}.json")
 
     _write_template_file(working_dir / "template.json", agents_max)
     _write_taskgen_shim(working_dir)
