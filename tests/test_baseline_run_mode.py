@@ -1,8 +1,14 @@
+import json
+
 from omegaconf import OmegaConf
 
 from emtom.actions.baseline_tools import ReadAgentTrajectoryTool
 from emtom.evolve.benchmark_wrapper import find_calibration_entry
 from emtom.runner.benchmark import BenchmarkRunner, task_to_instruction
+from emtom.task_gen.agent import (
+    TaskGeneratorAgent,
+    _build_mode_comparison,
+)
 
 
 class _Task:
@@ -17,6 +23,7 @@ class _Task:
             "agent_0": ["the key is in the drawer"],
             "agent_1": ["the cabinet is trapped"],
         }
+        self.team_secrets = None
         self.active_mechanics = []
         self.teams = None
 
@@ -90,3 +97,100 @@ def test_find_calibration_entry_defaults_to_standard_run_mode():
 
     assert standard["run_mode"] == "standard"
     assert baseline["run_mode"] == "baseline"
+
+
+def test_build_mode_comparison_requires_baseline_pass():
+    comparison = _build_mode_comparison(
+        "cooperative",
+        {
+            "steps": 10,
+            "turns": 4,
+            "evaluation": {"success": False, "percent_complete": 0.4},
+        },
+        {
+            "steps": 8,
+            "turns": 3,
+            "evaluation": {"success": False, "percent_complete": 0.9},
+        },
+        current_rate=0.5,
+        target_rate=0.2,
+    )
+
+    assert comparison["gate_passed"] is False
+    assert comparison["baseline_passed"] is False
+    assert comparison["standard_requirement"] == "must_fail"
+
+
+def test_build_mode_comparison_requires_standard_fail_when_rate_high():
+    comparison = _build_mode_comparison(
+        "cooperative",
+        {
+            "steps": 10,
+            "turns": 4,
+            "evaluation": {"success": True, "percent_complete": 1.0},
+        },
+        {
+            "steps": 8,
+            "turns": 3,
+            "evaluation": {"success": True, "percent_complete": 1.0},
+        },
+        current_rate=0.5,
+        target_rate=0.2,
+    )
+
+    assert comparison["gate_passed"] is False
+    assert comparison["standard_requirement"] == "must_fail"
+
+
+def test_build_mode_comparison_requires_standard_pass_when_rate_low():
+    comparison = _build_mode_comparison(
+        "cooperative",
+        {
+            "steps": 10,
+            "turns": 4,
+            "evaluation": {"success": False, "percent_complete": 0.4},
+        },
+        {
+            "steps": 8,
+            "turns": 3,
+            "evaluation": {"success": True, "percent_complete": 1.0},
+        },
+        current_rate=0.05,
+        target_rate=0.2,
+    )
+
+    assert comparison["gate_passed"] is False
+    assert comparison["standard_requirement"] == "must_pass"
+
+
+def test_save_calibration_result_writes_standard_and_baseline_entries(tmp_path):
+    task_file = tmp_path / "working_task.json"
+    task_file.write_text("{}")
+
+    agent = TaskGeneratorAgent.__new__(TaskGeneratorAgent)
+    agent.task_file = task_file
+    agent.test_model = "gpt-5.2"
+    agent._last_agent_models = {"agent_0": "gpt-5.2", "agent_1": "gpt-5.2"}
+    agent._log = lambda _msg: None
+
+    task_data = {"category": "cooperative", "calibration": []}
+    results = {
+        "standard": {
+            "steps": 12,
+            "evaluation": {"success": False, "percent_complete": 0.5},
+            "action_history": [{"turn": 1, "agent": "agent_0", "action": "Wait", "result": "ok"}],
+        },
+        "baseline": {
+            "steps": 9,
+            "evaluation": {"success": True, "percent_complete": 1.0},
+            "action_history": [{"turn": 1, "agent": "agent_1", "action": "Wait", "result": "ok"}],
+        },
+    }
+
+    TaskGeneratorAgent._save_calibration_result(agent, task_data, results)
+
+    saved = json.loads(task_file.read_text())
+    entries = saved["calibration"]
+
+    assert len(entries) == 2
+    assert {entry["run_mode"] for entry in entries} == {"standard", "baseline"}

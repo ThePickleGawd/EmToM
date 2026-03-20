@@ -54,7 +54,7 @@ Assigned!
 ## Workflow
 1. `new_scene[N]` → load scene with N agents
 2. **Before first edit**, inspect examples in `{working_dir}/sampled_tasks/` (recent dataset examples + calibration signals)
-3. Edit `{task_file}` — define goals in `problem_pddl` (inline full problem file)
+3. Edit `{task_file}` — write `problem_pddl` FIRST (inline full problem file), lock the formal task structure, then make `task`, `agent_secrets`, `team_secrets`, and mechanics match that spec
 4. `judge[]` → runs strict PDDL verification first, then LLM quality evaluation → fix → repeat until pass
 5. `verify_golden_trajectory[]` → deterministic regeneration + simulator check → fix spec → repeat until pass
 6. `test_task[]` → runs `standard` + `baseline`, records both, and calibrates difficulty from `standard`
@@ -108,6 +108,7 @@ Assigned!
 - `current_scene.json` schema: `objects` is a list of object IDs (strings), not dicts. Use `objects_on_furniture` (object->furniture via reverse map) and `furniture_in_rooms` to resolve locations.
 - Every agent essential; **no assigned roles**
 - `task` is GLOBAL and should stay high-level; it may describe the shared objective vaguely without exact IDs
+- Author `problem_pddl` FIRST. Treat it as the source of truth, then write the story/natural-language fields to match it exactly. Do not invent narrative requirements that are not in the formal spec.
 - Secrets state WHAT (constraints, roles, goals with exact IDs) but NEVER HOW (coordination strategy, relay chains, who to tell what)
 - Secrets MUST include hints about active mechanics that affect an agent's area. If a cabinet has `inverse_state`, at least one agent's secret must mention "the handle is reversed — opening closes it and closing opens it." If `remote_control` links two objects, a secret should hint "operating the cabinet in the office seems to affect something in the kitchen." Without these hints, agents cannot discover mechanics through trial-and-error.
 - Secrets create asymmetry; agents must figure out HOW to communicate to combine clues — that IS the ToM challenge
@@ -438,6 +439,7 @@ Use `judge[]` to see the computed minimal ToM depth from its strict PDDL-verific
 `golden_trajectory` is a derived artifact. Do NOT hand-author it as source-of-truth.
 `verify_golden_trajectory[]` and `submit_task[]` regenerate it deterministically from the task spec.
 You should focus on editing spec fields (`problem_pddl`, mechanics, constraints, secrets).
+Write `problem_pddl` first, then make the narrative fields match the authored formal spec.
 
 The deterministic planner generates **physical actions only** (Navigate, Open, Close, Pick, Place, UseItem).
 It does NOT generate Communicate or other epistemic-only steps. Runtime task success is evaluated
