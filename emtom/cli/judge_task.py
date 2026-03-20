@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from emtom.cli import CLIResult, failure, success
+from emtom.cli.task_metadata import compute_strict_tom_metadata
 
 
 def run(
@@ -31,6 +32,7 @@ def run(
     threshold: float = 0.65,
     difficulty: Optional[str] = None,
     user_query: Optional[str] = None,
+    required_tom_level: Optional[int] = None,
 ) -> CLIResult:
     """
     Evaluate task quality using multi-model council.
@@ -44,6 +46,7 @@ def run(
         threshold: Overall score threshold for passing.
         difficulty: Difficulty level context (easy/medium/hard).
         user_query: Optional user query the task should align with.
+        required_tom_level: Optional strict tom_level the task must satisfy.
 
     Returns:
         CLIResult with data keys: passed, overall_score, threshold,
@@ -67,6 +70,22 @@ def run(
     verify_result = verify_pddl_run(task_file, working_dir=working_dir)
     if not verify_result["success"]:
         return verify_result
+
+    try:
+        strict_tom = compute_strict_tom_metadata(task_data, scene_data=scene_data)
+    except Exception as e:
+        return failure(f"Strict ToM verification failed: {e}")
+
+    strict_tom_level = strict_tom.get("tom_level")
+    if required_tom_level is not None and strict_tom_level != required_tom_level:
+        return failure(
+            f"Strict tom_level is {strict_tom_level} but required tom_level is {required_tom_level}.",
+            data={
+                "required_tom_level": required_tom_level,
+                "computed_tom_level": strict_tom_level,
+                "strict_tom_verification": strict_tom,
+            },
+        )
 
     # Always regenerate golden trajectory from authoritative task spec.
     try:
@@ -134,6 +153,7 @@ def run(
         "threshold": judge.overall_threshold,
         "models": list(verdict.judgments.keys()),
         "pddl_verification": verify_result["data"],
+        "strict_tom_verification": strict_tom,
         "model_results": {
             model: {
                 "passed": j.is_valid,
@@ -240,6 +260,7 @@ if __name__ == "__main__":
     parser.add_argument("--models", default=None, help="Comma-separated council models")
     parser.add_argument("--threshold", type=float, default=0.65, help="Score threshold (default: 0.65)")
     parser.add_argument("--difficulty", default=None, choices=["easy", "medium", "hard"])
+    parser.add_argument("--required-tom-level", type=int, default=None)
     args = parser.parse_args()
 
     model_list = [m.strip() for m in args.models.split(",")] if args.models else None
@@ -251,5 +272,6 @@ if __name__ == "__main__":
         models=model_list,
         threshold=args.threshold,
         difficulty=args.difficulty,
+        required_tom_level=args.required_tom_level,
     )
     print_result(result)

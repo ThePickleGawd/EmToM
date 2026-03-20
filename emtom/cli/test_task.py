@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--test-model", type=str, default=None, help="Override model for LLM agents")
     parser.add_argument("--team-model-map", type=str, default=None,
                         help="Team->model mapping for competitive tasks, e.g. team_0=gpt-5.2,team_1=sonnet")
+    parser.add_argument("--run-mode", default="standard", choices=["standard", "baseline", "full_info"])
     args = parser.parse_args()
 
     # Add project root to path
@@ -121,6 +122,7 @@ def main():
         else:
             output_dir = f"/tmp/emtom_test_{os.getpid()}"
         with open_dict(config):
+            config.benchmark_run_mode = args.run_mode
             if "evaluation" in config:
                 config.evaluation.output_dir = output_dir
             if "paths" in config:
@@ -287,9 +289,11 @@ def main():
             "turns": results.get("turns", 0),
             "done": results.get("done", False),
             "episode_over": results.get("episode_over", False),
+            "run_mode": args.run_mode,
             "summary": (
                 f"Task {'completed' if results.get('done') else 'not completed'} "
-                f"in {results.get('turns', 0)} turns ({results.get('steps', 0)} steps)"
+                f"in {results.get('turns', 0)} turns ({results.get('steps', 0)} steps) "
+                f"[mode={args.run_mode}]"
             ),
             "action_history": action_history,
             "evaluation": evaluation,
@@ -303,6 +307,7 @@ def main():
                 "steps": 0,
                 "turns": 0,
                 "done": False,
+                "run_mode": args.run_mode,
                 "summary": f"Benchmark error: {e}",
             },
         ))

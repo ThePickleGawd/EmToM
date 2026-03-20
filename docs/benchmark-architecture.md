@@ -20,7 +20,7 @@ Task generation should optimize for functional ToM, not just literal ToM:
 2. Generate a task grounded in the current scene and mechanics.
 3. Verify the task statically and with runtime checks.
 4. Judge whether the task genuinely requires ToM reasoning.
-5. Benchmark agents on the final task.
+5. Benchmark agents on the final task in both `standard` and `baseline`, using `standard` for calibration and `baseline` as the full-info solvability check.
 
 ## Campaigns
 
@@ -34,6 +34,13 @@ Task generation should optimize for functional ToM, not just literal ToM:
 - `standard`: task secrets are private and agents only observe normal benchmark channels.
 - `baseline`: all task secrets are shared with all agents, and agents may read other agents' completed Thought+Action trajectories through a runtime benchmark tool.
 - `full_info`: all task secrets are shared with all agents, and agents may read other agents' completed Observation+Thought+Action trajectories through a runtime benchmark tool.
+
+## Task Generation Gates
+
+- `verify_golden_trajectory` remains the canonical deterministic solvability gate. It proves the authored task spec is functionally solvable under the planner/runtime semantics.
+- `test_task` now runs both `standard` and `baseline` in parallel.
+- Dataset difficulty calibration uses the `standard` result only, with a target pass rate of 20%.
+- `baseline` does not replace the planner/golden-trajectory check; it is an additional empirical check that the task becomes solvable when private information is removed.
 
 ## Code Ownership
 

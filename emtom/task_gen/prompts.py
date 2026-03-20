@@ -45,7 +45,7 @@ Assigned!
 - `bash[cmd]` - Run shell commands.
 - `judge[]` - Runs strict PDDL verification first, then evaluates task quality.
 - `verify_golden_trajectory[]` - Deterministically regenerate trajectory from spec and test it in simulator. Run after judge passes.
-- `test_task[]` - Difficulty calibration. Measures LLM agent pass rate (target: ~10%).
+- `test_task[]` - Difficulty calibration. Runs `standard` + `baseline`; target standard-mode pass rate is ~20%.
 - `submit_task[]` - Save task. Requires judge + verify + test_task.
 - `fail[reason]` - **STOPS ALL GENERATION.** Only for simulator bugs or critical errors. Use `new_scene[N]` for task issues.
 
@@ -57,7 +57,7 @@ Assigned!
 3. Edit `{task_file}` — define goals in `problem_pddl` (inline full problem file)
 4. `judge[]` → runs strict PDDL verification first, then LLM quality evaluation → fix → repeat until pass
 5. `verify_golden_trajectory[]` → deterministic regeneration + simulator check → fix spec → repeat until pass
-6. `test_task[]` → measures pass rate and records calibration data
+6. `test_task[]` → runs `standard` + `baseline`, records both, and calibrates difficulty from `standard`
 7. `submit_task[]`
 8. Repeat from step 1 for next task
 
@@ -108,19 +108,21 @@ Assigned!
 - `current_scene.json` schema: `objects` is a list of object IDs (strings), not dicts. Use `objects_on_furniture` (object->furniture via reverse map) and `furniture_in_rooms` to resolve locations.
 - Every agent essential; **no assigned roles**
 - `task` is GLOBAL and should stay high-level; it may describe the shared objective vaguely without exact IDs
-- Secrets must be actionable (room/furniture/key/constraint) and not prescriptive (no step-by-step instructions)
+- Secrets state WHAT (constraints, roles, goals with exact IDs) but NEVER HOW (coordination strategy, relay chains, who to tell what)
 - Secrets MUST include hints about active mechanics that affect an agent's area. If a cabinet has `inverse_state`, at least one agent's secret must mention "the handle is reversed — opening closes it and closing opens it." If `remote_control` links two objects, a secret should hint "operating the cabinet in the office seems to affect something in the kitchen." Without these hints, agents cannot discover mechanics through trial-and-error.
-- Secrets create asymmetry; agents must communicate to combine clues
+- Secrets create asymmetry; agents must figure out HOW to communicate to combine clues — that IS the ToM challenge
 - Use explicit scene IDs for goal-critical objects, furniture, and rooms in `agent_secrets` and `team_secrets`. Natural language can supplement the IDs, but should not replace them for targets that must be acted on precisely.
 - The `task` field should describe the shared objective and desired end-state clearly, but it does NOT need to name exact IDs. The `agent_secrets` MUST carry the exact actionable IDs/states. NEVER use ambiguous words like "adjust", "seal", "configure", "set to the correct state", or "specified configuration" when you mean open or close. Write "leave the cabinet open" or "close the fridge" in the public task, and put the exact `cabinet_27` / `fridge_44` references in secrets.
 - When a scene has multiple furniture of the same type in the same room or nearby rooms, the public task may stay generic, but the secrets must disambiguate with the exact target ID.
 - For competitive tasks: each team's `agent_secrets` MUST explicitly state the target state for that team's goal objects. The global `task` field stays neutral and high-level, but secrets must be actionable and exact.
 - A good ToM pattern is: an agent is blocked from entering a room, but its secret still names the exact object/furniture ID in that room, so the challenge is reasoning and coordination rather than grounding ambiguity.
+- NEVER prescribe coordination strategy in secrets. Bad: "tell agent_1 about X", "forward the message to agent_0", "wait for agent_3 then relay". Good: state room restrictions, communication constraints, physical roles, and abstract epistemic goals. The agent must reason about the communication graph itself.
+- NEVER include parenthetical strategy hints like "(Focus on X and ask your teammate to handle Y)". State the goal, not the method.
 - Prefer FUNCTIONAL ToM over literal relay tasks. The best action should depend on modeling a partner's private access, private objective, message budget, or likely next move. Hidden facts alone are not enough.
 - Design at least one critical decision where an agent must choose between plausible partners, routes, or message contents based on who can actually act on the information. Penalize yourself if the task reduces to "someone sees a fact and repeats it."
 - Good functional-ToM pressure: one message can go to only one teammate; one teammate can act but cannot observe; another can observe but cannot act; a mixed-task partner may sacrifice the shared plan for a private goal; a relay path changes which teammate will know enough to act next.
 - Each agent's secrets MUST include which other agents are on their team (e.g., "You are on a team with agent_1." for cooperative, or "You are on team_0 with agent_1. The opposing team is agent_2." for competitive)
-- Do NOT describe K() goals as runtime success conditions in `task`, `agent_secrets`, or `team_secrets`. Never write phrases like "must know", "knowledge is required", "final knows check", or "epistemic requirement". Instead phrase these as information needs or likely probe topics, e.g. "you may need a confirmation from agent_1" or "be ready to report whether the fridge was opened by the end."
+- Do NOT describe K() goals as runtime success conditions in `task`, `agent_secrets`, or `team_secrets`. Never write phrases like "must know", "knowledge is required", "final knows check", or "epistemic requirement". Instead phrase epistemic goals abstractly, e.g. "by the end, you must be confident that a teammate knows cabinet_26 is open" — never name WHICH teammate or HOW the information should travel.
 - Do NOT use positive `is_inside` goals unless the object is already inside in `:init` and meant to remain there. Prefer `is_on_top` for movable-placement goals.
 - Do NOT use `has_most` or `has_at_least` in `problem_pddl` goals; they are not part of deterministic PDDL solvability checks in this pipeline.
 - `judge[]` automatically runs strict PDDL verification first. Do not call a separate PDDL-verification tool.

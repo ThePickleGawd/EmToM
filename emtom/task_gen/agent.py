@@ -41,6 +41,126 @@ if TYPE_CHECKING:
 # Markers for the diversity section in the system prompt so it can be found and replaced
 _DIVERSITY_START_MARKER = "<!-- DIVERSITY_SECTION_START -->"
 _DIVERSITY_END_MARKER = "<!-- DIVERSITY_SECTION_END -->"
+_CALIBRATION_TOLERANCE = 0.05
+
+
+def _evaluation_passed(category: str, evaluation: Dict[str, Any]) -> bool:
+    """Return whether the benchmark succeeded for the task category."""
+    if category == "competitive":
+        return evaluation.get("winner") is not None
+    if category == "mixed":
+        return evaluation.get("main_goal_success", False)
+    return evaluation.get("success", False)
+
+
+def _evaluation_progress(category: str, evaluation: Dict[str, Any]) -> float:
+    """Return the benchmark progress value to use for gating/reporting."""
+    if category == "mixed":
+        return evaluation.get("main_goal_progress", evaluation.get("percent_complete", 0.0))
+    return evaluation.get("percent_complete", 0.0)
+
+
+def _build_results_block(category: str, evaluation: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert benchmark evaluation into calibration-friendly results."""
+    if category == "competitive":
+        teams: Dict[str, Any] = {}
+        for team_id, prog in evaluation.get("team_progress", {}).items():
+            teams[team_id] = {"progress": prog}
+        for team_id, status in evaluation.get("team_status", {}).items():
+            teams.setdefault(team_id, {})["passed"] = status
+        return {"winner": evaluation.get("winner"), "teams": teams}
+
+    if category == "mixed":
+        agents = {
+            aid: {"subgoal_passed": passed}
+            for aid, passed in evaluation.get("agent_subgoal_status", {}).items()
+        }
+        return {
+            "main_goal": {
+                "passed": evaluation.get("main_goal_success", False),
+                "progress": _evaluation_progress(category, evaluation),
+            },
+            "agents": agents,
+        }
+
+    return {
+        "passed": evaluation.get("success", False),
+        "progress": _evaluation_progress(category, evaluation),
+    }
+
+
+def _standard_requirement(
+    current_rate: Optional[float],
+    target_rate: float,
+    tolerance: float = _CALIBRATION_TOLERANCE,
+) -> str:
+    """Return how the next standard run should calibrate the dataset."""
+    if current_rate is None:
+        return "either"
+    if current_rate > target_rate + tolerance:
+        return "must_fail"
+    if current_rate < target_rate - tolerance:
+        return "must_pass"
+    return "either"
+
+
+def _build_mode_comparison(
+    category: str,
+    standard: Dict[str, Any],
+    baseline: Dict[str, Any],
+    current_rate: Optional[float],
+    target_rate: float,
+    tolerance: float = _CALIBRATION_TOLERANCE,
+) -> Dict[str, Any]:
+    """Summarize the dual benchmark run and acceptance gates."""
+    std_eval = standard.get("evaluation", {})
+    base_eval = baseline.get("evaluation", {})
+    standard_passed = _evaluation_passed(category, std_eval)
+    baseline_passed = _evaluation_passed(category, base_eval)
+    standard_progress = _evaluation_progress(category, std_eval)
+    baseline_progress = _evaluation_progress(category, base_eval)
+    requirement = _standard_requirement(current_rate, target_rate, tolerance=tolerance)
+
+    gate_passed = baseline_passed
+    reasons: List[str] = []
+    if not baseline_passed:
+        gate_passed = False
+        reasons.append(
+            "Baseline/full-info run must pass so the task is empirically solvable when information asymmetry is removed."
+        )
+    if requirement == "must_fail" and standard_passed:
+        gate_passed = False
+        reasons.append(
+            f"Standard run must fail because current pass rate ({current_rate:.1%}) is above the {target_rate:.0%} target."
+        )
+    elif requirement == "must_pass" and not standard_passed:
+        gate_passed = False
+        reasons.append(
+            f"Standard run must pass because current pass rate ({current_rate:.1%}) is below the {target_rate:.0%} target."
+        )
+
+    if not reasons:
+        reasons.append("Baseline passed and the standard result matches the current calibration target.")
+
+    return {
+        "gate_passed": gate_passed,
+        "functional_tom_signal": baseline_passed,
+        "standard_requirement": requirement,
+        "current_standard_pass_rate": current_rate,
+        "target_standard_pass_rate": target_rate,
+        "standard_passed": standard_passed,
+        "baseline_passed": baseline_passed,
+        "standard_progress": standard_progress,
+        "baseline_progress": baseline_progress,
+        "progress_delta": baseline_progress - standard_progress,
+        "standard_turns": standard.get("turns", 0),
+        "baseline_turns": baseline.get("turns", 0),
+        "turn_delta": standard.get("turns", 0) - baseline.get("turns", 0),
+        "standard_steps": standard.get("steps", 0),
+        "baseline_steps": baseline.get("steps", 0),
+        "step_delta": standard.get("steps", 0) - baseline.get("steps", 0),
+        "reasons": reasons,
+    }
 
 
 class TaskGeneratorAgent:
@@ -404,20 +524,38 @@ Your previous task did not pass the ToM verification. You MUST address these iss
                 "medium": (
                     "## Difficulty: MEDIUM\n"
                     "Generate moderately complex tasks:\n"
-                    "- 1-2 mechanics with hints in secrets\n"
-                    "- STRONGLY prefer including limited_bandwidth (2-3 messages per agent)\n"
-                    "- 2-4 agents, meaningful coordination required\n"
-                    "- 3-4 subtasks with some dependencies\n"
-                    "- tom_level 1-2\n"
+                    "- 3-4 agents with distinct physical roles\n"
+                    "- Use restricted_communication to create directed messaging (not all-to-all)\n"
+                    "- Use room_restriction so agents have limited access to rooms\n"
+                    "- limited_bandwidth: 2 messages per agent\n"
+                    "- 3-5 subtasks, at least one K() epistemic goal\n"
+                    "- Do NOT tell agents exactly what to communicate in secrets\n"
+                    "- tom_level 2-3 (required K-level is set separately)\n"
                 ),
                 "hard": (
-                    "## Difficulty: HARD\n"
-                    "Generate challenging tasks for top-tier models:\n"
-                    "- 2+ mechanics, complex interactions\n"
-                    "- MUST include limited_bandwidth with tight limits (1-2 messages per agent)\n"
-                    "- 3-4+ agents with deep interdependencies\n"
-                    "- 4+ subtasks with chained dependencies\n"
-                    "- tom_level 2-3, multi-step reasoning required\n"
+                    "## Difficulty: HARD — Target: GPT-5.2 FAILS this task\n"
+                    "Generate tasks that top-tier models CANNOT solve. "
+                    "test_task[] will REJECT any task GPT-5.2 can solve.\n\n"
+                    "### Required properties:\n"
+                    "- 3-4 agents, each with a UNIQUE physical role + information\n"
+                    "- Use restricted_communication to force RELAY chains (A→B→C, not A→C)\n"
+                    "- Use room_restriction to make each agent physically necessary\n"
+                    "- limited_bandwidth: 2 messages per agent for K=2, 3 for K=3\n"
+                    "- 3-5 subtasks mixing physical goals with K() epistemic goals\n"
+                    "- Keep mechanics to limited_bandwidth + restricted_communication + room_restriction\n\n"
+                    "### How to create K=2/3 tasks that GPT-5.2 CANNOT solve:\n"
+                    "- K=2 pattern: Agent A observes fact X. A can only message B (restricted_communication).\n"
+                    "  B must relay X to C. C must act on relayed info. Goal: (K C (K B X)).\n"
+                    "- K=3 pattern: Add a 4th hop — A→B→C→D relay chain.\n"
+                    "- restricted_communication creates the relay chain (agents can't skip hops)\n"
+                    "- room_restriction makes agents physically necessary (they can't go everywhere)\n"
+                    "- Secrets should say WHAT each agent needs to know, NOT how to communicate it\n"
+                    "- Do NOT prescribe the relay chain in secrets — agents must figure it out\n\n"
+                    "### Anti-patterns (these break tasks or make them easy):\n"
+                    "- 1 message per agent with K≥2 goals (UNSOLVABLE — not enough bandwidth)\n"
+                    "- Secrets that say 'tell agent_X: ...' or 'relay to agent_X'\n"
+                    "- Physical goals solvable by 1-2 agents (agent_necessity fails)\n"
+                    "- More than 3 mechanics (causes unsolvable PDDL)\n"
                 ),
             }
             calibration_section = difficulty_guidance.get(self.difficulty, "")
@@ -1443,41 +1581,27 @@ SUMMARY:"""
                 validation_result["summary"] = f"Task structure valid. Benchmark skipped: {results['error']}"
                 return json.dumps(validation_result, indent=2)
 
-            # Log detailed action history
-            action_history = results.get("action_history", [])
-            if action_history:
-                self._log("\n=== Agent Action History ===")
-                for entry in action_history:
-                    self._log(f"  Turn {entry.get('turn', '?')}: {entry.get('agent', '?')} -> {entry.get('action', '?')}")
-
-            # Save planner traces to separate file for reference
-            planner_traces = results.get("planner_traces", {})
-            if planner_traces:
-                trace_file = self.log_dir / f"planner_traces_{datetime.now().strftime('%H%M%S')}.txt"
-                with open(trace_file, 'w') as f:
-                    for agent_id, trace in planner_traces.items():
-                        f.write(f"\n{'='*60}\n")
-                        f.write(f"=== {agent_id} Trace ===\n")
-                        f.write(f"{'='*60}\n\n")
-                        f.write(trace)
-                        f.write("\n")
-                self._log(f"Planner traces saved to: {trace_file}")
-                # Don't include full traces in the JSON response (too large)
-                results["planner_traces"] = f"See {trace_file}"
-
             # Save calibration results to task JSON for dataset tracking (needs action_history)
             self._save_calibration_result(task_data, results)
 
-            # Remove action_history from results before merging (too large for agent context)
-            results.pop("action_history", None)
+            for run_mode in ("standard", "baseline"):
+                run_result = results.get(run_mode, {})
+                action_history = run_result.get("action_history", [])
+                if action_history:
+                    self._log(f"\n=== {run_mode.upper()} Action History ===")
+                    for entry in action_history:
+                        self._log(
+                            f"  Turn {entry.get('turn', '?')}: "
+                            f"{entry.get('agent', '?')} -> {entry.get('action', '?')}"
+                        )
+                run_result.pop("action_history", None)
 
             # Benchmark ran successfully - merge results with validation
             validation_result.update(results)
-
-            # Require non-zero benchmark progress before allowing submission.
-            evaluation = results.get("evaluation", {})
-            progress = evaluation.get("percent_complete", 0.0)
-            self.last_test_passed = progress > 0
+            comparison = results.get("comparison", {})
+            self.last_test_passed = comparison.get("gate_passed", False)
+            validation_result["gate"] = "PASSED" if self.last_test_passed else "REJECTED"
+            validation_result["gate_reason"] = " ".join(comparison.get("reasons", []))
 
             return json.dumps(validation_result, indent=2)
         except Exception as e:
@@ -1551,66 +1675,38 @@ SUMMARY:"""
             num_agents = task_data.get("num_agents", 2)
             agent_models = {f"agent_{i}": model_name for i in range(num_agents)}
 
-        # Build trajectory from action history
-        action_history = results.get("action_history", [])
-        trajectory = self._build_trajectory(action_history)
-
-        # Build structured results block per category
-        evaluation = results.get("evaluation", {})
         category = task_data.get("category", "")
-
-        if category == "competitive":
-            teams: Dict[str, Any] = {}
-            for team_id, prog in evaluation.get("team_progress", {}).items():
-                teams[team_id] = {"progress": prog}
-            for team_id, status in evaluation.get("team_status", {}).items():
-                teams.setdefault(team_id, {})["passed"] = status
-            results_block = {"winner": evaluation.get("winner"), "teams": teams}
-
-        elif category == "mixed":
-            agents = {
-                aid: {"subgoal_passed": passed}
-                for aid, passed in evaluation.get("agent_subgoal_status", {}).items()
-            }
-            results_block = {
-                "main_goal": {
-                    "passed": evaluation.get("main_goal_success", False),
-                    "progress": evaluation.get("main_goal_progress",
-                                               evaluation.get("percent_complete", 0.0)),
-                },
-                "agents": agents,
-            }
-
-        else:
-            # Cooperative / default
-            results_block = {
-                "passed": evaluation.get("success", False),
-                "progress": evaluation.get("percent_complete", 0.0),
-            }
-
-        calibration_entry = {
-            "tested_at": datetime.now().isoformat(),
-            "run_mode": "standard",
-            "agent_models": agent_models,
-            "steps": results.get("steps", 0),
-            "results": results_block,
-            "trajectory": trajectory,
-        }
 
         # Migrate legacy dict format and write as array
         raw_cal = task_data.get("calibration", [])
         calibration = _migrate_legacy_calibration(raw_cal)
+        tested_at = datetime.now().isoformat()
 
-        # Deduplicate: replace existing entry with same agent_models, else append
-        replaced = False
-        for i, existing in enumerate(calibration):
-            existing_run_mode = str(existing.get("run_mode", "standard") or "standard")
-            if existing.get("agent_models") == agent_models and existing_run_mode == "standard":
-                calibration[i] = calibration_entry
-                replaced = True
-                break
-        if not replaced:
-            calibration.append(calibration_entry)
+        for run_mode in ("standard", "baseline"):
+            run_result = results.get(run_mode)
+            if not isinstance(run_result, dict):
+                continue
+
+            action_history = run_result.get("action_history", [])
+            trajectory = self._build_trajectory(action_history)
+            calibration_entry = {
+                "tested_at": tested_at,
+                "run_mode": run_mode,
+                "agent_models": agent_models,
+                "steps": run_result.get("steps", 0),
+                "results": _build_results_block(category, run_result.get("evaluation", {})),
+                "trajectory": trajectory,
+            }
+
+            replaced = False
+            for i, existing in enumerate(calibration):
+                existing_run_mode = str(existing.get("run_mode", "standard") or "standard")
+                if existing.get("agent_models") == agent_models and existing_run_mode == run_mode:
+                    calibration[i] = calibration_entry
+                    replaced = True
+                    break
+            if not replaced:
+                calibration.append(calibration_entry)
 
         task_data["calibration"] = calibration
 
@@ -1618,7 +1714,7 @@ SUMMARY:"""
         try:
             with open(self.task_file, 'w') as f:
                 json.dump(task_data, f, indent=2)
-            self._log(f"[Calibration] Saved result: {calibration_entry['results']}, agents={agent_models}")
+            self._log(f"[Calibration] Saved standard+baseline results, agents={agent_models}")
         except Exception as e:
             self._log(f"[Calibration] Warning: Failed to save calibration result: {e}")
 
@@ -1636,8 +1732,9 @@ SUMMARY:"""
         return static_validate_trajectory(task_data, golden, self.scene_data)
 
     def _run_benchmark(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Run benchmark test in a subprocess (fresh GL context)."""
+        """Run standard and baseline benchmarks in parallel subprocesses."""
         import tempfile
+        from concurrent.futures import ThreadPoolExecutor
 
         current_task_num = len(self.submitted_tasks) + 1
         self._test_run_count += 1
@@ -1649,7 +1746,87 @@ SUMMARY:"""
                 json.dump(task_data, f)
                 temp_task_file = f.name
         except Exception as e:
-            return {"steps": 0, "done": False, "error": f"Failed to write temp task file: {e}"}
+            return {"error": f"Failed to write temp task file: {e}"}
+
+        self._last_agent_models = self._determine_agent_models(task_data)
+
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {
+                    run_mode: executor.submit(
+                        self._run_benchmark_mode,
+                        task_data,
+                        temp_task_file,
+                        run_mode,
+                        run_dir / run_mode,
+                    )
+                    for run_mode in ("standard", "baseline")
+                }
+                mode_results = {
+                    run_mode: future.result()
+                    for run_mode, future in futures.items()
+                }
+        finally:
+            self._cleanup_temp_files(temp_task_file)
+
+        mode_errors = {
+            run_mode: result["error"]
+            for run_mode, result in mode_results.items()
+            if result.get("error")
+        }
+        if mode_errors:
+            return {
+                "error": "; ".join(f"{mode}: {err}" for mode, err in sorted(mode_errors.items())),
+                "mode_errors": mode_errors,
+                "trajectory_dir": str(run_dir),
+            }
+
+        category = task_data.get("category", "")
+        comparison = _build_mode_comparison(
+            category,
+            mode_results["standard"],
+            mode_results["baseline"],
+            current_rate=self.calibration_stats.get("rate"),
+            target_rate=self.calibration_stats.get("target_rate", 0.20),
+        )
+        merged = {
+            "standard": mode_results["standard"],
+            "baseline": mode_results["baseline"],
+            "comparison": comparison,
+            "trajectory_dir": str(run_dir),
+        }
+        self._write_benchmark_comparison(run_dir, merged)
+        return merged
+
+    def _determine_agent_models(self, task_data: Dict[str, Any]) -> Dict[str, str]:
+        """Resolve the model assignment used by the benchmark runs."""
+        num_agents = task_data.get("num_agents", 2)
+        if task_data.get("category") == "competitive":
+            base_model = self.test_model or "gpt-5.2"
+            opponent = "sonnet" if base_model != "sonnet" else "gpt-5.2"
+            team_assignment = task_data.get("team_assignment", {})
+            agent_models: Dict[str, str] = {}
+            team_models = {"team_0": base_model, "team_1": opponent}
+            for team_id, agents in team_assignment.items():
+                model = team_models.get(team_id, base_model)
+                for agent_id in agents:
+                    agent_models[agent_id] = model
+            if agent_models:
+                return agent_models
+            return {f"agent_{i}": base_model for i in range(num_agents)}
+
+        model_name = self.test_model or "gpt-5.2"
+        return {f"agent_{i}": model_name for i in range(num_agents)}
+
+    def _run_benchmark_mode(
+        self,
+        task_data: Dict[str, Any],
+        temp_task_file: str,
+        run_mode: str,
+        run_dir: Path,
+    ) -> Dict[str, Any]:
+        """Run one benchmark mode in a subprocess (fresh GL context)."""
+        run_dir.mkdir(parents=True, exist_ok=True)
 
         num_agents = task_data.get("num_agents", 2)
         cmd = [
@@ -1658,77 +1835,84 @@ SUMMARY:"""
             "--working-dir", str(self.working_dir),
             "--trajectory-dir", str(run_dir),
             "--config-name", f"examples/emtom_{num_agents}_robots",
+            "--run-mode", run_mode,
         ]
         if self.test_model:
             cmd.extend(["--test-model", self.test_model])
 
-        # For competitive tasks, build cross-model matchup from test_model
         if task_data.get("category") == "competitive":
             base_model = self.test_model or "gpt-5.2"
             opponent = "sonnet" if base_model != "sonnet" else "gpt-5.2"
             team_model_map_str = f"team_0={base_model},team_1={opponent}"
             cmd.extend(["--team-model-map", team_model_map_str])
 
-            # Store per-agent model mapping for _save_calibration_result
-            team_assignment = task_data.get("team_assignment", {})
-            agent_models = {}
-            team_models = {"team_0": base_model, "team_1": opponent}
-            for team_id, agents in team_assignment.items():
-                model = team_models.get(team_id, base_model)
-                for agent_id in agents:
-                    agent_models[agent_id] = model
-            if not agent_models:
-                # Fallback if no team_assignment
-                for i in range(num_agents):
-                    agent_models[f"agent_{i}"] = base_model
-            self._last_agent_models = agent_models
-        else:
-            # Non-competitive: all agents use the same model
-            model_name = self.test_model or "gpt-5.2"
-            self._last_agent_models = {
-                f"agent_{i}": model_name for i in range(num_agents)
-            }
-
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=1200,
             )
-            self._cleanup_temp_files(temp_task_file)
-
-            try:
-                stdout = proc.stdout
-                json_start = stdout.find("{")
-                if json_start >= 0:
-                    stdout = stdout[json_start:]
-                result_data = json.loads(stdout)
-            except (json.JSONDecodeError, ValueError):
-                return {"steps": 0, "done": False, "error": f"Failed to parse output: {proc.stderr[:500]}"}
-
-            if result_data.get("success"):
-                result = result_data["data"]
-            else:
-                result = {"steps": 0, "done": False, "error": result_data.get("error", "Unknown error")}
-
-            result["trajectory_dir"] = str(run_dir)
-
-            # Read result.txt if available
-            result_txt_path = run_dir / "result.txt"
-            if result_txt_path.exists():
-                try:
-                    with open(result_txt_path) as f:
-                        result["result_txt"] = f.read()
-                except Exception:
-                    pass
-
-            result.pop("planner_traces", None)
+            result = self._parse_benchmark_subprocess(proc, run_dir)
+            result["run_mode"] = run_mode
             return result
 
         except subprocess.TimeoutExpired:
-            self._cleanup_temp_files(temp_task_file)
-            return {"steps": 0, "done": False, "error": "Test timed out", "trajectory_dir": str(run_dir)}
+            return {"steps": 0, "done": False, "error": "Test timed out", "trajectory_dir": str(run_dir), "run_mode": run_mode}
         except Exception as e:
-            self._cleanup_temp_files(temp_task_file)
-            return {"steps": 0, "done": False, "error": f"Subprocess error: {e}", "trajectory_dir": str(run_dir)}
+            return {"steps": 0, "done": False, "error": f"Subprocess error: {e}", "trajectory_dir": str(run_dir), "run_mode": run_mode}
+
+    def _parse_benchmark_subprocess(self, proc: subprocess.CompletedProcess[str], run_dir: Path) -> Dict[str, Any]:
+        """Parse the JSON payload emitted by emtom.cli.test_task."""
+        try:
+            stdout = proc.stdout
+            json_start = stdout.find("{")
+            if json_start >= 0:
+                stdout = stdout[json_start:]
+            result_data = json.loads(stdout)
+        except (json.JSONDecodeError, ValueError):
+            return {"steps": 0, "done": False, "error": f"Failed to parse output: {proc.stderr[:500]}", "trajectory_dir": str(run_dir)}
+
+        if result_data.get("success"):
+            result = result_data["data"]
+        else:
+            result = {"steps": 0, "done": False, "error": result_data.get("error", "Unknown error")}
+
+        result["trajectory_dir"] = str(run_dir)
+        result_txt_path = run_dir / "result.txt"
+        if result_txt_path.exists():
+            try:
+                with open(result_txt_path) as f:
+                    result["result_txt"] = f.read()
+            except Exception:
+                pass
+        result.pop("planner_traces", None)
+        return result
+
+    def _write_benchmark_comparison(self, run_dir: Path, results: Dict[str, Any]) -> None:
+        """Persist a compact dual-run comparison artifact for judge/debug use."""
+        comparison_file = run_dir / "comparison.json"
+        payload = {
+            "standard": {
+                "run_mode": "standard",
+                "steps": results["standard"].get("steps", 0),
+                "turns": results["standard"].get("turns", 0),
+                "evaluation": results["standard"].get("evaluation", {}),
+                "trajectory_dir": results["standard"].get("trajectory_dir"),
+            },
+            "baseline": {
+                "run_mode": "baseline",
+                "steps": results["baseline"].get("steps", 0),
+                "turns": results["baseline"].get("turns", 0),
+                "evaluation": results["baseline"].get("evaluation", {}),
+                "trajectory_dir": results["baseline"].get("trajectory_dir"),
+            },
+            "comparison": results.get("comparison", {}),
+            "agent_models": getattr(self, "_last_agent_models", {}),
+        }
+        try:
+            with open(comparison_file, "w") as f:
+                json.dump(payload, f, indent=2)
+            self._log(f"[Calibration] Comparison saved to: {comparison_file}")
+        except Exception as e:
+            self._log(f"[Calibration] Warning: Failed to save comparison file: {e}")
     def _regenerate_golden_trajectory(
         self,
         task_data: Dict[str, Any],
@@ -1874,6 +2058,7 @@ SUMMARY:"""
             trajectory_dir=traj_dir,
             threshold=self.judge.overall_threshold,
             difficulty=self.difficulty if self.difficulty else None,
+            required_tom_level=self._current_k_level,
         )
 
         if not result["success"]:

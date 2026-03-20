@@ -237,12 +237,12 @@ CRITERIA_DESCRIPTIONS = {
     },
     "secret_quality": {
         "name": "Secret Quality",
-        "description": "Are secrets actionable, explicit, and non-leaking? They must be required to solve the task.",
-        "rubric": """0.0: Secrets are vague, misleading, or useless
-0.3: Secrets hide the exact target state/object, are too prescriptive, or leak irrelevant info
-0.5: Mostly workable but still broad, redundant, or weakly necessary
-0.7: Actionable and explicit, with clear target IDs/states and minor redundancy
-1.0: Each secret is essential, explicit about the exact target IDs/states, and reveals only the information needed""",
+        "description": "Secrets must state constraints and goals with exact IDs, but NEVER prescribe communication strategy, relay chains, or coordination method. Agents must figure out HOW to coordinate themselves — that IS the ToM challenge.",
+        "rubric": """0.0: Secrets prescribe the full relay chain or tell agents exactly what to communicate and to whom
+0.3: Secrets hint at the coordination strategy (e.g., parenthetical suggestions, 'forward to agent_X', 'wait for agent_Y to tell you')
+0.5: Secrets state goals and constraints but include some strategy leakage (e.g., 'you may need a relay', 'coordinate with agent_X about Y')
+0.7: Secrets state only constraints (room/comm restrictions), physical roles (object IDs, locations), and end-state goals. No strategy hints remain.
+1.0: Secrets are minimal and precise — only constraints, roles with exact IDs, and abstract epistemic goals. Zero communication strategy leaked.""",
     },
     "task_naturalness": {
         "name": "Public/Secret Grounding Split",
@@ -456,6 +456,10 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 Use this derived runtime view when judging split-semantics quality.
 {runtime_semantics_section}
 
+## Benchmark Comparison
+Use this when calibration data exists.
+{benchmark_comparison_section}
+
 ## Evaluation Criteria
 Score each criterion from 0.0 to 1.0.
 {criteria_section}
@@ -506,7 +510,7 @@ DIFFICULTY_DESCRIPTIONS = {
 This task is designed for WEAKER models. Calibrate your evaluation accordingly:
 - **Agent necessity**: 2-3 agents with clear, distinct roles is sufficient. Simple role division (e.g., one agent fetches, another places) counts as high agent necessity.
 - **Task interdependence / goal opposition / subgoal tension**: Simple dependencies are fine. One clear handoff or information exchange between agents is enough.
-- **Secret quality**: Secrets should be straightforward and actionable. Crucially, secrets MUST include hints about active mechanics (e.g., "the cabinet handle is reversed — opening closes it" for inverse_state, "operating the office cabinet seems to affect the kitchen fridge" for remote_control). Without mechanic hints, agents cannot discover mechanics through trial-and-error. Score HIGH when mechanic hints are present.
+- **Secret quality**: Secrets should state constraints, roles, and goals with exact IDs. Mechanic hints (e.g., "the handle is reversed" for inverse_state) are required. But secrets must NEVER prescribe coordination strategy — no "tell agent_1 about X", "forward to agent_0", or parenthetical suggestions. Score LOW if secrets tell agents HOW to coordinate.
 - **Mechanic utilization**: Using 0-1 mechanics is sufficient. Prefer simple, observable mechanics. Avoid stacking multiple mechanics.
 - **Overall**: A well-structured simple task with clear agent roles, mechanic hints in secrets, and basic ToM should score HIGH. Do NOT penalize simplicity.""",
     "medium": """## Intended Difficulty: MEDIUM
@@ -515,13 +519,13 @@ This task targets mid-tier models. Standard evaluation applies:
 - Secrets should require reasoning to use effectively.
 - Tasks should use mechanics appropriately (typically 2-4).
 - Moderate complexity in coordination is expected.""",
-    "hard": """## Intended Difficulty: HARD
-This task is designed for the STRONGEST models. Expect high complexity:
-- **Agent necessity**: Each agent should be truly indispensable with unique capabilities or knowledge.
-- **Task interdependence / goal opposition / subgoal tension**: Complex multi-step dependencies, cascading information needs, or deep strategic considerations.
-- **Secret quality**: Secrets should create genuine reasoning challenges — layered information, indirect clues, or strategic deception opportunities.
-- **Mechanic utilization**: Use as many mechanics as the task genuinely needs. Complexity should come from deeper interactions between mechanics. Penalize redundant or purposeless mechanics.
-- **Overall**: Reward tasks that would genuinely challenge top-tier AI models through depth, not breadth of mechanics.""",
+    "hard": """## Intended Difficulty: HARD — Must defeat GPT-5.2
+This task must be difficult enough that GPT-5.2 CANNOT solve it. Apply strict standards:
+- **Agent necessity**: Each agent MUST hold unique information. Score LOW if any agent is removable.
+- **Task interdependence / goal opposition / subgoal tension**: Require information relay chains. Score LOW unless at least one goal depends on relayed (not directly observed) information.
+- **Secret quality**: Secrets must state only constraints (room/comm restrictions), physical roles (exact object IDs), and abstract epistemic goals. NEVER prescribe relay chains, communication strategy, or what to tell other agents. Score 0 if any secret says "tell agent_X", "forward to agent_X", or includes parenthetical strategy hints.
+- **Mechanic utilization**: limited_bandwidth MUST be present with 1 message per agent. 1-2 mechanics total is fine — complexity should come from ToM reasoning, not mechanic stacking. Score LOW if bandwidth > 1 per agent.
+- **Overall**: The task should require genuine Theory of Mind reasoning. Reward tasks where agents must infer what others know. Do NOT require complex mechanics — difficulty from information asymmetry is preferred.""",
 }
 
 
@@ -591,6 +595,59 @@ def _build_runtime_semantics_section(task_dict: Dict[str, Any]) -> str:
     else:
         lines.append("Literal-ToM probes: none derived")
 
+    return "\n".join(lines)
+
+
+def _build_benchmark_comparison_section(task_dict: Dict[str, Any]) -> str:
+    """Summarize the latest standard vs baseline calibration pair when present."""
+    from emtom.evolve.benchmark_wrapper import _migrate_legacy_calibration
+
+    calibration = _migrate_legacy_calibration(task_dict.get("calibration", []))
+    if not calibration:
+        return "Benchmark comparison: none recorded yet."
+
+    latest_standard = None
+    for entry in calibration:
+        run_mode = str(entry.get("run_mode", "standard") or "standard")
+        if run_mode == "standard":
+            latest_standard = entry
+    if latest_standard is None:
+        return "Benchmark comparison: no standard calibration recorded yet."
+
+    latest_baseline = None
+    target_models = latest_standard.get("agent_models", {})
+    for entry in calibration:
+        run_mode = str(entry.get("run_mode", "standard") or "standard")
+        if run_mode == "baseline" and entry.get("agent_models") == target_models:
+            latest_baseline = entry
+    if latest_baseline is None:
+        return "Benchmark comparison: standard recorded, but no matching baseline calibration yet."
+
+    def _results_summary(entry: Dict[str, Any]) -> str:
+        results = entry.get("results", {})
+        if "main_goal" in results:
+            return (
+                f"passed={results['main_goal'].get('passed', False)}, "
+                f"progress={results['main_goal'].get('progress', 0.0):.0%}"
+            )
+        if "winner" in results:
+            teams = results.get("teams", {})
+            max_progress = max((team.get("progress", 0.0) for team in teams.values()), default=0.0)
+            return f"winner={results.get('winner')}, progress={max_progress:.0%}"
+        return (
+            f"passed={results.get('passed', False)}, "
+            f"progress={results.get('progress', 0.0):.0%}"
+        )
+
+    lines = [
+        "Latest benchmark comparison:",
+        f"- Standard: {_results_summary(latest_standard)}",
+        f"- Baseline: {_results_summary(latest_baseline)}",
+        (
+            "Interpretation: stronger functional-ToM evidence comes from tasks where the "
+            "baseline/full-info run succeeds and the standard run is materially weaker."
+        ),
+    ]
     return "\n".join(lines)
 
 
@@ -948,6 +1005,7 @@ The user specifically requested:
             difficulty_section=difficulty_section,
             user_requirements_section=user_requirements_section,
             runtime_semantics_section=_build_runtime_semantics_section(task_dict),
+            benchmark_comparison_section=_build_benchmark_comparison_section(task_dict),
             criteria_section=_build_criteria_section(category, self.user_query),
             response_format=_build_response_format(category, self.user_query),
             task_json=task_json,

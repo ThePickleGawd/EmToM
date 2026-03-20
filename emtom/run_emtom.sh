@@ -191,6 +191,7 @@ print_usage() {
     echo "  new-scene      Load a new Habitat scene (requires GPU)"
     echo "  submit-task    Submit a validated task to output directory"
     echo "  migrate-room-restrictions  Canonicalize room restrictions into mechanic_bindings"
+    echo "  migrate-canonical-mechanics  Canonicalize mechanic init facts and keep only strict survivors"
     echo "  migrate-literal-tom  Migrate tasks to physical-success + literal-ToM-probe semantics"
     echo "  salvage-literal-tom  Backup, migrate, verify, judge, and keep only salvaged tasks"
     echo "  evolve         Run evolutionary difficulty generation (model ladder)"
@@ -1030,6 +1031,9 @@ run_test_task() {
     if [ -n "$TEST_MODEL" ]; then
         TEST_ARGS+=(--test-model "$TEST_MODEL")
     fi
+    if [ -n "$RUN_MODE" ]; then
+        TEST_ARGS+=(--run-mode "$RUN_MODE")
+    fi
     python -m emtom.cli.test_task "${TEST_ARGS[@]}"
 }
 
@@ -1053,6 +1057,14 @@ run_submit_task() {
 run_migrate_room_restrictions() {
     MIGRATE_ARGS=(--tasks-dir "${TASKS_DIR:-data/emtom/tasks}")
     python -m emtom.scripts.migrate_room_restrictions "${MIGRATE_ARGS[@]}"
+}
+
+run_migrate_canonical_mechanics() {
+    MIGRATE_ARGS=(--tasks-dir "${TASKS_DIR:-data/emtom/tasks}")
+    if [ -n "$MAX_WORKERS" ]; then
+        MIGRATE_ARGS+=(--max-workers "$MAX_WORKERS")
+    fi
+    python -m emtom.scripts.migrate_canonical_mechanics "${MIGRATE_ARGS[@]}"
 }
 
 run_migrate_literal_tom() {
@@ -1095,7 +1107,7 @@ while [[ $# -gt 0 ]]; do
             python -m emtom.scripts.campaign "$@"
             exit $?
             ;;
-        explore|generate|benchmark|test|judge|verify|verify-static|verify-pddl|validate-task|test-task|new-scene|submit-task|migrate-room-restrictions|migrate-literal-tom|salvage-literal-tom|all)
+        explore|generate|benchmark|test|judge|verify|verify-static|verify-pddl|validate-task|test-task|new-scene|submit-task|migrate-room-restrictions|migrate-canonical-mechanics|migrate-literal-tom|salvage-literal-tom|all)
             COMMAND=$1
             shift
             ;;
@@ -1441,6 +1453,9 @@ case $COMMAND in
         ;;
     migrate-room-restrictions)
         run_migrate_room_restrictions
+        ;;
+    migrate-canonical-mechanics)
+        run_migrate_canonical_mechanics
         ;;
     migrate-literal-tom)
         run_migrate_literal_tom

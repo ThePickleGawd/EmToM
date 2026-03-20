@@ -251,7 +251,7 @@ def main(config: DictConfig) -> None:
     query = extra_args.query if extra_args else None
     retry_verification = extra_args.retry_verification if extra_args else None
     calibration_model = extra_args.calibration_model if extra_args else "gpt-5.2"
-    target_pass_rate = extra_args.target_pass_rate if extra_args else 0.10
+    target_pass_rate = extra_args.target_pass_rate if extra_args else 0.20
     category = extra_args.category if extra_args else None
     seed_task = extra_args.seed_task if extra_args else None
     random_seed_task = extra_args.random_seed_task if extra_args else False
