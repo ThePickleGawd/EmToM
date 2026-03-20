@@ -148,6 +148,17 @@ Each secret states only: team membership, room restrictions, communication const
 - Avoid `python3 -c "..."` commands that include literal `\\n` escapes.
 - For multi-line JSON edits, prefer heredocs (e.g., `python3 - <<'PY' ... PY`) or `apply_patch`.
 
+## CRITICAL: Physical Goals Must Require Communication
+**The #1 failure mode in task generation is creating physical goals that agents can solve in parallel without talking.** If every agent already knows which object to move and where to put it, communication is unnecessary and the task is trivially easy — regardless of K-level, bandwidth limits, or mechanics.
+
+**At least one physical goal MUST be information-dependent:** an agent cannot determine WHAT to do or WHERE to do it without receiving information from another agent. Patterns that create this:
+- Agent A must place object_X on one of two tables, but only Agent B knows which table (because B can see a clue in a room A can't enter)
+- Agent A must open or close cabinet_Y, but the correct state depends on what Agent B discovered
+- Agent A's action is GATED by a mechanic (conditional_unlock, remote_control) that only Agent B can trigger
+- The task goal references an object's current location, which only one agent can observe
+
+**Self-test before submitting**: Remove all Communicate actions from the golden trajectory. Can agents still achieve 100% of physical goals just by executing their independent actions? If yes, the task does NOT test functional ToM — redesign it.
+
 ## Functional ToM Patterns
 Use at least one of these as the core difficulty driver. Do not reduce them to simple fact relay.
 
@@ -165,12 +176,17 @@ Use at least one of these as the core difficulty driver. Do not reduce them to s
    - The best relay depends on who will understand the message, still have bandwidth left, and be able to act on it next.
    - Bad version: any relay path is equally good.
 
-4. **Mixed-motive cooperation**
+4. **Information-gated action**
+   - Agent A's correct action depends on a fact only Agent B can observe. Without B's message, A must guess.
+   - Use room_restriction to prevent A from observing directly + restricted_communication to limit who can inform A.
+   - Bad version: A already knows everything needed from their own secrets.
+
+5. **Mixed-motive cooperation**
    - In mixed tasks, private objectives should change how useful or reliable a teammate is.
    - The best shared-task policy should depend on anticipating who may delay, hoard a resource, or divert effort toward a private goal.
    - Bad version: private goals exist but teammates can ignore them completely.
 
-5. **Competitive blocking**
+6. **Competitive blocking**
    - In competitive tasks, best play should depend on inferring which branch the opponent is likely to pursue.
    - Use contested resources, asymmetric access, and communication limits so blocking the wrong branch has a real cost.
    - Bad version: both sides just race independently with no need to model the opponent.

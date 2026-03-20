@@ -293,10 +293,10 @@ CRITERIA_DESCRIPTIONS = {
     # Cooperative-specific
     "task_interdependence": {
         "name": "Task Interdependence",
-        "description": "Do agents genuinely NEED each other to succeed, and does the best plan depend on modeling what specific teammates can or will do?",
-        "rubric": """0.0: One agent can complete the entire task alone
-0.3: Agents help but aren't required, or interdependence is just a hidden-fact relay
-0.5: Some interdependence but key steps can be done solo or without modeling which teammate is best positioned
+        "description": "Do agents genuinely NEED information from each other to complete physical goals? At least one physical goal must be information-dependent: an agent cannot determine WHAT to do or WHERE to act without receiving a message from another agent. If all physical goals can be completed in parallel without any communication, score 0.",
+        "rubric": """0.0: All physical goals are independently solvable — agents can complete everything in parallel without communicating
+0.3: Agents help but aren't required, or interdependence is just a hidden-fact relay with no impact on physical goal completion
+0.5: Some interdependence but key physical steps can be done solo or without modeling which teammate is best positioned
 0.7: Strong interdependence with partner-specific dependencies, though some steps are still generic handoffs
 1.0: Impossible for any single agent to succeed, and rational success depends on choosing actions based on what specific teammates know, can access, or are likely to prioritize""",
     },
