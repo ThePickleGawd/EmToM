@@ -30,6 +30,21 @@ class InformAction:
     sender: str         # agent who sends the information
 
 
+@dataclass(frozen=True)
+class RuntimeOp:
+    """One translated runtime action before parallel turn packing."""
+    agent: str
+    action: str
+    resources: Tuple[Tuple[str, str], ...] = ()
+
+
+@dataclass
+class RuntimeState:
+    """Minimal runtime state used to recover conservative action dependencies."""
+    object_supports: Dict[str, str]
+    held_by: Dict[str, str]
+
+
 # Regex for FD inform action names:
 #   inform_knows_{receiver}_{hash}_from_{sender}[_tokN]
 _INFORM_RE = re.compile(
@@ -488,29 +503,104 @@ def find_handoff_furniture(
     return None
 
 
-def wrap_parallel_step(num_agents: int, acting_agent: str, action: str) -> Dict[str, Any]:
-    """Create one parallel step with one active agent and Wait for others."""
+def build_parallel_step(
+    num_agents: int,
+    actions_by_agent: Dict[str, str],
+) -> Dict[str, Any]:
+    """Create one parallel step, filling missing agents with Wait."""
     actions = []
     for i in range(max(1, num_agents)):
         agent_id = f"agent_{i}"
         actions.append({
             "agent": agent_id,
-            "action": action if agent_id == acting_agent else "Wait[]",
+            "action": actions_by_agent.get(agent_id, "Wait[]"),
         })
     return {"actions": actions}
 
 
-def append_runtime_step(
-    trajectory: List[Dict[str, Any]],
-    num_agents: int,
+def wrap_parallel_step(num_agents: int, acting_agent: str, action: str) -> Dict[str, Any]:
+    """Create one parallel step with one active agent and Wait for others."""
+    return build_parallel_step(num_agents, {acting_agent: action})
+
+
+def _dedupe_resources(resources: List[Tuple[str, str]]) -> Tuple[Tuple[str, str], ...]:
+    """Preserve resource order while removing duplicates."""
+    seen = set()
+    deduped: List[Tuple[str, str]] = []
+    for resource in resources:
+        if resource in seen:
+            continue
+        seen.add(resource)
+        deduped.append(resource)
+    return tuple(deduped)
+
+
+def append_runtime_ops(
+    runtime_ops: List[RuntimeOp],
     acting_agent: str,
     action: str,
+    resources: Optional[List[Tuple[str, str]]] = None,
     navigate_target: Optional[str] = None,
 ) -> None:
-    """Append a runtime step, optionally inserting target-level navigation first."""
+    """Append translated runtime ops, optionally inserting target navigation first."""
     if navigate_target:
-        trajectory.append(wrap_parallel_step(num_agents, acting_agent, f"Navigate[{navigate_target}]"))
-    trajectory.append(wrap_parallel_step(num_agents, acting_agent, action))
+        runtime_ops.append(RuntimeOp(agent=acting_agent, action=f"Navigate[{navigate_target}]"))
+    runtime_ops.append(
+        RuntimeOp(
+            agent=acting_agent,
+            action=action,
+            resources=_dedupe_resources(resources or []),
+        )
+    )
+
+
+def extract_runtime_state(problem: Any) -> RuntimeState:
+    """Extract the minimal mutable state needed for dependency-aware translation."""
+    from emtom.pddl.dsl import Literal
+
+    object_supports: Dict[str, str] = {}
+    held_by: Dict[str, str] = {}
+
+    for literal in problem.init:
+        if not isinstance(literal, Literal) or literal.negated:
+            continue
+        if literal.predicate in ("is_on_top", "is_inside") and len(literal.args) == 2:
+            object_supports[literal.args[0]] = literal.args[1]
+            held_by.pop(literal.args[0], None)
+        elif literal.predicate == "is_held_by" and len(literal.args) == 2:
+            held_by[literal.args[0]] = literal.args[1]
+            object_supports.pop(literal.args[0], None)
+
+    return RuntimeState(object_supports=object_supports, held_by=held_by)
+
+
+def schedule_runtime_ops(num_agents: int, runtime_ops: List[RuntimeOp]) -> List[Dict[str, Any]]:
+    """Pack independent runtime ops into earliest valid parallel turns."""
+    if not runtime_ops:
+        return [wrap_parallel_step(num_agents, "agent_0", "Wait[]")]
+
+    step_actions: List[Dict[str, str]] = []
+    last_step_by_agent: Dict[str, int] = {}
+    last_step_by_resource: Dict[Tuple[str, str], int] = {}
+
+    for op in runtime_ops:
+        target_step = last_step_by_agent.get(op.agent, -1) + 1
+        for resource in op.resources:
+            target_step = max(target_step, last_step_by_resource.get(resource, -1) + 1)
+
+        while True:
+            if target_step == len(step_actions):
+                step_actions.append({})
+            if op.agent not in step_actions[target_step]:
+                break
+            target_step += 1
+
+        step_actions[target_step][op.agent] = op.action
+        last_step_by_agent[op.agent] = target_step
+        for resource in op.resources:
+            last_step_by_resource[resource] = target_step
+
+    return [build_parallel_step(num_agents, actions) for actions in step_actions]
 
 
 def extract_plannable_literals(goal_formula: Any) -> List[Any]:
@@ -651,7 +741,8 @@ def generate_deterministic_trajectory(
     relation_by_pair = _collect_goal_relation_preferences(problem.goal)
     object_types = dict(problem.objects)
     plan = solver_result.plan or []
-    trajectory: List[Dict[str, Any]] = []
+    runtime_ops: List[RuntimeOp] = []
+    runtime_state = extract_runtime_state(problem)
     ignored_epistemic_steps = 0
 
     def require_type(name: str, expected: str, step: str) -> None:
@@ -684,11 +775,11 @@ def generate_deterministic_trajectory(
             require_type(args[0], "agent", step)
             require_type(args[1], "furniture", step)
             require_type(args[2], "room", step)
-            append_runtime_step(
-                trajectory,
-                num_agents,
+            append_runtime_ops(
+                runtime_ops,
                 args[0],
                 f"Open[{args[1]}]",
+                resources=[("furniture", args[1])],
                 navigate_target=args[1],
             )
             continue
@@ -696,30 +787,36 @@ def generate_deterministic_trajectory(
             require_type(args[0], "agent", step)
             require_type(args[1], "furniture", step)
             require_type(args[2], "room", step)
-            append_runtime_step(
-                trajectory,
-                num_agents,
+            append_runtime_ops(
+                runtime_ops,
                 args[0],
                 f"Close[{args[1]}]",
+                resources=[("furniture", args[1])],
                 navigate_target=args[1],
             )
             continue
         if step_name == "navigate" and len(args) == 2:
             require_type(args[0], "agent", step)
             require_type(args[1], "room", step)
-            trajectory.append(wrap_parallel_step(num_agents, args[0], f"Navigate[{args[1]}]"))
+            runtime_ops.append(RuntimeOp(agent=args[0], action=f"Navigate[{args[1]}]"))
             continue
         if step_name == "pick" and len(args) == 3:
             require_type(args[0], "agent", step)
             require_movable_object(args[1], step)
             require_type(args[2], "room", step)
-            append_runtime_step(
-                trajectory,
-                num_agents,
+            source_support = runtime_state.object_supports.get(args[1])
+            resources = [("object", args[1])]
+            if source_support:
+                resources.append(("furniture", source_support))
+            append_runtime_ops(
+                runtime_ops,
                 args[0],
                 f"Pick[{args[1]}]",
+                resources=resources,
                 navigate_target=args[1],
             )
+            runtime_state.object_supports.pop(args[1], None)
+            runtime_state.held_by[args[1]] = args[0]
             continue
         if step_name == "place" and len(args) == 4:
             require_type(args[0], "agent", step)
@@ -728,38 +825,39 @@ def generate_deterministic_trajectory(
             require_type(args[3], "room", step)
             relation = relation_by_pair.get((args[1], args[2]), "on")
             action = f"Place[{args[1]}, {relation}, {args[2]}, None, None]"
-            append_runtime_step(
-                trajectory,
-                num_agents,
+            append_runtime_ops(
+                runtime_ops,
                 args[0],
                 action,
+                resources=[("object", args[1]), ("furniture", args[2])],
                 navigate_target=args[2],
             )
+            runtime_state.held_by.pop(args[1], None)
+            runtime_state.object_supports[args[1]] = args[2]
             continue
         if step_name == "use_item" and len(args) == 4:
             require_type(args[0], "agent", step)
             require_type(args[1], "item", step)
             require_type(args[2], "furniture", step)
             require_type(args[3], "room", step)
-            append_runtime_step(
-                trajectory,
-                num_agents,
+            append_runtime_ops(
+                runtime_ops,
                 args[0],
                 f"UseItem[{args[1]}, {args[2]}]",
+                resources=[("item", args[1]), ("furniture", args[2])],
                 navigate_target=args[2],
             )
             continue
         if step_name == "wait" and len(args) == 1:
             require_type(args[0], "agent", step)
-            trajectory.append(wrap_parallel_step(num_agents, args[0], "Wait[]"))
+            runtime_ops.append(RuntimeOp(agent=args[0], action="Wait[]"))
             continue
 
         raise RuntimeError(
             f"Unsupported planner step '{step}'. Cannot translate to golden trajectory."
         )
 
-    if not trajectory:
-        trajectory = [wrap_parallel_step(num_agents, "agent_0", "Wait[]")]
+    trajectory = schedule_runtime_ops(num_agents, runtime_ops)
 
     planned_literals = sorted({
         node.to_pddl()
@@ -833,7 +931,7 @@ def regenerate_golden_trajectory(
 
     metadata.update({
         "planner": "strict_fd_translator",
-        "planner_version": "v6_functional_runtime",
+        "planner_version": "v7_parallel_runtime",
         "source": source,
         "spec_hash": spec_hash,
         "trajectory_hash": trajectory_hash,
