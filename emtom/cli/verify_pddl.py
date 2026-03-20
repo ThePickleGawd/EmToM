@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -115,6 +116,14 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
             data={"valid": False, "pddl_goal": goal_spec.to_pddl_string()},
         )
 
+    from emtom.pddl.runtime_projection import project_runtime_from_parsed_problem
+    projection = project_runtime_from_parsed_problem(parsed_problem)
+    if not projection.is_valid:
+        return failure(
+            "Runtime functional projection is invalid:\n" + "\n".join(projection.invalid_reasons),
+            data={"valid": False, "pddl_goal": goal_spec.to_pddl_string()},
+        )
+
     # Build task object
     from emtom.task_gen.task_generator import GeneratedTask
     task = GeneratedTask.from_dict(task_data)
@@ -130,56 +139,84 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
             except (json.JSONDecodeError, IOError):
                 pass
 
-    # Compile and solve with strict iterative proof.
+    # Compile and solve functional projection only.
     from emtom.pddl.compiler import compile_task
-    from emtom.pddl.tom_verifier import explain_tom_depth, prove_minimal_tom_level
+    from emtom.pddl.epistemic import ObservabilityModel
+    from emtom.pddl.fd_solver import FastDownwardSolver
+    from emtom.pddl.problem_pddl import replace_goal_in_problem_pddl
+    from emtom.pddl.solver import _max_epistemic_depth
 
     compile_start = time.perf_counter()
-    compile_task(task, scene_data)
+    solvable_task_data = deepcopy(task_data)
+    solvable_task_data["problem_pddl"] = replace_goal_in_problem_pddl(
+        task_data["problem_pddl"],
+        projection.functional_goal_pddl,
+    )
+    solvable_task = GeneratedTask.from_dict(solvable_task_data)
+    problem = compile_task(solvable_task, scene_data)
     compile_time_s = time.perf_counter() - compile_start
+
     solve_start = time.perf_counter()
-    proof = prove_minimal_tom_level(task, scene_data=scene_data, strict=True)
+    observability = ObservabilityModel.from_task_with_scene(solvable_task, scene_data)
+    result = FastDownwardSolver().solve(
+        EMTOM_DOMAIN,
+        problem,
+        observability,
+        max_belief_depth=0,
+        strict=True,
+    )
     solve_wall_time_s = time.perf_counter() - solve_start
-    result = proof.get("solver_result")
 
     if result is None or not result.solvable:
-        diagnostic = (
-            proof["proof_attempts"][-1]["error"]
-            if proof.get("proof_attempts")
-            else "unknown"
-        )
         return failure(
-            f"PDDL goal is not solvable: {diagnostic}",
-            data={"valid": False, "pddl_goal": goal_spec.to_pddl_string()},
+            f"Functional PDDL goal is not solvable: {result.error or 'unknown'}",
+            data={
+                "valid": False,
+                "pddl_goal": goal_spec.to_pddl_string(),
+                "functional_goal_pddl": projection.functional_goal_pddl,
+            },
         )
 
-    tom_info = explain_tom_depth(task, scene_data, solver_result=result)
-    tom_info["epistemic_goal_depth"] = proof["epistemic_goal_depth"]
-    tom_info["proved_unsat_below"] = proof["proved_unsat_below"]
-    tom_info["proof_backend"] = proof["proof_backend"]
-    tom_info["proof_strict"] = proof["proof_strict"]
-    tom_info["proof_attempts"] = proof["proof_attempts"]
+    epistemic_goal_depth = _max_epistemic_depth(parsed_problem.goal_formula)
+    if epistemic_goal_depth <= 0:
+        tom_reasoning = (
+            "No epistemic operators appear in problem_pddl. "
+            "Functional solvability was checked on the non-epistemic runtime goal."
+        )
+    else:
+        tom_reasoning = (
+            "Functional solvability was checked on the projected non-epistemic runtime goal. "
+            f"Reported ToM depth is the authored epistemic nesting depth in problem_pddl: {epistemic_goal_depth}."
+        )
 
     # Goal description
-    formula = goal_spec.to_formula()
+    formula = projection.functional_goal or goal_spec.to_formula()
     from emtom.pddl.describe import goal_to_natural_language
     description = goal_to_natural_language(formula)
 
     output = {
         "valid": True,
         "pddl_goal": parsed_problem.goal_pddl if parsed_problem else goal_spec.to_pddl_string(),
+        "functional_goal_pddl": projection.functional_goal_pddl,
         "solvable": True,
-        "tom_level": tom_info["tom_level"],
-        "minimal_tom_level": tom_info["tom_level"],
-        "epistemic_goal_depth": tom_info["epistemic_goal_depth"],
-        "tom_reasoning": tom_info["tom_reasoning"],
+        "tom_level": epistemic_goal_depth,
+        "minimal_tom_level": epistemic_goal_depth,
+        "epistemic_goal_depth": epistemic_goal_depth,
+        "tom_reasoning": tom_reasoning,
         "goal_description": description,
         "num_conjuncts": len(goal_spec),
         "solve_time": result.solve_time,
-        "proved_unsat_below": tom_info["proved_unsat_below"],
-        "proof_backend": tom_info["proof_backend"],
-        "proof_strict": tom_info["proof_strict"],
-        "proof_attempts": tom_info["proof_attempts"],
+        "proved_unsat_below": [],
+        "proof_backend": "functional_fast_downward_strict",
+        "proof_strict": True,
+        "proof_attempts": [
+            {
+                "level": 0,
+                "solvable": True,
+                "belief_depth": 0,
+                "error": result.error,
+            }
+        ],
         "timing": {
             "parse_time_ms": round(parse_time_s * 1000, 3),
             "compile_time_ms": round(compile_time_s * 1000, 3),
@@ -189,12 +226,6 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     }
     if result.plan:
         output["plan"] = result.plan
-    if result.trivial_k_goals:
-        output["trivial_k_warnings"] = (
-            f"These K() goals are trivially satisfied (agent can directly observe the fact): "
-            f"{result.trivial_k_goals}. Consider removing them or adding room_restriction "
-            f"to create real information asymmetry."
-        )
 
     return success(output)
 

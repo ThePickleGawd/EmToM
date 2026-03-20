@@ -218,9 +218,13 @@ class GameStateManager:
         elif mech_type == "conditional_unlock":
             if trigger:
                 prereq = binding.get("prerequisite_object")
+                requires_item = binding.get("requires_item")
                 if prereq:
                     state.object_properties.setdefault(trigger, {})["prerequisite"] = prereq
                     state.object_properties.setdefault(prereq, {})["unlocks"] = trigger
+                if requires_item:
+                    state.object_properties.setdefault(trigger, {})["requires_item"] = requires_item
+                    state.object_properties.setdefault(trigger, {})["is_locked"] = True
 
         elif mech_type == "room_restriction":
             restricted_rooms = binding.get("restricted_rooms", [])

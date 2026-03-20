@@ -124,7 +124,7 @@ class TestDomainFixes:
     def test_open_has_forall_mirrors(self):
         open_action = next(a for a in EMTOM_DOMAIN.actions if a.name == "open")
         forall_effects = [e for e in open_action.effects if isinstance(e, ForallEffect)]
-        mirror_foralls = [e for e in forall_effects if "mirrors" in e.condition.to_pddl()]
+        mirror_foralls = [e for e in forall_effects if e.condition.to_pddl() == "(mirrors ?f ?g)"]
         assert len(mirror_foralls) == 1
 
     def test_open_inverse_negates(self):

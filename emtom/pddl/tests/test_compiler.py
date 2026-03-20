@@ -374,6 +374,71 @@ class TestCompiler:
         init_preds = {l.predicate for l in problem.init}
         assert "is_inverse" in init_preds
 
+    def test_mechanics_compile_from_bindings(self):
+        from unittest.mock import MagicMock
+
+        task = MagicMock()
+        task.task_id = "test_mechanics"
+        task.num_agents = 2
+        task.items = [{"item_id": "item_small_key_1", "inside": "drawer_1"}]
+        task.initial_states = {}
+        task.locked_containers = {}
+        task.message_targets = None
+        task.mechanic_bindings = [
+            {"mechanic_type": "inverse_state", "trigger_object": "cabinet_27"},
+            {
+                "mechanic_type": "remote_control",
+                "trigger_object": "switch_1",
+                "target_object": "cabinet_28",
+                "target_state": "is_closed",
+            },
+            {
+                "mechanic_type": "state_mirroring",
+                "trigger_object": "drawer_1",
+                "target_object": "drawer_2",
+                "target_state": "is_closed",
+            },
+            {
+                "mechanic_type": "conditional_unlock",
+                "trigger_object": "cabinet_29",
+                "requires_item": "item_small_key_1",
+            },
+            {"mechanic_type": "irreversible_action"},
+        ]
+        task.problem_pddl = (
+            "(define (problem test_mechanics)\n"
+            "  (:domain emtom)\n"
+            "  (:objects\n"
+            "    agent_0 agent_1 - agent\n"
+            "    kitchen_1 - room\n"
+            "    cabinet_27 cabinet_28 cabinet_29 switch_1 drawer_1 drawer_2 - furniture\n"
+            "  )\n"
+            "  (:init\n"
+            "    (agent_in_room agent_0 kitchen_1)\n"
+            "    (agent_in_room agent_1 kitchen_1)\n"
+            "    (is_in_room cabinet_27 kitchen_1)\n"
+            "    (is_in_room cabinet_28 kitchen_1)\n"
+            "    (is_in_room cabinet_29 kitchen_1)\n"
+            "    (is_in_room switch_1 kitchen_1)\n"
+            "    (is_in_room drawer_1 kitchen_1)\n"
+            "    (is_in_room drawer_2 kitchen_1)\n"
+            "  )\n"
+            "  (:goal (is_open cabinet_27))\n"
+            ")"
+        )
+
+        problem = compile_task(task)
+        init_facts = {(lit.predicate, lit.args) for lit in problem.init}
+
+        assert ("is_inverse", ("cabinet_27",)) in init_facts
+        assert ("controls_closed", ("switch_1", "cabinet_28")) in init_facts
+        assert ("mirrors_closed", ("drawer_1", "drawer_2")) in init_facts
+        assert ("is_locked", ("cabinet_29",)) in init_facts
+        assert ("requires_item", ("cabinet_29", "item_small_key_1")) in init_facts
+        assert ("item_in_container", ("item_small_key_1", "drawer_1")) in init_facts
+        assert ("irreversible_enabled", ("cabinet_27",)) in init_facts
+        assert problem.objects["item_small_key_1"] == "item"
+
     def test_no_goal(self):
         task = self._make_task(pddl_goal=None)
         with pytest.raises(ValueError, match="problem_pddl"):
@@ -607,8 +672,9 @@ class TestEpistemicGoalChecker:
         }
         checker = PDDLGoalChecker.from_task_data(task_data)
         assert checker is not None
-        assert len(checker.conjuncts) == 2
-        assert isinstance(checker.conjuncts[0], Knows)
+        assert len(checker.conjuncts) == 1
+        assert isinstance(checker.conjuncts[0], Literal)
+        assert checker.conjuncts[0].predicate == "is_open"
 
 
 # ---------------------------------------------------------------------------

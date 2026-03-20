@@ -14,6 +14,7 @@ from emtom.pddl.dsl import (
     ForallEffect,
     Literal,
     And,
+    Formula,
     Not,
     Domain,
 )
@@ -28,7 +29,7 @@ EMTOM_TYPES = [
     Type("object"),
     Type("furniture", parent="object"),
     Type("room"),
-    Type("item"),
+    Type("item", parent="object"),
 ]
 
 
@@ -54,6 +55,7 @@ EMTOM_PREDICATES = [
     Predicate("is_powered_on", (Param("x", "object"),)),
     Predicate("is_powered_off", (Param("x", "object"),)),
     Predicate("is_unlocked", (Param("f", "furniture"),)),
+    Predicate("is_locked", (Param("f", "furniture"),)),
 
     # Agent predicates
     Predicate("is_held_by", (Param("x", "object"), Param("a", "agent"))),
@@ -63,14 +65,22 @@ EMTOM_PREDICATES = [
     Predicate("has_item", (Param("a", "agent"), Param("i", "item"))),
     Predicate("has_at_least", (Param("a", "agent"), Param("i", "item"))),
     Predicate("has_most", (Param("a", "agent"), Param("i", "item"))),
+    Predicate("item_in_container", (Param("i", "item"), Param("f", "furniture"))),
 
     # Mechanic predicates
     Predicate("is_inverse", (Param("f", "furniture"),)),
     Predicate("mirrors", (Param("f1", "furniture"), Param("f2", "furniture"))),
+    Predicate("mirrors_closed", (Param("f1", "furniture"), Param("f2", "furniture"))),
     Predicate("controls", (Param("f1", "furniture"), Param("f2", "furniture"))),
+    Predicate("controls_unlocked", (Param("f1", "furniture"), Param("f2", "furniture"))),
+    Predicate("controls_closed", (Param("f1", "furniture"), Param("f2", "furniture"))),
+    Predicate("controls_locks", (Param("f1", "furniture"), Param("f2", "furniture"))),
     Predicate("is_restricted", (Param("a", "agent"), Param("r", "room"))),
     Predicate("is_locked_permanent", (Param("f", "furniture"),)),
     Predicate("requires_item", (Param("f", "furniture"), Param("i", "item"))),
+    Predicate("unlocks", (Param("x", "object"), Param("f", "furniture"))),
+    Predicate("irreversible_enabled", (Param("x", "object"),)),
+    Predicate("interaction_locked", (Param("x", "object"),)),
     Predicate("can_communicate", (Param("from", "agent"), Param("to", "agent"))),
 ]
 
@@ -96,26 +106,80 @@ _PREDICATE_DESCRIPTIONS = {
     "is_powered_on": "object is powered on",
     "is_powered_off": "object is powered off",
     "is_unlocked": "furniture is unlocked",
+    "is_locked": "furniture is locked",
     "is_held_by": "object is held by agent",
     "agent_in_room": "agent is in room",
     "has_item": "agent has item in inventory",
     "has_at_least": "agent has at least N of item",
     "has_most": "agent has the most of item among all agents",
+    "item_in_container": "(planner) item is hidden inside furniture until opened",
     "is_inverse": "(mechanic) furniture has inverted open/close",
     "mirrors": "(mechanic) furniture1 state mirrors furniture2",
+    "mirrors_closed": "(mechanic) furniture1 open/close toggles furniture2 closed/open state",
     "controls": "(mechanic) furniture1 remotely controls furniture2",
+    "controls_unlocked": "(mechanic) furniture1 remotely controls furniture2 unlocked/locked state",
+    "controls_closed": "(mechanic) furniture1 remotely controls furniture2 closed/open state",
+    "controls_locks": "(mechanic) furniture1 remotely controls furniture2 locked/unlocked state",
     "is_restricted": "(mechanic) agent cannot enter room",
     "is_locked_permanent": "(mechanic) furniture is locked until key used",
     "requires_item": "(mechanic) furniture requires item to unlock",
+    "unlocks": "(mechanic) interacting with furniture1 unlocks furniture2",
+    "irreversible_enabled": "(mechanic) object becomes interaction-locked after one use",
+    "interaction_locked": "(mechanic) object can no longer be targeted by interactions",
     "can_communicate": "(mechanic) agent can send messages to another agent",
 }
 
 _PREDICATE_GROUPS = [
     ("Spatial / Relational", ["is_on_top", "is_inside", "is_in_room", "is_on_floor", "is_next_to"]),
-    ("Unary State", ["is_open", "is_closed", "is_clean", "is_dirty", "is_filled", "is_empty", "is_powered_on", "is_powered_off", "is_unlocked"]),
-    ("Agent", ["is_held_by", "agent_in_room", "has_item", "has_at_least", "has_most"]),
-    ("Mechanic (init-only, do NOT use in pddl_goal)", ["is_inverse", "mirrors", "controls", "is_restricted", "is_locked_permanent", "requires_item", "can_communicate"]),
+    ("Unary State", ["is_open", "is_closed", "is_clean", "is_dirty", "is_filled", "is_empty", "is_powered_on", "is_powered_off", "is_unlocked", "is_locked"]),
+    ("Agent", ["is_held_by", "agent_in_room", "has_item", "has_at_least", "has_most", "item_in_container"]),
+    ("Mechanic (init-only, do NOT use in pddl_goal)", ["is_inverse", "mirrors", "mirrors_closed", "controls", "controls_unlocked", "controls_closed", "controls_locks", "is_restricted", "is_locked_permanent", "requires_item", "unlocks", "irreversible_enabled", "interaction_locked", "can_communicate"]),
 ]
+
+INIT_ONLY_PREDICATES = {
+    "is_inverse",
+    "mirrors",
+    "mirrors_closed",
+    "controls",
+    "controls_unlocked",
+    "controls_closed",
+    "controls_locks",
+    "is_restricted",
+    "is_locked_permanent",
+    "requires_item",
+    "unlocks",
+    "irreversible_enabled",
+    "interaction_locked",
+    "can_communicate",
+    "item_in_container",
+}
+
+
+def validate_goal_formula_allowed(formula: Formula) -> list[str]:
+    """Reject init-only mechanic predicates anywhere in goal space."""
+    from emtom.pddl.dsl import And, Believes, Knows, Literal, Not, Or
+
+    errors: list[str] = []
+
+    def _walk(node: Formula) -> None:
+        if isinstance(node, Literal):
+            if node.predicate in INIT_ONLY_PREDICATES:
+                errors.append(
+                    f"Predicate '{node.predicate}' is init-only and cannot appear in pddl_goal: {node.to_pddl()}"
+                )
+            return
+        if isinstance(node, (Knows, Believes)):
+            _walk(node.inner)
+            return
+        if isinstance(node, Not) and node.operand is not None:
+            _walk(node.operand)
+            return
+        if isinstance(node, (And, Or)):
+            for operand in node.operands:
+                _walk(operand)
+
+    _walk(formula)
+    return errors
 
 
 def get_predicates_for_prompt() -> str:
@@ -152,7 +216,9 @@ EMTOM_ACTIONS = [
             Literal("agent_in_room", ("?a", "?r")),
             Literal("is_in_room", ("?f", "?r")),
             Literal("is_closed", ("?f",)),
+            Not(operand=Literal("is_locked", ("?f",))),
             Not(operand=Literal("is_locked_permanent", ("?f",))),
+            Not(operand=Literal("interaction_locked", ("?f",))),
         )),
         effects=[
             Effect(Literal("is_open", ("?f",))),
@@ -171,12 +237,54 @@ EMTOM_ACTIONS = [
                 variable=Param("g", "furniture"),
                 condition=Literal("mirrors", ("?f", "?g")),
                 effect=Literal("is_open", ("?g",)),
+                negative_effect=Literal("is_closed", ("?g",)),
+            ),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("mirrors_closed", ("?f", "?g")),
+                effect=Literal("is_closed", ("?g",)),
+                negative_effect=Literal("is_open", ("?g",)),
             ),
             # Conditional: remote control triggers unlock (forall quantified)
             ForallEffect(
                 variable=Param("g", "furniture"),
                 condition=Literal("controls", ("?f", "?g")),
+                effect=Literal("is_open", ("?g",)),
+                negative_effect=Literal("is_closed", ("?g",)),
+            ),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("controls_unlocked", ("?f", "?g")),
                 effect=Literal("is_unlocked", ("?g",)),
+                negative_effect=Literal("is_locked", ("?g",)),
+            ),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("controls_closed", ("?f", "?g")),
+                effect=Literal("is_closed", ("?g",)),
+                negative_effect=Literal("is_open", ("?g",)),
+            ),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("controls_locks", ("?f", "?g")),
+                effect=Literal("is_locked", ("?g",)),
+                negative_effect=Literal("is_unlocked", ("?g",)),
+            ),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("unlocks", ("?f", "?g")),
+                effect=Literal("is_unlocked", ("?g",)),
+                negative_effect=Literal("is_locked", ("?g",)),
+            ),
+            ForallEffect(
+                variable=Param("i", "item"),
+                condition=Literal("item_in_container", ("?i", "?f")),
+                effect=Literal("has_item", ("?a", "?i")),
+                negative_effect=Literal("item_in_container", ("?i", "?f")),
+            ),
+            Effect(
+                Literal("interaction_locked", ("?f",)),
+                condition=Literal("irreversible_enabled", ("?f",)),
             ),
         ],
         observability="full",
@@ -190,6 +298,7 @@ EMTOM_ACTIONS = [
             Literal("agent_in_room", ("?a", "?r")),
             Literal("is_in_room", ("?f", "?r")),
             Literal("is_open", ("?f",)),
+            Not(operand=Literal("interaction_locked", ("?f",))),
         )),
         effects=[
             Effect(Literal("is_closed", ("?f",))),
@@ -208,6 +317,47 @@ EMTOM_ACTIONS = [
                 variable=Param("g", "furniture"),
                 condition=Literal("mirrors", ("?f", "?g")),
                 effect=Literal("is_closed", ("?g",)),
+                negative_effect=Literal("is_open", ("?g",)),
+            ),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("mirrors_closed", ("?f", "?g")),
+                effect=Literal("is_open", ("?g",)),
+                negative_effect=Literal("is_closed", ("?g",)),
+            ),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("controls", ("?f", "?g")),
+                effect=Literal("is_closed", ("?g",)),
+                negative_effect=Literal("is_open", ("?g",)),
+            ),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("controls_unlocked", ("?f", "?g")),
+                effect=Literal("is_locked", ("?g",)),
+                negative_effect=Literal("is_unlocked", ("?g",)),
+            ),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("controls_closed", ("?f", "?g")),
+                effect=Literal("is_open", ("?g",)),
+                negative_effect=Literal("is_closed", ("?g",)),
+            ),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("controls_locks", ("?f", "?g")),
+                effect=Literal("is_unlocked", ("?g",)),
+                negative_effect=Literal("is_locked", ("?g",)),
+            ),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("unlocks", ("?f", "?g")),
+                effect=Literal("is_unlocked", ("?g",)),
+                negative_effect=Literal("is_locked", ("?g",)),
+            ),
+            Effect(
+                Literal("interaction_locked", ("?f",)),
+                condition=Literal("irreversible_enabled", ("?f",)),
             ),
         ],
         observability="full",
@@ -238,9 +388,20 @@ EMTOM_ACTIONS = [
         preconditions=And(operands=(
             Literal("agent_in_room", ("?a", "?r")),
             Literal("is_in_room", ("?x", "?r")),
+            Not(operand=Literal("interaction_locked", ("?x",))),
         )),
         effects=[
             Effect(Literal("is_held_by", ("?x", "?a"))),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("unlocks", ("?x", "?g")),
+                effect=Literal("is_unlocked", ("?g",)),
+                negative_effect=Literal("is_locked", ("?g",)),
+            ),
+            Effect(
+                Literal("interaction_locked", ("?x",)),
+                condition=Literal("irreversible_enabled", ("?x",)),
+            ),
         ],
         observability="full",
     ),
@@ -253,6 +414,7 @@ EMTOM_ACTIONS = [
             Literal("is_held_by", ("?x", "?a")),
             Literal("agent_in_room", ("?a", "?r")),
             Literal("is_in_room", ("?f", "?r")),
+            Not(operand=Literal("interaction_locked", ("?x",))),
         )),
         effects=[
             Effect(Literal("is_held_by", ("?x", "?a"), negated=True)),
@@ -263,6 +425,16 @@ EMTOM_ACTIONS = [
             Effect(Literal("is_on_top", ("?x", "?f"))),
             Effect(Literal("is_inside", ("?x", "?f"))),
             Effect(Literal("is_in_room", ("?x", "?r"))),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("unlocks", ("?x", "?g")),
+                effect=Literal("is_unlocked", ("?g",)),
+                negative_effect=Literal("is_locked", ("?g",)),
+            ),
+            Effect(
+                Literal("interaction_locked", ("?x",)),
+                condition=Literal("irreversible_enabled", ("?x",)),
+            ),
         ],
         observability="full",
     ),
@@ -294,9 +466,21 @@ EMTOM_ACTIONS = [
             Literal("requires_item", ("?f", "?i")),
             Literal("agent_in_room", ("?a", "?r")),
             Literal("is_in_room", ("?f", "?r")),
+            Not(operand=Literal("interaction_locked", ("?i",))),
         )),
         effects=[
             Effect(Literal("is_unlocked", ("?f",))),
+            Effect(Literal("is_locked", ("?f",), negated=True)),
+            ForallEffect(
+                variable=Param("g", "furniture"),
+                condition=Literal("unlocks", ("?i", "?g")),
+                effect=Literal("is_unlocked", ("?g",)),
+                negative_effect=Literal("is_locked", ("?g",)),
+            ),
+            Effect(
+                Literal("interaction_locked", ("?i",)),
+                condition=Literal("irreversible_enabled", ("?i",)),
+            ),
         ],
         observability="full",
     ),

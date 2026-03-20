@@ -509,6 +509,22 @@ def validate_blocking_spec(
                             f"mechanic_bindings[{i}] (limited_bandwidth) message_limits[{agent_id}] must be a positive integer, got {limit}"
                         )
 
+        if mechanic_type == "remote_control":
+            target_state = binding.get("target_state", "is_open")
+            if target_state not in {"is_open", "is_closed", "is_unlocked", "is_locked"}:
+                errors.append(
+                    f"mechanic_bindings[{i}] (remote_control) unsupported target_state '{target_state}'. "
+                    "Supported: is_open, is_closed, is_unlocked, is_locked."
+                )
+
+        if mechanic_type == "state_mirroring":
+            target_state = binding.get("target_state", "is_open")
+            if target_state not in {"is_open", "is_closed"}:
+                errors.append(
+                    f"mechanic_bindings[{i}] (state_mirroring) unsupported target_state '{target_state}'. "
+                    "Supported: is_open, is_closed."
+                )
+
         # Validate binding object references against scene (when available).
         if scene_known_ids:
             for key in ("trigger_object", "target_object", "prerequisite_object"):

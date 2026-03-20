@@ -31,6 +31,7 @@ from emtom.pddl.dsl import (
     parse_goal_string,
     validate_goal_predicates,
 )
+from emtom.pddl.domain import validate_goal_formula_allowed
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +272,8 @@ class GoalSpec:
             # Predicate arity check.
             pred_errors = validate_goal_predicates(formula, domain)
             for pe in pred_errors:
+                errors.append(f"Goal {entry.id}: {pe}")
+            for pe in validate_goal_formula_allowed(formula):
                 errors.append(f"Goal {entry.id}: {pe}")
 
             # Epistemic agent check.

@@ -171,7 +171,7 @@ class TestVerifyPddl:
         finally:
             os.unlink(tmp)
 
-    def test_verify_returns_strict_proof_metadata(self):
+    def test_verify_uses_functional_projection_for_solvability(self):
         from emtom.cli.verify_pddl import run
         from emtom.pddl.solver import SolverResult
 
@@ -194,7 +194,7 @@ class TestVerifyPddl:
                 "  (:init (agent_in_room agent_0 kitchen_1) "
                 "         (agent_in_room agent_1 kitchen_1) "
                 "         (is_in_room cabinet_27 kitchen_1))\n"
-                "  (:goal (K agent_0 (is_open cabinet_27)))\n"
+                "  (:goal (and (is_open cabinet_27) (K agent_0 (is_open cabinet_27))))\n"
                 ")"
             ),
         }
@@ -205,25 +205,52 @@ class TestVerifyPddl:
 
         try:
             with patch(
-                "emtom.pddl.tom_verifier.prove_minimal_tom_level",
-                return_value={
-                    "tom_level": 1,
-                    "minimal_tom_level": 1,
-                    "epistemic_goal_depth": 1,
-                    "proved_unsat_below": [0],
-                    "proof_attempts": [{"level": 0, "solvable": False, "belief_depth": 1, "error": "requires depth 1"}],
-                    "proof_backend": "fast_downward_strict",
-                    "proof_strict": True,
-                    "solver_result": SolverResult(solvable=True, belief_depth=1, solve_time=0.0),
-                    "trivial_k_goals": [],
-                },
+                "emtom.pddl.fd_solver.FastDownwardSolver.solve",
+                return_value=SolverResult(solvable=True, belief_depth=0, solve_time=0.0, plan=["open(agent_0, cabinet_27, kitchen_1)"]),
             ):
                 result = run(tmp)
 
             assert result["success"] is True
+            assert result["data"]["functional_goal_pddl"] == "(is_open cabinet_27)"
             assert result["data"]["proof_strict"] is True
-            assert result["data"]["proof_backend"] == "fast_downward_strict"
-            assert result["data"]["proved_unsat_below"] == [0]
+            assert result["data"]["proof_backend"] == "functional_fast_downward_strict"
+            assert result["data"]["tom_level"] == 1
+            assert result["data"]["proved_unsat_below"] == []
+        finally:
+            os.unlink(tmp)
+
+    def test_verify_rejects_init_only_predicates_in_goal(self):
+        from emtom.cli.verify_pddl import run
+
+        task = {
+            "task_id": "illegal_goal",
+            "title": "Illegal Goal",
+            "category": "cooperative",
+            "scene_id": "scene",
+            "episode_id": "episode",
+            "mechanic_bindings": [],
+            "task": "Test task",
+            "agent_secrets": {},
+            "agent_actions": {},
+            "num_agents": 1,
+            "problem_pddl": (
+                "(define (problem illegal_goal)\n"
+                "  (:domain emtom)\n"
+                "  (:objects agent_0 - agent cabinet_27 - furniture kitchen_1 - room)\n"
+                "  (:init (agent_in_room agent_0 kitchen_1) (is_in_room cabinet_27 kitchen_1))\n"
+                "  (:goal (K agent_0 (is_inverse cabinet_27)))\n"
+                ")"
+            ),
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(task, f)
+            tmp = f.name
+
+        try:
+            result = run(tmp)
+            assert result["success"] is False
+            assert "init-only" in result["error"]
         finally:
             os.unlink(tmp)
 

@@ -93,6 +93,99 @@ def test_use_item_plan_translates_directly():
     assert result["ignored_literals"] == []
 
 
+def test_remote_control_open_goal_uses_trigger_object():
+    task_data = {
+        "task_id": "remote_open",
+        "title": "Remote Open",
+        "category": "cooperative",
+        "scene_id": "test",
+        "episode_id": "1",
+        "num_agents": 1,
+        "mechanic_bindings": [
+            {
+                "mechanic_type": "remote_control",
+                "trigger_object": "switch_1",
+                "target_object": "cabinet_27",
+                "target_state": "is_open",
+            }
+        ],
+        "problem_pddl": (
+            "(define (problem remote_open)\n"
+            "  (:domain emtom)\n"
+            "  (:objects\n"
+            "    agent_0 - agent\n"
+            "    switch_1 cabinet_27 - furniture\n"
+            "    kitchen_1 - room\n"
+            "  )\n"
+            "  (:init\n"
+            "    (agent_in_room agent_0 kitchen_1)\n"
+            "    (is_in_room switch_1 kitchen_1)\n"
+            "    (is_in_room cabinet_27 kitchen_1)\n"
+            "  )\n"
+            "  (:goal (is_open cabinet_27))\n"
+            ")"
+        ),
+        "items": [],
+        "locked_containers": {},
+        "initial_states": {},
+    }
+
+    result = generate_deterministic_trajectory(task_data)
+
+    assert _actions(result) == [
+        "Navigate[switch_1]",
+        "Open[switch_1]",
+    ]
+
+
+def test_conditional_unlock_hidden_item_is_solver_reachable():
+    task_data = {
+        "task_id": "conditional_unlock_hidden_item",
+        "title": "Conditional Unlock Hidden Item",
+        "category": "cooperative",
+        "scene_id": "test",
+        "episode_id": "1",
+        "num_agents": 1,
+        "mechanic_bindings": [
+            {
+                "mechanic_type": "conditional_unlock",
+                "trigger_object": "cabinet_27",
+                "requires_item": "item_small_key_1",
+            }
+        ],
+        "problem_pddl": (
+            "(define (problem conditional_unlock_hidden_item)\n"
+            "  (:domain emtom)\n"
+            "  (:objects\n"
+            "    agent_0 - agent\n"
+            "    drawer_1 cabinet_27 - furniture\n"
+            "    kitchen_1 - room\n"
+            "  )\n"
+            "  (:init\n"
+            "    (agent_in_room agent_0 kitchen_1)\n"
+            "    (is_in_room drawer_1 kitchen_1)\n"
+            "    (is_in_room cabinet_27 kitchen_1)\n"
+            "  )\n"
+            "  (:goal (is_unlocked cabinet_27))\n"
+            ")"
+        ),
+        "items": [
+            {"item_id": "item_small_key_1", "inside": "drawer_1"},
+        ],
+        "locked_containers": {},
+        "initial_states": {},
+    }
+
+    result = generate_deterministic_trajectory(task_data)
+
+    assert _actions(result) == [
+        "Navigate[drawer_1]",
+        "Open[drawer_1]",
+        "Navigate[cabinet_27]",
+        "UseItem[item_small_key_1, cabinet_27]",
+    ]
+
+
 def test_rejects_solver_plans_that_move_furniture():
     task_data = {
         "task_id": "invalid_pick",

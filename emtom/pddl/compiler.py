@@ -107,7 +107,10 @@ def compile_task(
         problem = parsed.to_problem()
 
         # Mechanics are the single authored source for runtime constraints.
+        _ensure_task_items(task, problem)
+        _ensure_locked_containers(task, problem)
         _ensure_room_restrictions(task, problem)
+        _ensure_mechanic_init_facts(task, problem)
         # Add default init facts (e.g., furniture starts closed)
         _add_default_init_facts(problem)
 
@@ -141,6 +144,161 @@ def _binding_value(binding: Any, key: str) -> Any:
     if isinstance(binding, dict):
         return binding.get(key)
     return getattr(binding, key, None)
+
+
+def _literal_key(literal: Literal) -> tuple[str, tuple[str, ...]]:
+    return literal.predicate, literal.args
+
+
+def _ensure_fact(problem: Problem, predicate: str, args: tuple[str, ...], existing: Optional[Set[tuple[str, tuple[str, ...]]]] = None) -> None:
+    if existing is None:
+        existing = {_literal_key(lit) for lit in problem.init}
+    fact = (predicate, args)
+    if fact in existing:
+        return
+    problem.init.append(Literal(predicate, args))
+    existing.add(fact)
+
+
+def _ensure_object(problem: Problem, obj_id: str, obj_type: str) -> None:
+    if not obj_id or obj_id in problem.objects:
+        return
+    problem.objects[obj_id] = obj_type
+
+
+def _ensure_task_items(task: "GeneratedTask", problem: Problem) -> None:
+    """Expose task items to the planner, including hidden-in-container items."""
+    existing = {_literal_key(lit) for lit in problem.init}
+    for item_data in getattr(task, "items", []) or []:
+        if not isinstance(item_data, dict):
+            continue
+        item_id = item_data.get("item_id")
+        if not isinstance(item_id, str) or not item_id:
+            continue
+        _ensure_object(problem, item_id, "item")
+        container = item_data.get("inside") or item_data.get("hidden_in")
+        if isinstance(container, str) and container:
+            _ensure_fact(problem, "item_in_container", (item_id, container), existing)
+
+
+def _resolve_required_item(task: "GeneratedTask", item_ref: Any) -> Optional[str]:
+    if not isinstance(item_ref, str) or not item_ref:
+        return None
+    items = [item for item in (getattr(task, "items", []) or []) if isinstance(item, dict)]
+    for item in items:
+        if item.get("item_id") == item_ref:
+            return item_ref
+
+    matches: List[str] = []
+    for item in items:
+        item_id = item.get("item_id")
+        if not isinstance(item_id, str):
+            continue
+        base_id = item.get("base_id")
+        item_type = item.get("item_type")
+        if item_ref in {base_id, item_type}:
+            matches.append(item_id)
+            continue
+        if item_ref in item_id or (isinstance(base_id, str) and item_ref in base_id):
+            matches.append(item_id)
+
+    unique_matches = sorted(set(matches))
+    if len(unique_matches) == 1:
+        return unique_matches[0]
+    return None
+
+
+def _ensure_locked_containers(task: "GeneratedTask", problem: Problem) -> None:
+    """Compile legacy locked_containers into planner facts."""
+    existing = {_literal_key(lit) for lit in problem.init}
+    for container_id, item_ref in (getattr(task, "locked_containers", {}) or {}).items():
+        if not isinstance(container_id, str) or not container_id:
+            continue
+        _ensure_fact(problem, "is_locked", (container_id,), existing)
+        item_id = _resolve_required_item(task, item_ref)
+        if item_id is None:
+            continue
+        _ensure_object(problem, item_id, "item")
+        _ensure_fact(problem, "requires_item", (container_id, item_id), existing)
+
+
+def _ensure_mechanic_init_facts(task: "GeneratedTask", problem: Problem) -> None:
+    """Compile planner-visible mechanic facts from mechanic_bindings."""
+    existing = {_literal_key(lit) for lit in problem.init}
+    all_interaction_targets = [
+        obj_id
+        for obj_id, obj_type in problem.objects.items()
+        if obj_type not in {"agent", "room"}
+    ]
+
+    for binding in getattr(task, "mechanic_bindings", []) or []:
+        mechanic_type = _binding_value(binding, "mechanic_type")
+        trigger = _binding_value(binding, "trigger_object")
+        target = _binding_value(binding, "target_object")
+        target_state = _binding_value(binding, "target_state") or "is_open"
+
+        if mechanic_type == "inverse_state":
+            if isinstance(trigger, str) and trigger:
+                _ensure_fact(problem, "is_inverse", (trigger,), existing)
+            continue
+
+        if mechanic_type == "state_mirroring":
+            if not (isinstance(trigger, str) and isinstance(target, str) and trigger and target):
+                continue
+            if target_state == "is_open":
+                _ensure_fact(problem, "mirrors", (trigger, target), existing)
+            elif target_state == "is_closed":
+                _ensure_fact(problem, "mirrors_closed", (trigger, target), existing)
+            else:
+                raise ValueError(
+                    f"Unsupported state_mirroring target_state '{target_state}'. "
+                    "Supported: is_open, is_closed."
+                )
+            continue
+
+        if mechanic_type == "remote_control":
+            if not (isinstance(trigger, str) and isinstance(target, str) and trigger and target):
+                continue
+            if target_state == "is_open":
+                _ensure_fact(problem, "controls", (trigger, target), existing)
+            elif target_state == "is_unlocked":
+                _ensure_fact(problem, "controls_unlocked", (trigger, target), existing)
+            elif target_state == "is_closed":
+                _ensure_fact(problem, "controls_closed", (trigger, target), existing)
+            elif target_state == "is_locked":
+                _ensure_fact(problem, "controls_locks", (trigger, target), existing)
+            else:
+                raise ValueError(
+                    f"Unsupported remote_control target_state '{target_state}'. "
+                    "Supported: is_open, is_closed, is_unlocked, is_locked."
+                )
+            continue
+
+        if mechanic_type == "conditional_unlock":
+            if not (isinstance(trigger, str) and trigger):
+                continue
+            _ensure_fact(problem, "is_locked", (trigger,), existing)
+            prereq = _binding_value(binding, "prerequisite_object")
+            requires_item = _binding_value(binding, "requires_item")
+            if isinstance(prereq, str) and prereq:
+                _ensure_fact(problem, "unlocks", (prereq, trigger), existing)
+            elif requires_item:
+                item_id = _resolve_required_item(task, requires_item)
+                if item_id is None:
+                    raise ValueError(
+                        f"conditional_unlock on '{trigger}' references missing requires_item '{requires_item}'."
+                    )
+                _ensure_object(problem, item_id, "item")
+                _ensure_fact(problem, "requires_item", (trigger, item_id), existing)
+            continue
+
+        if mechanic_type == "irreversible_action":
+            for obj_id in all_interaction_targets:
+                _ensure_fact(problem, "irreversible_enabled", (obj_id,), existing)
+            continue
+
+        if mechanic_type in {"limited_bandwidth", "restricted_communication", "unreliable_communication", "room_restriction"}:
+            continue
 
 
 def _ensure_room_restrictions(task: "GeneratedTask", problem: Problem) -> None:

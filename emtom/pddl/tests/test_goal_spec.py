@@ -220,6 +220,13 @@ class TestValidate:
         errors = spec.validate(EMTOM_DOMAIN, {"agent_0", "agent_1"})
         assert errors == []
 
+    def test_init_only_predicate_rejected_in_goal(self):
+        spec = GoalSpec.from_goals_array([
+            {"id": 0, "pddl": "(K agent_0 (is_inverse cabinet_27))", "after": []},
+        ])
+        errors = spec.validate(EMTOM_DOMAIN, {"agent_0"})
+        assert any("init-only" in e for e in errors)
+
 
 # -----------------------------------------------------------------------
 # Queries

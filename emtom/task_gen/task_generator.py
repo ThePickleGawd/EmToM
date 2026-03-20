@@ -29,6 +29,8 @@ class MechanicBinding:
     trigger_object: Optional[str] = None  # Object that triggers (optional - some mechanics use other keys)
     target_object: Optional[str] = None  # For remote_control/state_mirroring: the affected object
     target_state: Optional[str] = None  # State being affected (e.g., "is_open")
+    prerequisite_object: Optional[str] = None  # For conditional_unlock: object interaction that unlocks trigger_object
+    requires_item: Optional[str] = None  # For conditional_unlock: item that unlocks trigger_object
     count: Optional[int] = None  # Reserved for future use
     # room_restriction mechanic fields
     restricted_rooms: Optional[List[str]] = None  # Rooms agents cannot enter
@@ -51,6 +53,10 @@ class MechanicBinding:
             result["target_object"] = self.target_object
         if self.target_state is not None:
             result["target_state"] = self.target_state
+        if self.prerequisite_object is not None:
+            result["prerequisite_object"] = self.prerequisite_object
+        if self.requires_item is not None:
+            result["requires_item"] = self.requires_item
         if self.count is not None:
             result["count"] = self.count
         if self.restricted_rooms is not None:
@@ -72,6 +78,8 @@ class MechanicBinding:
             trigger_object=data.get("trigger_object"),
             target_object=data.get("target_object"),
             target_state=data.get("target_state"),
+            prerequisite_object=data.get("prerequisite_object"),
+            requires_item=data.get("requires_item"),
             count=data.get("count"),
             restricted_rooms=data.get("restricted_rooms"),
             for_agents=data.get("for_agents"),
