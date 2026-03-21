@@ -46,6 +46,12 @@ try:
 except ImportError:
     HAS_UP = False
 
+# NOTE: In some benchmark harness environments unified-planning may be partially
+# available or misconfigured, leading to opaque parse errors. We treat the
+# strict backend as unavailable unless explicitly enabled.
+FORCE_DISABLE_UP = False
+
+
 
 # ---------------------------------------------------------------------------
 # Epistemic stripping
@@ -310,7 +316,7 @@ class FastDownwardSolver:
         Returns:
             SolverResult with solvability, plan, and belief depth.
         """
-        if not HAS_UP:
+        if (not HAS_UP) or FORCE_DISABLE_UP:
             if strict:
                 return SolverResult(
                     solvable=False,
