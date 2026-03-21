@@ -596,8 +596,8 @@ Use the repo-owned `taskgen` commands for pipeline actions instead of bespoke to
 
 ## Workflow
 1. Run `taskgen status`.
-2. Run `taskgen new_scene N` to load a scene.
-3. Inspect examples in `{working_dir}/sampled_tasks/`.
+2. Run `taskgen new_scene N` to load a scene. The response includes `valid_agent_ids` — **all mechanic_bindings, agent_secrets, message_targets, teams, and problem_pddl :objects MUST only reference these agent IDs**.
+3. Inspect examples in `{working_dir}/sampled_tasks/` for structural inspiration. **Sampled tasks may have a different agent count — adapt patterns to this scene's agents, do not copy agent IDs directly.**
 4. Edit `{task_file}`. Author `problem_pddl` first, then make the natural-language fields and mechanics match it.
 5. Run `taskgen judge`, fix the task, and repeat until it passes.
 6. Run `taskgen verify_golden_trajectory`, fix the task, and repeat until it passes.
@@ -611,6 +611,7 @@ Use the repo-owned `taskgen` commands for pipeline actions instead of bespoke to
 - `taskgen finish` must be the final command once the required number of tasks has been submitted.
 - Use `taskgen fail` only for unrecoverable infrastructure issues.
 - You may use shell tools like `cat`, `sed`, `jq`, `python`, and `apply_patch` to inspect and edit files.
+- Do NOT `import emtom` in Python snippets — the agent runs in an isolated environment without the project's packages. Use `taskgen` commands or `jq` instead.
 
 {constraints}
 """
