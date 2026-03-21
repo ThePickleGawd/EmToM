@@ -1,6 +1,11 @@
 import json
+import random
 
-from emtom.task_gen.seed_selector import SeedSelectionConfig, build_seed_candidates
+from emtom.task_gen.seed_selector import (
+    SeedSelectionConfig,
+    build_seed_candidates,
+    select_seed_tasks,
+)
 
 
 def _write_task(path, title, calibration=None, category="cooperative", tom_level=2):
@@ -29,24 +34,23 @@ def _standard_calibration(model, passed, progress):
     ]
 
 
-def test_seed_selector_prefers_harder_tasks_when_pool_is_too_easy(tmp_path):
+def test_seed_selector_can_force_fail_bucket(tmp_path):
     model = "gpt-5.2"
     _write_task(tmp_path / "hard.json", "hard", _standard_calibration(model, False, 0.35))
     _write_task(tmp_path / "easy.json", "easy", _standard_calibration(model, True, 1.0))
-    _write_task(tmp_path / "unknown.json", "unknown")
 
     config = SeedSelectionConfig(
         tasks_dir=tmp_path,
         target_model=model,
-        target_pass_rate=0.20,
-        current_pass_rate=0.50,
+        pass_seed_ratio=0.0,
+        fail_seed_ratio=1.0,
     )
-    weights = {candidate.path.name: candidate.weight for candidate in build_seed_candidates(config)}
+    selected = select_seed_tasks(config, count=1, rng=random.Random(0))
 
-    assert weights["hard.json"] > weights["unknown.json"] > weights["easy.json"]
+    assert selected[0].path.name == "hard.json"
 
 
-def test_seed_selector_prefers_easier_tasks_when_pool_is_too_hard(tmp_path):
+def test_seed_selector_can_force_pass_bucket(tmp_path):
     model = "gpt-5.2"
     _write_task(tmp_path / "hard.json", "hard", _standard_calibration(model, False, 0.10))
     _write_task(tmp_path / "easy.json", "easy", _standard_calibration(model, True, 1.0))
@@ -54,12 +58,12 @@ def test_seed_selector_prefers_easier_tasks_when_pool_is_too_hard(tmp_path):
     config = SeedSelectionConfig(
         tasks_dir=tmp_path,
         target_model=model,
-        target_pass_rate=0.20,
-        current_pass_rate=0.05,
+        pass_seed_ratio=1.0,
+        fail_seed_ratio=0.0,
     )
-    weights = {candidate.path.name: candidate.weight for candidate in build_seed_candidates(config)}
+    selected = select_seed_tasks(config, count=1, rng=random.Random(0))
 
-    assert weights["easy.json"] > weights["hard.json"]
+    assert selected[0].path.name == "easy.json"
 
 
 def test_seed_selector_applies_category_and_tom_filters_as_soft_biases(tmp_path):
@@ -79,3 +83,19 @@ def test_seed_selector_applies_category_and_tom_filters_as_soft_biases(tmp_path)
     weights = {candidate.path.name: candidate.weight for candidate in build_seed_candidates(config)}
 
     assert weights["match.json"] > weights["mismatch.json"]
+
+
+def test_seed_selector_falls_back_to_untested_when_no_calibrated_buckets_exist(tmp_path):
+    model = "gpt-5.2"
+    _write_task(tmp_path / "unknown_a.json", "unknown_a")
+    _write_task(tmp_path / "unknown_b.json", "unknown_b")
+
+    config = SeedSelectionConfig(
+        tasks_dir=tmp_path,
+        target_model=model,
+        pass_seed_ratio=0.2,
+        fail_seed_ratio=0.8,
+    )
+    selected = select_seed_tasks(config, count=1, rng=random.Random(0))
+
+    assert selected[0].path.name in {"unknown_a.json", "unknown_b.json"}

@@ -21,6 +21,8 @@ class SeedSelectionConfig:
     current_pass_rate: Optional[float] = None
     category: Optional[str] = None
     tom_level: Optional[int] = None
+    pass_seed_ratio: float = 0.20
+    fail_seed_ratio: float = 0.80
 
 
 @dataclass(frozen=True)
@@ -126,22 +128,29 @@ def select_seed_tasks(
     remaining = list(pool)
     target_count = min(count, len(remaining))
     while remaining and len(chosen) < target_count:
-        weights = [max(candidate.weight, 0.001) for candidate in remaining]
-        picked = rng.choices(remaining, weights=weights, k=1)[0]
+        bucket = _choose_bucket(remaining, config, rng)
+        bucket_candidates = [
+            candidate for candidate in remaining if _bucket_name(candidate) == bucket
+        ]
+        weights = [max(candidate.weight, 0.001) for candidate in bucket_candidates]
+        picked = rng.choices(bucket_candidates, weights=weights, k=1)[0]
         chosen.append(picked)
         remaining = [candidate for candidate in remaining if candidate.path != picked.path]
     return chosen
 
 
 def _candidate_weight(task_data: dict, config: SeedSelectionConfig) -> float:
-    """Weight a seed so the pool shifts toward the target pass-rate."""
+    """Weight a seed within its selected bucket."""
     cal = find_calibration_entry(task_data.get("calibration", []), model=config.target_model)
     passed = cal_passed(cal) if cal is not None else None
     progress = cal_progress(cal) if cal is not None else None
 
-    hard_bias = _hard_bias(config.current_pass_rate, config.target_pass_rate)
-    hard_score, easy_score = _difficulty_scores(passed, progress)
-    weight = hard_bias * hard_score + (1.0 - hard_bias) * easy_score
+    if passed is True:
+        weight = 1.0
+    elif passed is False:
+        weight = 1.0 + max(0.0, 1.0 - min(max(progress or 0.0, 0.0), 1.0)) * 0.25
+    else:
+        weight = 0.35
 
     task_category = task_data.get("category")
     if config.category:
@@ -159,27 +168,36 @@ def _candidate_weight(task_data: dict, config: SeedSelectionConfig) -> float:
 
     return max(weight, 0.0)
 
+def _bucket_name(candidate: SeedTaskCandidate) -> str:
+    if candidate.passed_target_model is True:
+        return "pass"
+    if candidate.passed_target_model is False:
+        return "fail"
+    return "untested"
 
-def _hard_bias(current_rate: Optional[float], target_rate: float) -> float:
-    """Return how aggressively to favor harder seeds."""
-    if current_rate is None:
-        return 0.75
-    return min(max(0.5 + 2.0 * (current_rate - target_rate), 0.20), 0.95)
 
+def _choose_bucket(
+    remaining: list[SeedTaskCandidate],
+    config: SeedSelectionConfig,
+    rng: random.Random,
+) -> str:
+    buckets = {"pass": [], "fail": [], "untested": []}
+    for candidate in remaining:
+        buckets[_bucket_name(candidate)].append(candidate)
 
-def _difficulty_scores(
-    passed: Optional[bool],
-    progress: Optional[float],
-) -> tuple[float, float]:
-    """Score how useful a task is as a hard or easy seed."""
-    progress = min(max(progress or 0.0, 0.0), 1.0)
+    weighted_known_buckets = []
+    if buckets["fail"] and config.fail_seed_ratio > 0:
+        weighted_known_buckets.append(("fail", config.fail_seed_ratio))
+    if buckets["pass"] and config.pass_seed_ratio > 0:
+        weighted_known_buckets.append(("pass", config.pass_seed_ratio))
 
-    if passed is True:
-        return 0.12, 1.00
-    if passed is False:
-        hard_score = 1.20 - 0.55 * progress
-        easy_score = 0.20 + 0.45 * progress
-        return hard_score, easy_score
+    if weighted_known_buckets:
+        labels = [label for label, _ in weighted_known_buckets]
+        weights = [weight for _, weight in weighted_known_buckets]
+        return rng.choices(labels, weights=weights, k=1)[0]
 
-    # Untested tasks remain useful for exploration, but less than calibrated ones.
-    return 0.75, 0.55
+    if buckets["fail"]:
+        return "fail"
+    if buckets["pass"]:
+        return "pass"
+    return "untested"
