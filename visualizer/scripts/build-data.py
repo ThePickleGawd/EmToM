@@ -1,16 +1,38 @@
 #!/usr/bin/env python3
-"""Scan benchmark outputs and generate static JSON data for the visualizer."""
+"""Scan benchmark outputs and generate static JSON data for benchmark views.
+
+Generation data is intentionally live-only in dev via the Vite filesystem
+plugin. It is not indexed here.
+"""
+
+from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 OUTPUTS_DIR = PROJECT_ROOT / "outputs" / "emtom"
 TASKS_DIR = PROJECT_ROOT / "data" / "emtom" / "tasks"
 DATA_DIR = Path(__file__).resolve().parent.parent / "public" / "data"
+
+
+WORKSPACE_RE = re.compile(
+    r"tmp/task_gen/(?P<workspace>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-[a-z]+-[0-9a-f]{8})"
+)
+WORKER_RE = re.compile(r"gpu(?P<gpu>\d+)_slot(?P<slot>\d+)_(?P<category>\w+)\.log")
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def parse_run_timestamp(name: str) -> str:
+    try:
+        return datetime.strptime(name[:19], "%Y-%m-%d_%H-%M-%S").isoformat()
+    except ValueError:
+        return ""
 
 
 def normalize_secrets_text(secrets) -> str:
@@ -27,6 +49,345 @@ def make_relative_path(abs_path: str) -> str:
     if abs_path.startswith(prefix):
         return "/" + abs_path[len(prefix):]
     return abs_path
+
+
+def make_repo_relative_path(path: str | Path) -> str:
+    path_str = str(path)
+    prefix = str(PROJECT_ROOT) + "/"
+    if path_str.startswith(prefix):
+        return path_str[len(prefix):]
+    return path_str
+
+
+def normalize_path(path: str | Path) -> Path:
+    raw = Path(path)
+    if raw.is_absolute():
+        return raw
+    return (PROJECT_ROOT / raw).resolve()
+
+
+def read_json(path: Path) -> Optional[dict]:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    out: list[dict] = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return out
+
+
+def summarize_log_excerpt(text: str, head_lines: int = 40, tail_lines: int = 60) -> dict:
+    lines = text.splitlines()
+    return {
+        "head": lines[:head_lines],
+        "tail": lines[-tail_lines:] if len(lines) > tail_lines else lines[:],
+        "line_count": len(lines),
+    }
+
+
+def strip_ansi(text: str) -> str:
+    return ANSI_RE.sub("", text)
+
+
+def calibration_result(task_data: dict) -> bool:
+    calibration = task_data.get("calibration", [])
+    standard = None
+    if isinstance(calibration, list):
+        for entry in calibration:
+            if str(entry.get("run_mode", "standard")) == "standard":
+                standard = entry
+                break
+        if standard is None and calibration:
+            standard = calibration[0]
+    if not standard:
+        return False
+    results = standard.get("results", {})
+    if "main_goal" in results:
+        return bool(results.get("main_goal", {}).get("passed", False))
+    if "winner" in results:
+        return results.get("winner") is not None
+    return bool(results.get("passed", False))
+
+
+def load_submitted_task_summary(path_str: str) -> Optional[dict]:
+    task_path = normalize_path(path_str)
+    task_data = read_json(task_path)
+    if task_data is None:
+        return None
+    stat = task_path.stat()
+    return {
+        "task_id": task_data.get("task_id", task_path.stem),
+        "title": task_data.get("title", task_path.stem),
+        "category": task_data.get("category", ""),
+        "tom_level": task_data.get("tom_level"),
+        "success": calibration_result(task_data),
+        "path": make_repo_relative_path(task_path),
+        "submitted_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+    }
+
+
+def summarize_event(event: dict) -> dict:
+    data = event.get("data")
+    if not isinstance(data, dict):
+        data = {}
+    summary = {
+        "timestamp": event.get("timestamp", ""),
+        "event_type": event.get("event_type", ""),
+        "command": event.get("command"),
+        "success": event.get("success"),
+        "error": event.get("error"),
+        "agent_name": event.get("agent_name"),
+        "model": event.get("model"),
+        "reason": event.get("reason"),
+        "num_agents": event.get("num_agents"),
+        "keep": event.get("keep"),
+        "message": data.get("message"),
+        "scene_id": data.get("scene_id"),
+        "episode_id": data.get("episode_id"),
+        "output_path": data.get("output_path"),
+        "submitted_count": data.get("submitted_count"),
+        "next_required_k_level": data.get("next_required_k_level"),
+        "return_code": event.get("return_code"),
+        "finished": event.get("finished"),
+        "failed": event.get("failed"),
+        "fail_reason": event.get("fail_reason"),
+    }
+    return {k: v for k, v in summary.items() if v not in (None, "", [], {})}
+
+
+def parse_mini_trace(workspace_dir: Path) -> dict:
+    trajectory_path = workspace_dir / "mini_trajectory.json"
+    if not trajectory_path.exists():
+        return {"entries": [], "stats": None}
+
+    data = read_json(trajectory_path)
+    if data is None:
+        return {"entries": [], "stats": None}
+
+    entries: list[dict[str, Any]] = []
+    for index, message in enumerate(data.get("messages", []), start=1):
+        role = message.get("role")
+        if role == "assistant":
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                entries.append(
+                    {
+                        "index": index,
+                        "kind": "assistant",
+                        "content": content.strip(),
+                    }
+                )
+            for tool_call in message.get("tool_calls", []) or []:
+                arguments = tool_call.get("function", {}).get("arguments", "")
+                command = ""
+                if isinstance(arguments, str):
+                    try:
+                        parsed = json.loads(arguments)
+                        command = parsed.get("command", "")
+                    except json.JSONDecodeError:
+                        command = arguments
+                entries.append(
+                    {
+                        "index": index,
+                        "kind": "tool_call",
+                        "tool": tool_call.get("function", {}).get("name", ""),
+                        "command": command,
+                    }
+                )
+        elif role == "tool":
+            content = message.get("content")
+            if isinstance(content, dict):
+                output = content.get("output")
+                if output is None:
+                    output = "\n".join(
+                        part
+                        for part in [content.get("output_head", ""), content.get("output_tail", "")]
+                        if part
+                    )
+                entries.append(
+                    {
+                        "index": index,
+                        "kind": "tool_result",
+                        "returncode": content.get("returncode"),
+                        "output": str(output or "")[:4000],
+                    }
+                )
+
+    stats = data.get("info", {}).get("model_stats", {})
+    return {
+        "entries": entries,
+        "stats": {
+            "api_calls": stats.get("api_calls"),
+            "instance_cost": stats.get("instance_cost"),
+        },
+    }
+
+
+def parse_worker_workspace(log_text: str) -> Optional[Path]:
+    match = WORKSPACE_RE.search(log_text)
+    if not match:
+        return None
+    return PROJECT_ROOT / "tmp" / "task_gen" / match.group("workspace")
+
+
+def parse_worker(log_path: Path) -> dict:
+    text = log_path.read_text(errors="replace")
+    clean_text = strip_ansi(text)
+    match = WORKER_RE.match(log_path.name)
+    gpu = int(match.group("gpu")) if match else -1
+    slot = int(match.group("slot")) if match else -1
+    category = match.group("category") if match else "unknown"
+
+    workspace_dir = parse_worker_workspace(text)
+    workspace_state = (
+        read_json(workspace_dir / "taskgen_state.json") if workspace_dir and (workspace_dir / "taskgen_state.json").exists() else {}
+    ) or {}
+    event_log = (
+        [summarize_event(event) for event in read_jsonl(workspace_dir / "taskgen_events.jsonl")]
+        if workspace_dir
+        else []
+    )
+    mini_trace = parse_mini_trace(workspace_dir) if workspace_dir else {"entries": [], "stats": None}
+
+    submitted_tasks = []
+    for submitted_path in workspace_state.get("submitted_tasks", []):
+        summary = load_submitted_task_summary(submitted_path)
+        if summary:
+            submitted_tasks.append(summary)
+    if not submitted_tasks:
+        for match in re.finditer(r"^\s*-\s+(.*\.json)\s*$", clean_text, re.MULTILINE):
+            summary = load_submitted_task_summary(match.group(1).strip())
+            if summary:
+                submitted_tasks.append(summary)
+
+    status = "running"
+    if workspace_state.get("failed"):
+        status = "failed"
+    elif workspace_state.get("finished"):
+        status = "finished"
+    elif "Agent FAILED:" in clean_text:
+        status = "failed"
+    elif "Generation Complete" in clean_text:
+        status = "finished"
+    elif "Generation Result" in clean_text:
+        status = "stopped"
+
+    fail_reason = workspace_state.get("fail_reason", "")
+    if not fail_reason:
+        failure_match = re.findall(r"Agent FAILED:\s*(.+)", clean_text)
+        if failure_match:
+            fail_reason = failure_match[-1].strip()
+
+    target_tasks = workspace_state.get("num_tasks_target")
+    if not target_tasks:
+        target_match = re.search(r"Target tasks:\s*(\d+)", clean_text)
+        target_tasks = int(target_match.group(1)) if target_match else 0
+
+    return {
+        "id": log_path.stem,
+        "gpu": gpu,
+        "slot": slot,
+        "category": category,
+        "status": status,
+        "workspace_id": workspace_dir.name if workspace_dir else "",
+        "workspace_path": make_repo_relative_path(workspace_dir) if workspace_dir else "",
+        "worker_log_path": make_repo_relative_path(log_path),
+        "task_gen_agent": workspace_state.get("task_gen_agent"),
+        "task_gen_model": workspace_state.get("task_gen_model"),
+        "submitted_count": len(submitted_tasks),
+        "target_tasks": target_tasks,
+        "current_task_index": workspace_state.get("current_task_index"),
+        "current_k_level": workspace_state.get("current_k_level"),
+        "scene_id": workspace_state.get("scene_id"),
+        "episode_id": workspace_state.get("episode_id"),
+        "finished": bool(workspace_state.get("finished")),
+        "failed": bool(workspace_state.get("failed")) or status == "failed",
+        "fail_reason": fail_reason,
+        "submitted_tasks": submitted_tasks,
+        "events": event_log,
+        "agent_trace": mini_trace["entries"],
+        "agent_stats": mini_trace["stats"],
+        "log_excerpt": summarize_log_excerpt(text),
+    }
+
+
+def build_success_series(workers: list[dict]) -> list[dict]:
+    timeline = []
+    for worker in workers:
+        for task in worker.get("submitted_tasks", []):
+            timeline.append(
+                {
+                    "timestamp": task.get("submitted_at", ""),
+                    "task_id": task.get("task_id", ""),
+                    "title": task.get("title", ""),
+                    "category": task.get("category", ""),
+                    "success": bool(task.get("success")),
+                    "worker_id": worker.get("id", ""),
+                }
+            )
+    timeline.sort(key=lambda item: (item["timestamp"], item["task_id"]))
+    passed = 0
+    series = []
+    for index, item in enumerate(timeline, start=1):
+        if item["success"]:
+            passed += 1
+        series.append(
+            {
+                **item,
+                "index": index,
+                "cumulative_pass_rate": passed / index,
+                "cumulative_passed": passed,
+            }
+        )
+    return series
+
+
+def process_generation_run(log_dir: Path) -> Optional[dict]:
+    worker_logs = sorted(log_dir.glob("gpu*_slot*_*.log"))
+    if not worker_logs:
+        return None
+
+    workers = [parse_worker(log_path) for log_path in worker_logs]
+    success_series = build_success_series(workers)
+    launcher_log = log_dir.parent / f"{log_dir.name}-launcher.log"
+
+    requested_tasks = sum(int(worker.get("target_tasks") or 0) for worker in workers)
+    submitted_tasks = sum(len(worker.get("submitted_tasks", [])) for worker in workers)
+    finished_workers = sum(1 for worker in workers if worker.get("status") == "finished")
+    failed_workers = sum(1 for worker in workers if worker.get("status") == "failed")
+    running_workers = sum(1 for worker in workers if worker.get("status") == "running")
+
+    categories = sorted({worker.get("category", "") for worker in workers if worker.get("category")})
+    detail = {
+        "id": log_dir.name,
+        "started_at": parse_run_timestamp(log_dir.name),
+        "log_dir": make_repo_relative_path(log_dir),
+        "launcher_log": make_repo_relative_path(launcher_log) if launcher_log.exists() else "",
+        "total_workers": len(workers),
+        "requested_tasks": requested_tasks,
+        "submitted_tasks": submitted_tasks,
+        "finished_workers": finished_workers,
+        "failed_workers": failed_workers,
+        "running_workers": running_workers,
+        "categories": categories,
+        "success_series": success_series,
+        "workers": workers,
+    }
+    return detail
 
 
 def process_action(entry: dict) -> dict:
@@ -319,7 +680,6 @@ def main():
         sys.exit(1)
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-
     runs = []
     run_dirs = sorted(
         [d for d in OUTPUTS_DIR.iterdir() if d.is_dir() and "benchmark" in d.name],

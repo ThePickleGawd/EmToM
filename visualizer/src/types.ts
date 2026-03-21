@@ -85,6 +85,118 @@ export interface RunsIndex {
   library: TaskSummary[];
 }
 
+export interface GenerationWorkerTask {
+  task_id: string;
+  title: string;
+  category: string;
+  tom_level?: number;
+  success: boolean;
+  path: string;
+  submitted_at: string;
+}
+
+export interface GenerationEvent {
+  timestamp: string;
+  event_type: string;
+  command?: string;
+  success?: boolean;
+  error?: string | null;
+  agent_name?: string;
+  model?: string;
+  reason?: string;
+  num_agents?: number;
+  keep?: boolean;
+  message?: string;
+  scene_id?: string;
+  episode_id?: string;
+  output_path?: string;
+  submitted_count?: number;
+  next_required_k_level?: number;
+  return_code?: number;
+  finished?: boolean;
+  failed?: boolean;
+  fail_reason?: string;
+}
+
+export interface AgentTraceEntry {
+  index: number;
+  kind: "assistant" | "tool_call" | "tool_result";
+  content?: string;
+  tool?: string;
+  command?: string;
+  returncode?: number;
+  output?: string;
+}
+
+export interface GenerationWorker {
+  id: string;
+  gpu: number;
+  slot: number;
+  category: string;
+  status: "running" | "finished" | "failed" | "stopped";
+  workspace_id: string;
+  workspace_path: string;
+  worker_log_path: string;
+  task_gen_agent?: string;
+  task_gen_model?: string;
+  submitted_count: number;
+  target_tasks: number;
+  current_task_index?: number;
+  current_k_level?: number;
+  scene_id?: string;
+  episode_id?: string;
+  finished: boolean;
+  failed: boolean;
+  fail_reason?: string;
+  submitted_tasks: GenerationWorkerTask[];
+  events: GenerationEvent[];
+  agent_trace: AgentTraceEntry[];
+  agent_stats?: {
+    api_calls?: number;
+    instance_cost?: number;
+  } | null;
+  log_excerpt: {
+    head: string[];
+    tail: string[];
+    line_count: number;
+  };
+}
+
+export interface GenerationSuccessPoint {
+  index: number;
+  timestamp: string;
+  task_id: string;
+  title: string;
+  category: string;
+  success: boolean;
+  worker_id: string;
+  cumulative_pass_rate: number;
+  cumulative_passed: number;
+}
+
+export interface GenerationSummary {
+  id: string;
+  started_at: string;
+  log_dir: string;
+  total_workers: number;
+  requested_tasks: number;
+  submitted_tasks: number;
+  finished_workers: number;
+  failed_workers: number;
+  running_workers: number;
+  categories: string[];
+}
+
+export interface GenerationIndex {
+  generations: GenerationSummary[];
+}
+
+export interface GenerationDetail extends GenerationSummary {
+  launcher_log?: string;
+  success_series: GenerationSuccessPoint[];
+  workers: GenerationWorker[];
+}
+
 /* ─── Campaign types ─── */
 
 export interface CampaignRunDef {

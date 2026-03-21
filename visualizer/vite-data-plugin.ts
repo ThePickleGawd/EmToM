@@ -1,6 +1,6 @@
 /**
- * Vite dev server plugin that dynamically serves benchmark data
- * by scanning outputs/emtom/ and data/emtom/tasks/ at request time.
+ * Vite dev server plugin that dynamically serves benchmark and generation data
+ * by scanning repo outputs at request time.
  * Replaces the static build-data.py step during development.
  */
 import type { Plugin } from "vite";
@@ -9,6 +9,7 @@ import path from "path";
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const OUTPUTS_DIR = path.join(PROJECT_ROOT, "outputs", "emtom");
+const GENERATIONS_DIR = path.join(PROJECT_ROOT, "outputs", "generations");
 const TASKS_DIR = path.join(PROJECT_ROOT, "data", "emtom", "tasks");
 const RESULTS_DIR = path.join(PROJECT_ROOT, "data", "emtom", "results");
 const ARCHIVES_DIR = path.join(RESULTS_DIR, "archives");
@@ -214,6 +215,337 @@ function makeRelativePath(absPath: string): string {
     return "/" + absPath.slice(prefix.length);
   }
   return absPath;
+}
+
+function resolveRepoPath(rawPath: string): string {
+  if (!rawPath) return "";
+  return path.isAbsolute(rawPath) ? rawPath : path.join(PROJECT_ROOT, rawPath);
+}
+
+function readJsonLinesIfExists(filePath: string): Record<string, any>[] {
+  if (!fs.existsSync(filePath)) return [];
+  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+  const rows: Record<string, any>[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      rows.push(JSON.parse(trimmed));
+    } catch {
+      continue;
+    }
+  }
+  return rows;
+}
+
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function summarizeLogExcerpt(text: string, headLines = 40, tailLines = 60): Record<string, any> {
+  const lines = stripAnsi(text).split(/\r?\n/).filter((line, index, all) => !(line === "" && index === all.length - 1));
+  return {
+    head: lines.slice(0, headLines),
+    tail: lines.length > tailLines ? lines.slice(-tailLines) : lines,
+    line_count: lines.length,
+  };
+}
+
+function parseGenerationTimestamp(runId: string): string {
+  const raw = runId.slice(0, 19);
+  const normalized = raw.replace("_", "T").replace(/-/g, (value, offset) => (offset === 13 || offset === 16 ? ":" : value));
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
+}
+
+function normalizeGenerationId(rawRunId: string): string | null {
+  if (!rawRunId || rawRunId.includes("/") || rawRunId.includes("..")) {
+    return null;
+  }
+  return rawRunId;
+}
+
+function calibrationResult(taskData: Record<string, any>): boolean {
+  const calibration = Array.isArray(taskData.calibration) ? taskData.calibration : [];
+  let standard =
+    calibration.find((entry) => String(entry?.run_mode || "standard") === "standard") ||
+    calibration[0];
+  if (!standard || typeof standard !== "object") return false;
+  const results = standard.results || {};
+  if (results.main_goal) return !!results.main_goal.passed;
+  if ("winner" in results) return results.winner != null;
+  return !!results.passed;
+}
+
+function loadSubmittedTaskSummary(taskPathValue: string): Record<string, any> | null {
+  const taskPath = resolveRepoPath(taskPathValue);
+  const taskData = readJsonIfExists(taskPath);
+  if (!taskData) return null;
+  let submittedAt = "";
+  try {
+    submittedAt = fs.statSync(taskPath).mtime.toISOString();
+  } catch {
+    submittedAt = "";
+  }
+  return {
+    task_id: taskData.task_id || path.basename(taskPath, ".json"),
+    title: taskData.title || path.basename(taskPath, ".json"),
+    category: taskData.category || "",
+    tom_level: taskData.tom_level,
+    success: calibrationResult(taskData),
+    path: makeRelativePath(taskPath),
+    submitted_at: submittedAt,
+  };
+}
+
+function summarizeGenerationEvent(event: Record<string, any>): Record<string, any> {
+  const data =
+    event.data && typeof event.data === "object" && !Array.isArray(event.data) ? event.data : {};
+  const outputPath =
+    typeof data.output_path === "string" && data.output_path
+      ? makeRelativePath(resolveRepoPath(data.output_path))
+      : undefined;
+  const summary: Record<string, any> = {
+    timestamp: event.timestamp || "",
+    event_type: event.event_type || "",
+    command: event.command,
+    success: event.success,
+    error: event.error,
+    agent_name: event.agent_name,
+    model: event.model,
+    reason: event.reason,
+    num_agents: event.num_agents,
+    keep: event.keep,
+    message: data.message,
+    scene_id: data.scene_id || event.scene_id,
+    episode_id: data.episode_id || event.episode_id,
+    output_path: outputPath,
+    submitted_count: data.submitted_count || event.submitted_count,
+    next_required_k_level: data.next_required_k_level,
+    return_code: event.return_code,
+    finished: event.finished,
+    failed: event.failed,
+    fail_reason: event.fail_reason,
+  };
+  return Object.fromEntries(
+    Object.entries(summary).filter(([, value]) => value !== "" && value !== null && value !== undefined),
+  );
+}
+
+function parseMiniTrace(tracePathValue: string): Record<string, any> {
+  const tracePath = resolveRepoPath(tracePathValue);
+  const data = readJsonIfExists(tracePath);
+  if (!data) return { entries: [], stats: null };
+
+  const entries: Record<string, any>[] = [];
+  const messages = Array.isArray(data.messages) ? data.messages : [];
+  for (const [index, message] of messages.entries()) {
+    const entryIndex = index + 1;
+    if (message.role === "assistant") {
+      if (typeof message.content === "string" && message.content.trim()) {
+        entries.push({
+          index: entryIndex,
+          kind: "assistant",
+          content: message.content.trim(),
+        });
+      }
+      for (const toolCall of message.tool_calls || []) {
+        const rawArguments = toolCall?.function?.arguments;
+        let command = "";
+        if (typeof rawArguments === "string") {
+          try {
+            const parsed = JSON.parse(rawArguments);
+            command = parsed.command || rawArguments;
+          } catch {
+            command = rawArguments;
+          }
+        }
+        entries.push({
+          index: entryIndex,
+          kind: "tool_call",
+          tool: toolCall?.function?.name || "",
+          command,
+        });
+      }
+      continue;
+    }
+    if (message.role === "tool" && message.content && typeof message.content === "object") {
+      const output =
+        message.content.output ??
+        [message.content.output_head, message.content.output_tail].filter(Boolean).join("\n");
+      entries.push({
+        index: entryIndex,
+        kind: "tool_result",
+        returncode: message.content.returncode,
+        output: String(output || "").slice(0, 4000),
+      });
+    }
+  }
+
+  const stats = data.info?.model_stats || {};
+  return {
+    entries,
+    stats: {
+      api_calls: stats.api_calls,
+      instance_cost: stats.instance_cost,
+    },
+  };
+}
+
+function parseGenerationWorker(workerDir: string): Record<string, any> {
+  const snapshot = readJsonIfExists(path.join(workerDir, "worker.json")) || {};
+  const events = readJsonLinesIfExists(path.join(workerDir, "events.jsonl")).map(summarizeGenerationEvent);
+  const submittedTaskPaths = Array.isArray(snapshot.submitted_tasks) ? snapshot.submitted_tasks : [];
+  const submittedTasks = submittedTaskPaths
+    .map((taskPath) => (typeof taskPath === "string" ? loadSubmittedTaskSummary(taskPath) : null))
+    .filter((task): task is Record<string, any> => !!task);
+  const stdoutLogPath = typeof snapshot.stdout_log_path === "string" ? resolveRepoPath(snapshot.stdout_log_path) : "";
+  const logText = stdoutLogPath && fs.existsSync(stdoutLogPath) ? fs.readFileSync(stdoutLogPath, "utf-8") : "";
+  const tracePath =
+    typeof snapshot.agent_trace_path === "string"
+      ? snapshot.agent_trace_path
+      : path.join(workerDir, "agent_trace.json");
+  const agentTrace = parseMiniTrace(tracePath);
+  const workspacePath = typeof snapshot.workspace_path === "string" ? resolveRepoPath(snapshot.workspace_path) : "";
+  const workerStatus =
+    snapshot.status ||
+    (snapshot.failed ? "failed" : snapshot.finished ? "finished" : "running");
+
+  return {
+    id: snapshot.worker_id || path.basename(workerDir),
+    gpu: Number.isFinite(Number(snapshot.gpu)) ? Number(snapshot.gpu) : -1,
+    slot: Number.isFinite(Number(snapshot.slot)) ? Number(snapshot.slot) : -1,
+    category: snapshot.category || "random",
+    status: workerStatus,
+    workspace_id: snapshot.workspace_id || (workspacePath ? path.basename(workspacePath) : ""),
+    workspace_path: workspacePath ? makeRelativePath(workspacePath) : "",
+    worker_log_path: stdoutLogPath ? makeRelativePath(stdoutLogPath) : "",
+    task_gen_agent: snapshot.task_gen_agent,
+    task_gen_model: snapshot.task_gen_model,
+    submitted_count: submittedTasks.length,
+    target_tasks: Number(snapshot.target_tasks || snapshot.num_tasks_target || 0),
+    current_task_index: snapshot.current_task_index,
+    current_k_level: snapshot.current_k_level,
+    scene_id: snapshot.scene_id,
+    episode_id: snapshot.episode_id,
+    finished: !!snapshot.finished,
+    failed: !!snapshot.failed,
+    fail_reason: snapshot.fail_reason || "",
+    submitted_tasks: submittedTasks,
+    events,
+    agent_trace: agentTrace.entries,
+    agent_stats: agentTrace.stats,
+    log_excerpt: summarizeLogExcerpt(logText),
+  };
+}
+
+function buildGenerationSuccessSeries(workers: Record<string, any>[]): Record<string, any>[] {
+  const timeline: Record<string, any>[] = [];
+  for (const worker of workers) {
+    for (const task of worker.submitted_tasks || []) {
+      timeline.push({
+        timestamp: task.submitted_at || "",
+        task_id: task.task_id || "",
+        title: task.title || "",
+        category: task.category || "",
+        success: !!task.success,
+        worker_id: worker.id || "",
+      });
+    }
+  }
+  timeline.sort((a, b) =>
+    `${a.timestamp}|${a.task_id}|${a.worker_id}`.localeCompare(
+      `${b.timestamp}|${b.task_id}|${b.worker_id}`,
+    ),
+  );
+  let passed = 0;
+  return timeline.map((item, index) => {
+    if (item.success) passed += 1;
+    return {
+      ...item,
+      index: index + 1,
+      cumulative_pass_rate: passed / (index + 1),
+      cumulative_passed: passed,
+    };
+  });
+}
+
+function buildGenerationDetail(runId: string): Record<string, any> | null {
+  const normalizedRunId = normalizeGenerationId(runId);
+  if (!normalizedRunId) return null;
+  const runDir = path.join(GENERATIONS_DIR, normalizedRunId);
+  if (!fs.existsSync(runDir) || !fs.statSync(runDir).isDirectory()) return null;
+
+  const manifest = readJsonIfExists(path.join(runDir, "manifest.json")) || {};
+  const workersDir = path.join(runDir, "workers");
+  const workers = fs.existsSync(workersDir)
+    ? fs
+        .readdirSync(workersDir)
+        .map((entry) => path.join(workersDir, entry))
+        .filter((entry) => fs.statSync(entry).isDirectory())
+        .sort()
+        .map(parseGenerationWorker)
+    : [];
+  const successSeries = buildGenerationSuccessSeries(workers);
+  const requestedTasks =
+    Number(manifest.requested_tasks || 0) ||
+    workers.reduce((sum, worker) => sum + Number(worker.target_tasks || 0), 0);
+  const submittedTasks = workers.reduce(
+    (sum, worker) => sum + (worker.submitted_tasks?.length || 0),
+    0,
+  );
+  const finishedWorkers = workers.filter((worker) => worker.status === "finished").length;
+  const failedWorkers = workers.filter((worker) => worker.status === "failed").length;
+  const runningWorkers = workers.filter((worker) => worker.status === "running").length;
+  const categories = Array.from(
+    new Set(workers.map((worker) => worker.category).filter(Boolean)),
+  ).sort();
+  const launcherLogPath = path.join(runDir, "launcher.log");
+
+  return {
+    id: normalizedRunId,
+    started_at: manifest.started_at || parseGenerationTimestamp(normalizedRunId),
+    log_dir: fs.existsSync(path.join(runDir, "logs")) ? makeRelativePath(path.join(runDir, "logs")) : "",
+    launcher_log: fs.existsSync(launcherLogPath) ? makeRelativePath(launcherLogPath) : "",
+    total_workers: Number(manifest.total_workers || workers.length),
+    requested_tasks: requestedTasks,
+    submitted_tasks: submittedTasks,
+    finished_workers: finishedWorkers,
+    failed_workers: failedWorkers,
+    running_workers: runningWorkers,
+    categories,
+    success_series: successSeries,
+    workers,
+  };
+}
+
+function buildGenerationIndex(): Record<string, any> {
+  if (!fs.existsSync(GENERATIONS_DIR)) {
+    return { generations: [] };
+  }
+
+  const generations = fs
+    .readdirSync(GENERATIONS_DIR)
+    .map((entry) => path.join(GENERATIONS_DIR, entry))
+    .filter((entry) => fs.statSync(entry).isDirectory())
+    .sort()
+    .reverse()
+    .map((entry) => buildGenerationDetail(path.basename(entry)))
+    .filter((detail): detail is Record<string, any> => !!detail)
+    .map((detail) => ({
+      id: detail.id,
+      started_at: detail.started_at,
+      log_dir: detail.log_dir,
+      total_workers: detail.total_workers,
+      requested_tasks: detail.requested_tasks,
+      submitted_tasks: detail.submitted_tasks,
+      finished_workers: detail.finished_workers,
+      failed_workers: detail.failed_workers,
+      running_workers: detail.running_workers,
+      categories: detail.categories,
+    }));
+
+  return { generations };
 }
 
 function processAction(entry: Record<string, any>): Record<string, any> {
@@ -641,6 +973,27 @@ export default function dynamicDataPlugin(): Plugin {
           if (urlPath === "/campaign-index.json") {
             res.setHeader("Content-Type", "application/json");
             res.end(JSON.stringify(buildCampaignIndex()));
+            return;
+          }
+
+          if (urlPath === "/generation-index.json") {
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(buildGenerationIndex()));
+            return;
+          }
+
+          const generationDetailMatch = urlPath.match(
+            /^\/generation\/([^/]+)\.json$/,
+          );
+          if (generationDetailMatch) {
+            const detail = buildGenerationDetail(generationDetailMatch[1]);
+            if (!detail) {
+              res.statusCode = 404;
+              res.end("Not found");
+              return;
+            }
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(detail));
             return;
           }
 
