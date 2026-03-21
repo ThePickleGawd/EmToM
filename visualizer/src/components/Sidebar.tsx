@@ -1,5 +1,12 @@
-import type { TaskSummary } from "../types";
+import type { TaskSummary, GenerationIndex } from "../types";
 import type { Source } from "../App";
+
+function formatTimestamp(value?: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 interface Props {
   source: Source;
@@ -7,6 +14,9 @@ interface Props {
   libraryTasks: TaskSummary[];
   selectedTaskId: string;
   onTaskSelect: (taskId: string) => void;
+  generationIndex: GenerationIndex | null;
+  selectedGenerationId: string;
+  onGenerationSelect: (id: string) => void;
 }
 
 export default function Sidebar({
@@ -15,32 +25,81 @@ export default function Sidebar({
   libraryTasks,
   selectedTaskId,
   onTaskSelect,
+  generationIndex,
+  selectedGenerationId,
+  onGenerationSelect,
 }: Props) {
-  const tasks = libraryTasks;
-
-  return (
-    <aside className="sidebar">
-      <div className="sidebar-header">
-        <h1>
-          <span>EmToM</span> Visualizer
-        </h1>
-        <div className="source-tabs">
-          <button
-            className={`source-tab ${source === "campaign" ? "active" : ""}`}
-            onClick={() => onSourceChange("campaign")}
-          >
-            Campaign
-          </button>
-          <button
-            className={`source-tab ${source === "library" ? "active" : ""}`}
-            onClick={() => onSourceChange("library")}
-          >
-            Library
-          </button>
+  const renderSidebarBody = () => {
+    if (source === "campaign") {
+      return (
+        <div className="campaign-sidebar-info">
+          <p className="campaign-sidebar-hint">
+            Campaign results, leaderboard, and competitive matchups.
+          </p>
         </div>
-      </div>
+      );
+    }
+
+    if (source === "generation") {
+      if (!generationIndex) {
+        return (
+          <div className="sidebar-loading">
+            <div className="loading-spinner" />
+          </div>
+        );
+      }
+      if (generationIndex.generations.length === 0) {
+        return (
+          <div className="campaign-sidebar-info">
+            <p className="campaign-sidebar-hint">
+              No generation runs found yet.
+            </p>
+          </div>
+        );
+      }
+      return (
+        <div className="task-list">
+          {generationIndex.generations.map((run) => {
+            const pct = run.requested_tasks > 0
+              ? Math.round((run.submitted_tasks / run.requested_tasks) * 100)
+              : 0;
+            const label = run.id.replace(/-bulk-generate$/, "");
+            return (
+              <div
+                key={run.id}
+                className={`task-item gen-run-item ${selectedGenerationId === run.id ? "active" : ""}`}
+                onClick={() => onGenerationSelect(run.id)}
+              >
+                <div className="task-item-header">
+                  <div
+                    className={`task-status ${run.submitted_tasks >= run.requested_tasks ? "success" : "running"}`}
+                  />
+                  <span className="task-item-title">{label}</span>
+                </div>
+                <div className="task-item-meta">
+                  <span className="category-badge cooperative">
+                    {run.submitted_tasks}/{run.requested_tasks}
+                  </span>
+                  <span>{run.total_workers}w</span>
+                  <span>{formatTimestamp(run.started_at)}</span>
+                </div>
+                <div className="gen-run-bar">
+                  <div
+                    className="gen-run-bar-fill"
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // Library
+    return (
       <div className="task-list">
-        {tasks.map((task) => (
+        {libraryTasks.map((task) => (
           <div
             key={task.task_id}
             className={`task-item ${selectedTaskId === task.task_id ? "active" : ""}`}
@@ -64,6 +123,37 @@ export default function Sidebar({
           </div>
         ))}
       </div>
+    );
+  };
+
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-header">
+        <h1>
+          <span>EmToM</span> Visualizer
+        </h1>
+        <div className="source-tabs source-tabs-3">
+          <button
+            className={`source-tab ${source === "campaign" ? "active" : ""}`}
+            onClick={() => onSourceChange("campaign")}
+          >
+            Campaign
+          </button>
+          <button
+            className={`source-tab ${source === "generation" ? "active" : ""}`}
+            onClick={() => onSourceChange("generation")}
+          >
+            Generation
+          </button>
+          <button
+            className={`source-tab ${source === "library" ? "active" : ""}`}
+            onClick={() => onSourceChange("library")}
+          >
+            Library
+          </button>
+        </div>
+      </div>
+      {renderSidebarBody()}
     </aside>
   );
 }

@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
-import type { RunsIndex, TaskDetail } from "./types";
+import type { RunsIndex, TaskDetail, GenerationIndex } from "./types";
 import Sidebar from "./components/Sidebar";
 import TaskView from "./components/TaskView";
 import CampaignView from "./components/CampaignView";
+import GenerationView from "./components/GenerationView";
 
-export type Source = "campaign" | "library";
+export type Source = "campaign" | "library" | "generation";
 
 export default function App() {
   const [runsIndex, setRunsIndex] = useState<RunsIndex | null>(null);
@@ -13,6 +14,8 @@ export default function App() {
   const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
   const [loadingTask, setLoadingTask] = useState(false);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [generationIndex, setGenerationIndex] = useState<GenerationIndex | null>(null);
+  const [selectedGenerationId, setSelectedGenerationId] = useState("");
 
   useEffect(() => {
     fetch("/data/runs.json")
@@ -21,6 +24,35 @@ export default function App() {
         setRunsIndex(data);
       });
   }, []);
+
+  // Auto-refresh generation index when on the generation tab
+  useEffect(() => {
+    if (source !== "generation") return;
+    let cancelled = false;
+
+    const loadIndex = () => {
+      fetch("/data/generation-index.json")
+        .then((r) => r.json())
+        .then((data: GenerationIndex) => {
+          if (cancelled) return;
+          setGenerationIndex(data);
+          setSelectedGenerationId((current) => {
+            if (data.generations.some((run) => run.id === current)) return current;
+            return data.generations[0]?.id || "";
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setGenerationIndex({ generations: [] });
+        });
+    };
+
+    loadIndex();
+    const intervalId = window.setInterval(loadIndex, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [source]);
 
   const loadTask = useCallback(
     (taskId: string) => {
@@ -69,60 +101,38 @@ export default function App() {
     );
   }
 
-  // Campaign mode uses full-width layout (no sidebar)
-  if (source === "campaign") {
-    return (
-      <div className="app">
-        <aside className="sidebar">
-          <div className="sidebar-header">
-            <h1>
-              <span>EmToM</span> Visualizer
-            </h1>
-            <div className="source-tabs">
-              <button
-                className="source-tab active"
-                onClick={() => handleSourceChange("campaign")}
-              >
-                Campaign
-              </button>
-              <button
-                className="source-tab"
-                onClick={() => handleSourceChange("library")}
-              >
-                Library
-              </button>
-            </div>
-          </div>
-          <div className="campaign-sidebar-info">
-            <p className="campaign-sidebar-hint">
-              Campaign results, leaderboard, and competitive matchups.
-            </p>
-          </div>
-        </aside>
+  const renderMainContent = () => {
+    if (source === "campaign") {
+      return (
         <main className="main-content">
           <CampaignView onImageClick={setLightboxSrc} />
         </main>
-        {lightboxSrc && (
-          <div
-            className="lightbox-overlay"
-            onClick={() => setLightboxSrc(null)}
-          >
-            <img className="lightbox-img" src={lightboxSrc} alt="Frame" />
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="app">
-      <Sidebar
-        source={source}
-        onSourceChange={handleSourceChange}
-        libraryTasks={runsIndex.library || []}
-        selectedTaskId={selectedTaskId}
-        onTaskSelect={loadTask}
-      />
+      );
+    }
+    if (source === "generation") {
+      return (
+        <main className="main-content">
+          {!selectedGenerationId ? (
+            <div className="empty-state">
+              {generationIndex && generationIndex.generations.length === 0 ? (
+                <div className="campaign-empty">
+                  <div className="campaign-empty-icon">&#x2237;</div>
+                  <p>No generation runs found.</p>
+                  <code className="campaign-empty-cmd">
+                    ./emtom/bulk_generate.sh --total-tasks 8 --task-gen-agent mini --model gpt-5.2
+                  </code>
+                </div>
+              ) : (
+                "Select a generation run from the sidebar"
+              )}
+            </div>
+          ) : (
+            <GenerationView generationId={selectedGenerationId} />
+          )}
+        </main>
+      );
+    }
+    return (
       <main className="main-content">
         {!selectedTaskId ? (
           <div className="empty-state">
@@ -137,7 +147,22 @@ export default function App() {
           <TaskView task={taskDetail} onImageClick={setLightboxSrc} />
         ) : null}
       </main>
+    );
+  };
 
+  return (
+    <div className="app">
+      <Sidebar
+        source={source}
+        onSourceChange={handleSourceChange}
+        libraryTasks={runsIndex.library || []}
+        selectedTaskId={selectedTaskId}
+        onTaskSelect={loadTask}
+        generationIndex={generationIndex}
+        selectedGenerationId={selectedGenerationId}
+        onGenerationSelect={setSelectedGenerationId}
+      />
+      {renderMainContent()}
       {lightboxSrc && (
         <div className="lightbox-overlay" onClick={() => setLightboxSrc(null)}>
           <img className="lightbox-img" src={lightboxSrc} alt="Frame" />
