@@ -35,7 +35,7 @@ print('patched')
 PY]
 Assigned!
 
-Thought: Task is ready. Let me run the judge, which will verify the PDDL first and then check quality.
+Thought: Task is ready. Let me run the judge, which will verify the PDDL, regenerate the plan, simulator-check the golden trajectory if needed, and then check quality.
 Action: judge[]
 Assigned!
 
@@ -43,10 +43,9 @@ Assigned!
 - `new_scene[N]` - **CALL FIRST!** Load scene with N agents (2-10), reset task.
 - `new_scene[N, keep]` - Change agent count, keep current scene and task edits.
 - `bash[cmd]` - Run shell commands.
-- `judge[]` - Runs strict PDDL verification first, then evaluates task quality.
-- `verify_golden_trajectory[]` - Deterministically regenerate trajectory from spec and test it in simulator. Run after judge passes.
+- `judge[]` - Runs strict PDDL verification, regenerates the plan, simulator-verifies the golden trajectory when the plan changed, and then evaluates task quality.
 - `test_task[]` - Difficulty calibration. Runs `standard` + `baseline`; target standard-mode pass rate is ~20%.
-- `submit_task[]` - Save task. Requires judge + verify + test_task.
+- `submit_task[]` - Save task. Requires judge + test_task.
 - `fail[reason]` - **STOPS ALL GENERATION.** Only for simulator bugs or critical errors. Use `new_scene[N]` for task issues.
 
 **Stuck detection:** If you've spent 10+ iterations on the same scene without passing `judge[]`, call `new_scene[N]` for a fresh scene. Don't iterate endlessly on a scene that can't support your concept.
@@ -55,11 +54,10 @@ Assigned!
 1. `new_scene[N]` → load scene with N agents
 2. **Before first edit**, inspect examples in `{working_dir}/sampled_tasks/` (selector-curated seed tasks from the task pool)
 3. Edit `{task_file}` — write `problem_pddl` FIRST (inline full problem file), lock the formal task structure, then make `task`, `agent_secrets`, `team_secrets`, and mechanics match that spec
-4. `judge[]` → runs strict PDDL verification first, then LLM quality evaluation → fix → repeat until pass
-5. `verify_golden_trajectory[]` → deterministic regeneration + simulator check → fix spec → repeat until pass
-6. `test_task[]` → runs `standard` + `baseline`, records both, and calibrates difficulty from `standard`
-7. `submit_task[]`
-8. Repeat from step 1 for next task
+4. `judge[]` → runs strict PDDL verification, regenerates the golden trajectory, simulator-verifies it when needed, then runs LLM quality evaluation → fix → repeat until pass
+5. `test_task[]` → runs `standard` + `baseline`, records both, and calibrates difficulty from `standard`
+6. `submit_task[]`
+7. Repeat from step 1 for next task
 
 ## Files
 - `{task_file}` - Working task (created after new_scene)
@@ -491,7 +489,7 @@ Use `judge[]` to see the computed minimal ToM depth from its strict PDDL-verific
 
 ## Golden Trajectory
 `golden_trajectory` is a derived artifact. Do NOT hand-author it as source-of-truth.
-`verify_golden_trajectory[]` and `submit_task[]` regenerate it deterministically from the task spec.
+`judge[]` regenerates it deterministically from the task spec and simulator-verifies it when the plan changed.
 You should focus on editing spec fields (`problem_pddl`, mechanics, constraints, secrets).
 Write `problem_pddl` first, then make the narrative fields match the authored formal spec.
 
@@ -528,8 +526,6 @@ def _rewrite_react_tool_syntax(text: str) -> str:
         ("new_scene[N]", "taskgen new_scene N"),
         ("`judge[]`", "`taskgen judge`"),
         ("judge[]", "taskgen judge"),
-        ("`verify_golden_trajectory[]`", "`taskgen verify_golden_trajectory`"),
-        ("verify_golden_trajectory[]", "taskgen verify_golden_trajectory"),
         ("`test_task[]`", "`taskgen test_task`"),
         ("test_task[]", "taskgen test_task"),
         ("`submit_task[]`", "`taskgen submit_task`"),
@@ -605,7 +601,6 @@ Use the repo-owned `taskgen` commands for pipeline actions instead of bespoke to
 - `taskgen new_scene N`
 - `taskgen new_scene N --keep`
 - `taskgen judge`
-- `taskgen verify_golden_trajectory`
 - `taskgen test_task`
 - `taskgen submit_task`
 - `taskgen finish`
@@ -617,10 +612,9 @@ Use the repo-owned `taskgen` commands for pipeline actions instead of bespoke to
 3. Inspect examples in `{working_dir}/sampled_tasks/` for structural inspiration. **Sampled tasks may have a different agent count — adapt patterns to this scene's agents, do not copy agent IDs directly.**
 4. Edit `{task_file}`. Author `problem_pddl` first, then make the natural-language fields and mechanics match it.
 5. Run `taskgen judge`, fix the task, and repeat until it passes.
-6. Run `taskgen verify_golden_trajectory`, fix the task, and repeat until it passes.
-7. Run `taskgen test_task`.
-8. Run `taskgen submit_task`.
-9. When you have submitted {num_tasks} tasks, run `taskgen finish`.
+6. Run `taskgen test_task`.
+7. Run `taskgen submit_task`.
+8. When you have submitted {num_tasks} tasks, run `taskgen finish`.
 
 ## Command Rules
 - Work inside the current workspace.

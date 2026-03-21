@@ -5,7 +5,6 @@ Usage:
     python -m emtom.cli.taskgen --working-dir DIR status
     python -m emtom.cli.taskgen --working-dir DIR new_scene 3 [--keep]
     python -m emtom.cli.taskgen --working-dir DIR judge
-    python -m emtom.cli.taskgen --working-dir DIR verify_golden_trajectory
     python -m emtom.cli.taskgen --working-dir DIR test_task
     python -m emtom.cli.taskgen --working-dir DIR submit_task
     python -m emtom.cli.taskgen --working-dir DIR finish
@@ -32,9 +31,6 @@ def main() -> None:
     new_scene_parser.add_argument("--keep", action="store_true", help="Keep current scene/task")
 
     subparsers.add_parser("judge", help="Judge the current task")
-    subparsers.add_parser(
-        "verify_golden_trajectory", help="Regenerate and verify the golden trajectory"
-    )
     subparsers.add_parser("test_task", help="Run standard and baseline calibration runs")
     subparsers.add_parser("submit_task", help="Submit the current task")
     subparsers.add_parser("status", help="Show current task-generation state")
@@ -58,8 +54,6 @@ def main() -> None:
         result = session.new_scene(args.num_agents, keep=args.keep)
     elif args.command == "judge":
         result = session.judge()
-    elif args.command == "verify_golden_trajectory":
-        result = session.verify_golden_trajectory()
     elif args.command == "test_task":
         result = session.test_task()
     elif args.command == "submit_task":

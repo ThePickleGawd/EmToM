@@ -1,15 +1,15 @@
 #!/bin/bash
 # Bulk EMTOM Task Generation
 # Runs task generation across all GPUs with configurable concurrency
-# and keeps launching attempts until the requested total is reached
-# or a full batch fails.
+# by launching a fixed set of workers once and dividing the requested
+# total across them up front.
 #
 # Usage: ./emtom/bulk_generate.sh [options] [-- <run_emtom.sh args>]
 #
 # Examples:
-#   ./emtom/bulk_generate.sh                              # 24 processes (8 GPUs x 3)
-#   ./emtom/bulk_generate.sh --per-gpu 2                  # 16 concurrent slots (8 GPUs x 2)
-#   ./emtom/bulk_generate.sh --total-tasks 4              # Keep going until 4 tasks or a full batch fails
+#   ./emtom/bulk_generate.sh                              # One full saturated run
+#   ./emtom/bulk_generate.sh --per-gpu 2                  # 16 fixed workers (8 GPUs x 2)
+#   ./emtom/bulk_generate.sh --num-tasks 4                # Produce 4 total tasks with fixed workers
 #   ./emtom/bulk_generate.sh --model gpt-5                # Use different model
 #   ./emtom/bulk_generate.sh --dry-run                    # Preview without running
 #   ./emtom/bulk_generate.sh --per-gpu 5 -- --difficulty hard  # Difficulty preset
@@ -23,9 +23,67 @@ cd "$PROJECT_ROOT"
 
 mkdir -p outputs
 LOCK_FILE="outputs/.bulk_generate.lock"
+SHUTDOWN_IN_PROGRESS=false
+EXIT_STATUS=0
 
 cleanup_lock() {
     rm -f "$LOCK_FILE"
+}
+
+kill_worker_groups() {
+    if [ "${#PROCESS_GROUPS[@]}" -eq 0 ]; then
+        return
+    fi
+
+    local pgid
+    local sent_signal=false
+    for pgid in "${PROCESS_GROUPS[@]}"; do
+        if [ -n "$pgid" ] && kill -0 -- "-$pgid" 2>/dev/null; then
+            if [ "$sent_signal" = false ]; then
+                echo -e "${YELLOW}Stopping bulk worker processes...${NC}"
+                sent_signal=true
+            fi
+            kill -TERM -- "-$pgid" 2>/dev/null || true
+        fi
+    done
+
+    if [ "$sent_signal" = true ]; then
+        sleep 2
+        for pgid in "${PROCESS_GROUPS[@]}"; do
+            if [ -n "$pgid" ] && kill -0 -- "-$pgid" 2>/dev/null; then
+                kill -KILL -- "-$pgid" 2>/dev/null || true
+            fi
+        done
+    fi
+}
+
+cleanup_all() {
+    if [ "$SHUTDOWN_IN_PROGRESS" = true ]; then
+        return
+    fi
+    SHUTDOWN_IN_PROGRESS=true
+    kill_worker_groups
+    cleanup_lock
+}
+
+handle_signal() {
+    local signal_name="$1"
+    case "$signal_name" in
+        INT) EXIT_STATUS=130 ;;
+        TERM) EXIT_STATUS=143 ;;
+        *) EXIT_STATUS=1 ;;
+    esac
+    echo -e "${YELLOW}Received ${signal_name}. Shutting down bulk generation...${NC}"
+    cleanup_all
+    exit "$EXIT_STATUS"
+}
+
+handle_exit() {
+    local status=$?
+    trap - EXIT
+    EXIT_STATUS="$status"
+    cleanup_all
+    exit "$EXIT_STATUS"
 }
 
 if [ -f "$LOCK_FILE" ]; then
@@ -39,13 +97,14 @@ if [ -f "$LOCK_FILE" ]; then
 fi
 
 echo "$$" > "$LOCK_FILE"
-trap cleanup_lock EXIT INT TERM
+trap handle_exit EXIT
+trap 'handle_signal INT' INT
+trap 'handle_signal TERM' TERM
 
 # Defaults
 PER_GPU=3
 MODEL="gpt-5.2"
-NUM_TASKS=3
-TOTAL_TASKS=""
+NUM_TASKS=""
 DRY_RUN=false
 CATEGORY_FILTER=""  # Empty = all 3 categories (round-robin)
 OUTPUT_DIR="data/emtom/tasks"
@@ -74,9 +133,8 @@ print_usage() {
     echo "Options:"
     echo "  --per-gpu N         Concurrent processes per GPU (default: 3, one per category)"
     echo "  --model MODEL       LLM model (default: gpt-5.2)"
-    echo "  --num-tasks N       Tasks per process (default: 3)"
-    echo "  --total-tasks N     Keep launching one-task attempts until N tasks are submitted"
-    echo "                      or a full batch fails"
+    echo "  --num-tasks N       Total tasks for the whole bulk run (default: one full saturated run)"
+    echo "                      The launcher divides N across fixed workers and starts them once"
     echo "  --task-gen-agent A  External generator agent: mini|claude|codex (default: mini)"
     echo "  --category CAT      Only generate this category (cooperative, competitive, mixed)"
     echo "  --difficulty LEVEL  Difficulty for generation (easy, medium, hard)"
@@ -91,9 +149,9 @@ print_usage() {
     echo "  See: ./emtom/run_emtom.sh generate --help"
     echo ""
     echo "Examples:"
-    echo "  ./emtom/bulk_generate.sh                                  # 24 concurrent slots (8 GPUs x 3)"
+    echo "  ./emtom/bulk_generate.sh                                  # one full saturated run"
     echo "  ./emtom/bulk_generate.sh --per-gpu 6                      # 48 concurrent slots"
-    echo "  ./emtom/bulk_generate.sh --total-tasks 4                  # stop after 4 tasks or a full failed batch"
+    echo "  ./emtom/bulk_generate.sh --num-tasks 4                    # assign 4 total tasks across workers"
     echo "  ./emtom/bulk_generate.sh --per-gpu 8 --k-distribution 1:2,2:3,3:3  # Weighted K-levels"
     echo "  ./emtom/bulk_generate.sh --per-gpu 5 -- --difficulty hard  # Hard presets"
     echo "  ./emtom/bulk_generate.sh -- --difficulty hard --subtasks-max 20  # Override preset"
@@ -117,10 +175,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --num-tasks)
             NUM_TASKS=$2
-            shift 2
-            ;;
-        --total-tasks)
-            TOTAL_TASKS=$2
             shift 2
             ;;
         --task-gen-agent)
@@ -180,6 +234,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+for extra_arg in "${EXTRA_ARGS[@]}"; do
+    if [[ "$extra_arg" == "--num-tasks" || "$extra_arg" == "--tasks" ]]; then
+        echo -e "${RED}Error: bulk_generate.sh owns task count. Use top-level --num-tasks instead of forwarding ${extra_arg}.${NC}"
+        exit 1
+    fi
+done
+
 # Build per-slot k-level array from --k-distribution
 declare -a SLOT_K_LEVELS=()
 if [ -n "$K_DISTRIBUTION" ]; then
@@ -225,17 +286,19 @@ NUM_CATEGORIES=${#CATEGORIES[@]}
 MAX_PROCESSES=$((NUM_GPUS * PER_GPU))
 TOTAL_PROCESSES=$MAX_PROCESSES
 
-if [ -n "$TOTAL_TASKS" ]; then
-    if ! [[ "$TOTAL_TASKS" =~ ^[0-9]+$ ]] || [ "$TOTAL_TASKS" -le 0 ]; then
-        echo -e "${RED}Error: --total-tasks must be a positive integer${NC}"
-        exit 1
-    fi
+if [ -z "$NUM_TASKS" ]; then
+    NUM_TASKS="$TOTAL_PROCESSES"
 fi
 
-if [ -n "$TOTAL_TASKS" ] && [ "$TOTAL_TASKS" -lt "$TOTAL_PROCESSES" ]; then
-    INITIAL_BATCH_SIZE="$TOTAL_TASKS"
+if ! [[ "$NUM_TASKS" =~ ^[0-9]+$ ]] || [ "$NUM_TASKS" -le 0 ]; then
+    echo -e "${RED}Error: --num-tasks must be a positive integer${NC}"
+    exit 1
+fi
+
+if [ "$NUM_TASKS" -lt "$TOTAL_PROCESSES" ]; then
+    ACTIVE_WORKERS="$NUM_TASKS"
 else
-    INITIAL_BATCH_SIZE="$TOTAL_PROCESSES"
+    ACTIVE_WORKERS="$TOTAL_PROCESSES"
 fi
 
 # Create generation/task directories
@@ -257,6 +320,7 @@ echo -e "==============================================${NC}"
 echo -e "GPUs:               ${GREEN}$NUM_GPUS${NC}"
 echo -e "Processes per GPU:  ${GREEN}$PER_GPU${NC}"
 echo -e "Parallel slots:     ${GREEN}$MAX_PROCESSES${NC}"
+echo -e "Active workers:     ${GREEN}$ACTIVE_WORKERS${NC}"
 echo -e "Categories:         ${GREEN}${CATEGORIES[*]}${NC}"
 echo -e "Model:              ${GREEN}$MODEL${NC}"
 echo -e "Task-gen agent:     ${GREEN}$TASK_GEN_AGENT${NC}"
@@ -268,14 +332,8 @@ elif [ -n "$K_LEVEL" ]; then
 else
     echo -e "K-level:            ${GREEN}random per task${NC}"
 fi
-if [ -n "$TOTAL_TASKS" ]; then
-    echo -e "Total tasks:        ${GREEN}$TOTAL_TASKS${NC}"
-    echo -e "Tasks per attempt:  ${GREEN}1${NC}"
-    echo -e "Initial batch size: ${GREEN}$INITIAL_BATCH_SIZE${NC}"
-else
-    echo -e "Total processes:    ${GREEN}$TOTAL_PROCESSES${NC}"
-    echo -e "Tasks per process:  ${GREEN}$NUM_TASKS${NC}"
-fi
+echo -e "Total tasks:        ${GREEN}$NUM_TASKS${NC}"
+echo -e "Worker launch mode: ${GREEN}fixed${NC}"
 if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
     echo -e "Extra args:         ${GREEN}${EXTRA_ARGS[*]}${NC}"
 fi
@@ -288,8 +346,9 @@ echo ""
 # Track PIDs
 declare -a PIDS
 declare -a PROCESS_INFO
-REQUESTED_TASKS_TOTAL="${TOTAL_TASKS:-$((TOTAL_PROCESSES * NUM_TASKS))}"
-ATTEMPT_COUNTER=0
+declare -a PROCESS_TASK_COUNTS
+declare -a PROCESS_GROUPS
+REQUESTED_TASKS_TOTAL="$NUM_TASKS"
 
 build_worker_command() {
     local gpu="$1"
@@ -324,100 +383,105 @@ build_worker_command() {
 
     if [ "$DRY_RUN" = true ]; then
         printf '  EMTOM_GENERATION_RUN_ID=%q EMTOM_GENERATION_RUN_DIR=%q EMTOM_GENERATION_WORKER_ID=%q EMTOM_GENERATION_WORKER_DIR=%q EMTOM_GENERATION_TOTAL_WORKERS=%q EMTOM_GENERATION_REQUESTED_TASKS=%q EMTOM_GENERATION_MODE=%q EMTOM_GENERATION_GPU=%q EMTOM_GENERATION_SLOT=%q EMTOM_GENERATION_STDOUT_LOG=%q CUDA_VISIBLE_DEVICES=%q' \
-            "$GENERATION_RUN_ID" "$GENERATION_DIR" "$worker_id" "$worker_dir" "$MAX_PROCESSES" "$REQUESTED_TASKS_TOTAL" "bulk" "$gpu" "$slot" "$log_file" "$gpu"
+            "$GENERATION_RUN_ID" "$GENERATION_DIR" "$worker_id" "$worker_dir" "$ACTIVE_WORKERS" "$REQUESTED_TASKS_TOTAL" "bulk" "$gpu" "$slot" "$log_file" "$gpu"
         printf ' %q' "${cmd[@]}"
         printf '\n'
         return
     fi
 
-    EMTOM_GENERATION_RUN_ID="$GENERATION_RUN_ID" \
-    EMTOM_GENERATION_RUN_DIR="$GENERATION_DIR" \
-    EMTOM_GENERATION_WORKER_ID="$worker_id" \
-    EMTOM_GENERATION_WORKER_DIR="$worker_dir" \
-    EMTOM_GENERATION_TOTAL_WORKERS="$MAX_PROCESSES" \
-    EMTOM_GENERATION_REQUESTED_TASKS="$REQUESTED_TASKS_TOTAL" \
-    EMTOM_GENERATION_MODE="bulk" \
-    EMTOM_GENERATION_GPU="$gpu" \
-    EMTOM_GENERATION_SLOT="$slot" \
-    EMTOM_GENERATION_STDOUT_LOG="$log_file" \
-    CUDA_VISIBLE_DEVICES="$gpu" "${cmd[@]}" > "$log_file" 2>&1 &
+    setsid env \
+        EMTOM_GENERATION_RUN_ID="$GENERATION_RUN_ID" \
+        EMTOM_GENERATION_RUN_DIR="$GENERATION_DIR" \
+        EMTOM_GENERATION_WORKER_ID="$worker_id" \
+        EMTOM_GENERATION_WORKER_DIR="$worker_dir" \
+        EMTOM_GENERATION_TOTAL_WORKERS="$ACTIVE_WORKERS" \
+        EMTOM_GENERATION_REQUESTED_TASKS="$REQUESTED_TASKS_TOTAL" \
+        EMTOM_GENERATION_MODE="bulk" \
+        EMTOM_GENERATION_GPU="$gpu" \
+        EMTOM_GENERATION_SLOT="$slot" \
+        EMTOM_GENERATION_STDOUT_LOG="$log_file" \
+        CUDA_VISIBLE_DEVICES="$gpu" "${cmd[@]}" > "$log_file" 2>&1 &
     local pid=$!
     PIDS+=("$pid")
+    PROCESS_GROUPS+=("$pid")
     if [ "${#SLOT_K_LEVELS[@]}" -gt 0 ]; then
-        PROCESS_INFO+=("GPU$gpu:slot$slot:$category:K${SLOT_K_LEVELS[$slot]}:tasks=${process_num_tasks}:attempt=$(printf '%04d' "$ATTEMPT_COUNTER"):$pid")
+        PROCESS_INFO+=("GPU$gpu:slot$slot:$category:K${SLOT_K_LEVELS[$slot]}:tasks=${process_num_tasks}:$pid")
     else
-        PROCESS_INFO+=("GPU$gpu:slot$slot:$category:tasks=${process_num_tasks}:attempt=$(printf '%04d' "$ATTEMPT_COUNTER"):$pid")
+        PROCESS_INFO+=("GPU$gpu:slot$slot:$category:tasks=${process_num_tasks}:$pid")
     fi
 }
 
-launch_batch() {
-    local batch_size="$1"
-    local process_num_tasks="$2"
-    local batch_label="$3"
+build_worker_task_counts() {
+    local total_tasks="$1"
+    local worker_count="$2"
 
+    TASKS_PER_WORKER=()
+    local base_count=$((total_tasks / worker_count))
+    local remainder=$((total_tasks % worker_count))
+    for ((worker_idx=0; worker_idx<worker_count; worker_idx++)); do
+        local assigned="$base_count"
+        if [ "$worker_idx" -lt "$remainder" ]; then
+            assigned=$((assigned + 1))
+        fi
+        TASKS_PER_WORKER+=("$assigned")
+    done
+}
+
+launch_workers() {
     PIDS=()
     PROCESS_INFO=()
+    PROCESS_TASK_COUNTS=()
+    PROCESS_GROUPS=()
 
-    for ((process_idx=0; process_idx<batch_size; process_idx++)); do
-        local gpu=$((process_idx % NUM_GPUS))
-        local slot=$((process_idx / NUM_GPUS))
-        local category_idx=$((process_idx % NUM_CATEGORIES))
+    build_worker_task_counts "$NUM_TASKS" "$ACTIVE_WORKERS"
+
+    for ((worker_idx=0; worker_idx<ACTIVE_WORKERS; worker_idx++)); do
+        local gpu=$((worker_idx % NUM_GPUS))
+        local slot=$((worker_idx / NUM_GPUS))
+        local category_idx=$((worker_idx % NUM_CATEGORIES))
         local category=${CATEGORIES[$category_idx]}
-
-        ATTEMPT_COUNTER=$((ATTEMPT_COUNTER + 1))
-        local attempt_tag
-        attempt_tag=$(printf '%04d' "$ATTEMPT_COUNTER")
-        local worker_id="gpu${gpu}-slot${slot}-${category}-attempt${attempt_tag}"
+        local process_num_tasks=${TASKS_PER_WORKER[$worker_idx]}
+        local worker_tag
+        worker_tag=$(printf '%04d' $((worker_idx + 1)))
+        local worker_id="gpu${gpu}-slot${slot}-${category}-worker${worker_tag}"
         local worker_dir="${WORKERS_DIR}/${worker_id}"
         mkdir -p "$worker_dir"
 
         local log_file
         if [ "${#SLOT_K_LEVELS[@]}" -gt 0 ]; then
             local slot_k="${SLOT_K_LEVELS[$slot]}"
-            log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}_k${slot_k}_attempt${attempt_tag}.log"
+            log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}_k${slot_k}_worker${worker_tag}.log"
         else
-            log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}_attempt${attempt_tag}.log"
+            log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}_worker${worker_tag}.log"
         fi
 
-        local slot_label="GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}, Tasks=${process_num_tasks}, Attempt=${attempt_tag}"
+        local slot_label="GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}, Tasks=${process_num_tasks}, Worker=${worker_tag}"
         if [ "${#SLOT_K_LEVELS[@]}" -gt 0 ]; then
-            slot_label="GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}, K=${SLOT_K_LEVELS[$slot]}, Tasks=${process_num_tasks}, Attempt=${attempt_tag}"
+            slot_label="GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}, K=${SLOT_K_LEVELS[$slot]}, Tasks=${process_num_tasks}, Worker=${worker_tag}"
         fi
 
         if [ "$DRY_RUN" = true ]; then
-            echo -e "${YELLOW}[DRY-RUN]${NC} ${batch_label} $slot_label"
+            echo -e "${YELLOW}[DRY-RUN]${NC} $slot_label"
         else
-            echo -e "${GREEN}Starting${NC} ${batch_label} $slot_label -> $log_file"
+            echo -e "${GREEN}Starting${NC} $slot_label -> $log_file"
         fi
         build_worker_command "$gpu" "$slot" "$category" "$process_num_tasks" "$worker_id" "$worker_dir" "$log_file"
+        PROCESS_TASK_COUNTS+=("$process_num_tasks")
     done
 }
 
 BULK_START_EPOCH=$(date +%s)
 
-if [ -n "$TOTAL_TASKS" ]; then
-    launch_batch "$INITIAL_BATCH_SIZE" 1 "Batch 1 |"
-    if [ "$DRY_RUN" = true ]; then
-        echo ""
-        echo -e "${YELLOW}Dry run complete. In live mode the launcher keeps refilling slots with one-task attempts until ${TOTAL_TASKS} tasks are submitted or a full batch fails.${NC}"
-        exit 0
-    fi
-else
-    launch_batch "$TOTAL_PROCESSES" "$NUM_TASKS" ""
-    if [ "$DRY_RUN" = true ]; then
-        echo ""
-        echo -e "${YELLOW}Dry run complete. No processes started.${NC}"
-        exit 0
-    fi
+launch_workers
+if [ "$DRY_RUN" = true ]; then
+    echo ""
+    echo -e "${YELLOW}Dry run complete. In live mode the launcher starts ${ACTIVE_WORKERS} fixed workers whose assigned task counts sum to ${NUM_TASKS}.${NC}"
+    exit 0
 fi
 
 echo ""
 echo "=============================================="
-if [ -n "$TOTAL_TASKS" ]; then
-    echo -e "${BOLD}Scheduler started${NC} (target ${TOTAL_TASKS} tasks, up to ${MAX_PROCESSES} concurrent attempts)"
-else
-    echo -e "${BOLD}All $TOTAL_PROCESSES processes started${NC}"
-fi
+echo -e "${BOLD}Workers started${NC} (${ACTIVE_WORKERS} fixed workers, target ${NUM_TASKS} tasks)"
 echo "=============================================="
 echo ""
 echo -e "${CYAN}Monitoring:${NC}"
@@ -432,58 +496,32 @@ echo ""
 failed=0
 succeeded=0
 submitted_total=0
-batches_run=0
+failed_task_budget=0
 stop_reason=""
 
-wait_for_batch() {
-    local batch_success=0
-    local batch_failed=0
-
+wait_for_workers() {
     for i in "${!PIDS[@]}"; do
         local pid=${PIDS[$i]}
         local info=${PROCESS_INFO[$i]}
+        local assigned_tasks=${PROCESS_TASK_COUNTS[$i]}
 
         if wait "$pid"; then
             echo -e "${GREEN}[DONE]${NC} $info"
-            batch_success=$((batch_success + 1))
             succeeded=$((succeeded + 1))
+            submitted_total=$((submitted_total + assigned_tasks))
         else
             echo -e "${RED}[FAIL]${NC} $info"
-            batch_failed=$((batch_failed + 1))
             failed=$((failed + 1))
+            failed_task_budget=$((failed_task_budget + assigned_tasks))
         fi
     done
-
-    submitted_total=$((submitted_total + batch_success))
-    batches_run=$((batches_run + 1))
-    LAST_BATCH_SUCCESS="$batch_success"
-    LAST_BATCH_FAILED="$batch_failed"
 }
 
-if [ -n "$TOTAL_TASKS" ]; then
-    while true; do
-        wait_for_batch
-        echo -e "${CYAN}Batch ${batches_run} summary:${NC} submitted ${LAST_BATCH_SUCCESS}, failed ${LAST_BATCH_FAILED}, total submitted ${submitted_total}/${TOTAL_TASKS}"
-
-        if [ "$submitted_total" -ge "$TOTAL_TASKS" ]; then
-            stop_reason="reached target"
-            break
-        fi
-        if [ "$LAST_BATCH_SUCCESS" -eq 0 ]; then
-            stop_reason="all attempts in the latest batch failed"
-            break
-        fi
-
-        remaining_tasks=$((TOTAL_TASKS - submitted_total))
-        next_batch_size=$MAX_PROCESSES
-        if [ "$remaining_tasks" -lt "$next_batch_size" ]; then
-            next_batch_size="$remaining_tasks"
-        fi
-        launch_batch "$next_batch_size" 1 "Batch $((batches_run + 1)) |"
-    done
+wait_for_workers
+if [ "$failed" -eq 0 ]; then
+    stop_reason="all workers completed"
 else
-    wait_for_batch
-    stop_reason="all processes completed"
+    stop_reason="one or more workers failed before completing their assigned tasks"
 fi
 
 BULK_END_EPOCH=$(date +%s)
@@ -491,12 +529,11 @@ WALL_CLOCK=$((BULK_END_EPOCH - BULK_START_EPOCH))
 
 echo ""
 echo "=============================================="
-if [ -n "$TOTAL_TASKS" ]; then
-    echo -e "${BOLD}Bulk generation complete${NC} (${submitted_total}/${TOTAL_TASKS} tasks, ${succeeded} successful attempts, ${failed} failed attempts)"
-    echo -e "Stop reason: ${CYAN}${stop_reason}${NC}"
-else
-    echo -e "${BOLD}Processes complete${NC} (${succeeded} ok, ${failed} failed)"
+echo -e "${BOLD}Bulk generation complete${NC} (${submitted_total}/${NUM_TASKS} tasks, ${succeeded} successful attempts, ${failed} failed attempts)"
+if [ "$failed_task_budget" -gt 0 ]; then
+    echo -e "Unfinished task budget: ${YELLOW}${failed_task_budget}${NC}"
 fi
+echo -e "Stop reason: ${CYAN}${stop_reason}${NC}"
 echo "=============================================="
 echo ""
 

@@ -12,8 +12,7 @@ from typing import Any, Dict, List, Optional
 from emtom.cli import CLIResult, failure, success
 from emtom.cli.judge_task import run as judge_task_run
 from emtom.cli.submit_task import run as submit_task_run
-from emtom.cli.validate_task import static_validate_trajectory, validate
-from emtom.pddl.planner import regenerate_golden_trajectory
+from emtom.cli.validate_task import validate
 from emtom.task_gen.scene_loader import SceneData
 
 
@@ -179,6 +178,8 @@ def default_state(
         "last_judge_passed": False,
         "last_verify_passed": False,
         "last_test_passed": False,
+        "last_verified_spec_hash": None,
+        "last_verified_trajectory_hash": None,
         "consecutive_judge_failures": 0,
         "finished": False,
         "failed": False,
@@ -283,6 +284,8 @@ class TaskGenSession:
         self.state["last_judge_passed"] = False
         self.state["last_verify_passed"] = False
         self.state["last_test_passed"] = False
+        self.state["last_verified_spec_hash"] = None
+        self.state["last_verified_trajectory_hash"] = None
         self.state["consecutive_judge_failures"] = 0
 
     def status(self) -> CLIResult:
@@ -303,6 +306,8 @@ class TaskGenSession:
             "last_judge_passed": self.state.get("last_judge_passed", False),
             "last_verify_passed": self.state.get("last_verify_passed", False),
             "last_test_passed": self.state.get("last_test_passed", False),
+            "last_verified_spec_hash": self.state.get("last_verified_spec_hash"),
+            "last_verified_trajectory_hash": self.state.get("last_verified_trajectory_hash"),
             "scene_loaded": scene_data is not None,
         }
         if scene_data is not None:
@@ -778,81 +783,10 @@ class TaskGenSession:
         return success(payload)
 
     def verify_golden_trajectory(self) -> CLIResult:
-        if not self.task_file.exists():
-            return failure("working_task.json does not exist.")
-
-        try:
-            with open(self.task_file) as f:
-                task_data = json.load(f)
-        except json.JSONDecodeError as e:
-            return failure(f"Invalid JSON: {e}")
-
-        # Validate spec BEFORE running the planner — catches invalid agent IDs,
-        # missing mechanic fields, scene mismatches, etc. so the agent gets
-        # actionable errors instead of a confusing planner-generated trajectory.
-        validation_result = self._validate_task_structure(task_data)
-        if not validation_result["success"]:
-            return validation_result
-
-        try:
-            regenerate_golden_trajectory(
-                task_data,
-                scene_data=self._load_scene_data(),
-                source="verify",
-                task_file=str(self.task_file),
-            )
-        except Exception as e:
-            return failure(f"Failed to regenerate trajectory from task spec: {e}")
-
-        golden = task_data.get("golden_trajectory", [])
-        if not golden:
-            return failure("Deterministic planner produced empty trajectory.")
-
-        static_errors = static_validate_trajectory(task_data, golden, self._load_scene_data())
-        if static_errors:
-            return failure(
-                f"Static validation failed: {static_errors[0]}",
-                data={"all_errors": static_errors},
-            )
-
-        num_agents = task_data.get("num_agents", 2)
-        cmd = [
-            sys.executable,
-            "-m",
-            "emtom.cli.verify_trajectory",
-            str(self.task_file),
-            "--working-dir",
-            str(self.working_dir),
-            "--config-name",
-            f"examples/emtom_{num_agents}_robots",
-        ]
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=1200,
-                cwd=str(self.project_root),
-            )
-            stdout = proc.stdout
-            json_start = stdout.find("{")
-            if json_start >= 0:
-                stdout = stdout[json_start:]
-            result = json.loads(stdout)
-        except subprocess.TimeoutExpired:
-            return failure("Verification timed out (20 min). Possible navmesh issue.")
-        except (json.JSONDecodeError, ValueError):
-            return failure(f"Failed to parse verify output: {proc.stderr[:500]}")
-
-        if result.get("success") and result.get("data", {}).get("valid"):
-            self.state["last_verify_passed"] = True
-            self._write_state()
-            return success(result["data"])
-
-        data = result.get("data", {})
         return failure(
-            result.get("error", "Unknown verification failure"),
-            data=data,
+            "verify_golden_trajectory is no longer a separate step. "
+            "Run judge; it now regenerates the plan, simulator-verifies it when needed, "
+            "and then runs the quality judge."
         )
 
     def judge(self) -> CLIResult:
@@ -874,16 +808,32 @@ class TaskGenSession:
             threshold=self.state.get("judge_threshold") or 0.7,
             difficulty=self.state.get("difficulty"),
             required_tom_level=self.state.get("current_k_level"),
+            verified_trajectory_hash=(
+                self.state.get("last_verified_trajectory_hash")
+                if self.state.get("last_verify_passed")
+                else None
+            ),
         )
+        data = result.get("data") or {}
+        golden = data.get("golden_trajectory") or {}
+        if golden.get("sim_verified"):
+            self.state["last_verify_passed"] = True
+            self.state["last_verified_spec_hash"] = golden.get("spec_hash")
+            self.state["last_verified_trajectory_hash"] = golden.get("trajectory_hash")
+        elif golden.get("sim_verification_ran"):
+            self.state["last_verify_passed"] = False
+
         if not result["success"]:
+            self.state["last_judge_passed"] = False
+            self._write_state()
             return result
 
-        data = result["data"]
         self.state["last_judge_passed"] = bool(data.get("passed"))
         if self.state["last_judge_passed"]:
             self.state["consecutive_judge_failures"] = 0
             data["next_step"] = (
-                "Task passed judge. Run taskgen verify_golden_trajectory, then taskgen test_task, then taskgen submit_task."
+                "Task passed judge. Do not change the task spec. "
+                "Run taskgen test_task, then taskgen submit_task."
             )
         else:
             self.state["consecutive_judge_failures"] = (
@@ -894,10 +844,16 @@ class TaskGenSession:
         return success(data)
 
     def submit_task(self) -> CLIResult:
-        if not self.state.get("last_verify_passed"):
-            return failure("Must run verify_golden_trajectory successfully before submitting.")
         if not self.state.get("last_judge_passed"):
-            return failure("Must run judge successfully before submitting.")
+            return failure(
+                "Must run judge successfully before submitting. "
+                "judge now includes golden trajectory regeneration and simulator verification."
+            )
+        if not self.state.get("last_verify_passed"):
+            return failure(
+                "Must run judge after the latest task changes so the regenerated golden trajectory "
+                "is simulator-verified before submitting."
+            )
         if not self.state.get("last_test_passed"):
             return failure("Must run test_task successfully before submitting.")
 

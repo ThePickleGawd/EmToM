@@ -258,26 +258,28 @@ def aggregate_tasks(tasks_dir: str) -> None:
         if unlabeled:
             print(f"  {'unlabeled':<10} {unlabeled:>6}")
 
-    # ── ToM Level Pass Rate ──
-    tom_pass = defaultdict(lambda: {"pass": 0, "total": 0, "tasks": 0})
+    # ── ToM Level Pass Rate (standard mode, per-task) ──
+    tom_pass = defaultdict(lambda: {"pass": 0, "tested": 0, "tasks": 0})
     for t in tasks:
         level = t.get("tom_level")
         if level is None:
             continue
         tom_pass[level]["tasks"] += 1
-        for entry in t.get("calibration", []):
-            tom_pass[level]["total"] += 1
-            if cal_passed(entry):
+        std_entries = [e for e in t.get("calibration", [])
+                       if e.get("run_mode") == "standard"]
+        if std_entries:
+            tom_pass[level]["tested"] += 1
+            if any(cal_passed(e) for e in std_entries):
                 tom_pass[level]["pass"] += 1
     if tom_pass:
         print(f"\n{'─'*W}")
-        print(f"  ToM Level Pass Rate")
+        print(f"  ToM Level Pass Rate (standard mode)")
         print(f"{'─'*W}")
         print(f"  {'Level':<8} {'Tasks':>6} {'Tested':>8} {'Passed':>8} {'Pass Rate':>10}")
         print(f"  {'─'*8} {'─'*6} {'─'*8} {'─'*8} {'─'*10}")
         for level in sorted(tom_pass):
             s = tom_pass[level]
-            print(f"  K={level:<6} {s['tasks']:>6} {s['total']:>8} {s['pass']:>8} {_pct(s['pass'], s['total']):>9}%")
+            print(f"  K={level:<6} {s['tasks']:>6} {s['tested']:>8} {s['pass']:>8} {_pct(s['pass'], s['tested']):>9}%")
 
     print()
 

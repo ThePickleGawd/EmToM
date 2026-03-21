@@ -49,19 +49,20 @@ Important generation flags:
 For now, parallel generation is launched through the helper wrapper below:
 
 ```bash
-./emtom/bulk_generate.sh --total-tasks 8 --task-gen-agent mini --model gpt-5.2
+./emtom/bulk_generate.sh --num-tasks 8 --task-gen-agent mini --model gpt-5.2
 ```
 
-- `--total-tasks N` is the stop condition for the whole run. The launcher keeps starting one-task attempts until `N` tasks have been submitted or a full batch fails.
-- `--per-gpu N` controls concurrency. The launcher runs up to `num_gpus * per_gpu` attempts at once.
-- Each attempt runs `./emtom/run_emtom.sh generate --num-tasks 1` with its own taskgen workspace under `tmp/task_gen/`.
+- `./emtom/bulk_generate.sh --num-tasks N` means `N` total submitted tasks for the whole bulk run.
+- `--per-gpu N` controls concurrency. The launcher starts up to `num_gpus * per_gpu` fixed workers.
+- The bulk wrapper divides `N` across those workers up front, and each worker runs `./emtom/run_emtom.sh generate --num-tasks <assigned_count>` in its own taskgen workspace under `tmp/task_gen/`.
+- Workers are not respawned. If a worker fails early, the bulk run ends short of the requested total.
 - Run-level logs and live visualizer data are written under `outputs/generations/<run_id>/`.
 
 Useful bulk commands:
 
 ```bash
-./emtom/bulk_generate.sh --dry-run --total-tasks 8 --task-gen-agent mini --model gpt-5.2
-./emtom/bulk_generate.sh --per-gpu 1 --total-tasks 8 --task-gen-agent mini --model gpt-5.2
+./emtom/bulk_generate.sh --dry-run --num-tasks 8 --task-gen-agent mini --model gpt-5.2
+./emtom/bulk_generate.sh --per-gpu 1 --num-tasks 8 --task-gen-agent mini --model gpt-5.2
 ```
 
 ## Environment

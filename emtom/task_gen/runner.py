@@ -417,13 +417,19 @@ def main() -> None:
     working_dir = workspace_root / instance_id
     working_dir.mkdir(parents=True, exist_ok=True)
 
+    def _resolve_generation_path(path_value: Any) -> Path:
+        path = Path(path_value)
+        if not path.is_absolute():
+            path = project_root / path
+        return path.resolve()
+
     generation_run_id = os.environ.get("EMTOM_GENERATION_RUN_ID") or build_generation_run_id()
-    generation_run_dir = Path(
+    generation_run_dir = _resolve_generation_path(
         os.environ.get("EMTOM_GENERATION_RUN_DIR")
         or (project_root / "outputs" / "generations" / generation_run_id)
     )
     generation_worker_id = os.environ.get("EMTOM_GENERATION_WORKER_ID") or "worker-0"
-    generation_worker_dir = Path(
+    generation_worker_dir = _resolve_generation_path(
         os.environ.get("EMTOM_GENERATION_WORKER_DIR")
         or (generation_run_dir / "workers" / generation_worker_id)
     )
@@ -433,6 +439,8 @@ def main() -> None:
     generation_total_workers = maybe_int(os.environ.get("EMTOM_GENERATION_TOTAL_WORKERS"), 1)
     generation_requested_tasks = maybe_int(os.environ.get("EMTOM_GENERATION_REQUESTED_TASKS"), num_tasks)
     generation_stdout_log = os.environ.get("EMTOM_GENERATION_STDOUT_LOG") or ""
+    if generation_stdout_log:
+        generation_stdout_log = str(_resolve_generation_path(generation_stdout_log))
     generation_run_dir.mkdir(parents=True, exist_ok=True)
     generation_worker_dir.mkdir(parents=True, exist_ok=True)
 

@@ -1372,8 +1372,6 @@ SUMMARY:"""
             return self._bash(args)
         elif tool == "test_task":
             return self._test_task()
-        elif tool == "verify_golden_trajectory":
-            return self._verify_golden_trajectory()
         elif tool == "judge":
             return self._judge()
         elif tool == "submit_task":
@@ -1383,7 +1381,7 @@ SUMMARY:"""
         elif tool == "fail":
             return self._fail(args)
         else:
-            return f"Unknown tool: {tool}. Available: bash, test_task, verify_golden_trajectory, judge, submit_task, new_scene, fail"
+            return f"Unknown tool: {tool}. Available: bash, test_task, judge, submit_task, new_scene, fail"
 
     def _bash(self, command: str) -> str:
         """
@@ -1926,114 +1924,14 @@ SUMMARY:"""
         )
 
     def _verify_golden_trajectory(self) -> str:
-        """Regenerate trajectory from PDDL, then execute in subprocess (fresh GL context)."""
-        if not self.task_file.exists():
-            return json.dumps({"valid": False, "error": "working_task.json does not exist."})
-
-        try:
-            with open(self.task_file) as f:
-                task_data = json.load(f)
-        except json.JSONDecodeError as e:
-            return json.dumps({"valid": False, "error": f"Invalid JSON: {e}"})
-
-        # Always regenerate golden trajectory from the authoritative task spec.
-        try:
-            regen = self._regenerate_golden_trajectory(task_data, source="verify")
-            self._log(
-                f"Regenerated trajectory: {regen['num_steps']} steps "
-                f"(spec_hash={regen['spec_hash'][:8]})"
-            )
-        except Exception as e:
-            return json.dumps({
-                "valid": False,
-                "error": f"Failed to regenerate trajectory from task spec: {e}",
-            })
-
-        # Validate structure (after regeneration so golden_trajectory exists)
-        validation = self._validate_task_structure(task_data)
-        if "error" in validation:
-            return json.dumps(validation, indent=2)
-
-        golden = task_data.get("golden_trajectory", [])
-        if not golden:
-            return json.dumps({"valid": False, "error": "Deterministic planner produced empty trajectory."})
-
-        self._log(f"Verifying golden trajectory: {len(golden)} steps")
-
-        # Static pre-validation
-        static_errors = self._static_validate_trajectory(task_data, golden)
-        if static_errors:
-            return json.dumps({
-                "valid": False,
-                "error": f"Static validation failed: {static_errors[0]}",
-                "all_errors": static_errors,
-            })
-
-        num_agents = task_data.get("num_agents", 2)
-        cmd = [
-            sys.executable, "-m", "emtom.cli.verify_trajectory",
-            str(self.task_file),
-            "--working-dir", str(self.working_dir),
-            "--config-name", f"examples/emtom_{num_agents}_robots",
-        ]
-
-        try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=1200,
-            )
-            try:
-                stdout = proc.stdout
-                json_start = stdout.find("{")
-                if json_start >= 0:
-                    stdout = stdout[json_start:]
-                result = json.loads(stdout)
-            except (json.JSONDecodeError, ValueError):
-                return json.dumps({
-                    "valid": False,
-                    "error": f"Failed to parse verify output: {proc.stderr[:500]}",
-                })
-
-            if result.get("success") and result.get("data", {}).get("valid"):
-                self.last_verify_passed = True
-            if result.get("data", {}).get("navmesh_issue"):
-                result["data"]["recommendation"] = "This scene has navigation issues. Use new_scene[]."
-
-            # Return data portion as JSON for the agent
-            if result.get("success"):
-                return json.dumps(result["data"], indent=2)
-
-            # On failure, include diagnostic data so the agent can debug.
-            fail_resp: Dict[str, Any] = {
-                "valid": False,
-                "error": result.get("error", "Unknown error"),
-            }
-            data = result.get("data", {})
-            if data.get("evaluation"):
-                eval_info = data["evaluation"]
-                fail_resp["failure_explanations"] = eval_info.get(
-                    "failure_explanations", []
-                )
-                fail_resp["predicates_achieved"] = eval_info.get(
-                    "predicates_achieved", []
-                )
-                fail_resp["predicates_failed"] = eval_info.get(
-                    "predicates_failed", []
-                )
-            # Show last few executed steps for context
-            steps = data.get("executed_steps", [])
-            if steps:
-                fail_resp["last_steps"] = steps[-3:]
-                fail_resp["failed_step"] = data.get("failed_step")
-            return json.dumps(fail_resp, indent=2)
-
-        except subprocess.TimeoutExpired:
-            return json.dumps({
-                "valid": False,
-                "error": "Verification timed out (20 min). Possible navmesh issue.",
-                "hint": "Consider new_scene[].",
-            })
-        except Exception as e:
-            return json.dumps({"valid": False, "error": f"Subprocess error: {e}"})
+        return json.dumps({
+            "valid": False,
+            "error": (
+                "verify_golden_trajectory[] is no longer available. "
+                "Run judge[]; it now regenerates the plan, simulator-verifies it when needed, "
+                "and then evaluates task quality."
+            ),
+        }, indent=2)
 
     def _judge(self) -> str:
         """Evaluate task quality using multi-model council."""
@@ -2055,12 +1953,20 @@ SUMMARY:"""
             threshold=self.judge.overall_threshold,
             difficulty=self.difficulty if self.difficulty else None,
             required_tom_level=self._current_k_level,
+            verified_trajectory_hash=(
+                self.last_verified_trajectory_hash if self.last_verify_passed else None
+            ),
         )
 
         if not result["success"]:
             return json.dumps({"valid": False, "error": result["error"]}, indent=2)
 
         data = result["data"]
+        golden = data.get("golden_trajectory", {})
+        if golden.get("sim_verified"):
+            self.last_verify_passed = True
+            self.last_verified_spec_hash = golden.get("spec_hash")
+            self.last_verified_trajectory_hash = golden.get("trajectory_hash")
         self.last_judge_passed = data["passed"]
 
         # Reconstruct CouncilVerdict for state tracking
@@ -2069,7 +1975,7 @@ SUMMARY:"""
             data.pop("suggestions", None)
             data["next_step"] = (
                 "Task passed judge. Do NOT change the task design. "
-                "Run verify_golden_trajectory[] -> test_task[] -> submit_task[]."
+                "Run test_task[] -> submit_task[]."
             )
         else:
             self.consecutive_tom_failures += 1
@@ -2087,18 +1993,24 @@ SUMMARY:"""
         return json.dumps(data, indent=2)
 
     def _submit_task(self) -> str:
-        """Copy working task to output directory (requires verify/judge/test gates)."""
-        if not self.last_verify_passed:
-            return json.dumps({
-                "error": "Must run verify_golden_trajectory[] first and pass before submitting.",
-                "hint": "Run verify_golden_trajectory[] to prove the golden trajectory works."
-            })
+        """Copy working task to output directory (requires judge/test gates)."""
         if not self.last_judge_passed:
             return json.dumps({
-                "error": "Must run judge[] first and pass before submitting.",
-                "hint": "Run judge[] to verify the task quality and ToM requirements.",
+                "error": (
+                    "Must run judge[] first and pass before submitting. "
+                    "judge now includes golden trajectory regeneration and simulator verification."
+                ),
+                "hint": "Run judge[] to verify the task quality, planning, and ToM requirements.",
                 "last_score": self.last_judgment.overall_score if self.last_judgment else None,
                 "suggestions": self.last_judgment.suggestions if self.last_judgment else []
+            })
+        if not self.last_verify_passed:
+            return json.dumps({
+                "error": (
+                    "Must run judge[] after the latest task changes so the regenerated golden "
+                    "trajectory is simulator-verified before submitting."
+                ),
+                "hint": "Run judge[] again.",
             })
         if not self.last_test_passed:
             return json.dumps({

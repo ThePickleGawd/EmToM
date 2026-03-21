@@ -738,10 +738,6 @@ def validate_blocking_spec(
                 ):
                     non_wait_counts[agent] += 1
                     action_name, args = _parse_action(action_str)
-                    if action_name == "Communicate":
-                        recipient = _parse_communicate_recipient(args)
-                        if recipient in non_wait_counts:
-                            non_wait_counts[recipient] += 1
         active_agents = [a for a, c in non_wait_counts.items() if c > 0]
         if len(active_agents) <= 1:
             errors.append(
