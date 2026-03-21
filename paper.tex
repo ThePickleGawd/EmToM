@@ -13,6 +13,9 @@
 \usepackage{algorithmic}
 \usepackage{amsmath,amsfonts,amssymb}
 \usepackage{subcaption}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, calc, fit}
+\usepackage{caption}
 
 \usepackage{lineno}
 
@@ -45,7 +48,8 @@
 
 \newcommand{\fix}{\marginpar{FIX}}
 \newcommand{\new}{\marginpar{NEW}}
-
+\newcommand{\g}[1]{\textcolor{red}{#1}}
+\newcommand{\shortname}{\texttt{EmToM}}
 \begin{document}
 
 \ifcolmsubmission
@@ -61,173 +65,129 @@ TODO: Abstract placeholder.
 \section{Introduction}
 \label{sec:introduction}
 
-Humans track other people's beliefs, intentions, and mental states, and use these models to predict their behavior. This capacity is called Theory of Mind (ToM)~\citep{premack1978does, wimmer1983beliefs}. By age four, children understand that others can hold beliefs that differ from reality, for instance, that someone who left the room still believes an object is where they last saw it~\citep{wimmer1983beliefs, tomasello2005understanding}. Adults rely on ToM constantly for coordination: when two people carry a couch through a doorway, each predicts how the other will move based on what the other can see. ToM makes efficient coordination possible under partial observability and information asymmetry~\citep{tomasello2005understanding, bratman1992shared}.
+Humans track other people's beliefs, intentions, and mental states, and use these models to predict their behavior. This capacity is called Theory of Mind (ToM)~\citep{premack1978does, wimmer1983beliefs}. By age four, children understand that others can hold beliefs that differ from reality, for instance, understanding that someone who left the room still believes an object is where they last saw it~\citep{wimmer1983beliefs, tomasello2005understanding}. Adults rely on ToM constantly for coordination: when two people carry a couch through a doorway, each predicts how the other will move based on what the other can see. ToM makes efficient coordination possible under partial observability and information asymmetry~\citep{tomasello2005understanding, bratman1992shared}.
 
-If multi-agent AI systems are to coordinate in open-ended environments---navigating homes, assisting humans, or jointly manipulating objects---they require the same capacity. An agent that cannot model what its partner knows will broadcast redundant information, fail to anticipate partner actions, or wait indefinitely for instructions that will never arrive. Embodied collaboration under partial observability demands that agents reason about each other's epistemic states: what has each agent seen, what can each agent infer, and what must be communicated? This is functional ToM---not passive story understanding, but active belief modeling that drives action selection in real time.
+Multi-agent systems deployed in embodied environments, such as household robots coordinating to clean a room or search-and-rescue teams navigating a building, require the same capacity. An agent that cannot model what its partner knows will broadcast information the partner already has, fail to anticipate partner actions, and waste time waiting for instructions that never arrive. 
+Consider two agents searching a house for an object: without ToM, both search the same rooms; with ToM, each agent infers what the other has already checked and covers new ground. 
+Embodied collaboration under partial observability requires agents to reason about each other's epistemic states, i.e. what has each agent seen, what can each agent infer, and what must be communicated. This is called functional ToM, active belief modeling that drives action selection during coordination.
 
-Existing ToM benchmarks fall short of testing this capacity. Text-based evaluations such as Sally-Anne variants~\citep{wimmer1983beliefs}, ToMi~\citep{le2019revisiting}, HiToM~\citep{wu2023hi}, BigToM~\citep{gandhi2024understanding}, and FANToM~\citep{kim2023fantom} probe ToM through question-answering over written vignettes. These benchmarks are static: the agent reads a story and answers questions about characters' beliefs. They test \emph{passive} ToM---the ability to track beliefs in text---not \emph{functional} ToM---the ability to act on belief models during coordination. They are also limited in epistemic depth, typically testing first-order false belief (``does Sally know the ball moved?'') with only HiToM reaching higher orders. Perhaps most critically, they are hand-crafted and fixed-size, making them vulnerable to data contamination as LLMs train on increasingly large web corpora. Once a benchmark leaks into pretraining data, it no longer measures reasoning---it measures recall.
+Existing benchmarks fail to test functional ToM, especially in embodied settings. Text-based evaluations like Sally-Anne variants~\citep{wimmer1983beliefs}, ToMi~\citep{le2019revisiting}, HiToM~\citep{wu2023hi}, BigToM~\citep{gandhi2024understanding}, FANToM~\citep{kim2023fantom}, and ExploreToM~\citep{exploretom2024} test what \citet{riemer2024broken} call \emph{literal} ToM. The model reads a vignette and answers questions about characters' beliefs, without ever acting on those inferences. Multimodal extensions like MMToM-QA~\citep{mmtomqa2024} and MuMA-ToM~\citep{mumatom2024} add video input but remain observational. Embodied benchmarks like PARTNR~\citep{partnr2024} are embodied but evaluate multiagent instruction following rather than epistemic state reasoning. On the other hand, large scale simulations like SOTOPIA~\citep{sotopia2023} tests social intelligence through dialogue but has no embodiment or spatial grounding. 
+All these benchmarks are hand-crafted and fixed-size; as models improve, scores saturate without reflecting genuine advances in ToM understanding.
 
-We propose EmToM, an \emph{evolving} benchmark that automatically generates multi-agent ToM tasks grounded in 3D household scenes from the Habitat simulator~\citep{szot2021habitat}. Unlike static benchmarks, EmToM is a benchmark \emph{generator}: a closed-loop pipeline that produces tasks, verifies them against the simulator, and calibrates difficulty by benchmarking against a model ladder. Each task defines a coordination problem where $n$ agents must achieve a shared goal expressed as a \pddl{} formula with epistemic extensions. The epistemic operator $\K$ encodes knowledge requirements at nesting depths 0--3, where depth $d$ demands $(d{-}1)$-th order ToM. The required ToM level is not a post-hoc annotation but a \emph{formal property} of the goal: count the $\K$-nesting depth. Tasks span cooperative, competitive, and mixed-motive settings. Agents observe the environment through egocentric RGB video and select key frames for reasoning, grounding all coordination in visual perception under partial observability.
+In this work, we propose EmToM, an \emph{evolving} benchmark for functional ToM in embodied multi-agent settings. EmToM is embodied, having 2-4 agents act in 3D household scenes from Habitat~\citep{szot2021habitat} with egocentric RGB observations under partial observability. It is agentic, requiring the agents to take actions while coordinating to achieve shared, competitive, or mixed-motive goals. It is formally grounded, each task's goal is a \pddl{} formula with epistemic operators ($\K$-nesting up to depth 3), and a verifier confirms both that the task is solvable and that solving it genuinely requires the specified ToM depth. And it evolve, a closed-loop pipeline generates new tasks, verifies them against the simulator, and calibrates difficulty according to the model making the benchmark difficult to saturate without genuine ToM advances.
 
-We ground our notion of ToM depth in the level-$k$ reasoning framework from behavioral game theory~\citep{stahl1994experimental, camerer2004cognitive}. A level-0 agent acts without modeling others---it follows a fixed heuristic or best-responds to a uniform prior over partner actions. A level-1 agent best-responds to level-0 partners: it models what others will do under the assumption that they are non-strategic. A level-2 agent best-responds to level-1 partners, and so on recursively. Formally, let $\pi^{(k)}_i$ denote the policy of agent $i$ at level $k$:
-%
-\begin{equation}
-  \pi^{(0)}_i = \text{fixed heuristic}, \qquad \pi^{(k)}_i = \text{BR}\!\left(\pi^{(k-1)}_{-i}\right) \;\; \text{for } k \geq 1
-  \label{eq:level_k}
-\end{equation}
-%
-where $\text{BR}(\cdot)$ denotes a best response and $\pi^{(k-1)}_{-i}$ is the joint policy of all other agents at level $k{-}1$. EmToM tasks are designed so that the minimum level $k$ required for success is known \emph{a priori} from the epistemic nesting depth of the \pddl{} goal. A task with goal $\K_a(\K_b(\K_c(\phi)))$ requires level-3 reasoning: agent $a$ must model $b$'s model of $c$'s knowledge of $\phi$.
-
-The generation pipeline operates in four stages. A ReAct-style LLM agent explores a 3D scene and iteratively drafts a task specification through self-correction. A dual-model council judge (Claude Opus + GPT-5.2) scores candidates on structural and narrative criteria, requiring consensus for acceptance. A simulation-in-the-loop verifier replays a deterministic golden trajectory in Habitat to confirm physical executability. Finally, an evolution pipeline (Figure~\ref{fig:evolution}) benchmarks the task pool against a model ladder and generates harder tasks until the pass rate drops below a target threshold. This closed-loop process produces tasks that are guaranteed solvable, structurally validated, and calibrated to challenge frontier models.
-
-
-We generate 122 validated tasks spanning cooperative, competitive, and mixed categories with ToM levels 1--3. Seeded generation reliably produces epistemic ($\K$-level) tasks. Level-1 tasks achieve 50--100\% pass rates against frontier models. Level-2 tasks combining restricted communication and limited bandwidth drive pass rates to near zero: agents spend their message budget on coordination overhead rather than task-relevant information transfer. The evolution pipeline produces pools matching target ToM-level distributions within 8\% tolerance, providing a calibrated benchmark that scales with model capability.
+% TODO: update numbers once full evaluation is done
+\g{do it once we have proper results}
+We evaluate frontier models (GPT-5.2 with vision, Sonnet with text) on 68 EmToM tasks spanning cooperative, competitive, and mixed-motive settings at ToM depths 1--3. We find that: (i)~second-order ToM is achievable but fragile, succeeding only in simple topologies with generous communication budgets; (ii)~agents exhibit a striking cooperative bias, with zero defection across all mixed-motive tasks; (iii)~communication bandwidth is the primary bottleneck, with 60\%+ of depth-2 failures traced to message exhaustion; and (iv)~agents fall into novel failure modes such as confirmation spirals and action repetition loops that have not been documented in prior ToM evaluations.
 
 \section{Methodology}
 \label{sec:methodology}
-
-We describe the EmToM task generation pipeline: a system that produces multi-agent coordination tasks requiring Theory of Mind (ToM) reasoning in embodied environments. Each task is grounded in a 3D household scene from the Habitat simulator and expressed as a formal goal specification in \pddl{} with epistemic extensions. The pipeline has four stages: (1)~a ReAct-style LLM agent designs tasks through iterative scene exploration, (2)~a multi-model council judge scores candidates on structural and narrative criteria, (3)~a simulation-in-the-loop verifier confirms physical executability, and (4)~an evolution loop escalates difficulty against a model ladder.
+Task generation pipeline in \shortname{} has four stages: (1)~a ReAct-style LLM agent designs tasks through iterative scene exploration, (2)~a multi-model council judge scores candidates on structural and narrative criteria, (3)~a verifier (sylbolc + simulation based) confirms physical executability and ToM depth, and (4)~an evolution loop calibrates difficulty for the model being tested. We describe each stage below. Two worked task examples (cooperative and competitive) are in Appendix~\ref{app:examples}.
 
 \subsection{Task representation}
 \label{sec:task_repr}
 
-We represent each task as a self-contained JSON object that encodes everything needed to instantiate, execute, and evaluate an episode. A task $\task$ is defined by the tuple:
+Each task is a self-contained specification. A task $\task$ is defined by:
 %
 \begin{equation}
   \task = \bigl(\mathcal{S},\; \agents,\; \goal,\; \mechanics,\; \Sigma,\; \mathcal{C} \bigr)
   \label{eq:task_tuple}
 \end{equation}
 %
-where $\mathcal{S}$ is a scene from the Habitat Synthetic Scenes Dataset (HSSD), $\agents = \{a_1, \ldots, a_n\}$ is a set of $n$ agents with spawn positions, $\goal$ is a \pddl{} goal formula, $\mechanics$ is a set of mechanic bindings, $\Sigma$ maps each agent to a list of private secrets, and $\mathcal{C}$ specifies the task category (cooperative, competitive, or mixed).
+where $\mathcal{S}$ is a Habitat Synthetic Scenes Dataset (HSSD) scene, $\agents = \{a_1, \ldots, a_n\}$ is a set of $n$ agents with spawn positions, $\goal$ is a \pddl{} goal formula, $\mechanics$ is a set of mechanic bindings, $\Sigma$ maps each agent to private secrets, and $\mathcal{C}$ is the task category. 
 
-The goal formula $\goal$ is built from world-state predicates and the epistemic operator $\K$. World-state predicates include \texttt{is\_on\_top}, \texttt{is\_inside}, \texttt{is\_in\_room}, \texttt{is\_open}, and \texttt{is\_closed}, among others. The epistemic operator $\K_i(\phi)$ asserts that agent $a_i$ \emph{knows} $\phi$---a condition satisfied only when $a_i$ has directly observed $\phi$ or received it via communication. Goals may nest $\K$ to depth $d \in \{0, 1, 2, 3\}$, where depth $d \geq 2$ requires second-order ToM reasoning: agent $a_i$ must model what agent $a_j$ believes about agent $a_k$'s knowledge.
-
+The goal $\goal$ combines world-state predicates (\texttt{is\_on\_top}, \texttt{is\_inside}, \texttt{is\_open}, etc.) with the epistemic operator $\K$. $\K_i(\phi)$ asserts that agent $a_i$ \emph{knows} $\phi$, satisfied only when $a_i$ has directly observed $\phi$ or received it through communication. Goals nest $\K$ to depth $d \in \{0, 1, 2, 3\}$:
+%
 \begin{equation}
   \underbrace{\K_{a_1}(\K_{a_2}(\cdots \K_{a_d}(\phi) \cdots))}_{\text{depth } d} \quad \Longrightarrow \quad \text{$(d{-}1)$-th order ToM}
   \label{eq:tom_depth}
 \end{equation}
 
-Mechanic bindings $\mechanics$ impose structured constraints on agent interactions. We support six core mechanics for ToM task design:
+We ground ToM depth in the level-$k$ reasoning framework from behavioral game theory~\citep{stahl1994experimental, camerer2004cognitive}. A level-0 agent follows a fixed heuristic without modeling others. A level-$k$ agent chooses the action that maximizes its expected utility assuming all other agents play level-$(k{-}1)$ policies:
 %
-\begin{itemize}
-  \setlength{\itemsep}{1pt}
-  \item \textbf{Room restriction}: confines an agent to a subset of rooms, blocking direct observation of distant state.
-  \item \textbf{Limited bandwidth}: caps each agent's total \texttt{Communicate} actions to $b_i$ messages.
-  \item \textbf{Restricted communication}: specifies an adjacency graph over agents---$a_i$ can message $a_j$ only if $(a_i, a_j) \in E$.
-  \item \textbf{Remote control}: links a trigger object to a target object, so acting on the trigger changes the target's state in a different room.
-  \item \textbf{State mirroring}: synchronizes the state of two objects---opening one forces the other open.
-  \item \textbf{Inverse state}: reverses an object's handle---attempting to open it closes it, and vice versa.
-\end{itemize}
+\begin{equation}
+  \pi^{(0)}_i = \text{fixed heuristic}, \qquad \pi^{(k)}_i = \arg\max_{\pi_i} \; U_i\!\left(\pi_i,\; \pi^{(k-1)}_{-i}\right) \;\; \text{for } k \geq 1
+  \label{eq:level_k}
+\end{equation}
+%
+where $\pi^{(k-1)}_{-i}$ is the joint policy of all other agents at level $k{-}1$ and $U_i$ is agent $i$'s utility. The minimum level $k$ required for success is determined \emph{a priori} from the $\K$-nesting depth of $\goal$. A goal $\K_a(\K_b(\K_c(\phi)))$ requires level-3 reasoning: $a$ must model $b$'s model of $c$'s knowledge of $\phi$.
 
-Agent secrets $\Sigma(a_i)$ are natural-language strings that create information asymmetry. They describe private knowledge (e.g., ``the radio is hidden inside the locked cabinet''), private objectives in mixed tasks, or teammate/opponent identities in competitive tasks. Secrets must never leak cross-agent information and must not contain simulator object IDs.
+\paragraph{Mechanics.} Mechanic bindings $\mechanics$ impose constraints that force epistemic reasoning. \textbf{Room restriction} confines agents to a subset of rooms. \textbf{Limited bandwidth} caps each agent's messages to $b_i$. \textbf{Restricted communication} specifies who can message whom via an adjacency graph. \textbf{Remote control} links a trigger object to a target, so acting on one changes the other's state in a different room. \textbf{State mirroring} synchronizes two objects' states. \textbf{Inverse state} reverses an object's handle (opening it closes it).
+
+\paragraph{Secrets.} Agent secrets $\Sigma(a_i)$ are natural-language strings that create information asymmetry: private knowledge, private objectives in mixed tasks, or team identities in competitive tasks.
+
+\paragraph{Task Category.} In \emph{cooperative} tasks, all agents share a single goal and succeed or fail together. In \emph{competitive} tasks, two teams have opposing goals over the same shared state (e.g., both teams want a contested object on their table). In \emph{mixed-motive} tasks, agents share a cooperative goal but each also has a private side-objective that it needs to achieve for task completion.
 
 \subsection{Task generation agent}
 \label{sec:gen_agent}
 
-The generator is a ReAct-style LLM agent that iteratively designs tasks through a cycle of reasoning, tool use, and self-correction. At each step, the agent produces a \texttt{Thought} analyzing its progress, then executes an \texttt{Action} from a fixed tool set. The loop terminates when the agent submits a task passing all validation gates or exhausts its iteration budget.
+The generator is a ReAct-style LLM agent that designs tasks through iterative reasoning, tool use, and self-correction. It follows a prescribed 9-step workflow: load a scene, inspect examples, draft the task JSON, verify PDDL correctness, submit for judge evaluation, iterate on feedback, verify the golden trajectory in the simulator, run an LLM-agent benchmark, and submit. Each step is gated: structural validity precedes qualitative review, which precedes empirical testing.
 
-The agent's system prompt is assembled at runtime from: response format instructions, tool descriptions, a prescribed 9-step workflow, category-specific design rules, the PDDL predicate registry, mechanic descriptions, documented design pitfalls, epistemic-goal ($\K$) guidelines with worked examples at depths 0--2, and a diversity section listing structural patterns of previously generated tasks.
-
-The prescribed workflow enforces an ordering: \textbf{(1)}~load a scene with \texttt{new\_scene}, \textbf{(2)}~inspect example tasks, \textbf{(3)}~design and edit the task JSON, \textbf{(4)}~verify PDDL correctness with \texttt{verify\_pddl}, \textbf{(5)}~submit for judge evaluation, \textbf{(6)}~iterate on judge feedback, \textbf{(7)}~verify the golden trajectory in the simulator, \textbf{(8)}~run an LLM-agent benchmark with \texttt{test\_task}, and \textbf{(9)}~submit the validated task. Structural validity precedes qualitative review, which precedes empirical testing.
-
-The agent has access to eight tools spanning environment interaction, validation, evaluation, and lifecycle management. \texttt{new\_scene[$N$]} loads a random HSSD scene with $N$ agents; we require $\geq 5$ locatable objects across $\geq 2$ rooms. \texttt{verify\_pddl} checks PDDL syntax, compiles the goal against the scene inventory, runs FastDownward for solvability, and computes the minimum ToM depth. \texttt{judge} invokes the multi-model council (Section~\ref{sec:judge}). \texttt{verify\_golden\_trajectory} regenerates a deterministic trajectory from the PDDL specification and replays it step-by-step in Habitat. \texttt{test\_task} runs a full LLM-agent benchmark. \texttt{submit\_task} is gated on three boolean flags---\texttt{last\_verify\_passed}, \texttt{last\_judge\_passed}, and \texttt{last\_test\_passed}---and writes the final task JSON with authoritative ToM metadata.
+The agent has access to seven tools. \texttt{new\_scene} loads a random HSSD scene with $N$ agents ($\geq$5 locatable objects, $\geq$2 rooms). \texttt{bash} allows file exploration and task JSON editing within a sandboxed directory. \texttt{judge} first runs deterministic \pddl{} verification (syntax, object inventory, FastDownward solvability, ToM depth), then invokes the multi-model council (Section~\ref{sec:judge}). \texttt{verify\_golden\_trajectory} regenerates a deterministic action plan from the current spec and replays it in Habitat. \texttt{test\_task} runs a full LLM-agent benchmark and records calibration data. \texttt{submit\_task} requires all three gates---judge passed, trajectory verified, and benchmark run with nonzero progress---before writing the final task JSON. \texttt{fail} aborts generation for unrecoverable errors (e.g., simulator bugs).
 
 \subsection{Multi-model council judge}
 \label{sec:judge}
 
-We evaluate task quality using a council of Claude Opus and GPT-5.2. Both models independently score the candidate on 8--10 criteria; both must agree for the task to pass. This dual-model consensus reduces systematic biases from any single model. When the two models disagree, we default to rejection.
+Task quality is evaluated by a council of Claude Opus and GPT-5.2. Both models independently score the candidate on 8--10 criteria; both must agree for the task to pass. Disagreement defaults to rejection.
 
-The judge evaluates seven shared criteria. \textbf{Agent necessity}: removing any single agent must make the task unsolvable. \textbf{Secret quality}: secrets must be actionable, natural-language, and leak no cross-agent information. \textbf{Task naturalness}: no simulator object IDs or PDDL syntax in descriptions. \textbf{Narrative consistency}: the natural-language description must match the PDDL goal semantics. \textbf{Goal relevance}: no extraneous predicates. \textbf{Mechanic utilization}: every listed mechanic must be required for the task. \textbf{PDDL solvability}: the goal must be structurally solvable with appropriate epistemic constraints.
-
-Each category adds one criterion: \emph{task interdependence} (cooperative), \emph{goal opposition} (competitive), or \emph{subgoal tension} (mixed). A task passes the council if, for both models $m$:
+The seven shared criteria are: \textbf{agent necessity} (removing any agent makes the task unsolvable), \textbf{secret quality} (actionable, no cross-agent leaks), \textbf{task naturalness} (no simulator IDs in descriptions), \textbf{narrative consistency} (description matches PDDL semantics), \textbf{goal relevance} (no extraneous predicates), \textbf{mechanic utilization} (every listed mechanic is required), and \textbf{PDDL solvability}. Each category adds one criterion: \emph{task interdependence} (cooperative), \emph{goal opposition} (competitive), or \emph{subgoal tension} (mixed). A task passes if, for both models $m$:
 %
 \begin{equation}
   \bar{s}^{(m)} \geq \tau \quad \wedge \quad \forall\, i \neq i_{\text{nov}} :\; s_i^{(m)} \geq 0.5
   \label{eq:judge_pass}
 \end{equation}
 %
-where $\bar{s}^{(m)}$ is the mean criterion score, $\tau = 0.65$ is the passing threshold (0.7 during evolution), and the novelty criterion $i_{\text{nov}}$ is soft---it contributes to the mean but is exempt from the per-criterion minimum.
+where $\bar{s}^{(m)}$ is the mean score, $\tau = 0.65$ (0.7 during evolution), and novelty $i_{\text{nov}}$ is exempt from the per-criterion floor.
 
-\subsection{Simulation-in-the-loop verification}
+\subsection{Verification}
 \label{sec:sim_verify}
 
-Every submitted task passes three verification checks. \textbf{PDDL verification} parses the goal formula, compiles it against the scene's object inventory, runs FastDownward for solvability (with PDKB fallback), and computes the minimum ToM depth from epistemic nesting. \textbf{Golden trajectory verification} regenerates a deterministic plan from the PDDL specification---producing Navigate, Open, Close, Pick, Place, and Communicate actions---and replays it in Habitat. The final world state is checked against $\goal$. Trajectories are always regenerated rather than cached, ensuring consistency as the task evolves during generation. \textbf{Specification validation} applies deterministic structural checks without simulator execution: template placeholder detection, mechanic schema validation, and room-restriction consistency with Navigate targets.
+Every task passes three checks before acceptance.
+
+
+\begin{minipage}[t]{0.46\linewidth}
+\paragraph{PDDL verification.} The verifier parses the goal, compiles it against the scene's object inventory, and runs FastDownward (with PDKB fallback for epistemic predicates) to confirm solvability. It computes the ToM depth by counting $\K$-nesting. For the goal in Figure~\ref{fig:pddl_example}, the verifier extracts $\K$-depth 2, checks that \texttt{bowl\_1}, \texttt{table\_22}, and \texttt{cabinet\_34} exist in the scene, and confirms a valid action sequence achieves all conjuncts.
+\end{minipage}
+\hfill
+\begin{minipage}[t]{0.5\linewidth}
+\begin{lstlisting}
+(and
+  (is_on_top bowl_1 table_22)
+  (K agent_0 (K agent_1
+    (is_on_top bowl_1 table_22)))
+  (is_open cabinet_34)
+)
+\end{lstlisting}
+\vspace{-0.5em}
+\captionof{figure}{Example PDDL goal with epistemic nesting. The $\K$-depth is 2 (first-order ToM).}
+\label{fig:pddl_example}
+\end{minipage}%
+
+\paragraph{Golden trajectory verification.} The verifier generates a deterministic action plan from the PDDL goal (Navigate, Pick, Place, Open, Close, Communicate) and replays it step-by-step in Habitat. \g{Here we are also adding another check that if full information is given agents must be able to solve the tasks}. The final simulator state is checked against $\goal$. Trajectories are regenerated each time rather than cached, so any change to the task specification is immediately tested.
+
+\paragraph{Specification validation.} Structural checks run without the simulator: template placeholder detection, mechanic schema validation, and room-restriction consistency (no agent's golden trajectory navigates to a restricted room).
 
 \begin{figure}[h]
 \begin{center}
-\includegraphics[width=0.5\linewidth]{figures/evolution_pipeline.png}
+\resizebox{0.95\linewidth}{!}{\input{figures/evolution_pipeline_tikz}}
 \end{center}
-\caption{Evolution pipeline for difficulty escalation. The system benchmarks the task pool against a model ladder (GPT-5-mini $\to$ Sonnet $\to$ GPT-5.2), generates harder tasks when the pass rate exceeds the target threshold $\rho^*$, and repeats until the pool is calibrated to challenge each tier.}
+\caption{Evolution pipeline. The system benchmarks the task pool against a model ladder (GPT-5-mini $\to$ Sonnet $\to$ GPT-5.2), generates harder tasks when $\rho > \rho^*$, and repeats until the pool is calibrated.}
 \label{fig:evolution}
 \end{figure}
 
 \subsection{Evolution pipeline}
 \label{sec:evolution}
 
-The evolution pipeline escalates task difficulty through calibrated benchmarking against a model ladder ordered by capability ($\text{GPT-5-mini} \to \text{Sonnet} \to \text{GPT-5.2}$). At each tier, we benchmark the task pool against the current model and compute a pool-wide pass rate $\rho$. If $\rho > \rho^*$ (default $\rho^* = 0.20$), the pool is too easy: we invoke an in-context learning (ICL) sampler to select representative failures as few-shot examples and generate harder tasks in parallel. Generation halts when $\rho \leq \rho^*$ or the budget is exhausted.
+The evolution pipeline calibrates task difficulty against a model ladder ($\text{GPT-5-mini} \to \text{Sonnet} \to \text{GPT-5.2}$). At each tier, the pool-wide pass rate $\rho$ is computed. If $\rho > \rho^*$ (default 0.20), the pool is too easy: an in-context learning sampler selects representative failures (9 failed + 1 passed task, sorted by completion percentage) as few-shot examples and generates harder tasks. The sampler adjusts its guidance based on $\rho$: below 0.10, it shifts to a different difficulty axis; between 0.10 and 0.30, it amplifies failure patterns; above 0.30, it targets model weaknesses directly. Generation halts when $\rho \leq \rho^*$ or the budget is exhausted.
 
-The ICL sampler selects 9 failed tasks and 1 passed task, sorted by percent complete. Partial completions are informative: they reveal specific failure modes (e.g., exhausting the message budget before relaying a key fact). The sampler also constructs directional guidance based on $\rho$: when $\rho < 0.10$, it recommends a qualitatively different difficulty axis; when $0.10 \leq \rho \leq 0.30$, it amplifies patterns from failures; at higher pass rates, it escalates toward directly exploiting model weaknesses.
-
-The pipeline targets a ToM-level distribution of approximately 30\% level-1, 45\% level-2, and 25\% level-3 tasks (8\% tolerance), ensuring coverage across epistemic depths while concentrating at level-2 where we observe the best signal for discriminating between model capabilities.
+The pipeline targets a distribution of approximately 30\% level-1, 45\% level-2, and 25\% level-3 tasks (8\% tolerance), concentrating at level-2 where we observe the best signal for discriminating model capabilities.
 
 \subsection{Visual observation pipeline}
 \label{sec:vision}
 
-Each agent perceives the environment through an egocentric RGB camera mounted at head height in the Habitat simulator. At every turn, the simulator renders a first-person video of the agent's surroundings as the agent executes its action. Rather than feeding the full video into the LLM context (which would exhaust the token budget within a few turns), we use a two-stage key-frame selection process.
+Each agent perceives the environment through an egocentric RGB camera in Habitat. At every turn, the simulator renders a first-person video of the agent's surroundings. Rather than feeding the full video into the LLM context, we use a two-stage key-frame selection process: video frames are subsampled to 10--15 candidates, then the agent's LLM selects 2--5 frames most informative for its current reasoning step given its full context (instructions, communication history, prior observations). The selected frames enter the LLM context as images for the next action decision.
 
-First, the video frames are uniformly subsampled to a candidate set of 10--15 frames. Second, the agent's LLM receives the candidate set alongside its current conversation context (task instructions, private secrets, communication history, and prior observations) and selects 2--5 frames that are most informative for its current reasoning step. The selected frames are injected into the LLM context as images for the next action decision. This process runs at every turn, so the agent's visual context evolves as it navigates and acts.
-
-The vision pipeline creates a tighter coupling between perception and ToM reasoning than text-only observation modes. An agent that can see a teammate picking up an object in the same room has direct visual evidence of the teammate's action---it does not need to wait for a message. Conversely, an agent restricted from a room receives no visual information about that room, forcing it to rely entirely on communicated beliefs. This asymmetry between visual access and room restrictions is what makes the epistemic goals non-trivial: the $\K$-nesting depth measures how many relay hops are needed to propagate a visual observation to an agent who cannot see it directly.
-
-\subsection{Task example: cooperative depth-4 epistemic chain}
-\label{sec:example_coop}
-
-We illustrate the pipeline's output with a cooperative task requiring third-order ToM (K-depth 4). Four agents must coordinate a ``silent inspection'' across a household: open the kitchen cabinet, close the bedroom wardrobe, and place four items in designated locations. Communication follows a linear chain ($a_0 \leftrightarrow a_1 \leftrightarrow a_2 \leftrightarrow a_3$) with one message per agent. Room restrictions prevent any single agent from accessing all target locations---only $a_1$ can enter the kitchen.
-
-The PDDL goal includes the epistemic chain:
-%
-\begin{equation}
-  \K_{a_0}\bigl(\K_{a_1}\bigl(\K_{a_2}\bigl(\K_{a_3}(\texttt{is\_on\_top}(\texttt{box}, \texttt{cabinet}))\bigr)\bigr)\bigr)
-  \label{eq:example_k4}
-\end{equation}
-%
-This requires $a_0$ to know that $a_1$ knows that $a_2$ knows that $a_3$ knows the box is on the cabinet. The box is in the kitchen, visible only to $a_1$. For this chain to be satisfied, $a_1$ must relay the observation rightward through $a_2$ to $a_3$---consuming two of the chain's four message slots. Agent $a_0$, at the left endpoint, must \emph{infer} that $a_1$ used their single message to relay rightward (the only viable direction), that $a_2$ forwarded it to $a_3$, and that $a_1$ anticipated this relay. This is third-order ToM: $a_0$ models $a_1$'s model of $a_2$'s model of $a_3$'s knowledge.
-
-Table~\ref{tab:example_agents} summarizes the agent configuration. The bandwidth constraint (1 message each) interacts with the communication topology to make the epistemic goal non-trivial: a naive strategy of broadcasting observations locally would fail to propagate beliefs across the full chain.
-
-\begin{table}[t]
-\begin{center}
-\small
-\begin{tabular}{lllp{4.2cm}}
-\toprule
-\textbf{Agent} & \textbf{Can message} & \textbf{Restricted from} & \textbf{Key private knowledge} \\
-\midrule
-$a_0$ & $a_1$ & kitchen & Cabinet holds a cardboard box \\
-$a_1$ & $a_0$ or $a_2$ & entryway, bedroom, living room & Only agent with kitchen access \\
-$a_2$ & $a_1$ or $a_3$ & entryway, bathroom, kitchen & Must relay between $a_1$ and $a_3$ \\
-$a_3$ & $a_2$ & kitchen & Can access bathroom (target surface) \\
-\bottomrule
-\end{tabular}
-\end{center}
-\caption{Agent configuration for the cooperative silent inspection task. Each agent has 1 message. The linear chain topology and heavy room restrictions force epistemic reasoning at depth 4.}
-\label{tab:example_agents}
-\end{table}
-
-\subsection{Task example: competitive self-referential beliefs}
-\label{sec:example_comp}
-
-We also illustrate a competitive task with self-referential epistemic chains. Two teams ($\{a_0, a_1\}$ vs.\ $\{a_2, a_3\}$) compete to set a home's ``final inspection'' configuration. Each team must place a contested cushion in their preferred location and set a kitchen latch to their required state. The task explicitly warns agents to ``expect misinformation.'' Communication is team-internal only, with 1--2 messages per agent.
-
-The winning condition for team~0 includes:
-%
-\begin{equation}
-  \K_{a_1}\bigl(\K_{a_0}\bigl(\K_{a_1}\bigl(\K_{a_0}(\texttt{is\_closed}(\texttt{latch}))\bigr)\bigr)\bigr)
-  \label{eq:example_selfref}
-\end{equation}
-%
-This is a \emph{self-referential} depth-4 chain: $a_1$ must know that $a_0$ knows that $a_1$ knows that $a_0$ knows the latch is closed. Unlike the cooperative example, the belief chain loops back through the same two agents. Satisfying it requires $a_1$ to model $a_0$'s model of $a_1$'s own knowledge---a recursive belief loop.
-
-The competitive setting adds adversarial ToM on top. Each team holds hidden win conditions (e.g., team~0 wants the latch closed; team~1 wants it open). Room restrictions prevent team members from directly verifying the latch state: $a_0$ and $a_2$ cannot enter the kitchen, while $a_1$ and $a_3$ cannot enter the bedroom or living room where the remote-control trigger and inverse-state stand reside. Agents must reason not only about their teammate's beliefs but also about what the opposing team believes about \emph{their} strategy---second-order adversarial ToM layered on top of the self-referential epistemic goal.
+Vision creates a tighter coupling between perception and ToM. An agent that sees a teammate pick up an object has direct evidence; an agent restricted from a room gets no visual information about it and must rely on communicated beliefs. This asymmetry is what makes epistemic goals non-trivial: the $\K$-nesting depth measures how many relay hops are needed to propagate a visual observation to an agent who cannot see it.
 
 \section{Agent Behavioral Analysis}
 \label{sec:behaviors}
@@ -568,6 +528,58 @@ Meanwhile, $a_1$ (Team~0) succeeds on the first try:
 \end{quote}
 
 Wardrobes are classified as receptacles, not objects. The simulator distinguishes movable objects (\texttt{FindObjectTool}) from static furniture (\texttt{FindReceptacleTool}). Sonnet agents frequently select the wrong tool and never recover.
+
+
+\section{Task Examples}
+\label{app:examples}
+
+\subsection{Cooperative: depth-4 epistemic chain}
+\label{app:example_coop}
+
+Four agents coordinate a ``silent inspection'' across a household: open the kitchen cabinet, close the bedroom wardrobe, and place items in designated locations. Communication follows a linear chain ($a_0 \leftrightarrow a_1 \leftrightarrow a_2 \leftrightarrow a_3$) with one message per agent. Room restrictions prevent any single agent from accessing all locations; only $a_1$ can enter the kitchen.
+
+The PDDL goal includes:
+%
+\begin{equation}
+  \K_{a_0}\bigl(\K_{a_1}\bigl(\K_{a_2}\bigl(\K_{a_3}(\texttt{is\_on\_top}(\texttt{box}, \texttt{cabinet}))\bigr)\bigr)\bigr)
+  \label{eq:example_k4}
+\end{equation}
+%
+This requires $a_0$ to know that $a_1$ knows that $a_2$ knows that $a_3$ knows the box is on the cabinet. The box is in the kitchen, visible only to $a_1$. For this chain to hold, $a_1$ must relay the observation through $a_2$ to $a_3$, consuming two of the chain's four message slots. Agent $a_0$ must infer that $a_1$ relayed rightward (the only viable direction), that $a_2$ forwarded it, and that $a_1$ anticipated this relay. This is third-order ToM.
+
+\begin{table}[h]
+\begin{center}
+\small
+\begin{tabular}{lllp{4.2cm}}
+\toprule
+\textbf{Agent} & \textbf{Can message} & \textbf{Restricted from} & \textbf{Key private knowledge} \\
+\midrule
+$a_0$ & $a_1$ & kitchen & Cabinet holds a cardboard box \\
+$a_1$ & $a_0$ or $a_2$ & entryway, bedroom, living room & Only agent with kitchen access \\
+$a_2$ & $a_1$ or $a_3$ & entryway, bathroom, kitchen & Must relay between $a_1$ and $a_3$ \\
+$a_3$ & $a_2$ & kitchen & Can access bathroom (target surface) \\
+\bottomrule
+\end{tabular}
+\end{center}
+\caption{Agent configuration for the cooperative silent inspection task. Each agent has 1 message. The linear chain and room restrictions force depth-4 epistemic reasoning.}
+\label{tab:example_agents}
+\end{table}
+
+\subsection{Competitive: self-referential beliefs}
+\label{app:example_comp}
+
+Two teams ($\{a_0, a_1\}$ vs.\ $\{a_2, a_3\}$) compete to set a home's ``final inspection'' configuration. Each team must place a contested cushion in their preferred location and set a kitchen latch to their required state. Communication is team-internal only, with 1--2 messages per agent.
+
+The winning condition for team~0 includes:
+%
+\begin{equation}
+  \K_{a_1}\bigl(\K_{a_0}\bigl(\K_{a_1}\bigl(\K_{a_0}(\texttt{is\_closed}(\texttt{latch}))\bigr)\bigr)\bigr)
+  \label{eq:example_selfref}
+\end{equation}
+%
+This is a self-referential depth-4 chain: $a_1$ must know that $a_0$ knows that $a_1$ knows that $a_0$ knows the latch is closed. The belief chain loops through the same two agents, requiring $a_1$ to model $a_0$'s model of $a_1$'s own knowledge.
+
+Room restrictions add complexity: $a_0$ and $a_2$ cannot enter the kitchen, while $a_1$ and $a_3$ cannot enter rooms containing the remote-control trigger and inverse-state stand. Agents must reason about teammate beliefs and about what the opposing team believes about their strategy.
 
 
 \end{document}
