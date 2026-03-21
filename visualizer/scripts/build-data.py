@@ -90,11 +90,11 @@ def read_jsonl(path: Path) -> list[dict]:
     return out
 
 
-def summarize_log_excerpt(text: str, head_lines: int = 40, tail_lines: int = 60) -> dict:
+def summarize_log_excerpt(text: str, head_lines: int = 40, tail_lines: int = 0) -> dict:
     lines = text.splitlines()
     return {
         "head": lines[:head_lines],
-        "tail": lines[-tail_lines:] if len(lines) > tail_lines else lines[:],
+        "tail": lines if tail_lines <= 0 else (lines[-tail_lines:] if len(lines) > tail_lines else lines[:]),
         "line_count": len(lines),
     }
 
