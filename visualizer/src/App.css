@@ -386,6 +386,10 @@ body {
   animation: pulse-dot 1.5s ease-in-out infinite;
 }
 
+.task-status.partial {
+  background: #f59e0b;
+}
+
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }

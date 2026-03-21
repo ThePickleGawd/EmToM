@@ -72,7 +72,15 @@ export default function Sidebar({
               >
                 <div className="task-item-header">
                   <div
-                    className={`task-status ${run.submitted_tasks >= run.requested_tasks ? "success" : "running"}`}
+                    className={`task-status ${
+                      run.submitted_tasks >= run.requested_tasks
+                        ? "success"
+                        : run.running_workers > 0
+                          ? "running"
+                          : run.submitted_tasks > 0
+                            ? "partial"
+                            : "failure"
+                    }`}
                   />
                   <span className="task-item-title">{label}</span>
                 </div>

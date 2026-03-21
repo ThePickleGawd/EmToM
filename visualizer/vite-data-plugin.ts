@@ -242,11 +242,11 @@ function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-function summarizeLogExcerpt(text: string, headLines = 40, tailLines = 60): Record<string, any> {
+function summarizeLogExcerpt(text: string, headLines = 40): Record<string, any> {
   const lines = stripAnsi(text).split(/\r?\n/).filter((line, index, all) => !(line === "" && index === all.length - 1));
   return {
     head: lines.slice(0, headLines),
-    tail: lines.length > tailLines ? lines.slice(-tailLines) : lines,
+    tail: lines,
     line_count: lines.length,
   };
 }
