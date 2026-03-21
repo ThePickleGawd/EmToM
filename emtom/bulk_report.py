@@ -6,7 +6,7 @@ errors, and prints a colored terminal summary.
 
 Usage:
     python -m emtom.bulk_report <log_dir> [<log_dir2> ...]
-    python -m emtom.bulk_report outputs/bulk_gen_logs/2026-02-03_17-52-37-bulk-generate
+    python -m emtom.bulk_report outputs/generations/2026-03-20_17-52-37-generation/logs
 
 Called automatically by bulk_generate.sh after all processes finish.
 """
@@ -130,9 +130,12 @@ class ProcessResult:
 
 def parse_log(log_path: Path) -> ProcessResult:
     """Parse a single bulk generation log file."""
-    # Extract GPU/slot/category from filename: gpu0_slot1_cooperative.log
+    # Extract GPU/slot/category from filename:
+    # gpu0_slot1_cooperative.log
+    # gpu0_slot1_cooperative_attempt0001.log
+    # gpu0_slot1_cooperative_k2_attempt0001.log
     stem = log_path.stem
-    m = re.match(r"gpu(\d+)_slot(\d+)_(\w+)", stem)
+    m = re.match(r"gpu(\d+)_slot(\d+)_([A-Za-z]+)(?:_k\d+)?(?:_attempt\d+)?$", stem)
     if m:
         gpu, slot, category = int(m.group(1)), int(m.group(2)), m.group(3)
     else:
@@ -161,6 +164,8 @@ def parse_log(log_path: Path) -> ProcessResult:
     # Parse task file paths: "  - data/emtom/tasks/foo.json"
     for path_m in re.finditer(r"^\s+-\s+(.*\.json)\s*$", clean, re.MULTILINE):
         result.task_paths.append(path_m.group(1).strip())
+    if result.task_paths and result.tasks_generated == 0:
+        result.tasks_generated = len(result.task_paths)
 
     # Parse iteration progress: "Iteration N/M | Submitted: X/Y"
     iter_matches = re.findall(r"Iteration\s+(\d+)/(\d+)\s*\|", clean)
