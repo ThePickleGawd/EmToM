@@ -276,6 +276,7 @@ export default function GenerationView({ generationId }: Props) {
 
       {/* Selected worker detail */}
       {selectedWorker && (
+        <>
         <div className="gen-detail-columns">
           <div className="gen-detail-col">
             <div className="gen-section">
@@ -367,19 +368,22 @@ export default function GenerationView({ generationId }: Props) {
               </div>
             </div>
 
-            <div className="gen-section">
-              <div className="gen-section-head">
-                <div>
-                  <div className="gen-kicker">Log Excerpt</div>
-                  <h3>Worker stdout/stderr</h3>
-                </div>
-              </div>
-              <div className="gen-log-block">
-                <pre>{selectedWorker.log_excerpt.tail.join("\n")}</pre>
-              </div>
-            </div>
           </div>
         </div>
+
+        {/* Full-width log at the bottom */}
+        <div className="gen-log-section">
+          <div className="gen-log-header">
+            <span className="gen-log-icon">{"\u25B8"}</span>
+            <span className="gen-log-title">stdout/stderr</span>
+            <span className="gen-log-meta">
+              {selectedWorker.log_excerpt.line_count.toLocaleString()} lines
+              {" \u00b7 "}{selectedWorker.id}
+            </span>
+          </div>
+          <pre className="gen-log-pre">{selectedWorker.log_excerpt.tail.join("\n")}</pre>
+        </div>
+        </>
       )}
     </div>
   );
