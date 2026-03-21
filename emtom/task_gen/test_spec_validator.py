@@ -50,3 +50,42 @@ def test_single_actor_without_recipient_still_fails_multi_agent_guard() -> None:
     errors = validate_blocking_spec(task)
 
     assert any("only one active agent" in error for error in errors)
+
+
+def test_shorthand_mechanic_bindings_are_accepted() -> None:
+    task = _base_task()
+    task["problem_pddl"] = (
+        "(define (problem test_task)\n"
+        "  (:domain emtom)\n"
+        "  (:objects\n"
+        "    agent_0 agent_1 - agent\n"
+        "    kitchen_1 living_room_1 - room\n"
+        "    bottle_1 - object\n"
+        "    table_1 - furniture\n"
+        "  )\n"
+        "  (:init\n"
+        "    (agent_in_room agent_0 living_room_1)\n"
+        "    (agent_in_room agent_1 kitchen_1)\n"
+        "    (is_in_room bottle_1 kitchen_1)\n"
+        "    (is_in_room table_1 kitchen_1)\n"
+        "  )\n"
+        "  (:goal (and (is_on_top bottle_1 table_1) (K agent_0 (is_on_top bottle_1 table_1))))\n"
+        ")"
+    )
+    task["mechanic_bindings"] = [
+        {
+            "mechanic_type": "room_restriction",
+            "agent_id": "agent_0",
+            "allowed_rooms": ["living_room_1"],
+        },
+        {
+            "mechanic_type": "limited_bandwidth",
+            "agent_id": "agent_1",
+            "max_messages": 1,
+        },
+    ]
+
+    errors = validate_blocking_spec(task)
+
+    assert not any("room_restriction" in error for error in errors)
+    assert not any("limited_bandwidth" in error for error in errors)

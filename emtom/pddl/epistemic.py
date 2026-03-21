@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 
+from emtom.task_gen.task_generator import normalize_mechanic_bindings
+
 if TYPE_CHECKING:
     from emtom.pddl.dsl import Literal
     from emtom.task_gen.task_generator import GeneratedTask
@@ -47,33 +49,57 @@ class ObservabilityModel:
         num_agents = task.num_agents
         all_agents = {f"agent_{i}" for i in range(num_agents)}
 
+        raw_bindings: List[Dict[str, Any]] = []
         for binding in task.mechanic_bindings:
-            mtype = binding.mechanic_type
+            if isinstance(binding, dict):
+                raw_bindings.append(binding)
+                continue
+            if hasattr(binding, "to_dict"):
+                try:
+                    candidate = binding.to_dict()
+                    if isinstance(candidate, dict):
+                        raw_bindings.append(candidate)
+                        continue
+                except Exception:
+                    pass
+            mechanic_type = getattr(binding, "mechanic_type", None)
+            if isinstance(mechanic_type, str):
+                raw_bindings.append(
+                    {
+                        "mechanic_type": mechanic_type,
+                        "trigger_object": getattr(binding, "trigger_object", None),
+                        "restricted_rooms": getattr(binding, "restricted_rooms", None),
+                        "for_agents": getattr(binding, "for_agents", None),
+                        "message_limits": getattr(binding, "message_limits", None),
+                        "allowed_targets": getattr(binding, "allowed_targets", None),
+                    }
+                )
+
+        normalized_bindings = normalize_mechanic_bindings(
+            raw_bindings,
+            problem_pddl=getattr(task, "problem_pddl", None),
+        )
+        for binding in normalized_bindings:
+            mtype = binding.get("mechanic_type")
 
             if mtype == "room_restriction":
-                rooms = set(binding.restricted_rooms or [])
-                for agent in (binding.for_agents or []):
+                rooms = set(binding.get("restricted_rooms") or [])
+                for agent in (binding.get("for_agents") or []):
                     model.restricted_rooms.setdefault(agent, set()).update(rooms)
 
             elif mtype in ("remote_control", "state_mirroring"):
-                # If the target object is in a different room than the trigger,
-                # agents at the trigger can't directly observe the target effect.
-                trigger = binding.trigger_object
+                trigger = binding.get("trigger_object")
                 if trigger:
-                    # All agents are potentially unaware of remote effects
-                    # unless they're in the target room. This is a conservative
-                    # over-approximation refined at planning time.
                     model.hidden_effects[trigger] = set(all_agents)
 
             elif mtype == "limited_bandwidth":
-                # Extract per-agent message limits from binding
-                ml = binding.message_limits or {}
+                ml = binding.get("message_limits") or {}
                 for agent_id, limit in ml.items():
                     if isinstance(limit, (int, float)):
                         model.message_limits[agent_id] = int(limit)
 
             elif mtype == "restricted_communication":
-                allowed_targets = binding.allowed_targets or {}
+                allowed_targets = binding.get("allowed_targets") or {}
                 for agent_id, targets in allowed_targets.items():
                     if isinstance(targets, list):
                         model.message_targets[agent_id] = set(targets)

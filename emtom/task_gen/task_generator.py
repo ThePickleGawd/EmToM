@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 class TaskCategory(Enum):
     """Category of task - determines evaluation criteria."""
@@ -18,6 +18,84 @@ class TaskCategory(Enum):
     COOPERATIVE = "cooperative"  # All agents share same goal, must work together
     COMPETITIVE = "competitive"  # Two teams with opposing win conditions
     MIXED = "mixed"  # Shared main goal, but agents have secret conflicting subgoals
+
+
+def extract_room_ids_from_problem_pddl(problem_pddl: Optional[str]) -> Set[str]:
+    """Best-effort extraction of declared room IDs from canonical problem_pddl."""
+    if not isinstance(problem_pddl, str) or not problem_pddl.strip():
+        return set()
+
+    try:
+        from emtom.pddl.problem_pddl import parse_problem_pddl
+
+        parsed = parse_problem_pddl(problem_pddl)
+    except Exception:
+        return set()
+
+    return {
+        name
+        for name, obj_type in parsed.objects.items()
+        if obj_type == "room"
+    }
+
+
+def normalize_mechanic_binding_dict(
+    binding: Dict[str, Any],
+    room_ids: Optional[Set[str]] = None,
+) -> Dict[str, Any]:
+    """Normalize shorthand mechanic bindings emitted by external agents."""
+    if not isinstance(binding, dict):
+        return {}
+
+    normalized = dict(binding)
+    mechanic_type = normalized.get("mechanic_type")
+    known_rooms = {room for room in (room_ids or set()) if isinstance(room, str) and room}
+
+    if mechanic_type == "room_restriction":
+        if not isinstance(normalized.get("for_agents"), list):
+            agent_id = normalized.get("agent_id")
+            if isinstance(agent_id, str) and agent_id:
+                normalized["for_agents"] = [agent_id]
+
+        restricted_rooms = normalized.get("restricted_rooms")
+        if not (isinstance(restricted_rooms, list) and restricted_rooms):
+            allowed_rooms = normalized.get("allowed_rooms")
+            if isinstance(allowed_rooms, list):
+                allowed_set = {room for room in allowed_rooms if isinstance(room, str) and room}
+                normalized["restricted_rooms"] = sorted(known_rooms - allowed_set) if known_rooms else []
+
+    elif mechanic_type == "limited_bandwidth":
+        if not isinstance(normalized.get("message_limits"), dict):
+            agent_id = normalized.get("agent_id")
+            max_messages = normalized.get("max_messages")
+            if isinstance(agent_id, str) and isinstance(max_messages, (int, float)):
+                normalized["message_limits"] = {agent_id: int(max_messages)}
+
+    elif mechanic_type == "restricted_communication":
+        allowed_targets = normalized.get("allowed_targets")
+        agent_id = normalized.get("agent_id")
+        if isinstance(agent_id, str) and isinstance(allowed_targets, list):
+            normalized["allowed_targets"] = {
+                agent_id: [target for target in allowed_targets if isinstance(target, str) and target]
+            }
+
+    return normalized
+
+
+def normalize_mechanic_bindings(
+    mechanic_bindings: Any,
+    problem_pddl: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return mechanic bindings in canonical schema."""
+    if not isinstance(mechanic_bindings, list):
+        return []
+
+    room_ids = extract_room_ids_from_problem_pddl(problem_pddl)
+    normalized: List[Dict[str, Any]] = []
+    for binding in mechanic_bindings:
+        if isinstance(binding, dict):
+            normalized.append(normalize_mechanic_binding_dict(binding, room_ids=room_ids))
+    return normalized
 
 
 
@@ -73,19 +151,20 @@ class MechanicBinding:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MechanicBinding":
+        normalized = normalize_mechanic_binding_dict(data)
         return cls(
-            mechanic_type=data["mechanic_type"],
-            trigger_object=data.get("trigger_object"),
-            target_object=data.get("target_object"),
-            target_state=data.get("target_state"),
-            prerequisite_object=data.get("prerequisite_object"),
-            requires_item=data.get("requires_item"),
-            count=data.get("count"),
-            restricted_rooms=data.get("restricted_rooms"),
-            for_agents=data.get("for_agents"),
-            message_limits=data.get("message_limits"),
-            allowed_targets=data.get("allowed_targets"),
-            failure_probability=data.get("failure_probability"),
+            mechanic_type=normalized["mechanic_type"],
+            trigger_object=normalized.get("trigger_object"),
+            target_object=normalized.get("target_object"),
+            target_state=normalized.get("target_state"),
+            prerequisite_object=normalized.get("prerequisite_object"),
+            requires_item=normalized.get("requires_item"),
+            count=normalized.get("count"),
+            restricted_rooms=normalized.get("restricted_rooms"),
+            for_agents=normalized.get("for_agents"),
+            message_limits=normalized.get("message_limits"),
+            allowed_targets=normalized.get("allowed_targets"),
+            failure_probability=normalized.get("failure_probability"),
         )
 
 
@@ -149,13 +228,21 @@ class GeneratedTask:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "GeneratedTask":
         """Create task from dictionary."""
+        problem_pddl = data.get("problem_pddl") if isinstance(data.get("problem_pddl"), str) else None
+        if not (problem_pddl and problem_pddl.strip()):
+            raise ValueError(
+                "Task must define non-empty 'problem_pddl'. "
+                "Legacy goal fields are no longer supported."
+            )
+        from emtom.pddl.problem_pddl import normalize_problem_pddl
+
+        problem_pddl = normalize_problem_pddl(problem_pddl)
+
         # Parse mechanic bindings
         bindings = []
-        raw_bindings = data.get("mechanic_bindings", [])
-        if isinstance(raw_bindings, list):
-            for b in raw_bindings:
-                if isinstance(b, dict):
-                    bindings.append(MechanicBinding.from_dict(b))
+        raw_bindings = normalize_mechanic_bindings(data.get("mechanic_bindings", []), problem_pddl=problem_pddl)
+        for b in raw_bindings:
+            bindings.append(MechanicBinding.from_dict(b))
 
         # Parse items
         items = data.get("items", [])
@@ -190,12 +277,6 @@ class GeneratedTask:
 
         # Parse canonical PDDL payload (required end-to-end).
         pddl_domain = data.get("pddl_domain", "emtom")
-        problem_pddl = data.get("problem_pddl") if isinstance(data.get("problem_pddl"), str) else None
-        if not (problem_pddl and problem_pddl.strip()):
-            raise ValueError(
-                "Task must define non-empty 'problem_pddl'. "
-                "Legacy goal fields are no longer supported."
-            )
 
         # Parse agent config
         agent_secrets = data.get("agent_secrets", {})

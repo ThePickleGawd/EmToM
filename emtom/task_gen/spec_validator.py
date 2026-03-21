@@ -17,6 +17,7 @@ import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from emtom.mechanics.handlers import MECHANIC_INFO
+from emtom.task_gen.task_generator import normalize_mechanic_bindings
 
 
 _ACTION_PATTERN = re.compile(r"(\w+)(?:\[(.*)\])?$")
@@ -176,7 +177,10 @@ def _extract_room_restrictions(
             if isinstance(agent, str) and agent:
                 restrictions.setdefault(agent, set()).update(room_set)
 
-    for binding in task_data.get("mechanic_bindings", []):
+    for binding in normalize_mechanic_bindings(
+        task_data.get("mechanic_bindings", []),
+        problem_pddl=task_data.get("problem_pddl"),
+    ):
         if isinstance(binding, dict):
             add_binding(binding)
 
@@ -415,7 +419,10 @@ def validate_blocking_spec(
     # Mechanics schema and binding checks
     # ------------------------------------------------------------------
     active_mechanics = task_data.get("active_mechanics", [])
-    mechanic_bindings = task_data.get("mechanic_bindings", [])
+    mechanic_bindings = normalize_mechanic_bindings(
+        task_data.get("mechanic_bindings", []),
+        problem_pddl=task_data.get("problem_pddl"),
+    )
 
     if active_mechanics is not None and not isinstance(active_mechanics, list):
         errors.append("active_mechanics must be a list")
@@ -738,6 +745,10 @@ def validate_blocking_spec(
                 ):
                     non_wait_counts[agent] += 1
                     action_name, args = _parse_action(action_str)
+                    if action_name == "Communicate":
+                        recipient = _parse_communicate_recipient(args)
+                        if recipient in non_wait_counts:
+                            non_wait_counts[recipient] += 1
         active_agents = [a for a, c in non_wait_counts.items() if c > 0]
         if len(active_agents) <= 1:
             errors.append(

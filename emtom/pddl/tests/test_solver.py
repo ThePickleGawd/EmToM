@@ -9,6 +9,7 @@ from emtom.pddl.solver import PDKBSolver, _max_epistemic_depth, SolverResult
 from emtom.pddl.dsl import Knows, Believes
 from emtom.pddl.epistemic import ObservabilityModel
 from emtom.pddl.tom_verifier import compute_tom_depth, explain_tom_depth, generate_tom_reasoning
+from emtom.task_gen.task_generator import GeneratedTask
 
 
 class TestSolver:
@@ -181,6 +182,15 @@ class TestTomVerifier:
         depth = compute_tom_depth(task, scene)
         assert depth == 1
 
+    def test_plain_k_goal_is_strict_tom_1(self):
+        task = self._make_task(
+            pddl_goal="(K agent_0 (is_open cabinet_27))",
+            mechanics=[],
+        )
+        scene = {"rooms": ["kitchen_1"], "furniture": ["cabinet_27"], "objects": []}
+        depth = compute_tom_depth(task, scene)
+        assert depth == 1
+
     def test_room_valued_fact_depth_1(self):
         """Room-valued literals should not become trivially observable."""
         binding = MagicMock()
@@ -211,6 +221,51 @@ class TestTomVerifier:
         scene = {"rooms": [], "furniture": ["cabinet_27"], "objects": []}
         depth = compute_tom_depth(task, scene)
         assert depth == -1
+
+
+class TestMechanicBindingNormalization:
+    def test_shorthand_room_restriction_normalizes_for_strict_tom(self):
+        task = GeneratedTask.from_dict(
+            {
+                "task_id": "test_001",
+                "title": "Shorthand Room Restriction",
+                "task": "Move the object.",
+                "category": "cooperative",
+                "scene_id": "scene",
+                "episode_id": "episode",
+                "active_mechanics": ["room_restriction"],
+                "mechanic_bindings": [
+                    {
+                        "mechanic_type": "room_restriction",
+                        "agent_id": "agent_0",
+                        "allowed_rooms": ["living_room_1"],
+                    }
+                ],
+                "agent_secrets": {"agent_0": [], "agent_1": []},
+                "agent_actions": {"agent_0": ["Communicate"], "agent_1": ["Communicate"]},
+                "num_agents": 2,
+                "problem_pddl": (
+                    "(define (problem test_001)\n"
+                    "  (:domain emtom)\n"
+                    "  (:objects\n"
+                    "    agent_0 agent_1 - agent\n"
+                    "    kitchen_1 living_room_1 - room\n"
+                    "    cabinet_27 - furniture\n"
+                    "  )\n"
+                    "  (:init\n"
+                    "    (agent_in_room agent_0 living_room_1)\n"
+                    "    (agent_in_room agent_1 kitchen_1)\n"
+                    "    (is_in_room cabinet_27 kitchen_1)\n"
+                    "  )\n"
+                    "  (:goal (K agent_0 (is_open cabinet_27)))\n"
+                    ")"
+                ),
+            }
+        )
+
+        obs = ObservabilityModel.from_task_with_scene(task, None)
+        assert obs.restricted_rooms == {"agent_0": {"kitchen_1"}}
+        assert compute_tom_depth(task, None) == 1
 
 
 class TestTrivialKGoals:

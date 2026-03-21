@@ -219,6 +219,56 @@ class TestVerifyPddl:
         finally:
             os.unlink(tmp)
 
+    def test_verify_normalizes_is_openable_init_fact(self):
+        from emtom.cli.verify_pddl import run
+        from emtom.pddl.solver import SolverResult
+        from emtom.task_gen.task_generator import GeneratedTask
+
+        task = {
+            "task_id": "test_openable_alias",
+            "title": "Openable alias",
+            "category": "cooperative",
+            "scene_id": "scene",
+            "episode_id": "episode",
+            "active_mechanics": [],
+            "mechanic_bindings": [],
+            "task": "Test task",
+            "agent_secrets": {},
+            "agent_actions": {},
+            "num_agents": 2,
+            "problem_pddl": (
+                "(define (problem test)\n"
+                "  (:domain emtom)\n"
+                "  (:objects agent_0 agent_1 - agent kitchen_1 - room cabinet_27 - furniture)\n"
+                "  (:init (agent_in_room agent_0 kitchen_1) "
+                "         (agent_in_room agent_1 kitchen_1) "
+                "         (is_in_room cabinet_27 kitchen_1) "
+                "         (is_openable cabinet_27) "
+                "         (is_closed cabinet_27))\n"
+                "  (:goal (is_open cabinet_27))\n"
+                ")"
+            ),
+        }
+
+        normalized = GeneratedTask.from_dict(task)
+        assert "is_openable" not in normalized.problem_pddl
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(task, f)
+            tmp = f.name
+
+        try:
+            with patch(
+                "emtom.pddl.fd_solver.FastDownwardSolver.solve",
+                return_value=SolverResult(solvable=True, belief_depth=0, solve_time=0.0, plan=[]),
+            ):
+                result = run(tmp)
+
+            assert result["success"] is True
+            assert result["data"]["valid"] is True
+        finally:
+            os.unlink(tmp)
+
     def test_verify_rejects_init_only_predicates_in_goal(self):
         from emtom.cli.verify_pddl import run
 
@@ -423,6 +473,34 @@ class TestJudgeTask:
             assert result["success"] is False
             assert "strict proof failed" in result["error"]
             mock_regen.assert_not_called()
+
+    def test_strict_tom_metadata_uses_proved_level(self):
+        from emtom.cli.task_metadata import compute_strict_tom_metadata
+        from emtom.pddl.solver import SolverResult
+
+        task = _make_minimal_task(
+            problem_pddl=(
+                "(define (problem test_k1) "
+                "(:domain emtom) "
+                "(:objects agent_0 agent_1 - agent kitchen_1 - room cabinet_27 - furniture) "
+                "(:init (agent_in_room agent_0 kitchen_1) "
+                "(agent_in_room agent_1 kitchen_1) "
+                "(is_in_room cabinet_27 kitchen_1)) "
+                "(:goal (K agent_0 (is_open cabinet_27))))"
+            ),
+        )
+
+        with patch(
+            "emtom.pddl.fd_solver.FastDownwardSolver.solve",
+            return_value=SolverResult(solvable=True, belief_depth=0, solve_time=0.0, plan=[]),
+        ), patch(
+            "emtom.pddl.tom_verifier.generate_tom_reasoning",
+            return_value="first-order knowledge required",
+        ):
+            metadata = compute_strict_tom_metadata(task, scene_data=None)
+
+        assert metadata["tom_level"] == 1
+        assert metadata["epistemic_goal_depth"] == 1
 
 
 # ---------------------------------------------------------------------------

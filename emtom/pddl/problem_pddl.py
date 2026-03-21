@@ -148,6 +148,27 @@ def replace_init_in_problem_pddl(problem_pddl: str, new_init_pddl: str) -> str:
     return raw[:pos] + "\n    " + new_init_pddl.strip() + "\n  " + raw[end:]
 
 
+def normalize_problem_pddl(problem_pddl: str) -> str:
+    """Normalize compatibility-only init facts in inline problem PDDL.
+
+    The current planner domain does not define ``is_openable``. Older prompts
+    and model priors sometimes emit it as a redundant init fact, which makes
+    Fast Downward reject the problem even though the rest of the task is valid.
+    Drop that compatibility alias from ``:init`` before planner-facing use.
+    """
+    parsed = parse_problem_pddl(problem_pddl)
+    filtered_init = [
+        lit for lit in parsed.init_literals
+        if lit.predicate != "is_openable"
+    ]
+    if len(filtered_init) == len(parsed.init_literals):
+        return problem_pddl
+
+    init_exprs = [lit.to_pddl() for lit in filtered_init]
+    init_exprs.extend(expr.to_pddl() for expr in parsed.epistemic_init)
+    return replace_init_in_problem_pddl(problem_pddl, "\n    ".join(init_exprs))
+
+
 def collect_object_ids_from_formula(formula: Formula) -> Set[str]:
     """Collect grounded object IDs referenced in a formula."""
     out: Set[str] = set()

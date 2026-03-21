@@ -173,6 +173,7 @@ Do NOT fail a run because `:init` is deterministic. You do NOT need disjunction,
 - Agent A's secret says they must act on the exact ID that only Agent B can identify or confirm
 
 **Self-test before submitting**: Remove all Communicate actions from the golden trajectory. Can agents still achieve 100% of physical goals just by executing their independent actions? If yes, the task does NOT test functional ToM — redesign it.
+Private target assignments alone are NOT enough. If one unrestricted agent could still do every physical goal, the regenerated golden trajectory will collapse to one active agent and judge will reject the task.
 
 ## Functional ToM Patterns
 Use at least one of these as the core difficulty driver. Do not reduce them to simple fact relay.
@@ -341,6 +342,11 @@ These are the most frequent failure patterns. Avoid them:
 }}
 ```
 `active_mechanics` is auto-derived from `mechanic_bindings` — do NOT set it manually.
+Use the canonical mechanic schema only:
+- `room_restriction`: `restricted_rooms` + `for_agents`
+- `limited_bandwidth`: `message_limits`
+- `restricted_communication`: `allowed_targets`
+Do not use shorthand fields like `agent_id`, `allowed_rooms`, or `max_messages`.
 
 ## Available PDDL Predicates
 {available_predicates}
@@ -352,6 +358,7 @@ Use `problem_pddl` as the single goal source. It must contain a full PDDL proble
 - Every goal/mechanic-relevant object or furniture must have explicit room grounding in `:init` via `is_in_room`.
 - Every declared agent must have an explicit `agent_in_room` fact in `:init`.
 - Communication constraints must be encoded in `:init` with `can_communicate`.
+- Do not emit compatibility-only predicates like `is_openable`; use only predicates from the list above.
 - Single goal example: `(:goal (is_open cabinet_27))`
 - Conjunction: `(:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))`
 - Negation: `(:goal (and (not (is_open drawer_5))))`

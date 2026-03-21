@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from emtom.task_gen.task_generator import normalize_mechanic_bindings
+
 logger = logging.getLogger(__name__)
 
 
@@ -309,7 +311,10 @@ def compute_task_spec_hash(task_data: Dict[str, Any]) -> str:
 def extract_room_restrictions(task_data: Dict[str, Any]) -> Dict[str, set]:
     """Build agent -> restricted rooms map from room_restriction mechanics."""
     restrictions: Dict[str, set] = {}
-    for binding in task_data.get("mechanic_bindings", []):
+    for binding in normalize_mechanic_bindings(
+        task_data.get("mechanic_bindings", []),
+        problem_pddl=task_data.get("problem_pddl"),
+    ):
         if not isinstance(binding, dict):
             continue
         if binding.get("mechanic_type") != "room_restriction":
