@@ -17,18 +17,20 @@ Task generation should optimize for functional ToM, not just literal ToM:
 ## Pipeline
 
 1. Explore a scene and discover useful mechanics.
-2. Select seed tasks from the existing task pool for a target benchmark model, then load one into the generator.
-3. Generate a task grounded in the current scene, mechanics, and selected seed.
+2. Select sampled task examples from the existing task pool for a target benchmark model, using an explicit logical pass/fail mix over that model's calibrated results.
+3. Generate a task grounded in the current scene and mechanics, starting from the blank task template and using the sampled examples only as inspiration.
 4. Verify the task statically and with runtime checks.
 5. Judge whether the task genuinely requires ToM reasoning.
 6. Benchmark agents on the final task in both `standard` and `baseline`, using `standard` for calibration and `baseline` as the full-info solvability check.
 
 Task generation runs through an external SWE-agent CLI (`mini`, `claude`, or `codex`) inside a repo-local workspace under `tmp/task_gen/`. The agent executable may come from the operator environment, but each task-generation run gets its own sandbox environment in `tmp/task_gen/<run_id>/.venv` so parallel runs stay isolated. The repo provides the prompt, sampled seed context, and a stable `taskgen` command surface for `new_scene`, `judge`, `verify_golden_trajectory`, `test_task`, `submit_task`, and `finish`.
 
+`tmp/task_gen/` is workspace-only. All generation logs and visualizer-facing artifacts live under `outputs/generations/<run_id>/`, including the run manifest, per-worker status snapshots, normalized EMTOM event logs, backend-native agent traces such as `agent_trace.json`, and any bulk-launcher stdout logs. The visualizer reads those files live in dev through filesystem-backed endpoints; it does not rely on a generated generation-data snapshot.
+
 There is no separate evolution pipeline. Difficulty shaping happens inside normal task generation:
-- the seed selector uses target-model calibration data to bias the pool toward harder or easier seeds so the dataset moves toward the desired pass-rate
-- `new_scene` re-samples from the seed pool instead of treating seed reuse as a separate mode
-- sampled examples and the loaded working task should come from the same selector so seed tasks are emphasized in-context
+- the sampled-task selector uses target-model calibration data and an explicit pass/fail mix, defaulting to 80% failed examples and 20% passed examples
+- `new_scene` always creates `working_task.json` from the blank template with the requested number of agents
+- sampled examples are inspiration only; they are not loaded directly into the authored task
 
 ## Campaigns
 
