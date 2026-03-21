@@ -253,31 +253,22 @@ export default function GenerationView({ generationId }: Props) {
 
       <SuccessGraph detail={detail} />
 
-      {/* Worker grid */}
+      {/* Worker picker */}
       <div className="gen-section">
         <div className="gen-kicker">Workers</div>
-        <div className="gen-worker-grid">
+        <div className="gen-worker-picker">
           {detail.workers.map((worker) => (
             <button
               key={worker.id}
-              className={`gen-worker-chip ${selectedWorker?.id === worker.id ? "active" : ""}`}
+              className={`gen-worker-tile ${selectedWorker?.id === worker.id ? "active" : ""}`}
               onClick={() => setSelectedWorkerId(worker.id)}
+              title={`${worker.id}\nGPU ${worker.gpu}:${worker.slot} · ${worker.category} · K=${worker.current_k_level ?? "?"}\n${worker.submitted_count}/${worker.target_tasks} submitted${worker.fail_reason ? `\n${worker.fail_reason}` : ""}`}
             >
-              <div className="gen-worker-chip-head">
-                <span>{worker.id}</span>
-                <span className={`gen-worker-status ${worker.status}`}>
-                  {statusLabel(worker.status)}
-                </span>
-              </div>
-              <div className="gen-worker-chip-meta">
-                GPU {worker.gpu} &middot; slot {worker.slot} &middot; {worker.category}
-              </div>
-              <div className="gen-worker-chip-meta">
-                {worker.submitted_count}/{worker.target_tasks} submitted
-              </div>
-              {worker.current_k_level != null && (
-                <div className="gen-worker-chip-meta">K={worker.current_k_level}</div>
-              )}
+              <span className={`gen-tile-status-bar ${worker.status}`} />
+              <span className="gen-tile-category">{worker.category.slice(0, 4)}</span>
+              <span className="gen-tile-progress">
+                {worker.submitted_count}/{worker.target_tasks}
+              </span>
             </button>
           ))}
         </div>

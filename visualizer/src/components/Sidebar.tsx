@@ -97,32 +97,52 @@ export default function Sidebar({
     }
 
     // Library
+    const total = libraryTasks.length;
+    const passed = libraryTasks.filter((t) => t.success).length;
+    const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
+
     return (
-      <div className="task-list">
-        {libraryTasks.map((task) => (
-          <div
-            key={task.task_id}
-            className={`task-item ${selectedTaskId === task.task_id ? "active" : ""}`}
-            onClick={() => onTaskSelect(task.task_id)}
-          >
-            <div className="task-item-header">
-              <div
-                className={`task-status ${task.success ? "success" : "failure"}`}
-              />
-              <span className="task-item-title">{task.title}</span>
+      <>
+        {total > 0 && (
+          <div className="library-stats">
+            <div className="library-stats-rate">{passRate}%</div>
+            <div className="library-stats-detail">
+              {passed}/{total} passing
             </div>
-            <div className="task-item-meta">
-              {task.category && (
-                <span className={`category-badge ${task.category}`}>
-                  {task.category}
-                </span>
-              )}
-              <span>{task.turns}t</span>
-              <span>{task.agents}a</span>
+            <div className="library-stats-bar">
+              <div
+                className="library-stats-bar-fill"
+                style={{ width: `${passRate}%` }}
+              />
             </div>
           </div>
-        ))}
-      </div>
+        )}
+        <div className="task-list">
+          {libraryTasks.map((task) => (
+            <div
+              key={task.task_id}
+              className={`task-item ${selectedTaskId === task.task_id ? "active" : ""}`}
+              onClick={() => onTaskSelect(task.task_id)}
+            >
+              <div className="task-item-header">
+                <div
+                  className={`task-status ${task.success ? "success" : "failure"}`}
+                />
+                <span className="task-item-title">{task.title}</span>
+              </div>
+              <div className="task-item-meta">
+                {task.category && (
+                  <span className={`category-badge ${task.category}`}>
+                    {task.category}
+                  </span>
+                )}
+                <span>{task.turns}t</span>
+                <span>{task.agents}a</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </>
     );
   };
 

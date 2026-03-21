@@ -148,14 +148,31 @@ Each secret states only: team membership, room restrictions, communication const
 - Avoid `python3 -c "..."` commands that include literal `\\n` escapes.
 - For multi-line JSON edits, prefer heredocs (e.g., `python3 - <<'PY' ... PY`) or `apply_patch`.
 
+## K-Level Feasibility Under Deterministic Init
+Strict PDDL verification assumes a deterministic `:init`. That does NOT make K=2/K=3 tasks impossible.
+
+Keep these three layers separate:
+- **Physical solvability**: use ordinary fixed goal literals such as `(is_open cabinet_28)` or `(is_on_top bottle_2 table_12)`.
+- **Agent-side information asymmetry**: make the correct action depend on private secrets, room-restricted clues, mechanic access, or communication limits. The acting agent does not need the clue in `:init`; it can come from another agent's secret or observation.
+- **ToM depth**: create nested epistemic goals over deterministic facts, e.g. `(K agent_0 (K agent_1 (K agent_2 (is_open cabinet_28))))`.
+
+Concrete K=3 pattern that IS supported:
+- One fixed physical target literal such as `(is_open cabinet_28)` or `(is_on_top bottle_2 table_12)`
+- One nested K=3 literal about that same deterministic fact or another grounded fact
+- `room_restriction` and/or `restricted_communication` so the observing agent cannot directly inform the final acting agent
+- `limited_bandwidth` only when you still leave enough messages to realize the chain
+
+Do NOT fail a run because `:init` is deterministic. You do NOT need disjunction, equality, or epistemic facts inside `:init` to build a valid ToM-3 task.
+
 ## CRITICAL: Physical Goals Must Require Communication
 **The #1 failure mode in task generation is creating physical goals that agents can solve in parallel without talking.** If every agent already knows which object to move and where to put it, communication is unnecessary and the task is trivially easy — regardless of K-level, bandwidth limits, or mechanics.
 
-**At least one physical goal MUST be information-dependent:** an agent cannot determine WHAT to do or WHERE to do it without receiving information from another agent. Patterns that create this:
+**At least one essential physical action path MUST be information-dependent from the agents' perspective:** an agent cannot determine WHAT to do or WHERE to do it without information held by another agent. The authored PDDL goal can still stay fully deterministic. Patterns that create this:
 - Agent A must place object_X on one of two tables, but only Agent B knows which table (because B can see a clue in a room A can't enter)
 - Agent A must open or close cabinet_Y, but the correct state depends on what Agent B discovered
 - Agent A's action is GATED by a mechanic (conditional_unlock, remote_control) that only Agent B can trigger
 - The task goal references an object's current location, which only one agent can observe
+- Agent A's secret says they must act on the exact ID that only Agent B can identify or confirm
 
 **Self-test before submitting**: Remove all Communicate actions from the golden trajectory. Can agents still achieve 100% of physical goals just by executing their independent actions? If yes, the task does NOT test functional ToM — redesign it.
 
@@ -611,7 +628,6 @@ Use the repo-owned `taskgen` commands for pipeline actions instead of bespoke to
 - `taskgen finish` must be the final command once the required number of tasks has been submitted.
 - Use `taskgen fail` only for unrecoverable infrastructure issues.
 - You may use shell tools like `cat`, `sed`, `jq`, `python`, and `apply_patch` to inspect and edit files.
-- Do NOT `import emtom` in Python snippets — the agent runs in an isolated environment without the project's packages. Use `taskgen` commands or `jq` instead.
 
 {constraints}
 """
