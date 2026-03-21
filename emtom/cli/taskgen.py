@@ -4,7 +4,6 @@ Task-generation command surface for external SWE agents.
 Usage:
     python -m emtom.cli.taskgen --working-dir DIR status
     python -m emtom.cli.taskgen --working-dir DIR new_scene 3 [--keep]
-    python -m emtom.cli.taskgen --working-dir DIR describe_scene
     python -m emtom.cli.taskgen --working-dir DIR judge
     python -m emtom.cli.taskgen --working-dir DIR verify_golden_trajectory
     python -m emtom.cli.taskgen --working-dir DIR test_task
@@ -32,9 +31,6 @@ def main() -> None:
     new_scene_parser.add_argument("num_agents", type=int, help="Number of agents")
     new_scene_parser.add_argument("--keep", action="store_true", help="Keep current scene/task")
 
-    subparsers.add_parser(
-        "describe_scene", help="Show rooms, furniture, objects, and valid agent IDs"
-    )
     subparsers.add_parser("judge", help="Judge the current task")
     subparsers.add_parser(
         "verify_golden_trajectory", help="Regenerate and verify the golden trajectory"
@@ -60,8 +56,6 @@ def main() -> None:
 
     if args.command == "new_scene":
         result = session.new_scene(args.num_agents, keep=args.keep)
-    elif args.command == "describe_scene":
-        result = session.describe_scene()
     elif args.command == "judge":
         result = session.judge()
     elif args.command == "verify_golden_trajectory":
