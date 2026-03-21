@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import shutil
 import sys
@@ -24,6 +25,7 @@ from typing import Any, Dict, Optional
 from emtom.actions import ActionRegistry
 from emtom.mechanics import get_mechanics_for_task_generation
 from emtom.pddl.domain import get_predicates_for_prompt
+from emtom.task_gen.event_log import append_event, maybe_int, write_run_manifest, write_worker_snapshot
 from emtom.task_gen.external_agent import ExternalAgentError, ExternalAgentLauncher
 from emtom.task_gen.prompts import build_external_taskgen_prompt
 from emtom.task_gen.seed_selector import (
@@ -49,9 +51,9 @@ def parse_extra_args():
         default=None,
         choices=["cooperative", "competitive", "mixed"],
     )
-    parser.add_argument("--seed-task", type=str, default=None)
     parser.add_argument("--seed-tasks-dir", type=str, default=None)
-    parser.add_argument("--random-seed-task", action="store_true", default=False)
+    parser.add_argument("--seed-pass-ratio", type=float, default=0.20)
+    parser.add_argument("--seed-fail-ratio", type=float, default=0.80)
     parser.add_argument("--sampled-tasks-dir", type=str, default=None)
     parser.add_argument("--judge-threshold", type=float, default=None)
     parser.add_argument(
@@ -135,9 +137,13 @@ def build_workspace_id(task_gen_agent: str, now: Optional[datetime] = None) -> s
     return f"{timestamp}-{task_gen_agent}-{uuid.uuid4().hex[:8]}"
 
 
-def _copy_sample_with_aliases(src_path: Path, sampled_tasks_dir: Path, index: int) -> None:
-    for filename in (f"task_{index}.json", f"task_{index:03d}.json"):
-        shutil.copy(src_path, sampled_tasks_dir / filename)
+def build_generation_run_id(now: Optional[datetime] = None) -> str:
+    timestamp = (now or datetime.now()).strftime("%Y-%m-%d_%H-%M-%S")
+    return f"{timestamp}-generation-{uuid.uuid4().hex[:8]}"
+
+
+def _copy_sample(src_path: Path, sampled_tasks_dir: Path, index: int) -> None:
+    shutil.copy(src_path, sampled_tasks_dir / f"task_{index}.json")
 
 
 def populate_sampled_tasks_dir(
@@ -147,7 +153,7 @@ def populate_sampled_tasks_dir(
 ) -> tuple[Optional[Path], int]:
     selected = select_seed_tasks(selection_config, count=sample_count)
     for i, candidate in enumerate(selected, 1):
-        _copy_sample_with_aliases(candidate.path, sampled_tasks_dir, i)
+        _copy_sample(candidate.path, sampled_tasks_dir, i)
     return selection_config.tasks_dir if selected else None, len(selected)
 
 
@@ -226,10 +232,9 @@ def _build_extra_sections(
     calibration_stats: dict,
     difficulty: Optional[str],
     current_k_level: int,
-    seed_task: Optional[str],
     seed_tasks_dir: Optional[str],
-    random_seed_task: bool,
-    test_model: Optional[str],
+    seed_pass_ratio: float,
+    seed_fail_ratio: float,
 ) -> str:
     sections: list[str] = []
 
@@ -301,17 +306,15 @@ def _build_extra_sections(
         )
     )
 
-    if seed_task or seed_tasks_dir:
-        selection_mode = "uniform random" if random_seed_task else "target-model calibrated"
-        seed_pool = seed_task or seed_tasks_dir or "seed pool"
-        target_model = calibration_stats.get("model") or test_model or "unknown"
+    if seed_tasks_dir:
+        target_model = calibration_stats.get("model", "unknown")
         sections.append(
             "\n".join(
                 [
-                    "## Seed Task Context",
-                    f"A seed task from `{seed_pool}` will be loaded when you call `taskgen new_scene`.",
-                    f"Selection mode: {selection_mode}. Target model: {target_model}.",
-                    "Treat the loaded seed as structure only and rewrite natural-language fields from scratch.",
+                    "## Sampled Task Context",
+                    f"`{seed_tasks_dir}` is used to populate `{Path(seed_tasks_dir).name}` examples for inspiration.",
+                    f"Target model: {target_model}. Logical sampled-task mix: fail {seed_fail_ratio:.0%}, pass {seed_pass_ratio:.0%}.",
+                    "Start each task from the blank template in working_task.json. Do not copy a seed task directly.",
                 ]
             )
         )
@@ -387,9 +390,9 @@ def main() -> None:
         target_model = "gpt-5.2"
     target_pass_rate = extra_args.target_pass_rate if extra_args else 0.20
     category = extra_args.category if extra_args else None
-    seed_task = extra_args.seed_task if extra_args else None
     seed_tasks_dir_arg = extra_args.seed_tasks_dir if extra_args else None
-    random_seed_task = extra_args.random_seed_task if extra_args else False
+    seed_pass_ratio = extra_args.seed_pass_ratio if extra_args else 0.20
+    seed_fail_ratio = extra_args.seed_fail_ratio if extra_args else 0.80
     judge_threshold = extra_args.judge_threshold if extra_args else None
     difficulty = extra_args.difficulty if extra_args else None
     test_model = extra_args.test_model if extra_args else None
@@ -401,6 +404,10 @@ def main() -> None:
         if invalid:
             raise SystemExit(f"Error: --k-level values must be 1, 2, or 3 (got {invalid})")
         k_levels = sorted(set(k_levels))
+    if seed_pass_ratio < 0 or seed_fail_ratio < 0:
+        raise SystemExit("Error: --seed-pass-ratio and --seed-fail-ratio must be non-negative.")
+    if seed_pass_ratio == 0 and seed_fail_ratio == 0:
+        raise SystemExit("Error: at least one of --seed-pass-ratio or --seed-fail-ratio must be positive.")
 
     verification_feedback = _load_verification_feedback(retry_verification)
     project_root = Path(__file__).resolve().parent.parent.parent
@@ -410,10 +417,30 @@ def main() -> None:
     working_dir = workspace_root / instance_id
     working_dir.mkdir(parents=True, exist_ok=True)
 
+    generation_run_id = os.environ.get("EMTOM_GENERATION_RUN_ID") or build_generation_run_id()
+    generation_run_dir = Path(
+        os.environ.get("EMTOM_GENERATION_RUN_DIR")
+        or (project_root / "outputs" / "generations" / generation_run_id)
+    )
+    generation_worker_id = os.environ.get("EMTOM_GENERATION_WORKER_ID") or "worker-0"
+    generation_worker_dir = Path(
+        os.environ.get("EMTOM_GENERATION_WORKER_DIR")
+        or (generation_run_dir / "workers" / generation_worker_id)
+    )
+    generation_mode = os.environ.get("EMTOM_GENERATION_MODE") or "single"
+    generation_gpu = maybe_int(os.environ.get("EMTOM_GENERATION_GPU"))
+    generation_slot = maybe_int(os.environ.get("EMTOM_GENERATION_SLOT"))
+    generation_total_workers = maybe_int(os.environ.get("EMTOM_GENERATION_TOTAL_WORKERS"), 1)
+    generation_requested_tasks = maybe_int(os.environ.get("EMTOM_GENERATION_REQUESTED_TASKS"), num_tasks)
+    generation_stdout_log = os.environ.get("EMTOM_GENERATION_STDOUT_LOG") or ""
+    generation_run_dir.mkdir(parents=True, exist_ok=True)
+    generation_worker_dir.mkdir(parents=True, exist_ok=True)
+
     sampled_tasks_dir = working_dir / "sampled_tasks"
     sampled_tasks_dir.mkdir(parents=True, exist_ok=True)
     (working_dir / "agent_trajectories").mkdir(parents=True, exist_ok=True)
     (working_dir / "submitted_tasks").mkdir(parents=True, exist_ok=True)
+    current_k_level = random.choice(k_levels) if k_levels else random.choice([1, 2, 3])
 
     if not test_model:
         test_model = target_model
@@ -430,7 +457,7 @@ def main() -> None:
         selected = sorted(override_files)[:10]
         for i, task_path in enumerate(selected, 1):
             shutil.copy(task_path, sampled_tasks_dir / task_path.name)
-            _copy_sample_with_aliases(task_path, sampled_tasks_dir, i)
+            _copy_sample(task_path, sampled_tasks_dir, i)
     elif seed_tasks_dir is not None:
         selection_config = SeedSelectionConfig(
             tasks_dir=seed_tasks_dir,
@@ -438,23 +465,28 @@ def main() -> None:
             target_pass_rate=target_pass_rate,
             current_pass_rate=calibration_stats["rate"],
             category=category,
+            tom_level=current_k_level,
+            pass_seed_ratio=seed_pass_ratio,
+            fail_seed_ratio=seed_fail_ratio,
         )
-        populate_sampled_tasks_dir(sampled_tasks_dir, selection_config, sample_count=10)
+        populate_sampled_tasks_dir(
+            sampled_tasks_dir,
+            selection_config,
+            sample_count=10,
+        )
 
     _write_template_file(working_dir / "template.json", agents_max)
     _write_taskgen_shim(working_dir)
 
-    current_k_level = random.choice(k_levels) if k_levels else random.choice([1, 2, 3])
     extra_sections = _build_extra_sections(
         query=query,
         verification_feedback=verification_feedback,
         calibration_stats=calibration_stats,
         difficulty=difficulty,
         current_k_level=current_k_level,
-        seed_task=seed_task,
         seed_tasks_dir=str(seed_tasks_dir) if seed_tasks_dir is not None else None,
-        random_seed_task=random_seed_task,
-        test_model=test_model,
+        seed_pass_ratio=seed_pass_ratio,
+        seed_fail_ratio=seed_fail_ratio,
     )
 
     prompt_text = build_external_taskgen_prompt(
@@ -483,21 +515,85 @@ def main() -> None:
         subtasks_min=subtasks_min,
         subtasks_max=subtasks_max,
         category=category,
-        seed_task=seed_task,
         seed_tasks_dir=str(seed_tasks_dir) if seed_tasks_dir is not None else None,
-        random_seed_task=random_seed_task,
+        seed_pass_ratio=seed_pass_ratio,
+        seed_fail_ratio=seed_fail_ratio,
         judge_threshold=judge_threshold,
         difficulty=difficulty,
         test_model=test_model,
         calibration_stats=calibration_stats,
         task_gen_agent=task_gen_agent,
         allowed_k_levels=k_levels,
+        generation_run_id=generation_run_id,
+        generation_run_dir=str(generation_run_dir),
+        generation_worker_id=generation_worker_id,
+        generation_worker_dir=str(generation_worker_dir),
     )
     state["current_k_level"] = current_k_level
     state["task_gen_model"] = model
     state["task_gen_llm_provider"] = llm_provider
     with open(working_dir / "taskgen_state.json", "w") as f:
         json.dump(state, f, indent=2)
+    write_run_manifest(
+        generation_run_dir,
+        run_id=generation_run_id,
+        started_at=datetime.now().isoformat(),
+        mode=generation_mode,
+        total_workers=generation_total_workers,
+        requested_tasks=generation_requested_tasks,
+        output_dir=output_dir,
+        task_gen_agent=task_gen_agent,
+        model=model,
+    )
+    write_worker_snapshot(
+        generation_worker_dir,
+        worker_id=generation_worker_id,
+        run_id=generation_run_id,
+        mode=generation_mode,
+        gpu=generation_gpu,
+        slot=generation_slot,
+        category=category or "random",
+        workspace_id=instance_id,
+        workspace_path=str(working_dir),
+        output_dir=output_dir,
+        task_gen_agent=task_gen_agent,
+        task_gen_model=model,
+        target_tasks=num_tasks,
+        submitted_count=0,
+        current_task_index=1,
+        current_k_level=current_k_level,
+        scene_id=None,
+        episode_id=None,
+        finished=False,
+        failed=False,
+        fail_reason="",
+        status="running",
+        agent_trace_path=str(generation_worker_dir / "agent_trace.json"),
+        stdout_log_path=generation_stdout_log,
+    )
+    if generation_stdout_log:
+        write_worker_snapshot(
+            generation_worker_dir,
+            stdout_log_path=generation_stdout_log,
+        )
+    append_event(
+        generation_worker_dir,
+        "workspace_initialized",
+        run_id=generation_run_id,
+        worker_id=generation_worker_id,
+        workspace=str(working_dir),
+        task_gen_agent=task_gen_agent,
+        model=model,
+        llm_provider=llm_provider,
+        category=category,
+        num_tasks_target=num_tasks,
+        agents_min=agents_min,
+        agents_max=agents_max,
+        subtasks_min=subtasks_min,
+        subtasks_max=subtasks_max,
+        current_k_level=current_k_level,
+        output_dir=output_dir,
+    )
 
     bootstrap_prompt = (working_dir / "bootstrap_prompt.txt").read_text()
 
@@ -517,17 +613,71 @@ def main() -> None:
 
     launcher = ExternalAgentLauncher(project_root)
     try:
+        append_event(
+            generation_worker_dir,
+            "agent_launch_started",
+            run_id=generation_run_id,
+            worker_id=generation_worker_id,
+            agent_name=task_gen_agent,
+            model=model,
+        )
         return_code = launcher.run(
             agent_name=task_gen_agent,
             workspace_dir=working_dir,
             bootstrap_prompt=bootstrap_prompt,
             model=model,
+            trace_output_path=generation_worker_dir / "agent_trace.json",
         )
     except ExternalAgentError as exc:
+        append_event(
+            generation_worker_dir,
+            "agent_launch_failed",
+            run_id=generation_run_id,
+            worker_id=generation_worker_id,
+            agent_name=task_gen_agent,
+            model=model,
+            error=str(exc),
+        )
+        write_worker_snapshot(
+            generation_worker_dir,
+            status="failed",
+            failed=True,
+            fail_reason=str(exc),
+        )
         raise SystemExit(str(exc)) from exc
 
     with open(working_dir / "taskgen_state.json") as f:
         final_state = json.load(f)
+    final_submitted_tasks = final_state.get("submitted_tasks", [])
+    final_status = "failed" if final_state.get("failed", False) else "finished" if final_state.get("finished", False) else "stopped"
+    write_worker_snapshot(
+        generation_worker_dir,
+        status=final_status,
+        submitted_count=len(final_submitted_tasks),
+        current_task_index=final_state.get("current_task_index"),
+        current_k_level=final_state.get("current_k_level"),
+        scene_id=final_state.get("scene_id"),
+        episode_id=final_state.get("episode_id"),
+        finished=final_state.get("finished", False),
+        failed=final_state.get("failed", False),
+        fail_reason=final_state.get("fail_reason", ""),
+        submitted_tasks=final_submitted_tasks,
+        workspace_path=str(working_dir),
+    )
+    append_event(
+        generation_worker_dir,
+        "generation_finished",
+        run_id=generation_run_id,
+        worker_id=generation_worker_id,
+        agent_name=task_gen_agent,
+        model=model,
+        return_code=return_code,
+        finished=final_state.get("finished", False),
+        failed=final_state.get("failed", False),
+        fail_reason=final_state.get("fail_reason", ""),
+        submitted_tasks=final_state.get("submitted_tasks", []),
+        submitted_count=len(final_state.get("submitted_tasks", [])),
+    )
 
     print()
     print("=" * 60)

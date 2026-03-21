@@ -142,6 +142,7 @@ class ExternalAgentLauncher:
         workspace_dir: Path,
         bootstrap_prompt: str,
         model: Optional[str] = None,
+        trace_output_path: Optional[Path] = None,
     ) -> List[str]:
         if agent_name == "mini":
             model = self._normalize_mini_model(model)
@@ -159,7 +160,7 @@ class ExternalAgentLauncher:
                 [
                     "--exit-immediately",
                     "-o",
-                    str(workspace_dir / "mini_trajectory.json"),
+                    str(trace_output_path or (workspace_dir / "mini_trajectory.json")),
                     "-t",
                     bootstrap_prompt,
                 ]
@@ -206,6 +207,7 @@ class ExternalAgentLauncher:
         workspace_dir: Path,
         bootstrap_prompt: str,
         model: Optional[str] = None,
+        trace_output_path: Optional[Path] = None,
     ) -> int:
         self.ensure_agent_environment(workspace_dir)
         env = self.build_agent_env(workspace_dir=workspace_dir)
@@ -216,6 +218,7 @@ class ExternalAgentLauncher:
             workspace_dir=workspace_dir,
             bootstrap_prompt=bootstrap_prompt,
             model=model,
+            trace_output_path=trace_output_path,
         )
         proc = subprocess.run(cmd, cwd=str(workspace_dir), env=env)
         return proc.returncode

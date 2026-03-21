@@ -141,9 +141,9 @@ THRESHOLD=0.7  # ToM judge threshold
 RETRY_VERIFICATION=""  # Path to failed ToM verification file
 NO_AUTO_RETRY=false  # Disable automatic retry on judge failure
 CATEGORY=""  # Task category: cooperative, competitive, or mixed
-SEED_TASK=""  # Path to existing task to use as seed
-SEED_TASKS_DIR=""  # Task pool used by the seed selector
-RANDOM_SEED_TASK=false  # Use a random existing task as seed on each new_scene[]
+SEED_TASKS_DIR=""  # Task pool used by the sampled_tasks selector
+SEED_PASS_RATIO="0.20"  # Logical seed mix for target-model passing tasks
+SEED_FAIL_RATIO="0.80"  # Logical seed mix for target-model failing tasks
 NO_VIDEO=true  # Disable video saving (default: true for speed)
 MAX_WORKERS=""  # Parallel benchmark: max concurrent processes (empty = sequential)
 NUM_GPUS=8  # GPU count for round-robin subprocess assignment
@@ -248,11 +248,11 @@ print_usage() {
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
     echo "  --retry-verification FILE  Retry generation using suggestions from failed ToM verification"
     echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
-    echo "  --seed-task FILE     Use existing task JSON as seed instead of blank template"
-    echo "  --seed-tasks-dir DIR Task pool for seed selection (default: output dir, then data/emtom/tasks)"
+    echo "  --seed-tasks-dir DIR Task pool for sampled_tasks selection (default: output dir, then data/emtom/tasks)"
     echo "  --target-model MODEL Model the generator is targeting for calibration + seed selection (default: $TARGET_MODEL)"
     echo "  --target-pass-rate R Desired pass rate for --target-model (default: $TARGET_PASS_RATE = 20%)"
-    echo "  --random-seed-task   On each new_scene[], sample uniformly from the seed pool"
+    echo "  --seed-pass-ratio R  Logical fraction of selected seeds that should pass the target model (default: $SEED_PASS_RATIO)"
+    echo "  --seed-fail-ratio R  Logical fraction of selected seeds that should fail the target model (default: $SEED_FAIL_RATIO)"
     echo "  --sampled-tasks-dir DIR  Pre-built sampled_tasks directory (skips random sampling)"
     echo "  --k-level L [L ...]  Allowed ToM k-levels, e.g. --k-level 2 3 (default: random per task)"
     echo "  --tom-ratio-tolerance R  ToM ratio tolerance (default: $TOM_RATIO_TOLERANCE)"
@@ -298,7 +298,8 @@ print_usage() {
     echo ""
     echo -e "${BOLD}Seed Loop:${NC}"
     echo "  Evolution is now the normal generate loop."
-    echo "  Use --target-model, --target-pass-rate, and --seed-tasks-dir with generate."
+    echo "  Use --target-model, --target-pass-rate, --seed-tasks-dir, and optional seed pass/fail ratios with generate."
+    echo "  Seed selection populates sampled_tasks/ for inspiration only; working_task.json starts from the blank template."
     echo "  ./emtom/run_emtom.sh evolve ... still works as a deprecated alias for generate."
     echo ""
     echo -e "${BOLD}Golden Verify Options:${NC}"
@@ -326,7 +327,7 @@ print_usage() {
     echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_emtom.sh verify --task data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_emtom.sh verify-static --task data/emtom/tasks/my_task.json"
-    echo "  ./emtom/run_emtom.sh generate --target-model gpt-5-mini --seed-tasks-dir data/emtom/tasks"
+    echo "  ./emtom/run_emtom.sh generate --target-model gpt-5-mini --seed-tasks-dir data/emtom/tasks --seed-fail-ratio 0.8 --seed-pass-ratio 0.2"
     echo "  ./emtom/run_emtom.sh evolve --target-model sonnet --seed-tasks-dir data/emtom/tasks"
 }
 
@@ -436,6 +437,8 @@ run_generate() {
     echo "K-level: ${K_LEVEL:-random per task}"
     echo "Target model: $TARGET_MODEL"
     echo "Target pass rate: $TARGET_PASS_RATE"
+    echo "Seed pass ratio: $SEED_PASS_RATIO"
+    echo "Seed fail ratio: $SEED_FAIL_RATIO"
     if [ -n "$SEED_TASKS_DIR" ]; then
         echo "Seed pool: $SEED_TASKS_DIR"
     fi
@@ -472,14 +475,14 @@ run_generate() {
     if [ -n "$TARGET_PASS_RATE" ]; then
         EXTRA_ARGS+=(--target-pass-rate "$TARGET_PASS_RATE")
     fi
-    if [ -n "$SEED_TASK" ]; then
-        EXTRA_ARGS+=(--seed-task "$SEED_TASK")
+    if [ -n "$SEED_PASS_RATIO" ]; then
+        EXTRA_ARGS+=(--seed-pass-ratio "$SEED_PASS_RATIO")
+    fi
+    if [ -n "$SEED_FAIL_RATIO" ]; then
+        EXTRA_ARGS+=(--seed-fail-ratio "$SEED_FAIL_RATIO")
     fi
     if [ -n "$SEED_TASKS_DIR" ]; then
         EXTRA_ARGS+=(--seed-tasks-dir "$SEED_TASKS_DIR")
-    fi
-    if [ "$RANDOM_SEED_TASK" = true ]; then
-        EXTRA_ARGS+=(--random-seed-task)
     fi
     if [ -n "$SAMPLED_TASKS_DIR" ]; then
         EXTRA_ARGS+=(--sampled-tasks-dir "$SAMPLED_TASKS_DIR")
@@ -1282,6 +1285,14 @@ while [[ $# -gt 0 ]]; do
             TARGET_PASS_RATE=$2
             shift 2
             ;;
+        --seed-pass-ratio)
+            SEED_PASS_RATIO=$2
+            shift 2
+            ;;
+        --seed-fail-ratio)
+            SEED_FAIL_RATIO=$2
+            shift 2
+            ;;
         --tom-target-l1)
             TOM_TARGET_L1=$2
             TOM_L1_EXPLICIT=true
@@ -1352,17 +1363,9 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2
             ;;
-        --seed-task)
-            SEED_TASK=$2
-            shift 2
-            ;;
         --seed-tasks-dir)
             SEED_TASKS_DIR=$2
             shift 2
-            ;;
-        --random-seed-task)
-            RANDOM_SEED_TASK=true
-            shift
             ;;
         --sampled-tasks-dir)
             SAMPLED_TASKS_DIR=$2

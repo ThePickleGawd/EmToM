@@ -15,12 +15,6 @@ from emtom.cli.submit_task import run as submit_task_run
 from emtom.cli.validate_task import static_validate_trajectory, validate
 from emtom.pddl.planner import regenerate_golden_trajectory
 from emtom.task_gen.scene_loader import SceneData
-from emtom.task_gen.seed_sanitizer import sanitize_task_for_seeding
-from emtom.task_gen.seed_selector import (
-    SeedSelectionConfig,
-    build_seed_candidates,
-    select_seed_tasks,
-)
 
 
 def _evaluation_passed(category: str, evaluation: Dict[str, Any]) -> bool:
@@ -147,15 +141,19 @@ def default_state(
     subtasks_min: int,
     subtasks_max: int,
     category: Optional[str],
-    seed_task: Optional[str],
     seed_tasks_dir: Optional[str],
-    random_seed_task: bool,
+    seed_pass_ratio: float,
+    seed_fail_ratio: float,
     judge_threshold: Optional[float],
     difficulty: Optional[str],
     test_model: Optional[str],
     calibration_stats: Dict[str, Any],
     task_gen_agent: str,
     allowed_k_levels: Optional[List[int]],
+    generation_run_id: Optional[str] = None,
+    generation_run_dir: Optional[str] = None,
+    generation_worker_id: Optional[str] = None,
+    generation_worker_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     return {
         "working_dir": working_dir,
@@ -166,9 +164,9 @@ def default_state(
         "subtasks_min": subtasks_min,
         "subtasks_max": subtasks_max,
         "category": category,
-        "seed_task": seed_task,
         "seed_tasks_dir": seed_tasks_dir,
-        "random_seed_task": random_seed_task,
+        "seed_pass_ratio": seed_pass_ratio,
+        "seed_fail_ratio": seed_fail_ratio,
         "judge_threshold": judge_threshold,
         "difficulty": difficulty,
         "test_model": test_model,
@@ -188,6 +186,10 @@ def default_state(
         "scene_id": None,
         "episode_id": None,
         "calibration_stats": calibration_stats,
+        "generation_run_id": generation_run_id,
+        "generation_run_dir": generation_run_dir,
+        "generation_worker_id": generation_worker_id,
+        "generation_worker_dir": generation_worker_dir,
     }
 
 
@@ -338,73 +340,28 @@ class TaskGenSession:
         self._write_state()
         return success({"message": f"Marked run as failed: {reason}"})
 
-    def _resolve_seed_task_path(self) -> Optional[Path]:
-        seed_task = self.state.get("seed_task")
-        if seed_task:
-            # Seed task paths stored in state/prompt are often repo-relative
-            # (e.g. `data/emtom/tasks/...`). When taskgen runs inside a nested
-            # workspace, relative paths resolve against the current working dir
-            # and can fail even though the file exists in the repository.
-            # Normalize to an absolute path under the project root.
-            resolved = Path(self._resolve_asset_path(seed_task))
-            return resolved
-
-        seed_tasks_dir = self.state.get("seed_tasks_dir")
-        if not seed_tasks_dir:
-            return None
-
-        seed_dir = Path(self._resolve_asset_path(seed_tasks_dir))
-        if not seed_dir.exists():
-            return None
-
-        calibration_stats = self.state.get("calibration_stats") or {}
-        selection_config = SeedSelectionConfig(
-            tasks_dir=seed_dir,
-            target_model=calibration_stats.get("model") or self.state.get("test_model") or "gpt-5.2",
-            target_pass_rate=calibration_stats.get("target_rate", 0.20),
-            current_pass_rate=calibration_stats.get("rate"),
-            category=self.state.get("category"),
-            tom_level=self.state.get("current_k_level"),
-        )
-        if self.state.get("random_seed_task"):
-            candidates = build_seed_candidates(selection_config)
-            if not candidates:
-                return None
-            return random.choice(candidates).path
-
-        selected = select_seed_tasks(selection_config, count=1)
-        if not selected:
-            return None
-        return selected[0].path
-
     def _create_working_task_from_template(self, num_agents: int) -> None:
-        seed_path = self._resolve_seed_task_path()
-        if seed_path is not None:
-            with open(seed_path) as f:
-                task = json.load(f)
-            task = sanitize_task_for_seeding(task, num_agents=num_agents)
-        else:
-            with open(self.template_file) as f:
-                task = json.load(f)
-            default_actions = [
-                "Navigate",
-                "Open",
-                "Close",
-                "Pick",
-                "Place",
-                "UseItem",
-                "FindObjectTool",
-                "FindReceptacleTool",
-                "FindRoomTool",
-                "Communicate",
-                "Wait",
-            ]
-            task["agent_secrets"] = {
-                f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"] for i in range(num_agents)
-            }
-            task["agent_actions"] = {
-                f"agent_{i}": default_actions.copy() for i in range(num_agents)
-            }
+        with open(self.template_file) as f:
+            task = json.load(f)
+        default_actions = [
+            "Navigate",
+            "Open",
+            "Close",
+            "Pick",
+            "Place",
+            "UseItem",
+            "FindObjectTool",
+            "FindReceptacleTool",
+            "FindRoomTool",
+            "Communicate",
+            "Wait",
+        ]
+        task["agent_secrets"] = {
+            f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"] for i in range(num_agents)
+        }
+        task["agent_actions"] = {
+            f"agent_{i}": default_actions.copy() for i in range(num_agents)
+        }
 
         scene_data = self._load_scene_data()
         if scene_data is not None:
@@ -523,18 +480,28 @@ class TaskGenSession:
                 self._create_working_task_from_template(num_agents)
 
             self._write_state()
+            valid_agent_ids = [f"agent_{i}" for i in range(num_agents)]
             return success(
                 {
                     "message": "Scene loaded.",
                     "scene_id": loaded_scene.scene_id,
                     "episode_id": loaded_scene.episode_id,
                     "num_agents": num_agents,
+                    "valid_agent_ids": valid_agent_ids,
                     "keep": keep,
                     "rooms": loaded_scene.rooms,
-                    "objects": len(loaded_scene.objects),
-                    "furniture": len(loaded_scene.furniture),
+                    "objects": loaded_scene.objects,
+                    "furniture": loaded_scene.furniture,
+                    "articulated_furniture": loaded_scene.articulated_furniture,
                     "current_k_level": self.state.get("current_k_level"),
                     "task_file": str(self.task_file),
+                    "hint": (
+                        f"This scene has {num_agents} agents: {valid_agent_ids}. "
+                        "All mechanic_bindings, agent_secrets, message_targets, teams, "
+                        "and problem_pddl :objects MUST only reference these agent IDs. "
+                        "Sampled tasks in sampled_tasks/ may have different agent counts — "
+                        "adapt their patterns to this scene's agents, do not copy directly."
+                    ),
                 }
             )
 
@@ -820,6 +787,13 @@ class TaskGenSession:
         except json.JSONDecodeError as e:
             return failure(f"Invalid JSON: {e}")
 
+        # Validate spec BEFORE running the planner — catches invalid agent IDs,
+        # missing mechanic fields, scene mismatches, etc. so the agent gets
+        # actionable errors instead of a confusing planner-generated trajectory.
+        validation_result = self._validate_task_structure(task_data)
+        if not validation_result["success"]:
+            return validation_result
+
         try:
             regenerate_golden_trajectory(
                 task_data,
@@ -829,10 +803,6 @@ class TaskGenSession:
             )
         except Exception as e:
             return failure(f"Failed to regenerate trajectory from task spec: {e}")
-
-        validation_result = self._validate_task_structure(task_data)
-        if not validation_result["success"]:
-            return validation_result
 
         golden = task_data.get("golden_trajectory", [])
         if not golden:
