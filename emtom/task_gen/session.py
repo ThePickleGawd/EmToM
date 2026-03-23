@@ -432,8 +432,8 @@ class TaskGenSession:
                 last_error = proc.stderr or "Failed to parse new_scene output."
                 continue
 
-            if not result.get("success"):
-                last_error = result.get("error", "Unknown error")
+            if not isinstance(result, dict) or not result.get("success"):
+                last_error = result.get("error", "Unknown error") if isinstance(result, dict) else "Unexpected output type"
                 continue
 
             loaded_scene = self._load_scene_data()
@@ -622,8 +622,16 @@ class TaskGenSession:
                 "trajectory_dir": str(run_dir),
             }
 
+        if not isinstance(result_data, dict):
+            return {
+                "steps": 0,
+                "done": False,
+                "error": f"Unexpected output type ({type(result_data).__name__}): {str(result_data)[:200]}",
+                "trajectory_dir": str(run_dir),
+            }
+
         if result_data.get("success"):
-            result = result_data["data"]
+            result = result_data.get("data", {})
         else:
             result = {
                 "steps": 0,
@@ -665,6 +673,8 @@ class TaskGenSession:
             opponent = "sonnet" if base_model != "sonnet" else "gpt-5.2"
             cmd.extend(["--team-model-map", f"team_0={base_model},team_1={opponent}"])
 
+        env = os.environ.copy()
+        env = self._with_project_root_assets(env)
         try:
             proc = subprocess.run(
                 cmd,
@@ -672,6 +682,7 @@ class TaskGenSession:
                 text=True,
                 timeout=1200,
                 cwd=str(self.project_root),
+                env=env,
             )
         except subprocess.TimeoutExpired:
             return {

@@ -1864,8 +1864,11 @@ SUMMARY:"""
         except (json.JSONDecodeError, ValueError):
             return {"steps": 0, "done": False, "error": f"Failed to parse output: {proc.stderr[:500]}", "trajectory_dir": str(run_dir)}
 
+        if not isinstance(result_data, dict):
+            return {"steps": 0, "done": False, "error": f"Unexpected output type ({type(result_data).__name__})", "trajectory_dir": str(run_dir)}
+
         if result_data.get("success"):
-            result = result_data["data"]
+            result = result_data.get("data", {})
         else:
             result = {"steps": 0, "done": False, "error": result_data.get("error", "Unknown error")}
 
@@ -2248,8 +2251,8 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                         continue
                     return f"Error loading new scene after {max_scene_retries} attempts. Last error: {last_error}"
 
-                if not result.get("success"):
-                    last_error = result.get("error", "Unknown error")
+                if not isinstance(result, dict) or not result.get("success"):
+                    last_error = result.get("error", "Unknown error") if isinstance(result, dict) else f"Unexpected output type: {type(result).__name__}"
                     self._log(f"Scene loading failed (attempt {attempt}): {last_error}")
                     if attempt < max_scene_retries:
                         continue
@@ -2262,7 +2265,10 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                 return f"Error loading new scene after {max_scene_retries} attempts. Last error: {last_error}"
 
             # Convert dict back to SceneData
-            scene_dict = result["data"]["scene_data"]
+            data = result.get("data", {})
+            if not isinstance(data, dict) or "scene_data" not in data:
+                return f"Error: scene loading returned malformed data (missing 'data.scene_data')"
+            scene_dict = data["scene_data"]
             candidate = SceneData(
                 episode_id=scene_dict["episode_id"],
                 scene_id=scene_dict["scene_id"],

@@ -87,15 +87,19 @@ def _extract_known_task_ids(task: Dict[str, Any]) -> Set[str]:
             if isinstance(val, str):
                 ids.update(ID_PATTERN.findall(val))
 
-    for container, key_item in task.get("locked_containers", {}).items():
-        if isinstance(container, str):
-            ids.update(ID_PATTERN.findall(container))
-        if isinstance(key_item, str):
-            ids.update(ID_PATTERN.findall(key_item))
+    locked_containers = task.get("locked_containers", {})
+    if isinstance(locked_containers, dict):
+        for container, key_item in locked_containers.items():
+            if isinstance(container, str):
+                ids.update(ID_PATTERN.findall(container))
+            if isinstance(key_item, str):
+                ids.update(ID_PATTERN.findall(key_item))
 
-    for obj_name in task.get("initial_states", {}).keys():
-        if isinstance(obj_name, str):
-            ids.update(ID_PATTERN.findall(obj_name))
+    initial_states = task.get("initial_states", {})
+    if isinstance(initial_states, dict):
+        for obj_name in initial_states.keys():
+            if isinstance(obj_name, str):
+                ids.update(ID_PATTERN.findall(obj_name))
 
     for binding in task.get("mechanic_bindings", []):
         if not isinstance(binding, dict):

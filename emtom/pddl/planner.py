@@ -697,6 +697,97 @@ def apply_literal_ordering(literals: List[Any], ordering: List[Dict[str, str]]) 
     return [literals[i] for i in ordered_idx]
 
 
+def _rebalance_agent_assignments(
+    runtime_ops: List[RuntimeOp],
+    task_data: Dict[str, Any],
+    scene_data: Optional[Any],
+    num_agents: int,
+) -> List[RuntimeOp]:
+    """Reassign agents in runtime_ops to distribute work across all agents.
+
+    The FD planner has no multi-agent distribution preference and typically
+    assigns everything to agent_0. This post-pass uses pick_agent_for_target
+    with load tracking to spread actions while respecting room restrictions.
+
+    Navigate ops inserted by append_runtime_ops are paired with the action
+    op that follows them — both get the same reassigned agent.
+    """
+    if num_agents < 2 or not runtime_ops:
+        return runtime_ops
+
+    restrictions = extract_room_restrictions(task_data)
+    target_to_room = build_target_to_room_map(scene_data)
+    agent_loads: Dict[str, int] = {f"agent_{i}": 0 for i in range(num_agents)}
+
+    # Group ops into logical units: (optional Navigate, action).
+    # append_runtime_ops always emits Navigate before the action op.
+    groups: List[List[int]] = []  # each group is a list of indices
+    i = 0
+    while i < len(runtime_ops):
+        op = runtime_ops[i]
+        if op.action.startswith("Navigate[") and i + 1 < len(runtime_ops):
+            next_op = runtime_ops[i + 1]
+            if not next_op.action.startswith("Navigate[") and next_op.agent == op.agent:
+                groups.append([i, i + 1])
+                i += 2
+                continue
+        groups.append([i])
+        i += 1
+
+    result = list(runtime_ops)
+    # Track which objects are held by which agent to preserve pick/place
+    # consistency: the agent that picks an object must also place it.
+    held_by: Dict[str, str] = {}
+
+    for group in groups:
+        action_idx = group[-1]
+        action_op = runtime_ops[action_idx]
+        action_str = action_op.action
+
+        # Extract the primary target from the action string.
+        target = None
+        bracket_start = action_str.find("[")
+        bracket_end = action_str.find("]")
+        if bracket_start >= 0 and bracket_end > bracket_start:
+            inner = action_str[bracket_start + 1:bracket_end]
+            parts = [p.strip() for p in inner.split(",")]
+            if parts and parts[0] != "None":
+                target = parts[0]
+
+        action_name = action_str[:bracket_start] if bracket_start >= 0 else action_str
+
+        # If this agent is placing an object it picked up, it must be the
+        # same agent that picked it — don't reassign.
+        if action_name == "Place" and target and target in held_by:
+            assigned = held_by.pop(target)
+        elif target and target_to_room:
+            try:
+                assigned = pick_agent_for_target(
+                    target, num_agents, target_to_room, restrictions, agent_loads,
+                )
+            except ValueError:
+                assigned = action_op.agent
+        else:
+            assigned = action_op.agent
+
+        # Track picks so the same agent does the corresponding place.
+        if action_name == "Pick" and target:
+            held_by[target] = assigned
+
+        agent_loads[assigned] = agent_loads.get(assigned, 0) + 1
+
+        for idx in group:
+            old = result[idx]
+            if old.agent != assigned:
+                result[idx] = RuntimeOp(
+                    agent=assigned,
+                    action=old.action,
+                    resources=old.resources,
+                )
+
+    return result
+
+
 def generate_deterministic_trajectory(
     task_data: Dict[str, Any],
     scene_data: Optional[Any] = None,
@@ -861,6 +952,13 @@ def generate_deterministic_trajectory(
         raise RuntimeError(
             f"Unsupported planner step '{step}'. Cannot translate to golden trajectory."
         )
+
+    # Post-pass: rebalance agent assignments so work is distributed across
+    # agents instead of collapsing to a single agent (the FD solver has no
+    # preference for multi-agent distribution).
+    runtime_ops = _rebalance_agent_assignments(
+        runtime_ops, task_data, scene_data, num_agents,
+    )
 
     trajectory = schedule_runtime_ops(num_agents, runtime_ops)
 

@@ -52,6 +52,9 @@ def _make_problem(goal, objects=None, init=None):
             Literal("is_closed", ("cabinet_27",)),
             Literal("can_communicate", ("agent_0", "agent_1")),
             Literal("can_communicate", ("agent_1", "agent_0")),
+            Literal("agent_in_room", ("agent_0", "kitchen_1")),
+            Literal("agent_in_room", ("agent_1", "bedroom_1")),
+            Literal("is_in_room", ("cabinet_27", "kitchen_1")),
         ],
         goal=goal,
     )
@@ -697,6 +700,9 @@ class TestFDSolverEpistemicCompilation:
             goal,
             init=[
                 Literal("is_closed", ("cabinet_27",)),
+                Literal("agent_in_room", ("agent_0", "bedroom_1")),
+                Literal("agent_in_room", ("agent_1", "kitchen_1")),
+                Literal("is_in_room", ("cabinet_27", "kitchen_1")),
                 # No can_communicate!
             ],
         )
@@ -730,6 +736,11 @@ class TestFDSolverEpistemicCompilation:
                 Literal("is_closed", ("drawer_5",)),
                 Literal("is_closed", ("shelf_8",)),
                 Literal("can_communicate", ("agent_1", "agent_0")),
+                Literal("agent_in_room", ("agent_0", "bedroom_1")),
+                Literal("agent_in_room", ("agent_1", "kitchen_1")),
+                Literal("is_in_room", ("cabinet_27", "kitchen_1")),
+                Literal("is_in_room", ("drawer_5", "kitchen_1")),
+                Literal("is_in_room", ("shelf_8", "kitchen_1")),
             ],
         )
         obs = _make_obs(
@@ -783,6 +794,9 @@ class TestFDSolverEpistemicCompilation:
                 Literal("is_closed", ("cabinet_27",)),
                 Literal("can_communicate", ("agent_0", "agent_1")),
                 Literal("can_communicate", ("agent_1", "agent_0")),
+                Literal("agent_in_room", ("agent_0", "bedroom_1")),
+                Literal("agent_in_room", ("agent_1", "kitchen_1")),
+                Literal("is_in_room", ("cabinet_27", "kitchen_1")),
             ],
         )
         obs = _make_obs(
@@ -802,6 +816,9 @@ class TestFDSolverEpistemicCompilation:
                 Literal("is_closed", ("cabinet_27",)),
                 Literal("can_communicate", ("agent_0", "agent_1")),
                 Literal("can_communicate", ("agent_1", "agent_0")),
+                Literal("agent_in_room", ("agent_0", "bedroom_1")),
+                Literal("agent_in_room", ("agent_1", "bedroom_1")),
+                Literal("is_in_room", ("cabinet_27", "kitchen_1")),
             ],
         )
         obs = _make_obs(
@@ -858,6 +875,10 @@ class TestFDSolverEpistemicCompilation:
                 # Chain: 0→1, 1→2 only
                 Literal("can_communicate", ("agent_0", "agent_1")),
                 Literal("can_communicate", ("agent_1", "agent_2")),
+                Literal("agent_in_room", ("agent_0", "kitchen_1")),
+                Literal("agent_in_room", ("agent_1", "bedroom_1")),
+                Literal("agent_in_room", ("agent_2", "bedroom_1")),
+                Literal("is_in_room", ("cabinet_27", "kitchen_1")),
             ],
         )
         obs = _make_obs(
@@ -889,6 +910,10 @@ class TestFDSolverEpistemicCompilation:
                 Literal("is_closed", ("cabinet_27",)),
                 # Only 0→1, no path to a2
                 Literal("can_communicate", ("agent_0", "agent_1")),
+                Literal("agent_in_room", ("agent_0", "kitchen_1")),
+                Literal("agent_in_room", ("agent_1", "bedroom_1")),
+                Literal("agent_in_room", ("agent_2", "bedroom_1")),
+                Literal("is_in_room", ("cabinet_27", "kitchen_1")),
             ],
         )
         obs = _make_obs(
@@ -923,6 +948,11 @@ class TestFDSolverEpistemicCompilation:
                 Literal("can_communicate", ("agent_1", "agent_2")),
                 Literal("can_communicate", ("agent_2", "agent_3")),
                 Literal("can_communicate", ("agent_3", "agent_0")),
+                Literal("agent_in_room", ("agent_0", "kitchen_1")),
+                Literal("agent_in_room", ("agent_1", "bedroom_1")),
+                Literal("agent_in_room", ("agent_2", "kitchen_1")),
+                Literal("agent_in_room", ("agent_3", "bedroom_1")),
+                Literal("is_in_room", ("cabinet_27", "kitchen_1")),
             ],
         )
         obs = _make_obs(

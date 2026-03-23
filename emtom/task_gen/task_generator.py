@@ -152,8 +152,11 @@ class MechanicBinding:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MechanicBinding":
         normalized = normalize_mechanic_binding_dict(data)
+        mechanic_type = normalized.get("mechanic_type")
+        if not mechanic_type or not isinstance(mechanic_type, str):
+            raise ValueError(f"mechanic_binding missing or invalid 'mechanic_type': {data!r}")
         return cls(
-            mechanic_type=normalized["mechanic_type"],
+            mechanic_type=mechanic_type,
             trigger_object=normalized.get("trigger_object"),
             target_object=normalized.get("target_object"),
             target_state=normalized.get("target_state"),
@@ -242,7 +245,12 @@ class GeneratedTask:
         bindings = []
         raw_bindings = normalize_mechanic_bindings(data.get("mechanic_bindings", []), problem_pddl=problem_pddl)
         for b in raw_bindings:
-            bindings.append(MechanicBinding.from_dict(b))
+            if not isinstance(b, dict) or not b.get("mechanic_type"):
+                continue
+            try:
+                bindings.append(MechanicBinding.from_dict(b))
+            except (ValueError, KeyError):
+                continue
 
         # Parse items
         items = data.get("items", [])

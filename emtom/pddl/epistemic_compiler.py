@@ -486,7 +486,7 @@ def _build_inform_actions_network(
                 # by suffixing with a stable per-(fhash,sender,receiver) index.
                 else:
                     effect_clause = (
-                        f"({' '.join(f'({pred})' for pred in effect_preds)})"
+                        f"({effect_preds[0]})"
                         if len(effect_preds) == 1
                         else f"(and {' '.join(f'({pred})' for pred in effect_preds)})"
                     )
@@ -676,8 +676,14 @@ def _collect_action_constants(
     # Combine all action text for a single scan pass
     combined = "\n".join(extra_actions)
     for obj_name, obj_type in problem.objects.items():
+        # Agents are always needed as constants: inform actions reference them
+        # via can_communicate, and :init facts like agent_in_room use them.
+        # Excluding any agent from :constants causes unified-planning grounding
+        # failures (UNSOLVABLE_INCOMPLETELY).
+        if obj_type == "agent":
+            constants[obj_name] = obj_type
         # Look for the object name as a whole word in any action
-        if re.search(rf'\b{re.escape(obj_name)}\b', combined):
+        elif re.search(rf'\b{re.escape(obj_name)}\b', combined):
             constants[obj_name] = obj_type
     return constants
 

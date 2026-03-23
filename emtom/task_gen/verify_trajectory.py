@@ -207,7 +207,15 @@ def main():
 
             for action_entry in actions:
                 agent_str = action_entry.get("agent", "agent_0")
-                agent_id = int(agent_str.split("_")[1])
+                parts_split = agent_str.split("_")
+                if len(parts_split) < 2:
+                    print(f"    Skipping malformed agent string: {agent_str!r}", file=sys.stderr)
+                    continue
+                try:
+                    agent_id = int(parts_split[1])
+                except ValueError:
+                    print(f"    Skipping non-integer agent id: {agent_str!r}", file=sys.stderr)
+                    continue
 
                 # Parse PARTNR-style action: "Navigate[table_22]" -> ("Navigate", "table_22")
                 action_str = action_entry.get("action", "")
