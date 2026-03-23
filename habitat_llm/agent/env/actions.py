@@ -874,6 +874,20 @@ ALL_ACTIONS: List[ActionConfig] = [
 
 
 def register_actions(conf):
+    # Some configs may not include structured-config defaults for `habitat.task.actions`.
+    # Ensure the container exists so we can populate it.
+    from omegaconf.errors import MissingMandatoryValue
+
+    try:
+        _actions = conf.habitat.task.actions
+        needs_init = _actions is None
+    except MissingMandatoryValue:
+        needs_init = True
+
+    if needs_init:
+        with habitat.config.read_write(conf):
+            conf.habitat.task.actions = {}
+
     with habitat.config.read_write(conf):
         for conf_agent in conf.evaluation.agents.values():
             agent_uid = conf_agent["uid"]

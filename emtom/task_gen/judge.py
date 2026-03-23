@@ -98,7 +98,14 @@ def _detect_provider_for_model(model: str) -> str:
                 pass
         return "bedrock_claude"
 
-    if normalized.startswith("kimi-k2.5"):
+    # NOTE: The default judge council includes "kimi-k2.5".
+    # In many taskgen environments we do not have Fireworks credentials,
+    # and treating Kimi as an OpenAI-chat model can trigger hard
+    # infrastructure failures (e.g., missing FIREWORKS_API_KEY).
+    # Map Kimi models to Fireworks when possible; otherwise fall back.
+    if normalized.startswith("kimi"):
+        if os.getenv("FIREWORKS_API_KEY", "").strip():
+            return "fireworks"
         return "openai_chat"
 
     return "openai_chat"
@@ -671,7 +678,7 @@ class Judge:
     PRIORITY_CRITERIA = ["agent_necessity", "secret_quality"]
 
     # Default council models
-    DEFAULT_MODELS = ["kimi-k2.5", "gpt-5.2"]
+    DEFAULT_MODELS = ["gpt-5.2"]
     MODEL_REQUEST_TIMEOUT_S = 45
     COUNCIL_WALL_TIMEOUT_S = 180
 
@@ -1145,19 +1152,30 @@ The user specifically requested:
 
     def _aggregate(self, judgments: Dict[str, Judgment]) -> CouncilVerdict:
         """Aggregate judgments from multiple models."""
-        # If ANY model failed due to infrastructure, the council verdict is
-        # unreliable. Kill the process — we need all models for consistent quality.
+        # If ANY model failed due to infrastructure, we can optionally continue
+        # with remaining models in environments where some providers are not
+        # configured (e.g., missing FIREWORKS_API_KEY for Kimi).
         infra_failures = {
             m: j for m, j in judgments.items()
             if self._is_infra_failure(j)
         }
         if infra_failures:
-            raise RuntimeError(
-                "Judge council incomplete: "
-                f"{', '.join(infra_failures.keys())} failed due to infrastructure errors. "
-                "All council models are required for consistent task quality. "
-                "Check API keys, billing, and network connectivity."
-            )
+            if os.getenv("TASKGEN_ALLOW_INCOMPLETE_COUNCIL", "").strip().lower() in {"1", "true", "yes"}:
+                for m in list(infra_failures.keys()):
+                    judgments.pop(m, None)
+            else:
+                # NOTE: Avoid backslashes inside f-string expressions (SyntaxError on Python 3.9).
+                failed_models = ", ".join(infra_failures.keys())
+                raise RuntimeError(
+                    "Judge council incomplete: "
+                    f"{failed_models} failed due to infrastructure errors. "
+                    "All council models are required for consistent task quality. "
+                    "Check API keys, billing, and network connectivity."
+                )
+
+        if not judgments:
+            raise RuntimeError("Judge council incomplete: all models failed due to infrastructure errors.")
+
 
         # Check if all models pass
         all_pass = all(j.is_valid for j in judgments.values())

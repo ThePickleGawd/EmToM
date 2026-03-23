@@ -188,23 +188,41 @@ def is_held_by(
     agent_ids: List[str],
 ) -> PropositionResult:
     """Check if an object is being held by an agent."""
-    # Get agent's grasp manager to check what they're holding
     for agent_id in agent_ids:
         try:
-            # Try to get the agent's grasp manager
             agent_idx = int(agent_id.split("_")[-1]) if "_" in agent_id else int(agent_id)
             agent = sim.agents_mgr[agent_idx]
             grasp_mgr = agent.grasp_mgr
 
-            # Check if any of the object handles are currently grasped
-            if grasp_mgr.is_grasped:
-                grasped_obj = grasp_mgr.snap_idx
-                rom = sim.get_rigid_object_manager()
-                for handle in object_handles:
-                    # Try to match by handle or object ID
-                    obj = rom.get_object_by_handle(handle)
-                    if obj and obj.object_id == grasped_obj:
-                        return PropositionResult(True, {"agent": agent_id, "object": handle})
+            if not grasp_mgr.is_grasped:
+                continue
+
+            grasped_obj_id = grasp_mgr.snap_idx
+            rom = sim.get_rigid_object_manager()
+
+            # Find the handle of the actually-grasped object by scanning all
+            # rigid objects, then check if it matches any requested handle.
+            grasped_handle = None
+            for h in rom.get_object_handles():
+                try:
+                    obj = rom.get_object_by_handle(h)
+                    if obj is not None and obj.object_id == grasped_obj_id:
+                        grasped_handle = h
+                        break
+                except Exception:
+                    continue
+
+            if grasped_handle is None:
+                continue
+
+            # Match the grasped object's handle against each requested handle.
+            grasped_base = grasped_handle.split(":")[0].strip().rstrip("_")
+            for handle in object_handles:
+                if handle == grasped_handle:
+                    return PropositionResult(True, {"agent": agent_id, "object": handle})
+                handle_norm = handle.strip().rstrip("_")
+                if handle_norm == grasped_base or grasped_handle.startswith(handle_norm):
+                    return PropositionResult(True, {"agent": agent_id, "object": handle})
         except Exception:
             continue
 

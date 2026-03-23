@@ -74,7 +74,6 @@ class OpenAIChat(BaseLLM):
         # GPT-5.2
         "gpt5.2": "gpt-5.2",
         # Fireworks-hosted Kimi K2.5
-        "kimi-k2.5": "accounts/fireworks/models/kimi-k2p5",
     }
 
     @classmethod
@@ -87,7 +86,6 @@ class OpenAIChat(BaseLLM):
         normalized = (model or "").strip().lower()
         return (
             normalized.startswith("accounts/fireworks/models/")
-            or normalized.startswith("kimi-k2.5")
         )
 
     def __init__(self, conf: DictConfig):

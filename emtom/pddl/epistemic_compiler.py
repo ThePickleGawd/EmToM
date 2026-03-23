@@ -402,6 +402,7 @@ def _build_observe_actions_network(
 ) -> List[str]:
     """Build observe actions for every agent who can see each leaf fact."""
     actions: List[str] = []
+    used_action_names: set[str] = set()
 
     for fhash, formula in sorted(leaf_facts.items()):
         precond = formula.to_pddl()
@@ -440,6 +441,7 @@ def _build_inform_actions_network(
     FD discovers relay chains: observe → knows_a0 → inform → knows_a1 → ...
     """
     actions: List[str] = []
+    used_action_names: set[str] = set()
     sender_ack_preds: Dict[Tuple[str, str, str], List[str]] = {}
 
     for kg in k_goals:
@@ -471,7 +473,7 @@ def _build_inform_actions_network(
                         tok_pred = f"msg_tok_{sender}_{tok_idx}"
                         effect_clause = " ".join(f"({pred})" for pred in effect_preds)
                         action = (
-                            f"(:action inform_{receiver_pred}_from_{sender}_tok{tok_idx}\n"
+                            f"(:action inform_{receiver_pred}_from_{sender}_tok{tok_idx}_{fhash}\n"
                             f"  :parameters ()\n"
                             f"  :precondition (and ({sender_pred}) "
                             f"(can_communicate {sender} {receiver}) "
@@ -479,6 +481,9 @@ def _build_inform_actions_network(
                             f"  :effect (and {effect_clause} (not ({tok_pred}))))"
                         )
                         actions.append(action)
+
+                # Ensure unique action names even if receiver_pred repeats due to normalization or hashing collisions
+                # by suffixing with a stable per-(fhash,sender,receiver) index.
                 else:
                     effect_clause = (
                         f"({' '.join(f'({pred})' for pred in effect_preds)})"
@@ -486,7 +491,7 @@ def _build_inform_actions_network(
                         else f"(and {' '.join(f'({pred})' for pred in effect_preds)})"
                     )
                     action = (
-                        f"(:action inform_{receiver_pred}_from_{sender}\n"
+                        f"(:action inform_{receiver_pred}_from_{sender}_{fhash}\n"
                         f"  :parameters ()\n"
                         f"  :precondition (and ({sender_pred}) "
                         f"(can_communicate {sender} {receiver}))\n"
@@ -514,6 +519,7 @@ def _build_nested_k_actions(
     establish what another agent knows.
     """
     actions: List[str] = []
+    used_action_names: set[str] = set()
 
     for kg in k_goals:
         if not isinstance(kg.inner, (Knows, Believes)):
