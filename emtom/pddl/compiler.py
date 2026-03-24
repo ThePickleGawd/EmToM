@@ -301,10 +301,57 @@ def _ensure_mechanic_init_facts(task: "GeneratedTask", problem: Problem) -> None
             continue
 
 
+def _extract_restrictions_from_secrets(
+    task: "GeneratedTask",
+    problem: Problem,
+) -> Dict[str, List[str]]:
+    """Extract room restrictions from agent_secrets text as a fallback.
+
+    Parses patterns like "you cannot enter kitchen_1, bedroom_1, or bathroom_1"
+    from agent secret strings.  Only returns rooms that are declared as room
+    objects in the problem so we don't inject bogus predicates.
+    """
+    declared_rooms = {
+        name for name, typ in problem.objects.items() if typ == "room"
+    }
+    restrictions: Dict[str, List[str]] = {}
+    secrets = getattr(task, "agent_secrets", {}) or {}
+    for agent_id, secret_list in secrets.items():
+        if not isinstance(secret_list, list):
+            continue
+        text = " ".join(str(s) for s in secret_list)
+        # Match "cannot enter room_1, room_2, and/or room_3"
+        for m in re.finditer(
+            r"cannot enter\s+([\w_]+(?:[\s,]+(?:and\s+|or\s+)?[\w_]+)*)",
+            text,
+        ):
+            raw = m.group(1)
+            # Split on commas, "and", "or", whitespace
+            tokens = re.split(r"[,\s]+(?:and\s+|or\s+)?", raw)
+            for tok in tokens:
+                tok = tok.strip().rstrip(".")
+                if tok in declared_rooms:
+                    restrictions.setdefault(agent_id, []).append(tok)
+    return restrictions
+
+
 def _ensure_room_restrictions(task: "GeneratedTask", problem: Problem) -> None:
-    """Populate is_restricted predicates from room_restriction mechanic bindings."""
+    """Populate is_restricted predicates from mechanic bindings and agent secrets.
+
+    Primary source: room_restriction mechanic bindings.
+    Fallback: parse "cannot enter" patterns from agent_secrets text.
+    This ensures the planner respects room restrictions even when the
+    task-gen agent only wrote them in natural language instructions.
+    """
     existing = {(l.predicate, l.args) for l in problem.init}
 
+    def _add(agent: str, room: str) -> None:
+        fact = ("is_restricted", (agent, room))
+        if fact not in existing:
+            problem.init.append(Literal("is_restricted", (agent, room)))
+            existing.add(fact)
+
+    # Primary: mechanic_bindings
     for binding in getattr(task, "mechanic_bindings", []) or []:
         if _binding_value(binding, "mechanic_type") != "room_restriction":
             continue
@@ -316,11 +363,12 @@ def _ensure_room_restrictions(task: "GeneratedTask", problem: Problem) -> None:
             for room in rooms:
                 if not isinstance(room, str):
                     continue
-                fact = ("is_restricted", (agent, room))
-                if fact in existing:
-                    continue
-                problem.init.append(Literal("is_restricted", (agent, room)))
-                existing.add(fact)
+                _add(agent, room)
+
+    # Fallback: extract from agent_secrets natural language
+    for agent, rooms in _extract_restrictions_from_secrets(task, problem).items():
+        for room in rooms:
+            _add(agent, room)
 
 
 def _ensure_can_communicate(task: "GeneratedTask", problem: Problem) -> None:
