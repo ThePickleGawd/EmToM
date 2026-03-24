@@ -221,6 +221,13 @@ def main():
                 action_str = action_entry.get("action", "")
                 action, target = parse_action_string(action_str)
 
+                # Normalize Place relation naming across simulators/PDDL
+                if action == "Place" and isinstance(target, str):
+                    parts = [p.strip() for p in target.split(",")]
+                    if len(parts) >= 2 and parts[1].lower() == "within":
+                        parts[1] = "inside"
+                        target = ", ".join(parts)
+
                 # Skip Wait actions
                 if action == "Wait":
                     print(f"    {agent_str}: Wait [SKIP]", file=sys.stderr)
@@ -307,6 +314,10 @@ def main():
                             elif action == "Place":
                                 # Place format: "obj, on, receptacle, ..."
                                 parts = [p.strip() for p in (target or "").split(",")]
+                                # Normalize Place relation naming across simulators
+                                if len(parts) >= 2 and parts[1].lower() == "within":
+                                    parts[1] = "inside"
+                                target = ", ".join(parts)
                                 nav_target = parts[2] if len(parts) >= 3 else parts[0]
                             else:
                                 # Open/Close: target is the object itself

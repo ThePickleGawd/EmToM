@@ -9,6 +9,9 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_ROOT"
 
+# Ensure the project root is importable (needed when conda activate changes the interpreter)
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$PROJECT_ROOT"
+
 # Activate the habitat-llm conda environment (required for hydra, habitat, etc.)
 eval "$(conda shell.bash hook 2>/dev/null)"
 conda activate habitat-llm 2>/dev/null || true
@@ -164,6 +167,7 @@ OBSERVATION_MODE="text"  # Benchmark observation mode: text or vision
 RUN_MODE="standard"  # Benchmark run mode: standard, baseline, or full_info
 LIMIT=0  # Optional task limit for salvage-style commands
 SKIP_BACKUP=false  # Skip backup creation for salvage flow
+REMOVE_STEPS=""  # Skip judge pipeline steps (e.g. "pddl council")
 SELECTOR_MIN_FRAMES=1
 SELECTOR_MAX_FRAMES=5
 SELECTOR_MAX_CANDIDATES=12
@@ -255,6 +259,7 @@ print_usage() {
     echo "  --seed-fail-ratio R  Logical fraction of selected seeds that should fail the target model (default: $SEED_FAIL_RATIO)"
     echo "  --sampled-tasks-dir DIR  Pre-built sampled_tasks directory (skips random sampling)"
     echo "  --k-level L [L ...]  Allowed ToM k-levels, e.g. --k-level 2 3 (default: random per task)"
+    echo "  --remove STEP [...]  Skip judge pipeline steps: pddl, tom, golden, structure, council, test"
     echo "  --tom-ratio-tolerance R  ToM ratio tolerance (default: $TOM_RATIO_TOLERANCE)"
     echo "  --output-dir DIR     Override output directory (used by generate and benchmark)"
     echo ""
@@ -442,6 +447,9 @@ run_generate() {
     if [ -n "$SEED_TASKS_DIR" ]; then
         echo "Seed pool: $SEED_TASKS_DIR"
     fi
+    if [ -n "$REMOVE_STEPS" ]; then
+        echo "Skipping steps: $REMOVE_STEPS"
+    fi
     if [ -n "$QUERY" ]; then
         echo "Query: $QUERY"
     fi
@@ -498,6 +506,9 @@ run_generate() {
     fi
     if [ -n "$K_LEVEL" ]; then
         EXTRA_ARGS+=(--k-level $K_LEVEL)
+    fi
+    if [ -n "$REMOVE_STEPS" ]; then
+        EXTRA_ARGS+=(--remove $REMOVE_STEPS)
     fi
 
     # Use Hydra config system with custom overrides
@@ -1323,6 +1334,20 @@ while [[ $# -gt 0 ]]; do
             K_LEVEL="${K_LEVEL# }"  # trim leading space
             if [ -z "$K_LEVEL" ]; then
                 echo "Error: --k-level requires at least one integer (1, 2, or 3)"
+                exit 1
+            fi
+            ;;
+        --remove)
+            # Consume all following step names (pddl, tom, golden, structure, council, test)
+            shift
+            REMOVE_STEPS=""
+            while [[ $# -gt 0 && "$1" != -* ]]; do
+                REMOVE_STEPS="$REMOVE_STEPS $1"
+                shift
+            done
+            REMOVE_STEPS="${REMOVE_STEPS# }"  # trim leading space
+            if [ -z "$REMOVE_STEPS" ]; then
+                echo "Error: --remove requires at least one step (pddl, tom, golden, structure, council, test)"
                 exit 1
             fi
             ;;

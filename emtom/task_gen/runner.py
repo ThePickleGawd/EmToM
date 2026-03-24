@@ -71,6 +71,13 @@ def parse_extra_args():
         choices=["mini", "claude", "codex"],
         help="External agent CLI used for task generation.",
     )
+    parser.add_argument(
+        "--remove",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Skip judge pipeline steps. Choices: pddl, tom, golden, structure, council, test",
+    )
 
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
@@ -398,6 +405,15 @@ def main() -> None:
     test_model = extra_args.test_model if extra_args else None
     k_levels = extra_args.k_level if extra_args else None
     task_gen_agent = extra_args.task_gen_agent if extra_args else "mini"
+    skip_steps = extra_args.remove if extra_args else None
+    if skip_steps:
+        valid_steps = {"pddl", "tom", "golden", "structure", "council", "test"}
+        invalid = [s for s in skip_steps if s not in valid_steps]
+        if invalid:
+            raise SystemExit(
+                f"Error: --remove got invalid steps {invalid}. "
+                f"Valid choices: {sorted(valid_steps)}"
+            )
 
     if k_levels is not None:
         invalid = [k for k in k_levels if k not in (1, 2, 3)]
@@ -532,6 +548,7 @@ def main() -> None:
         calibration_stats=calibration_stats,
         task_gen_agent=task_gen_agent,
         allowed_k_levels=k_levels,
+        skip_steps=skip_steps,
         generation_run_id=generation_run_id,
         generation_run_dir=str(generation_run_dir),
         generation_worker_id=generation_worker_id,

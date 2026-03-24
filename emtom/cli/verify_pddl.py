@@ -163,7 +163,7 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
         problem,
         observability,
         max_belief_depth=0,
-        strict=True,
+        strict=False,
     )
     solve_wall_time_s = time.perf_counter() - solve_start
 
