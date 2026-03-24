@@ -113,6 +113,7 @@ EXTRA_ARGS=()  # Extra args forwarded verbatim to run_emtom.sh generate
 DIFFICULTY=""
 K_LEVEL=""  # Allowed k-levels (e.g. "2 3"). Empty = random per task.
 K_DISTRIBUTION=""  # Slot distribution (e.g. "1:2,2:3,3:3"). Overrides --k-level.
+REMOVE_STEPS=""  # Skip judge pipeline steps (e.g. "pddl council")
 
 # Colors
 RED='\033[0;31m'
@@ -141,6 +142,7 @@ print_usage() {
     echo "  --k-level L [L ...] Allowed k-levels, e.g. --k-level 2 3 (default: random per task)"
     echo "  --k-distribution D  Slots per k-level, e.g. 1:2,2:3,3:3 = 2 slots K=1, 3 K=2, 3 K=3"
     echo "                      Slot counts must sum to --per-gpu. Overrides --k-level."
+    echo "  --remove STEP [...] Skip judge pipeline steps: pddl, tom, golden, structure, council, test"
     echo "  --output-dir DIR    Output directory for submitted tasks (default: data/emtom/tasks)"
     echo "  --dry-run           Show commands without executing"
     echo ""
@@ -213,6 +215,19 @@ while [[ $# -gt 0 ]]; do
         --k-distribution)
             K_DISTRIBUTION=$2
             shift 2
+            ;;
+        --remove)
+            shift
+            REMOVE_STEPS=""
+            while [[ $# -gt 0 && "$1" != -* ]]; do
+                REMOVE_STEPS="$REMOVE_STEPS $1"
+                shift
+            done
+            REMOVE_STEPS="${REMOVE_STEPS# }"
+            if [ -z "$REMOVE_STEPS" ]; then
+                echo "Error: --remove requires at least one step (pddl, tom, golden, structure, council, test)"
+                exit 1
+            fi
             ;;
         --output-dir)
             OUTPUT_DIR=$2
@@ -325,6 +340,7 @@ echo -e "Categories:         ${GREEN}${CATEGORIES[*]}${NC}"
 echo -e "Model:              ${GREEN}$MODEL${NC}"
 echo -e "Task-gen agent:     ${GREEN}$TASK_GEN_AGENT${NC}"
 [ -n "$DIFFICULTY" ] && echo -e "Difficulty:         ${GREEN}$DIFFICULTY${NC}"
+[ -n "$REMOVE_STEPS" ] && echo -e "Skipping steps:     ${GREEN}$REMOVE_STEPS${NC}"
 if [ -n "$K_DISTRIBUTION" ]; then
     echo -e "K-distribution:     ${GREEN}${K_DISTRIBUTION}${NC} (per GPU: ${SLOT_K_LEVELS[*]})"
 elif [ -n "$K_LEVEL" ]; then
@@ -376,6 +392,10 @@ build_worker_command() {
         # shellcheck disable=SC2206
         local k_parts=($K_LEVEL)
         cmd+=(--k-level "${k_parts[@]}")
+    fi
+    if [ -n "$REMOVE_STEPS" ]; then
+        # shellcheck disable=SC2206
+        cmd+=(--remove $REMOVE_STEPS)
     fi
     if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
         cmd+=("${EXTRA_ARGS[@]}")
