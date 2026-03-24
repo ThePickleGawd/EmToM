@@ -114,6 +114,10 @@ def compile_task(
         # Add default init facts (e.g., furniture starts closed)
         _add_default_init_facts(problem)
 
+        # Auto-populate grounding facts from scene data where missing.
+        if scene_data:
+            _ensure_scene_grounding(problem, scene_data)
+
         # Populate can_communicate if not already in init
         _ensure_can_communicate(task, problem)
         return problem
@@ -369,6 +373,62 @@ def _ensure_room_restrictions(task: "GeneratedTask", problem: Problem) -> None:
     for agent, rooms in _extract_restrictions_from_secrets(task, problem).items():
         for room in rooms:
             _add(agent, room)
+
+
+def _ensure_scene_grounding(problem: Problem, scene_data: Dict[str, Any]) -> None:
+    """Auto-populate missing grounding facts from scene data.
+
+    Injects agent_in_room, is_in_room, and is_on_top facts that exist in
+    the scene but were omitted from the authored problem_pddl.  Only adds
+    facts for objects already declared in problem.objects so we don't
+    introduce undeclared identifiers.
+    """
+    existing = {(l.predicate, l.args) for l in problem.init}
+    declared = set(problem.objects.keys())
+
+    def _add(predicate: str, args: tuple) -> None:
+        if (predicate, args) not in existing:
+            problem.init.append(Literal(predicate, args))
+            existing.add((predicate, args))
+
+    # Build furniture -> room and object -> (room, furniture) maps from scene
+    furniture_to_room: Dict[str, str] = {}
+    for room, furns in (scene_data.get("furniture_in_rooms") or {}).items():
+        if not isinstance(furns, list):
+            continue
+        for furn in furns:
+            if isinstance(furn, str):
+                furniture_to_room[furn] = room
+
+    object_to_furniture: Dict[str, str] = {}
+    for furn, objs in (scene_data.get("objects_on_furniture") or {}).items():
+        if not isinstance(objs, list):
+            continue
+        for obj in objs:
+            if isinstance(obj, str):
+                object_to_furniture[obj] = furn
+
+    # 1. agent_in_room from agent_spawns
+    agent_spawns = scene_data.get("agent_spawns") or {}
+    for agent_id, room_id in agent_spawns.items():
+        if agent_id in declared and isinstance(room_id, str):
+            _add("agent_in_room", (agent_id, room_id))
+
+    # 2. is_in_room for furniture
+    for furn_id, room_id in furniture_to_room.items():
+        if furn_id in declared:
+            _add("is_in_room", (furn_id, room_id))
+
+    # 3. is_in_room for objects (derived from furniture location)
+    for obj_id, furn_id in object_to_furniture.items():
+        if obj_id not in declared:
+            continue
+        room_id = furniture_to_room.get(furn_id)
+        if room_id:
+            _add("is_in_room", (obj_id, room_id))
+        # Also add is_on_top so the planner knows the starting position
+        if furn_id in declared:
+            _add("is_on_top", (obj_id, furn_id))
 
 
 def _ensure_can_communicate(task: "GeneratedTask", problem: Problem) -> None:

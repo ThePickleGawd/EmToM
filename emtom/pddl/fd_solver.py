@@ -153,6 +153,116 @@ def _epistemic_grounding_errors(
     return errors
 
 
+def _diagnose_unsolvable(problem: Problem, physical_goal: Formula) -> List[str]:
+    """Diagnose why a physical goal is unsolvable by checking init completeness.
+
+    Returns a list of actionable hints about missing init facts.
+    """
+    hints: List[str] = []
+    init_preds: Dict[str, Set[Tuple[str, ...]]] = {}
+    for lit in problem.init:
+        if not lit.negated:
+            init_preds.setdefault(lit.predicate, set()).add(lit.args)
+
+    declared_agents = sorted(
+        name for name, typ in problem.objects.items() if typ == "agent"
+    )
+    declared_rooms = {
+        name for name, typ in problem.objects.items() if typ == "room"
+    }
+
+    # Check agent grounding
+    grounded_agents = {
+        args[0]
+        for args in init_preds.get("agent_in_room", set())
+        if len(args) == 2
+    }
+    for agent in declared_agents:
+        if agent not in grounded_agents:
+            hints.append(
+                f"Missing agent position: add (agent_in_room {agent} <room>) to :init"
+            )
+
+    # Check object/furniture room grounding
+    grounded_objects = {
+        args[0]
+        for args in init_preds.get("is_in_room", set())
+        if len(args) == 2
+    }
+
+    # Collect objects referenced in the goal
+    goal_refs: Set[str] = set()
+
+    def _collect_refs(f: Formula) -> None:
+        if isinstance(f, Literal):
+            for arg in f.args:
+                if not arg.startswith("?"):
+                    goal_refs.add(arg)
+        elif isinstance(f, (And, Or)):
+            for op in f.operands:
+                _collect_refs(op)
+        elif isinstance(f, Not) and f.operand is not None:
+            _collect_refs(f.operand)
+
+    _collect_refs(physical_goal)
+
+    for obj_id in sorted(goal_refs):
+        obj_type = problem.objects.get(obj_id)
+        if obj_type in ("agent", "room") or obj_type is None:
+            continue
+        if obj_id not in grounded_objects:
+            hints.append(
+                f"Missing room grounding: add (is_in_room {obj_id} <room>) to :init"
+            )
+
+    # Check if goal references predicates with no matching init facts
+    def _check_goal_predicates(f: Formula) -> None:
+        if isinstance(f, Literal):
+            if not f.negated:
+                # For positive goal literals, check if there's any init support
+                pred = f.predicate
+                if pred in ("is_on_top", "is_on_floor", "is_inside"):
+                    # Object placement — check if object has a current position
+                    if len(f.args) >= 1:
+                        obj = f.args[0]
+                        has_pos = any(
+                            obj in (a[0] if len(a) >= 1 else "")
+                            for p in ("is_on_top", "is_on_floor", "is_inside")
+                            for a in init_preds.get(p, set())
+                        )
+                        if not has_pos and obj in problem.objects:
+                            hints.append(
+                                f"Object '{obj}' has no initial position in :init. "
+                                f"Add (is_on_top {obj} <furniture>) or similar."
+                            )
+        elif isinstance(f, (And, Or)):
+            for op in f.operands:
+                _check_goal_predicates(op)
+        elif isinstance(f, Not) and f.operand is not None:
+            _check_goal_predicates(f.operand)
+
+    _check_goal_predicates(physical_goal)
+
+    # Check for closed containers blocking access
+    closed_furniture = {
+        args[0]
+        for args in init_preds.get("is_closed", set())
+        if len(args) == 1
+    }
+    items_in_closed = []
+    for args in init_preds.get("item_in_container", set()):
+        if len(args) == 2 and args[1] in closed_furniture:
+            items_in_closed.append((args[0], args[1]))
+    for item, container in sorted(items_in_closed):
+        if item in goal_refs:
+            hints.append(
+                f"Item '{item}' is inside closed container '{container}'. "
+                f"Ensure the planner can open it (check is_locked, requires_item)."
+            )
+
+    return hints
+
+
 def _deduplicate_conjuncts(formula: Formula) -> Formula:
     """Remove duplicate conjuncts from an And formula."""
     if not isinstance(formula, And):
@@ -346,13 +456,20 @@ class FastDownwardSolver:
         has_epistemic = _has_epistemic_goals(problem.goal)
         grounding_errors = _epistemic_grounding_errors(problem, observability) if has_epistemic else []
         if has_epistemic and strict and grounding_errors:
+            error_lines = [
+                "Strict epistemic proof requires explicit observability grounding.",
+                "Missing facts in :init:",
+            ]
+            for err in grounding_errors:
+                error_lines.append(f"  - {err}")
+            error_lines.append(
+                "Fix: add the missing (agent_in_room ...) and (is_in_room ...) "
+                "facts to the problem_pddl :init section, or provide scene data."
+            )
             return SolverResult(
                 solvable=False,
                 solve_time=time.time() - start,
-                error=(
-                    "Strict epistemic proof requires explicit observability grounding: "
-                    + "; ".join(grounding_errors)
-                ),
+                error="\n".join(error_lines),
             )
         if has_epistemic and observability and not grounding_errors:
             return self._solve_epistemic(
@@ -436,14 +553,18 @@ class FastDownwardSolver:
             )
 
         if not result["solvable"]:
+            base_error = result.get(
+                "error",
+                "No plan found — goal is unreachable "
+                "(physical or epistemic requirements unsatisfiable)",
+            )
+            hints = _diagnose_unsolvable(problem, _strip_epistemic(problem.goal))
+            if hints:
+                base_error += "\nActionable fixes:\n" + "\n".join(f"  - {h}" for h in hints)
             return SolverResult(
                 solvable=False,
                 solve_time=time.time() - start,
-                error=result.get(
-                    "error",
-                    "No plan found — goal is unreachable "
-                    "(physical or epistemic requirements unsatisfiable)",
-                ),
+                error=base_error,
             )
 
         return SolverResult(
@@ -494,10 +615,14 @@ class FastDownwardSolver:
             )
 
         if not result["solvable"]:
+            base_error = result.get("error", "No plan found — goal is unreachable from init state")
+            hints = _diagnose_unsolvable(problem, physical_goal)
+            if hints:
+                base_error += "\nActionable fixes:\n" + "\n".join(f"  - {h}" for h in hints)
             return SolverResult(
                 solvable=False,
                 solve_time=time.time() - start,
-                error=result.get("error", "No plan found — goal is unreachable from init state"),
+                error=base_error,
             )
 
         # Run epistemic checks (belief depth, trivial K, budget)

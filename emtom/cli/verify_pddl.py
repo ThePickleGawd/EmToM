@@ -23,9 +23,116 @@ import re
 import time
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from emtom.cli import CLIResult, failure, success
+
+
+def _build_failure_summary(
+    problem: "Problem",
+    functional_goal_pddl: str,
+    raw_error: str,
+) -> str:
+    """Build a 2-4 sentence actionable summary explaining why PDDL verification failed.
+
+    Designed to give the task-gen agent enough context to fix the problem_pddl
+    in one edit rather than blind trial-and-error.
+    """
+    from emtom.pddl.dsl import And, Formula, Literal, Not, Or
+
+    init_preds: Dict[str, Set[Tuple[str, ...]]] = {}
+    for lit in problem.init:
+        if not lit.negated:
+            init_preds.setdefault(lit.predicate, set()).add(lit.args)
+
+    # --- Collect issues ---
+    issues: List[str] = []
+
+    # 1. Missing agent positions
+    agents_without_room = []
+    grounded_agents = {
+        args[0] for args in init_preds.get("agent_in_room", set()) if len(args) == 2
+    }
+    for name, typ in problem.objects.items():
+        if typ == "agent" and name not in grounded_agents:
+            agents_without_room.append(name)
+    if agents_without_room:
+        issues.append(
+            f"Agents {', '.join(agents_without_room)} have no starting room — "
+            f"add (agent_in_room <agent> <room>) to :init for each."
+        )
+
+    # 2. Missing object/furniture room grounding
+    grounded_objects = {
+        args[0] for args in init_preds.get("is_in_room", set()) if len(args) == 2
+    }
+    goal_refs: Set[str] = set()
+
+    def _collect_goal_refs(f: Formula) -> None:
+        if isinstance(f, Literal):
+            for arg in f.args:
+                if not arg.startswith("?"):
+                    goal_refs.add(arg)
+        elif isinstance(f, (And, Or)):
+            for op in f.operands:
+                _collect_goal_refs(op)
+        elif isinstance(f, Not) and f.operand is not None:
+            _collect_goal_refs(f.operand)
+
+    if problem.goal:
+        _collect_goal_refs(problem.goal)
+
+    ungrounded = sorted(
+        obj_id for obj_id in goal_refs
+        if problem.objects.get(obj_id) not in ("agent", "room", None)
+        and obj_id not in grounded_objects
+    )
+    if ungrounded:
+        issues.append(
+            f"Objects/furniture referenced in the goal have no room placement: "
+            f"{', '.join(ungrounded)}. Add (is_in_room <id> <room>) for each."
+        )
+
+    # 3. Missing initial object positions (needed for move/place goals)
+    positioned = set()
+    for pred in ("is_on_top", "is_on_floor", "is_inside", "is_in_hand"):
+        for args in init_preds.get(pred, set()):
+            if args:
+                positioned.add(args[0])
+    unpositioned = sorted(
+        obj_id for obj_id in goal_refs
+        if problem.objects.get(obj_id) in ("item", "object")
+        and obj_id not in positioned
+    )
+    if unpositioned:
+        issues.append(
+            f"Items {', '.join(unpositioned)} have no initial position — "
+            f"the planner cannot move them. Add (is_on_top <item> <furniture>) to :init."
+        )
+
+    # 4. Contradictory goal detection
+    if "contradictory" in raw_error.lower() or "expression false" in raw_error.lower():
+        issues.append(
+            "The goal contains contradictory requirements (e.g., a physical negation "
+            "conflicts with an epistemic K() goal over the same fact). "
+            "Check that no goal literal is both asserted and negated."
+        )
+
+    # 5. Planner status fallback
+    if "unsolvable" in raw_error.lower() and not issues:
+        issues.append(
+            "The planner proved the goal is unreachable from the initial state. "
+            "Verify that the :init facts describe a world state where the goal "
+            "can actually be achieved through the available actions (navigate, "
+            "pick_up, place, open, close)."
+        )
+
+    if not issues:
+        # Generic fallback with the raw error
+        return f"PDDL verification failed: {raw_error}"
+
+    summary = "PDDL verification failed. " + " ".join(issues)
+    return summary
 
 
 def run(task_file: str, working_dir: str = None) -> CLIResult:
@@ -168,12 +275,15 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     solve_wall_time_s = time.perf_counter() - solve_start
 
     if result is None or not result.solvable:
+        error_msg = (result.error if result is not None else None) or "unknown"
+        summary = _build_failure_summary(problem, projection.functional_goal_pddl, error_msg)
         return failure(
-            f"Functional PDDL goal is not solvable: {result.error or 'unknown'}",
+            summary,
             data={
                 "valid": False,
                 "pddl_goal": goal_spec.to_pddl_string(),
                 "functional_goal_pddl": projection.functional_goal_pddl,
+                "solver_error": error_msg,
             },
         )
 
