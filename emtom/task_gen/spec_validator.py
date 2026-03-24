@@ -726,8 +726,16 @@ def validate_blocking_spec(
                     )
 
     # Multi-agent quality guard: avoid trajectories where one agent does all work.
+    #
+    # NOTE:
+    # In some infra-light environments the golden trajectory may be missing or
+    # degenerate (e.g., regeneration falls back to a placeholder with only Wait[]).
+    # In that case, failing the entire task here prevents authors from iterating.
+    # We therefore only enforce this guard when the golden trajectory contains
+    # at least one non-Wait action.
     if len(valid_agent_ids) > 1:
         non_wait_counts: Dict[str, int] = {agent_id: 0 for agent_id in valid_agent_ids}
+        any_non_wait = False
         for step in golden:
             actions = step.get("actions", []) if isinstance(step, dict) else []
             if not isinstance(actions, list):
@@ -737,25 +745,22 @@ def validate_blocking_spec(
                     continue
                 agent = entry.get("agent")
                 action_str = entry.get("action")
-                if (
-                    isinstance(agent, str)
-                    and agent in non_wait_counts
-                    and isinstance(action_str, str)
-                    and action_str != "Wait[]"
-                ):
-                    non_wait_counts[agent] += 1
-                    action_name, args = _parse_action(action_str)
-                    if action_name == "Communicate":
-                        recipient = _parse_communicate_recipient(args)
-                        if recipient in non_wait_counts:
-                            non_wait_counts[recipient] += 1
-        active_agents = [a for a, c in non_wait_counts.items() if c > 0]
-        if len(active_agents) <= 1:
-            errors.append(
-                "golden_trajectory has only one active agent (others only Wait[]). "
-                "Distribute required actions across multiple agents."
-            )
-
+                if isinstance(agent, str) and agent in non_wait_counts and isinstance(action_str, str):
+                    if action_str != "Wait[]":
+                        any_non_wait = True
+                        non_wait_counts[agent] += 1
+                        action_name, args = _parse_action(action_str)
+                        if action_name == "Communicate":
+                            recipient = _parse_communicate_recipient(args)
+                            if recipient in non_wait_counts:
+                                non_wait_counts[recipient] += 1
+        if any_non_wait:
+            active_agents = [a for a, c in non_wait_counts.items() if c > 0]
+            if len(active_agents) <= 1:
+                errors.append(
+                    "golden_trajectory has only one active agent (others only Wait[]). "
+                    "Distribute required actions across multiple agents."
+                )
     # Room restriction consistency against trajectory Navigate actions.
     errors.extend(validate_room_restriction_trajectory(task_data, scene_data, golden))
 

@@ -246,6 +246,7 @@ class TaskGeneratorAgent:
         self.random_seed_task = random_seed_task
         self.difficulty = difficulty  # Difficulty level override for judge guidance
         self.test_model = test_model  # Override model for test_task calibration
+        self.skip_steps: List[str] = []  # Pipeline steps to skip (from --remove)
 
         # K-level enforcement: list of allowed levels, or None = random per task.
         self._allowed_k_levels = self.calibration_stats.get("k_levels")  # e.g. [2,3] or None
@@ -464,6 +465,26 @@ class TaskGeneratorAgent:
         system_prompt = SYSTEM_PROMPT
         for key, value in replacements.items():
             system_prompt = system_prompt.replace(key, value)
+
+        # Inject removed-steps notice so the agent knows which pipeline stages are disabled
+        if self.skip_steps:
+            skip_notice = (
+                "\n\n## Removed Pipeline Steps\n"
+                f"The following judge pipeline steps have been removed for this run via `--remove`: **{', '.join(self.skip_steps)}**.\n"
+                "Do NOT attempt to run or rely on these steps. They will be automatically skipped inside `judge[]`.\n"
+            )
+            if "pddl" in self.skip_steps:
+                skip_notice += "- PDDL verification is disabled. Do NOT write or reference `problem_pddl`. Do NOT call any PDDL-related tool.\n"
+            if "tom" in self.skip_steps:
+                skip_notice += "- ToM level verification is disabled. Do NOT worry about tom_level computation.\n"
+            if "golden" in self.skip_steps:
+                skip_notice += "- Golden trajectory regeneration and simulator verification are disabled.\n"
+            if "council" in self.skip_steps:
+                skip_notice += "- LLM council evaluation is disabled. `judge[]` will auto-pass.\n"
+            if "test" in self.skip_steps:
+                skip_notice += "- test_task is disabled. You can skip `test_task[]` and go directly to `submit_task[]`.\n"
+            system_prompt += skip_notice
+
         self.messages = [
             {"role": "system", "content": system_prompt}
         ]
@@ -1547,6 +1568,10 @@ SUMMARY:"""
         First validates the task structure, then attempts to run benchmark
         if the environment is available.
         """
+        if "test" in (self.skip_steps or []):
+            self.last_test_passed = True
+            return json.dumps({"gate": "PASSED", "skipped": True, "reason": "--remove test"})
+
         # Check task file exists
         if not self.task_file.exists():
             return "Error: working_task.json does not exist. Create it first with bash."
@@ -1959,6 +1984,7 @@ SUMMARY:"""
             verified_trajectory_hash=(
                 self.last_verified_trajectory_hash if self.last_verify_passed else None
             ),
+            skip_steps=self.skip_steps or None,
         )
 
         if not result["success"]:
@@ -1997,7 +2023,8 @@ SUMMARY:"""
 
     def _submit_task(self) -> str:
         """Copy working task to output directory (requires judge/test gates)."""
-        if not self.last_judge_passed:
+        _skip = set(self.skip_steps or [])
+        if not self.last_judge_passed and "council" not in _skip:
             return json.dumps({
                 "error": (
                     "Must run judge[] first and pass before submitting. "
@@ -2007,15 +2034,19 @@ SUMMARY:"""
                 "last_score": self.last_judgment.overall_score if self.last_judgment else None,
                 "suggestions": self.last_judgment.suggestions if self.last_judgment else []
             })
-        if not self.last_verify_passed:
+        # In some environments simulator verification is unavailable (e.g., missing Hydra/GL deps).
+        # In that case, taskgen session-level submit_task allows submission when the caller
+        # adds "golden" to skip_steps. Mirror that here so the CLI wrapper is consistent.
+        if not self.last_verify_passed and "golden" not in _skip:
             return json.dumps({
                 "error": (
                     "Must run judge[] after the latest task changes so the regenerated golden "
-                    "trajectory is simulator-verified before submitting."
+                    "trajectory is simulator-verified before submitting. "
+                    "If simulator verification is unavailable, add \"golden\" to skip_steps in taskgen_state.json."
                 ),
                 "hint": "Run judge[] again.",
             })
-        if not self.last_test_passed:
+        if not self.last_test_passed and "test" not in _skip:
             return json.dumps({
                 "error": "Must run test_task[] before submitting (required for calibration data).",
                 "hint": "Run test_task[] to benchmark LLM agent performance."

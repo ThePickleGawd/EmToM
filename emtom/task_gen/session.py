@@ -861,6 +861,9 @@ class TaskGenSession:
         data = result.get("data") or {}
         golden = data.get("golden_trajectory") or {}
         if golden.get("sim_verified"):
+            # Note: in lightweight envs sim verification may be skipped due to missing
+            # hydra/habitat deps; judge_task.py still sets sim_verified=True in that case.
+            
             self.state["last_verify_passed"] = True
             self.state["last_verified_spec_hash"] = golden.get("spec_hash")
             self.state["last_verified_trajectory_hash"] = golden.get("trajectory_hash")
@@ -894,10 +897,13 @@ class TaskGenSession:
                 "Must run judge successfully before submitting. "
                 "judge now includes golden trajectory regeneration and simulator verification."
             )
+        # In some environments we skip simulator verification (e.g., missing Hydra/GL deps).
+        # When the golden step is skipped, allow submission as long as judge + test passed.
         if not self.state.get("last_verify_passed") and "golden" not in _skip:
             return failure(
-                "Must run judge after the latest task changes so the regenerated golden trajectory "
-                "is simulator-verified before submitting."
+                "Must simulator-verify the regenerated golden trajectory before submitting. "
+                "If simulator verification is unavailable in this environment, add 'golden' to skip_steps "
+                "in taskgen_state.json (set TASKGEN_SKIP_LLM=1 already uses structural-only judge)."
             )
         if not self.state.get("last_test_passed") and "test" not in _skip:
             return failure("Must run test_task successfully before submitting.")

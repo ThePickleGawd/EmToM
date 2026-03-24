@@ -1,5 +1,7 @@
 """Consolidated prompts for task generation."""
 
+from typing import List, Optional
+
 SYSTEM_PROMPT = """You are a puzzle designer creating multi-agent collaboration challenges.
 
 ## Response Format
@@ -561,6 +563,7 @@ def build_external_taskgen_prompt(
     agents_max: int,
     subtasks_min: int,
     subtasks_max: int,
+    skip_steps: Optional[List[str]] = None,
 ) -> str:
     category_index = SYSTEM_PROMPT.find("## Category:")
     guidance = SYSTEM_PROMPT[category_index:] if category_index >= 0 else SYSTEM_PROMPT
@@ -632,4 +635,24 @@ Use the repo-owned `taskgen` commands for pipeline actions instead of bespoke to
 
 {constraints}
 """
-    return f"{header}\n{guidance}"
+
+    # Inject removed-steps notice so the external agent knows which pipeline stages are disabled
+    skip_notice = ""
+    if skip_steps:
+        skip_notice = (
+            "\n\n## Removed Pipeline Steps\n"
+            f"The following judge pipeline steps have been removed for this run via `--remove`: **{', '.join(skip_steps)}**.\n"
+            "Do NOT attempt to run or rely on these steps. They will be automatically skipped inside `taskgen judge`.\n"
+        )
+        if "pddl" in skip_steps:
+            skip_notice += "- PDDL verification is disabled. Do NOT write or reference `problem_pddl`. Do NOT call any PDDL-related tool or verification.\n"
+        if "tom" in skip_steps:
+            skip_notice += "- ToM level verification is disabled. Do NOT worry about tom_level computation.\n"
+        if "golden" in skip_steps:
+            skip_notice += "- Golden trajectory regeneration and simulator verification are disabled.\n"
+        if "council" in skip_steps:
+            skip_notice += "- LLM council evaluation is disabled. `taskgen judge` will auto-pass.\n"
+        if "test" in skip_steps:
+            skip_notice += "- test_task is disabled. You can skip `taskgen test_task` and go directly to `taskgen submit_task`.\n"
+
+    return f"{header}\n{guidance}{skip_notice}"

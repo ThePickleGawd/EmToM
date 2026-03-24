@@ -527,6 +527,7 @@ def main() -> None:
         agents_max=agents_max,
         subtasks_min=subtasks_min,
         subtasks_max=subtasks_max,
+        skip_steps=skip_steps,
     )
     _write_bootstrap_files(working_dir=working_dir, prompt_text=prompt_text)
 

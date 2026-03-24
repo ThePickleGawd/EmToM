@@ -105,24 +105,8 @@ def run(
             return failure(f"Strict ToM verification failed: {e}")
 
     strict_tom_level = strict_tom.get("tom_level")
-    if os.environ.get("TASKGEN_SKIP_LLM", "").lower() in {"1","true","yes"}:
-        # In infra-light environments we still run strict PDDL + metadata checks
-        # but skip the LLM council entirely.
-        task_data["tom_level"] = strict_tom_level
-        return success(
-            data={
-                "passed": True,
-                "overall_score": 1.0,
-                "threshold": threshold,
-                "models": [],
-                "pddl_verification": verify_result.get("data", {}),
-                "strict_tom_verification": strict_tom,
-                "golden_trajectory": {},
-                "model_results": {},
-                "suggestions": [],
-                "summary": "PASS - LLM council skipped (TASKGEN_SKIP_LLM=1)",
-            }
-        )
+    if False:
+        pass
     if "tom" not in _skip and required_tom_level is not None and strict_tom_level != required_tom_level:
         return failure(
             f"Strict tom_level is {strict_tom_level} but required tom_level is {required_tom_level}.",
@@ -198,8 +182,12 @@ def run(
                     payload.setdefault("stage", "golden_trajectory_verification")
                     payload["golden_trajectory"] = golden_status
                     return failure(err, data=payload)
-            golden_status["sim_verified"] = True
-            golden_status["sim_verification"] = verification["data"]
+            # If simulator verification succeeded (or we skipped it due to missing
+            # simulator deps), record the result without overriding the earlier
+            # decision.
+            if verification["success"]:
+                golden_status["sim_verified"] = True
+                golden_status["sim_verification"] = verification.get("data")
         else:
             golden_status["sim_verified"] = True
             golden_status["sim_verification_skipped_reason"] = (
@@ -294,7 +282,7 @@ def run(
             }
             for model, j in verdict.judgments.items()
         },
-                "golden_trajectory": {},
+                "golden_trajectory": golden_status,
     }
 
     if verdict.disagreements:
