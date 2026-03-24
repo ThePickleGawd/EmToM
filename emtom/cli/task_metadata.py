@@ -21,8 +21,19 @@ def compute_strict_tom_metadata(
     # If taskgen runs with a lightweight synthetic scene (or otherwise without
     # observability grounding), the verifier cannot reliably prove minimal ToM
     # levels above 1 even when the authored goals contain deeper nesting.
-    # In that case, fall back to the authored epistemic nesting depth.
-    if (scene_data is None) or (isinstance(scene_data, dict) and (not scene_data.get("rooms"))):
+    #
+    # NOTE: scene_data may be either a plain dict (common in JSON workflows) or
+    # a SceneData dataclass instance (taskgen internal loader). Avoid dict-only
+    # APIs like `.get()`.
+    def _rooms_empty(sd: Any) -> bool:
+        if sd is None:
+            return True
+        if isinstance(sd, dict):
+            return not bool(sd.get("rooms"))
+        rooms = getattr(sd, "rooms", None)
+        return not bool(rooms)
+
+    if _rooms_empty(scene_data):
         depth = proof.get("epistemic_goal_depth")
         if isinstance(depth, int) and depth > 0:
             return {

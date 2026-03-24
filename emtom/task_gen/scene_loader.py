@@ -57,6 +57,12 @@ class SceneData:
             "agent_spawns": self.agent_spawns,
         }
 
+    # Compatibility: some downstream utilities treat scene_data like a dict.
+    # Provide a minimal `.get()` to mirror dict semantics.
+    def get(self, key: str, default: Any = None) -> Any:  # type: ignore[override]
+        return self.to_dict().get(key, default)
+
+
     def to_scene_inventory(self) -> Dict[str, List[str]]:
         """Convert to scene_inventory format for compatibility."""
         return {
