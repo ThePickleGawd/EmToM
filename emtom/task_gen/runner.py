@@ -76,7 +76,7 @@ def parse_extra_args():
         type=str,
         nargs="+",
         default=None,
-        help="Skip judge pipeline steps. Choices: pddl, tom, golden, structure, council, test",
+        help="Skip pipeline components. Choices: pddl, llm-council, simulation, task-evolution, tom, structure, test",
     )
 
     args, remaining = parser.parse_known_args()
@@ -378,7 +378,7 @@ def main() -> None:
     num_tasks = runner_args["num_tasks"]
     model = runner_args["model"]
     llm_provider = runner_args["llm_provider"]
-    output_dir = runner_args["output_dir"]
+    output_dir = str(Path(runner_args["output_dir"]).resolve())
     subtasks_min = runner_args["subtasks_min"]
     subtasks_max = runner_args["subtasks_max"]
     agents_min = runner_args["agents_min"]
@@ -407,7 +407,10 @@ def main() -> None:
     task_gen_agent = extra_args.task_gen_agent if extra_args else "mini"
     skip_steps = extra_args.remove if extra_args else None
     if skip_steps:
-        valid_steps = {"pddl", "tom", "golden", "structure", "council", "test"}
+        # Canonical names and legacy aliases
+        _legacy_map = {"council": "llm-council", "golden": "simulation"}
+        skip_steps = [_legacy_map.get(s, s) for s in skip_steps]
+        valid_steps = {"pddl", "llm-council", "simulation", "task-evolution", "tom", "structure", "test"}
         invalid = [s for s in skip_steps if s not in valid_steps]
         if invalid:
             raise SystemExit(
@@ -474,8 +477,12 @@ def main() -> None:
     calibration_stats = compute_calibration_stats(calibration_tasks_dir, target_model)
     calibration_stats["target_rate"] = target_pass_rate
 
+    # When task-evolution is removed, skip seed task population and calibration guidance
+    _skip_evolution = skip_steps and "task-evolution" in skip_steps
     sampled_tasks_override = extra_args.sampled_tasks_dir if extra_args else None
-    if sampled_tasks_override:
+    if _skip_evolution:
+        pass  # No seed tasks — agent generates from scratch
+    elif sampled_tasks_override:
         override_path = Path(sampled_tasks_override)
         override_files = [p for p in override_path.glob("*.json") if is_task_like_json(p)]
         selected = sorted(override_files)[:10]
@@ -505,10 +512,10 @@ def main() -> None:
     extra_sections = _build_extra_sections(
         query=query,
         verification_feedback=verification_feedback,
-        calibration_stats=calibration_stats,
-        difficulty=difficulty,
+        calibration_stats=calibration_stats if not _skip_evolution else {},
+        difficulty=difficulty if not _skip_evolution else None,
         current_k_level=current_k_level,
-        seed_tasks_dir=str(seed_tasks_dir) if seed_tasks_dir is not None else None,
+        seed_tasks_dir=(str(seed_tasks_dir) if seed_tasks_dir is not None else None) if not _skip_evolution else None,
         seed_pass_ratio=seed_pass_ratio,
         seed_fail_ratio=seed_fail_ratio,
     )

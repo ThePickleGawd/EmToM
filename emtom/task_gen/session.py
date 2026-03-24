@@ -771,10 +771,12 @@ class TaskGenSession:
         return payload
 
     def test_task(self) -> CLIResult:
-        if "test" in (self.state.get("skip_steps") or []):
+        _skip_test = self.state.get("skip_steps") or []
+        if "test" in _skip_test or "task-evolution" in _skip_test:
             self.state["last_test_passed"] = True
             self._write_state()
-            return success({"gate": "PASSED", "skipped": True, "reason": "--remove test"})
+            _reason = "--remove task-evolution" if "task-evolution" in _skip_test else "--remove test"
+            return success({"gate": "PASSED", "skipped": True, "reason": _reason})
 
         if not self.task_file.exists():
             return failure("working_task.json does not exist.")
@@ -892,20 +894,20 @@ class TaskGenSession:
 
     def submit_task(self) -> CLIResult:
         _skip = set(self.state.get("skip_steps") or [])
-        if not self.state.get("last_judge_passed") and "council" not in _skip:
+        if not self.state.get("last_judge_passed") and "llm-council" not in _skip:
             return failure(
                 "Must run judge successfully before submitting. "
                 "judge now includes golden trajectory regeneration and simulator verification."
             )
         # In some environments we skip simulator verification (e.g., missing Hydra/GL deps).
-        # When the golden step is skipped, allow submission as long as judge + test passed.
-        if not self.state.get("last_verify_passed") and "golden" not in _skip:
+        # When simulation is skipped, allow submission as long as judge + test passed.
+        if not self.state.get("last_verify_passed") and "simulation" not in _skip:
             return failure(
                 "Must simulator-verify the regenerated golden trajectory before submitting. "
-                "If simulator verification is unavailable in this environment, add 'golden' to skip_steps "
-                "in taskgen_state.json (set TASKGEN_SKIP_LLM=1 already uses structural-only judge)."
+                "If simulator verification is unavailable in this environment, add 'simulation' to skip_steps "
+                "in taskgen_state.json."
             )
-        if not self.state.get("last_test_passed") and "test" not in _skip:
+        if not self.state.get("last_test_passed") and "test" not in _skip and "task-evolution" not in _skip:
             return failure("Must run test_task successfully before submitting.")
 
         allowed_tom_levels = (

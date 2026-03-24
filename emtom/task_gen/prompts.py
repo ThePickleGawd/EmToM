@@ -548,6 +548,155 @@ def _rewrite_react_tool_syntax(text: str) -> str:
     return text
 
 
+import re
+
+
+def _strip_section(text: str, heading: str) -> str:
+    """Remove a markdown section (## heading) and everything until the next ## heading."""
+    pattern = re.compile(
+        r"(^|\n)##\s+" + re.escape(heading) + r".*?(?=\n##\s|\Z)",
+        re.DOTALL,
+    )
+    return pattern.sub("", text)
+
+
+def _strip_pddl_from_guidance(guidance: str) -> str:
+    """Remove PDDL-specific sections and references from guidance when --remove pddl."""
+    # Remove entire PDDL-focused sections (## level)
+    for section_name in [
+        "PDDL-Scene Consistency Rules",
+        "Available PDDL Predicates",
+        "PDDL Goal Format",
+        r"Goal Ownership \(`:goal-owners`\)",
+        "Competitive OR Goals — Required Pattern",
+        "K-Level Feasibility Under Deterministic Init",
+        "Golden Trajectory",
+    ]:
+        pattern = re.compile(
+            r"(^|\n)##\s+" + section_name + r".*?(?=\n##\s|\Z)",
+            re.DOTALL,
+        )
+        guidance = pattern.sub("", guidance)
+
+    # Remove ### Pitfall 4 (PDDL init state)
+    guidance = re.sub(
+        r"\n### Pitfall 4: Secrets contradicting PDDL init state.*?(?=\n###\s|\n##\s|\Z)",
+        "",
+        guidance,
+        flags=re.DOTALL,
+    )
+
+    # Remove lines that are purely about problem_pddl or PDDL verification
+    guidance = re.sub(r"^.*\bproblem_pddl\b.*$", "", guidance, flags=re.MULTILINE)
+    guidance = re.sub(r"^.*\bpddl_domain\b.*$", "", guidance, flags=re.MULTILINE)
+    guidance = re.sub(
+        r"^.*Do NOT use `has_most` or `has_at_least`.*PDDL.*$", "", guidance, flags=re.MULTILINE
+    )
+    guidance = re.sub(
+        r"^.*automatically runs strict PDDL verification.*$", "", guidance, flags=re.MULTILINE
+    )
+
+    # Rewrite tool descriptions
+    guidance = guidance.replace(
+        "Runs strict PDDL verification, regenerates the plan, simulator-verifies the golden trajectory when the plan changed, and then evaluates task quality.",
+        "Evaluates task quality.",
+    )
+    guidance = guidance.replace(
+        "runs strict PDDL verification, regenerates the golden trajectory, simulator-verifies it when needed, then runs LLM quality evaluation",
+        "runs task quality evaluation",
+    )
+    guidance = guidance.replace(
+        "Author `problem_pddl` FIRST. Treat it as the source of truth, then write the story/natural-language fields to match it exactly. Do not invent narrative requirements that are not in the formal spec.",
+        "Write the task description and natural-language fields directly.",
+    )
+    guidance = guidance.replace(
+        "encode shared objective in `problem_pddl :goal`",
+        "encode shared objective in the task description",
+    )
+    guidance = guidance.replace(
+        "encode opposition directly in `problem_pddl :goal`",
+        "encode opposition directly in the task description",
+    )
+    guidance = guidance.replace(
+        "encoded in `:goal` of `problem_pddl`",
+        "described in the task",
+    )
+    guidance = guidance.replace("(derived from the PDDL goals)", "")
+    guidance = guidance.replace(
+        "Write `problem_pddl` first, then make the narrative fields match the authored formal spec.",
+        "Write the task description and narrative fields.",
+    )
+    guidance = guidance.replace(
+        "Run `judge[]` to trigger strict PDDL verification and see the computed minimal ToM depth",
+        "Run `judge[]` to evaluate the task",
+    )
+    guidance = guidance.replace(
+        "Use `judge[]` to see the computed minimal ToM depth from its strict PDDL-verification step. ",
+        "Use `judge[]` to evaluate the task. ",
+    )
+    guidance = guidance.replace(
+        "on the non-epistemic projection of `problem_pddl` only, while `K()` goals are used separately for",
+        "on non-epistemic goals only, while `K()` goals are used separately for",
+    )
+    guidance = guidance.replace(
+        "You should focus on editing spec fields (`problem_pddl`, mechanics, constraints, secrets).",
+        "You should focus on editing spec fields (mechanics, constraints, secrets).",
+    )
+    guidance = guidance.replace(
+        "which will verify the PDDL, regenerate the plan, simulator-check the golden trajectory if needed, and then check quality",
+        "which will evaluate task quality",
+    )
+    # Replace "Competitive PDDL goal MUST use" references
+    guidance = re.sub(
+        r"^.*Competitive PDDL goal MUST.*$", "", guidance, flags=re.MULTILINE
+    )
+    # Replace "Strict PDDL verification" references
+    guidance = re.sub(
+        r"^.*Strict PDDL verification.*$", "", guidance, flags=re.MULTILINE
+    )
+    # Remaining inline PDDL references
+    guidance = guidance.replace(
+        "The authored PDDL goal can still stay fully deterministic. ",
+        "",
+    )
+    guidance = guidance.replace(
+        "Use `taskgen judge` to see the computed minimal ToM depth from its strict PDDL-verification step. ",
+        "Use `taskgen judge` to evaluate the task. ",
+    )
+    # Clean up excessive blank lines from removals
+    guidance = re.sub(r"\n{3,}", "\n\n", guidance)
+    return guidance
+
+
+def _strip_simulation_from_guidance(guidance: str) -> str:
+    """Remove simulation/golden-trajectory references from guidance when --remove simulation."""
+    # Remove the Golden Trajectory section
+    guidance = _strip_section(guidance, "Golden Trajectory")
+
+    guidance = guidance.replace(
+        "Runs strict PDDL verification, regenerates the plan, simulator-verifies the golden trajectory when the plan changed, and then evaluates task quality.",
+        "Runs strict PDDL verification and evaluates task quality.",
+    )
+    guidance = guidance.replace(
+        "runs strict PDDL verification, regenerates the golden trajectory, simulator-verifies it when needed, then runs LLM quality evaluation",
+        "runs strict PDDL verification and LLM quality evaluation",
+    )
+    guidance = guidance.replace(
+        "which will verify the PDDL, regenerate the plan, simulator-check the golden trajectory if needed, and then check quality",
+        "which will verify the PDDL and check quality",
+    )
+    # Also handle the case where PDDL is also stripped (different base text)
+    guidance = guidance.replace(
+        "Evaluates task quality.",
+        "Evaluates task quality.",
+    )
+    guidance = guidance.replace(
+        "runs task quality evaluation",
+        "runs task quality evaluation",
+    )
+    return guidance
+
+
 def build_external_taskgen_prompt(
     *,
     working_dir: str,
@@ -565,16 +714,27 @@ def build_external_taskgen_prompt(
     subtasks_max: int,
     skip_steps: Optional[List[str]] = None,
 ) -> str:
+    _skip = set(skip_steps or [])
+    _skip_pddl = "pddl" in _skip
+    _skip_evolution = "task-evolution" in _skip
+    _skip_test = "test" in _skip or _skip_evolution
+
     category_index = SYSTEM_PROMPT.find("## Category:")
     guidance = SYSTEM_PROMPT[category_index:] if category_index >= 0 else SYSTEM_PROMPT
     guidance = _rewrite_react_tool_syntax(guidance)
+
+    # Strip sections/references for removed pipeline components
+    if _skip_pddl:
+        guidance = _strip_pddl_from_guidance(guidance)
+    if "simulation" in _skip:
+        guidance = _strip_simulation_from_guidance(guidance)
 
     replacements = {
         "{task_file}": task_file,
         "{working_dir}": working_dir,
         "{available_items}": available_items,
         "{available_mechanics}": available_mechanics,
-        "{available_predicates}": available_predicates,
+        "{available_predicates}": available_predicates if not _skip_pddl else "(PDDL disabled for this run)",
         "{category}": category.upper(),
         "{action_descriptions}": action_descriptions,
         "{diversity_section}": (
@@ -594,6 +754,78 @@ def build_external_taskgen_prompt(
     )
     constraints = _rewrite_react_tool_syntax(constraints)
 
+    # -- Working Files section (conditionally include sampled_tasks) --
+    working_files = [
+        f"- `{task_file}`: current working task JSON",
+        f"- `{working_dir}/current_scene.json`: current scene data after `taskgen new_scene`",
+    ]
+    if not _skip_evolution:
+        working_files.append(f"- `{working_dir}/sampled_tasks/`: sampled seed-task examples")
+    working_files.append(f"- `{working_dir}/template.json`: blank task template")
+
+    # -- Required Commands (conditionally include test_task) --
+    commands = [
+        "- `taskgen status`",
+        "- `taskgen new_scene N`",
+        "- `taskgen new_scene N --keep`",
+        "- `taskgen judge`",
+    ]
+    if not _skip_test:
+        commands.append("- `taskgen test_task`")
+    commands.extend([
+        "- `taskgen submit_task`",
+        "- `taskgen finish`",
+        '- `taskgen fail "reason"`',
+    ])
+
+    # -- Workflow steps (conditionally include PDDL authoring, sampled tasks, test_task) --
+    step_num = 1
+    workflow = []
+
+    workflow.append(f"{step_num}. Run `taskgen status`.")
+    step_num += 1
+
+    if _skip_pddl:
+        workflow.append(
+            f"{step_num}. Run `taskgen new_scene N` to load a scene. The response includes `valid_agent_ids` "
+            "— **all mechanic_bindings, agent_secrets, message_targets, and teams MUST only reference these agent IDs**."
+        )
+    else:
+        workflow.append(
+            f"{step_num}. Run `taskgen new_scene N` to load a scene. The response includes `valid_agent_ids` "
+            "— **all mechanic_bindings, agent_secrets, message_targets, teams, and problem_pddl :objects MUST only reference these agent IDs**."
+        )
+    step_num += 1
+
+    if not _skip_evolution:
+        workflow.append(
+            f"{step_num}. Inspect examples in `{working_dir}/sampled_tasks/` for structural inspiration. "
+            "**Sampled tasks may have a different agent count — adapt patterns to this scene's agents, do not copy agent IDs directly.**"
+        )
+        step_num += 1
+
+    if _skip_pddl:
+        workflow.append(
+            f"{step_num}. Edit `{task_file}`. Write the natural-language task description, agent_secrets, and mechanics."
+        )
+    else:
+        workflow.append(
+            f"{step_num}. Edit `{task_file}`. Author `problem_pddl` first, then make the natural-language fields and mechanics match it."
+        )
+    step_num += 1
+
+    workflow.append(f"{step_num}. Run `taskgen judge`, fix the task, and repeat until it passes.")
+    step_num += 1
+
+    if not _skip_test:
+        workflow.append(f"{step_num}. Run `taskgen test_task`.")
+        step_num += 1
+
+    workflow.append(f"{step_num}. Run `taskgen submit_task`.")
+    step_num += 1
+
+    workflow.append(f"{step_num}. When you have submitted {num_tasks} tasks, run `taskgen finish`.")
+
     header = f"""You are a puzzle designer creating multi-agent collaboration benchmark tasks.
 
 You are working inside a task-generation workspace at `{working_dir}`.
@@ -601,34 +833,17 @@ Use normal shell commands for inspection and file edits.
 Use the repo-owned `taskgen` commands for pipeline actions instead of bespoke tool syntax.
 
 ## Working Files
-- `{task_file}`: current working task JSON
-- `{working_dir}/current_scene.json`: current scene data after `taskgen new_scene`
-- `{working_dir}/sampled_tasks/`: sampled seed-task examples
-- `{working_dir}/template.json`: blank task template
+{chr(10).join(working_files)}
 
 ## Required Commands
-- `taskgen status`
-- `taskgen new_scene N`
-- `taskgen new_scene N --keep`
-- `taskgen judge`
-- `taskgen test_task`
-- `taskgen submit_task`
-- `taskgen finish`
-- `taskgen fail "reason"`
+{chr(10).join(commands)}
 
 ## Workflow
-1. Run `taskgen status`.
-2. Run `taskgen new_scene N` to load a scene. The response includes `valid_agent_ids` — **all mechanic_bindings, agent_secrets, message_targets, teams, and problem_pddl :objects MUST only reference these agent IDs**.
-3. Inspect examples in `{working_dir}/sampled_tasks/` for structural inspiration. **Sampled tasks may have a different agent count — adapt patterns to this scene's agents, do not copy agent IDs directly.**
-4. Edit `{task_file}`. Author `problem_pddl` first, then make the natural-language fields and mechanics match it.
-5. Run `taskgen judge`, fix the task, and repeat until it passes.
-6. Run `taskgen test_task`.
-7. Run `taskgen submit_task`.
-8. When you have submitted {num_tasks} tasks, run `taskgen finish`.
+{chr(10).join(workflow)}
 
 ## Command Rules
 - Work inside the current workspace.
-- Use `taskgen` commands for scene loading, judging, verification, testing, submission, and finish/fail.
+- Use `taskgen` commands for scene loading, judging, {"testing, " if not _skip_test else ""}submission, and finish/fail.
 - `taskgen finish` must be the final command once the required number of tasks has been submitted.
 - Use `taskgen fail` only for unrecoverable infrastructure issues.
 - You may use shell tools like `cat`, `sed`, `jq`, `python`, and `apply_patch` to inspect and edit files.
@@ -638,21 +853,23 @@ Use the repo-owned `taskgen` commands for pipeline actions instead of bespoke to
 
     # Inject removed-steps notice so the external agent knows which pipeline stages are disabled
     skip_notice = ""
-    if skip_steps:
+    if _skip:
         skip_notice = (
-            "\n\n## Removed Pipeline Steps\n"
-            f"The following judge pipeline steps have been removed for this run via `--remove`: **{', '.join(skip_steps)}**.\n"
-            "Do NOT attempt to run or rely on these steps. They will be automatically skipped inside `taskgen judge`.\n"
+            "\n\n## Removed Pipeline Components\n"
+            f"The following pipeline components have been removed for this run via `--remove`: **{', '.join(sorted(_skip))}**.\n"
+            "Do NOT attempt to run or rely on these components.\n"
         )
-        if "pddl" in skip_steps:
-            skip_notice += "- PDDL verification is disabled. Do NOT write or reference `problem_pddl`. Do NOT call any PDDL-related tool or verification.\n"
-        if "tom" in skip_steps:
-            skip_notice += "- ToM level verification is disabled. Do NOT worry about tom_level computation.\n"
-        if "golden" in skip_steps:
-            skip_notice += "- Golden trajectory regeneration and simulator verification are disabled.\n"
-        if "council" in skip_steps:
-            skip_notice += "- LLM council evaluation is disabled. `taskgen judge` will auto-pass.\n"
-        if "test" in skip_steps:
-            skip_notice += "- test_task is disabled. You can skip `taskgen test_task` and go directly to `taskgen submit_task`.\n"
+        if _skip_pddl:
+            skip_notice += "- **pddl**: PDDL verification is disabled. Do NOT write or reference `problem_pddl`. Do NOT call any PDDL-related tool or verification.\n"
+        if "tom" in _skip:
+            skip_notice += "- **tom**: ToM level verification is disabled. Do NOT worry about tom_level computation.\n"
+        if "simulation" in _skip:
+            skip_notice += "- **simulation**: Golden trajectory regeneration and simulator verification are skipped inside `taskgen judge`.\n"
+        if "llm-council" in _skip:
+            skip_notice += "- **llm-council**: LLM council evaluation is disabled. `taskgen judge` will auto-pass the quality check.\n"
+        if _skip_evolution:
+            skip_notice += "- **task-evolution**: Task evolution is disabled. No seed tasks or calibration data are available. Do NOT reference `sampled_tasks/`.\n"
+        if "test" in _skip:
+            skip_notice += "- **test**: `taskgen test_task` is disabled. Skip it and go directly to `taskgen submit_task`.\n"
 
     return f"{header}\n{guidance}{skip_notice}"

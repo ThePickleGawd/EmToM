@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from omegaconf import DictConfig
 
-from .prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+from .prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, _strip_pddl_from_guidance, _strip_simulation_from_guidance
 from .judge import Judge, Judgment, CouncilVerdict, Colors
 from .diversity import DiversityTracker
 from .seed_sanitizer import sanitize_task_for_seeding
@@ -463,6 +463,13 @@ class TaskGeneratorAgent:
             "{diversity_section}": self._wrap_diversity_section(self._build_diversity_section()),
         }
         system_prompt = SYSTEM_PROMPT
+
+        # Strip sections for removed pipeline components before replacements
+        if "pddl" in (self.skip_steps or []):
+            system_prompt = _strip_pddl_from_guidance(system_prompt)
+        if "simulation" in (self.skip_steps or []):
+            system_prompt = _strip_simulation_from_guidance(system_prompt)
+
         for key, value in replacements.items():
             system_prompt = system_prompt.replace(key, value)
 
@@ -470,17 +477,22 @@ class TaskGeneratorAgent:
         if self.skip_steps:
             skip_notice = (
                 "\n\n## Removed Pipeline Steps\n"
-                f"The following judge pipeline steps have been removed for this run via `--remove`: **{', '.join(self.skip_steps)}**.\n"
-                "Do NOT attempt to run or rely on these steps. They will be automatically skipped inside `judge[]`.\n"
+                f"The following pipeline components have been removed for this run via `--remove`: **{', '.join(self.skip_steps)}**.\n"
+                "Do NOT attempt to run or rely on these components. They will be automatically skipped.\n"
             )
             if "pddl" in self.skip_steps:
                 skip_notice += "- PDDL verification is disabled. Do NOT write or reference `problem_pddl`. Do NOT call any PDDL-related tool.\n"
             if "tom" in self.skip_steps:
                 skip_notice += "- ToM level verification is disabled. Do NOT worry about tom_level computation.\n"
-            if "golden" in self.skip_steps:
-                skip_notice += "- Golden trajectory regeneration and simulator verification are disabled.\n"
-            if "council" in self.skip_steps:
+            if "simulation" in self.skip_steps:
+                skip_notice += "- Simulation verification is disabled. Golden trajectory regeneration and simulator verification are skipped.\n"
+            if "llm-council" in self.skip_steps:
                 skip_notice += "- LLM council evaluation is disabled. `judge[]` will auto-pass.\n"
+            if "task-evolution" in self.skip_steps:
+                skip_notice += (
+                    "- Task evolution is disabled. No seed tasks are provided. "
+                    "Do NOT reference `sampled_tasks/`. Skip `test_task[]` and go directly to `submit_task[]`.\n"
+                )
             if "test" in self.skip_steps:
                 skip_notice += "- test_task is disabled. You can skip `test_task[]` and go directly to `submit_task[]`.\n"
             system_prompt += skip_notice
@@ -1568,9 +1580,11 @@ SUMMARY:"""
         First validates the task structure, then attempts to run benchmark
         if the environment is available.
         """
-        if "test" in (self.skip_steps or []):
+        _skip = self.skip_steps or []
+        if "test" in _skip or "task-evolution" in _skip:
             self.last_test_passed = True
-            return json.dumps({"gate": "PASSED", "skipped": True, "reason": "--remove test"})
+            _reason = "--remove task-evolution" if "task-evolution" in _skip else "--remove test"
+            return json.dumps({"gate": "PASSED", "skipped": True, "reason": _reason})
 
         # Check task file exists
         if not self.task_file.exists():
@@ -2024,29 +2038,28 @@ SUMMARY:"""
     def _submit_task(self) -> str:
         """Copy working task to output directory (requires judge/test gates)."""
         _skip = set(self.skip_steps or [])
-        if not self.last_judge_passed and "council" not in _skip:
+        if not self.last_judge_passed and "llm-council" not in _skip:
             return json.dumps({
                 "error": (
                     "Must run judge[] first and pass before submitting. "
-                    "judge now includes golden trajectory regeneration and simulator verification."
+                    "judge includes task quality evaluation."
                 ),
-                "hint": "Run judge[] to verify the task quality, planning, and ToM requirements.",
+                "hint": "Run judge[] to verify the task quality.",
                 "last_score": self.last_judgment.overall_score if self.last_judgment else None,
                 "suggestions": self.last_judgment.suggestions if self.last_judgment else []
             })
         # In some environments simulator verification is unavailable (e.g., missing Hydra/GL deps).
-        # In that case, taskgen session-level submit_task allows submission when the caller
-        # adds "golden" to skip_steps. Mirror that here so the CLI wrapper is consistent.
-        if not self.last_verify_passed and "golden" not in _skip:
+        # When simulation is skipped, allow submission as long as judge + test passed.
+        if not self.last_verify_passed and "simulation" not in _skip:
             return json.dumps({
                 "error": (
                     "Must run judge[] after the latest task changes so the regenerated golden "
                     "trajectory is simulator-verified before submitting. "
-                    "If simulator verification is unavailable, add \"golden\" to skip_steps in taskgen_state.json."
+                    "If simulator verification is unavailable, add \"simulation\" to skip_steps in taskgen_state.json."
                 ),
                 "hint": "Run judge[] again.",
             })
-        if not self.last_test_passed and "test" not in _skip:
+        if not self.last_test_passed and "test" not in _skip and "task-evolution" not in _skip:
             return json.dumps({
                 "error": "Must run test_task[] before submitting (required for calibration data).",
                 "hint": "Run test_task[] to benchmark LLM agent performance."

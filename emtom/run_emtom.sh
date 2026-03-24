@@ -167,7 +167,7 @@ OBSERVATION_MODE="text"  # Benchmark observation mode: text or vision
 RUN_MODE="standard"  # Benchmark run mode: standard, baseline, or full_info
 LIMIT=0  # Optional task limit for salvage-style commands
 SKIP_BACKUP=false  # Skip backup creation for salvage flow
-REMOVE_STEPS=""  # Skip judge pipeline steps (e.g. "pddl council")
+REMOVE_STEPS=""  # Skip pipeline components (e.g. "pddl llm-council simulation task-evolution")
 SELECTOR_MIN_FRAMES=1
 SELECTOR_MAX_FRAMES=5
 SELECTOR_MAX_CANDIDATES=12
@@ -259,7 +259,7 @@ print_usage() {
     echo "  --seed-fail-ratio R  Logical fraction of selected seeds that should fail the target model (default: $SEED_FAIL_RATIO)"
     echo "  --sampled-tasks-dir DIR  Pre-built sampled_tasks directory (skips random sampling)"
     echo "  --k-level L [L ...]  Allowed ToM k-levels, e.g. --k-level 2 3 (default: random per task)"
-    echo "  --remove STEP [...]  Skip judge pipeline steps: pddl, tom, golden, structure, council, test"
+    echo "  --remove STEP [...]  Skip pipeline components: pddl, llm-council, simulation, task-evolution, tom, structure, test"
     echo "  --tom-ratio-tolerance R  ToM ratio tolerance (default: $TOM_RATIO_TOLERANCE)"
     echo "  --output-dir DIR     Override output directory (used by generate and benchmark)"
     echo ""
@@ -1338,7 +1338,7 @@ while [[ $# -gt 0 ]]; do
             fi
             ;;
         --remove)
-            # Consume all following step names (pddl, tom, golden, structure, council, test)
+            # Consume all following step names (pddl, llm-council, simulation, task-evolution, tom, structure, test)
             shift
             REMOVE_STEPS=""
             while [[ $# -gt 0 && "$1" != -* ]]; do
@@ -1347,7 +1347,7 @@ while [[ $# -gt 0 ]]; do
             done
             REMOVE_STEPS="${REMOVE_STEPS# }"  # trim leading space
             if [ -z "$REMOVE_STEPS" ]; then
-                echo "Error: --remove requires at least one step (pddl, tom, golden, structure, council, test)"
+                echo "Error: --remove requires at least one step (pddl, llm-council, simulation, task-evolution, tom, structure, test)"
                 exit 1
             fi
             ;;

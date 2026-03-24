@@ -26,7 +26,7 @@ from emtom.cli.task_metadata import compute_strict_tom_metadata
 from emtom.cli.validate_task import static_validate_trajectory
 
 
-SKIPPABLE_STEPS = {"pddl", "tom", "golden", "structure", "council"}
+SKIPPABLE_STEPS = {"pddl", "tom", "simulation", "structure", "llm-council"}
 
 
 def run(
@@ -124,9 +124,9 @@ def run(
         "spec_hash": None,
         "trajectory_hash": None,
     }
-    if "golden" in _skip:
+    if "simulation" in _skip:
         golden_status["skipped"] = True
-        golden_status["reason"] = "--remove golden"
+        golden_status["reason"] = "--remove simulation"
         golden_status["sim_verified"] = True
     elif skip_regenerate_golden:
         metadata = task_data.get("golden_trajectory_metadata", {})
@@ -202,7 +202,7 @@ def run(
         if not validation["success"]:
             return validation
 
-    if "council" in _skip:
+    if "llm-council" in _skip:
         # Skip the LLM council entirely — auto-pass with perfect score.
         result_data: Dict[str, Any] = {
             "passed": True,
@@ -214,7 +214,7 @@ def run(
             "golden_trajectory": golden_status,
             "model_results": {},
             "suggestions": [],
-            "summary": "PASS - LLM council skipped (--remove council)",
+            "summary": "PASS - LLM council skipped (--remove llm-council)",
             "skipped_steps": sorted(_skip),
         }
         if working_dir:
