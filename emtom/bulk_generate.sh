@@ -23,11 +23,19 @@ cd "$PROJECT_ROOT"
 
 mkdir -p outputs
 LOCK_FILE="outputs/.bulk_generate.lock"
+QUEUE_DIR="outputs/.bulk_queue"
 SHUTDOWN_IN_PROGRESS=false
 EXIT_STATUS=0
+QUEUE_TICKET=""
+
+mkdir -p "$QUEUE_DIR"
 
 cleanup_lock() {
     rm -f "$LOCK_FILE"
+    # Remove our queue ticket if it exists
+    if [ -n "$QUEUE_TICKET" ] && [ -f "$QUEUE_TICKET" ]; then
+        rm -f "$QUEUE_TICKET"
+    fi
 }
 
 kill_worker_groups() {
@@ -86,17 +94,88 @@ handle_exit() {
     exit "$EXIT_STATUS"
 }
 
-if [ -f "$LOCK_FILE" ]; then
-    existing_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
-    if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
-        echo -e "${RED}Error: bulk generation already running (pid=$existing_pid).${NC}"
-        echo "If that process is stale, stop it and remove $LOCK_FILE."
-        exit 1
-    fi
-    rm -f "$LOCK_FILE"
-fi
+# ── Queue logic ──────────────────────────────────────────────────────
+# If a bulk generation is already running, join the FIFO queue and wait.
+# Queue tickets are files named by <epoch_nanoseconds>_<pid> so that
+# lexicographic sort gives FIFO order.
 
-echo "$$" > "$LOCK_FILE"
+queue_ticket_name() {
+    # nanosecond timestamp + PID guarantees uniqueness and ordering
+    echo "${QUEUE_DIR}/$(date +%s%N)_$$"
+}
+
+is_lock_held() {
+    if [ -f "$LOCK_FILE" ]; then
+        local holder_pid
+        holder_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+        if [ -n "$holder_pid" ] && kill -0 "$holder_pid" 2>/dev/null; then
+            return 0  # held
+        fi
+        # Stale lock — clean it up
+        rm -f "$LOCK_FILE"
+    fi
+    return 1  # not held
+}
+
+am_i_next_in_queue() {
+    # Return 0 if our ticket is the earliest (first in sorted order)
+    local first
+    first="$(ls -1 "$QUEUE_DIR" 2>/dev/null | head -1)"
+    [ -n "$first" ] && [ "$QUEUE_DIR/$first" = "$QUEUE_TICKET" ]
+}
+
+purge_stale_tickets() {
+    # Remove tickets whose owning PID is no longer alive
+    for ticket in "$QUEUE_DIR"/*; do
+        [ -f "$ticket" ] || continue
+        local ticket_pid
+        ticket_pid="$(cat "$ticket" 2>/dev/null || true)"
+        if [ -n "$ticket_pid" ] && ! kill -0 "$ticket_pid" 2>/dev/null; then
+            rm -f "$ticket"
+        fi
+    done
+}
+
+acquire_lock_or_queue() {
+    if ! is_lock_held; then
+        # No contention — take the lock immediately
+        echo "$$" > "$LOCK_FILE"
+        return
+    fi
+
+    # Someone is running. Create a queue ticket.
+    QUEUE_TICKET="$(queue_ticket_name)"
+    echo "$$" > "$QUEUE_TICKET"
+
+    local holder_pid
+    holder_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+    local position
+    position="$(ls -1 "$QUEUE_DIR" 2>/dev/null | wc -l)"
+    echo -e "${YELLOW}Bulk generation already running (pid=$holder_pid). Queued at position ${position}. Waiting...${NC}"
+
+    # Poll until the lock is free AND we are first in the queue
+    while true; do
+        sleep 5
+        purge_stale_tickets
+        if ! is_lock_held && am_i_next_in_queue; then
+            break
+        fi
+        # Print status periodically
+        if is_lock_held; then
+            holder_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+            position="$(ls -1 "$QUEUE_DIR" 2>/dev/null | sort | grep -n "$(basename "$QUEUE_TICKET")" | cut -d: -f1)"
+            echo -e "${YELLOW}[queue] Waiting... (running pid=$holder_pid, queue position=$position)${NC}"
+        fi
+    done
+
+    echo -e "${GREEN}Lock released — starting queued bulk generation.${NC}"
+    echo "$$" > "$LOCK_FILE"
+    # Remove our ticket now that we hold the lock
+    rm -f "$QUEUE_TICKET"
+    QUEUE_TICKET=""
+}
+
+acquire_lock_or_queue
 trap handle_exit EXIT
 trap 'handle_signal INT' INT
 trap 'handle_signal TERM' TERM
@@ -145,6 +224,7 @@ print_usage() {
     echo "  --remove STEP [...] Skip judge pipeline steps: pddl, tom, golden, structure, council, test"
     echo "  --output-dir DIR    Output directory for submitted tasks (default: data/emtom/tasks)"
     echo "  --dry-run           Show commands without executing"
+    echo "  --queue-status      Show current queue status and exit"
     echo ""
     echo "Everything after -- is forwarded to run_emtom.sh generate:"
     echo "  --difficulty, --subtasks-*, --tom-target-*, --iterations-per-task, etc."
@@ -236,6 +316,35 @@ while [[ $# -gt 0 ]]; do
         --dry-run)
             DRY_RUN=true
             shift
+            ;;
+        --queue-status)
+            echo -e "${BOLD}Bulk Generation Queue Status${NC}"
+            echo "=============================="
+            if [ -f "$LOCK_FILE" ]; then
+                holder_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+                if [ -n "$holder_pid" ] && kill -0 "$holder_pid" 2>/dev/null; then
+                    echo -e "Running: ${GREEN}pid=$holder_pid${NC}"
+                else
+                    echo -e "Running: ${YELLOW}none (stale lock file)${NC}"
+                fi
+            else
+                echo -e "Running: ${YELLOW}none${NC}"
+            fi
+            queue_count=0
+            if [ -d "$QUEUE_DIR" ]; then
+                for ticket in "$QUEUE_DIR"/*; do
+                    [ -f "$ticket" ] || continue
+                    t_pid="$(cat "$ticket" 2>/dev/null || true)"
+                    if [ -n "$t_pid" ] && kill -0 "$t_pid" 2>/dev/null; then
+                        queue_count=$((queue_count + 1))
+                        echo -e "Queued #${queue_count}: ${CYAN}pid=$t_pid${NC} ($(basename "$ticket"))"
+                    fi
+                done
+            fi
+            if [ "$queue_count" -eq 0 ]; then
+                echo -e "Queue: ${YELLOW}empty${NC}"
+            fi
+            exit 0
             ;;
         -h|--help)
             print_usage
