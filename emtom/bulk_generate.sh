@@ -30,8 +30,22 @@ QUEUE_TICKET=""
 
 mkdir -p "$QUEUE_DIR"
 
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
 cleanup_lock() {
-    rm -f "$LOCK_FILE"
+    if [ -f "$LOCK_FILE" ]; then
+        local holder_pid
+        holder_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+        if [ "$holder_pid" = "$$" ]; then
+            rm -f "$LOCK_FILE"
+        fi
+    fi
     # Remove our queue ticket if it exists
     if [ -n "$QUEUE_TICKET" ] && [ -f "$QUEUE_TICKET" ]; then
         rm -f "$QUEUE_TICKET"
@@ -104,6 +118,17 @@ queue_ticket_name() {
     echo "${QUEUE_DIR}/$(date +%s%N)_$$"
 }
 
+sorted_queue_basenames() {
+    local tickets=("$QUEUE_DIR"/*)
+    if [ ${#tickets[@]} -eq 1 ] && [ "${tickets[0]}" = "$QUEUE_DIR/*" ]; then
+        return
+    fi
+    for ticket in "${tickets[@]}"; do
+        [ -f "$ticket" ] || continue
+        basename "$ticket"
+    done | LC_ALL=C sort
+}
+
 is_lock_held() {
     if [ -f "$LOCK_FILE" ]; then
         local holder_pid
@@ -117,11 +142,21 @@ is_lock_held() {
     return 1  # not held
 }
 
+try_acquire_lock() {
+    ( set -o noclobber; echo "$$" > "$LOCK_FILE" ) 2>/dev/null
+}
+
 am_i_next_in_queue() {
     # Return 0 if our ticket is the earliest (first in sorted order)
     local first
-    first="$(ls -1 "$QUEUE_DIR" 2>/dev/null | head -1)"
+    first="$(sorted_queue_basenames | head -1)"
     [ -n "$first" ] && [ "$QUEUE_DIR/$first" = "$QUEUE_TICKET" ]
+}
+
+queue_is_empty() {
+    local first
+    first="$(sorted_queue_basenames | head -1)"
+    [ -z "$first" ]
 }
 
 purge_stale_tickets() {
@@ -137,48 +172,44 @@ purge_stale_tickets() {
 }
 
 acquire_lock_or_queue() {
-    if ! is_lock_held; then
-        # No contention — take the lock immediately
-        echo "$$" > "$LOCK_FILE"
+    purge_stale_tickets
+    if ! is_lock_held && queue_is_empty && try_acquire_lock; then
         return
     fi
 
-    # Someone is running. Create a queue ticket.
-    QUEUE_TICKET="$(queue_ticket_name)"
-    echo "$$" > "$QUEUE_TICKET"
-
-    local holder_pid
-    holder_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
-    local position
-    position="$(ls -1 "$QUEUE_DIR" 2>/dev/null | wc -l)"
-    echo -e "${YELLOW}Bulk generation already running (pid=$holder_pid). Queued at position ${position}. Waiting...${NC}"
+    if [ -z "$QUEUE_TICKET" ]; then
+        QUEUE_TICKET="$(queue_ticket_name)"
+        echo "$$" > "$QUEUE_TICKET"
+        local holder_pid
+        local position
+        holder_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+        position="$(sorted_queue_basenames | grep -n "^$(basename "$QUEUE_TICKET")\$" | cut -d: -f1)"
+        echo -e "${YELLOW}Bulk generation busy${holder_pid:+ (pid=$holder_pid)}. Queued at position ${position:-1}. Waiting...${NC}"
+    fi
 
     # Poll until the lock is free AND we are first in the queue
     while true; do
         sleep 5
         purge_stale_tickets
-        if ! is_lock_held && am_i_next_in_queue; then
-            break
+        if ! is_lock_held && am_i_next_in_queue && try_acquire_lock; then
+            echo -e "${GREEN}Lock released — starting queued bulk generation.${NC}"
+            rm -f "$QUEUE_TICKET"
+            QUEUE_TICKET=""
+            return
         fi
-        # Print status periodically
+        local holder_pid=""
+        local position=""
         if is_lock_held; then
             holder_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
-            position="$(ls -1 "$QUEUE_DIR" 2>/dev/null | sort | grep -n "$(basename "$QUEUE_TICKET")" | cut -d: -f1)"
-            echo -e "${YELLOW}[queue] Waiting... (running pid=$holder_pid, queue position=$position)${NC}"
+        fi
+        position="$(sorted_queue_basenames | grep -n "^$(basename "$QUEUE_TICKET")\$" | cut -d: -f1)"
+        if [ -n "$holder_pid" ]; then
+            echo -e "${YELLOW}[queue] Waiting... (running pid=$holder_pid, queue position=${position:-?})${NC}"
+        else
+            echo -e "${YELLOW}[queue] Waiting... (queue position=${position:-?})${NC}"
         fi
     done
-
-    echo -e "${GREEN}Lock released — starting queued bulk generation.${NC}"
-    echo "$$" > "$LOCK_FILE"
-    # Remove our ticket now that we hold the lock
-    rm -f "$QUEUE_TICKET"
-    QUEUE_TICKET=""
 }
-
-acquire_lock_or_queue
-trap handle_exit EXIT
-trap 'handle_signal INT' INT
-trap 'handle_signal TERM' TERM
 
 # Defaults
 PER_GPU=3
@@ -193,14 +224,7 @@ DIFFICULTY=""
 K_LEVEL=""  # Allowed k-levels (e.g. "2 3"). Empty = random per task.
 K_DISTRIBUTION=""  # Slot distribution (e.g. "1:2,2:3,3:3"). Overrides --k-level.
 REMOVE_STEPS=""  # Skip pipeline components (e.g. "pddl llm-council simulation task-evolution")
-
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+SHOW_QUEUE_STATUS=false
 
 print_usage() {
     echo -e "${BOLD}Bulk EMTOM Task Generation${NC}"
@@ -318,33 +342,8 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --queue-status)
-            echo -e "${BOLD}Bulk Generation Queue Status${NC}"
-            echo "=============================="
-            if [ -f "$LOCK_FILE" ]; then
-                holder_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
-                if [ -n "$holder_pid" ] && kill -0 "$holder_pid" 2>/dev/null; then
-                    echo -e "Running: ${GREEN}pid=$holder_pid${NC}"
-                else
-                    echo -e "Running: ${YELLOW}none (stale lock file)${NC}"
-                fi
-            else
-                echo -e "Running: ${YELLOW}none${NC}"
-            fi
-            queue_count=0
-            if [ -d "$QUEUE_DIR" ]; then
-                for ticket in "$QUEUE_DIR"/*; do
-                    [ -f "$ticket" ] || continue
-                    t_pid="$(cat "$ticket" 2>/dev/null || true)"
-                    if [ -n "$t_pid" ] && kill -0 "$t_pid" 2>/dev/null; then
-                        queue_count=$((queue_count + 1))
-                        echo -e "Queued #${queue_count}: ${CYAN}pid=$t_pid${NC} ($(basename "$ticket"))"
-                    fi
-                done
-            fi
-            if [ "$queue_count" -eq 0 ]; then
-                echo -e "Queue: ${YELLOW}empty${NC}"
-            fi
-            exit 0
+            SHOW_QUEUE_STATUS=true
+            shift
             ;;
         -h|--help)
             print_usage
@@ -358,12 +357,46 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [ "$SHOW_QUEUE_STATUS" = true ]; then
+    purge_stale_tickets
+    echo -e "${BOLD}Bulk Generation Queue Status${NC}"
+    echo "=============================="
+    if is_lock_held; then
+        holder_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+        echo -e "Running: ${GREEN}pid=$holder_pid${NC}"
+    else
+        echo -e "Running: ${YELLOW}none${NC}"
+    fi
+
+    queue_count=0
+    while IFS= read -r ticket_name; do
+        [ -n "$ticket_name" ] || continue
+        ticket_path="$QUEUE_DIR/$ticket_name"
+        t_pid="$(cat "$ticket_path" 2>/dev/null || true)"
+        if [ -n "$t_pid" ] && kill -0 "$t_pid" 2>/dev/null; then
+            queue_count=$((queue_count + 1))
+            echo -e "Queued #${queue_count}: ${CYAN}pid=$t_pid${NC} (${ticket_name})"
+        fi
+    done < <(sorted_queue_basenames)
+    if [ "$queue_count" -eq 0 ]; then
+        echo -e "Queue: ${YELLOW}empty${NC}"
+    fi
+    exit 0
+fi
+
 for extra_arg in "${EXTRA_ARGS[@]}"; do
     if [[ "$extra_arg" == "--num-tasks" || "$extra_arg" == "--tasks" ]]; then
         echo -e "${RED}Error: bulk_generate.sh owns task count. Use top-level --num-tasks instead of forwarding ${extra_arg}.${NC}"
         exit 1
     fi
 done
+
+if [ "$DRY_RUN" != true ]; then
+    acquire_lock_or_queue
+    trap handle_exit EXIT
+    trap 'handle_signal INT' INT
+    trap 'handle_signal TERM' TERM
+fi
 
 # Build per-slot k-level array from --k-distribution
 declare -a SLOT_K_LEVELS=()

@@ -321,7 +321,7 @@ def _build_extra_sections(
                     "## Sampled Task Context",
                     f"`{seed_tasks_dir}` is used to populate `{Path(seed_tasks_dir).name}` examples for inspiration.",
                     f"Target model: {target_model}. Logical sampled-task mix: fail {seed_fail_ratio:.0%}, pass {seed_pass_ratio:.0%}.",
-                    "Start each task from the blank template in working_task.json. Do not copy a seed task directly.",
+                    "Start each task from the scene-grounded template in working_task.json. Do not copy a seed task directly.",
                 ]
             )
         )

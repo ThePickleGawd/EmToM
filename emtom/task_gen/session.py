@@ -14,6 +14,7 @@ from emtom.cli.judge_task import run as judge_task_run
 from emtom.cli.submit_task import run as submit_task_run
 from emtom.cli.validate_task import validate
 from emtom.task_gen.scene_loader import SceneData
+from emtom.task_gen.task_bootstrap import build_scene_bootstrap_problem_pddl
 
 
 def _evaluation_passed(category: str, evaluation: Dict[str, Any]) -> bool:
@@ -376,6 +377,11 @@ class TaskGenSession:
             task["episode_id"] = scene_data.episode_id
             if scene_data.agent_spawns:
                 task["agent_spawns"] = scene_data.agent_spawns
+            task["problem_pddl"] = build_scene_bootstrap_problem_pddl(
+                scene_data,
+                num_agents,
+                problem_name=f"scene_{scene_data.scene_id}",
+            )
         task["num_agents"] = num_agents
         task["task_id"] = "REPLACE_WITH_UNIQUE_ID"
 

@@ -25,6 +25,8 @@ from typing import Optional
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
+from emtom.task_gen.task_bootstrap import build_scene_bootstrap_problem_pddl
+
 
 def get_config_name(num_agents: int) -> str:
     """Get Hydra config name for agent count."""
@@ -88,6 +90,11 @@ def create_working_task(scene_data: dict, num_agents: int) -> dict:
     task["episode_id"] = scene_data["episode_id"]
     task["agent_spawns"] = scene_data.get("agent_spawns", {})
     task["num_agents"] = num_agents
+    task["problem_pddl"] = build_scene_bootstrap_problem_pddl(
+        scene_data,
+        num_agents,
+        problem_name=f"scene_{scene_data['scene_id']}",
+    )
 
     # Generate agent skeletons for the requested agent count
     default_actions = [

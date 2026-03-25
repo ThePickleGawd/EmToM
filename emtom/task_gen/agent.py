@@ -33,6 +33,7 @@ from .spec_validator import (
     validate_blocking_spec,
     validate_room_restriction_trajectory,
 )
+from .task_bootstrap import build_scene_bootstrap_problem_pddl
 from emtom.actions import ActionRegistry
 
 if TYPE_CHECKING:
@@ -871,6 +872,11 @@ Always rewrite `title`, `task`, `agent_secrets`, and `team_secrets` from scratch
             # Include agent spawn positions (calculated once, reused for all runs)
             if self.scene_data.agent_spawns:
                 task["agent_spawns"] = self.scene_data.agent_spawns
+            task["problem_pddl"] = build_scene_bootstrap_problem_pddl(
+                self.scene_data,
+                num_agents,
+                problem_name=f"scene_{self.scene_data.scene_id}",
+            )
 
         task["num_agents"] = num_agents
 
