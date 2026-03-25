@@ -728,6 +728,8 @@ class Judge:
     DEFAULT_MODELS = ["kimi-k2.5", "gpt-5.2"]
     MODEL_REQUEST_TIMEOUT_S = 45
     COUNCIL_WALL_TIMEOUT_S = 180
+    COUNCIL_RETRY_ATTEMPTS = 1
+    COUNCIL_RETRY_TIMEOUT_S = 300  # Longer timeout on retry
 
     def __init__(
         self,
@@ -974,44 +976,60 @@ class Judge:
             print(f"[Judge] Evaluating with {len(self.models)} models in parallel: {', '.join(self.models)}")
 
         judgments: Dict[str, Judgment] = {}
-        executor = ThreadPoolExecutor(max_workers=len(self.models))
-        future_to_model = {
-            executor.submit(self._evaluate_single, task_dict, model, scene_data, rollout): model
-            for model in self.models
-        }
-        try:
-            done, not_done = wait(
-                set(future_to_model.keys()),
-                timeout=self.COUNCIL_WALL_TIMEOUT_S,
-                return_when=ALL_COMPLETED,
-            )
-            for future in done:
-                model = future_to_model[future]
-                try:
-                    judgments[model] = future.result()
-                    if self.verbose:
-                        print(f"[Judge] {model} completed")
-                except Exception as e:
-                    print(f"[Judge] {model} failed: {e}")
+        models_to_evaluate = list(self.models)
+
+        for attempt in range(1 + self.COUNCIL_RETRY_ATTEMPTS):
+            timeout = self.COUNCIL_WALL_TIMEOUT_S if attempt == 0 else self.COUNCIL_RETRY_TIMEOUT_S
+            executor = ThreadPoolExecutor(max_workers=len(models_to_evaluate))
+            future_to_model = {
+                executor.submit(self._evaluate_single, task_dict, model, scene_data, rollout): model
+                for model in models_to_evaluate
+            }
+            try:
+                done, not_done = wait(
+                    set(future_to_model.keys()),
+                    timeout=timeout,
+                    return_when=ALL_COMPLETED,
+                )
+                for future in done:
+                    model = future_to_model[future]
+                    try:
+                        judgments[model] = future.result()
+                        if self.verbose:
+                            print(f"[Judge] {model} completed")
+                    except Exception as e:
+                        print(f"[Judge] {model} failed: {e}")
+                        judgments[model] = self._failed_judgment(
+                            f"[{model}] Error: {e}",
+                            category=task_dict.get("category", "cooperative"),
+                        )
+
+                timed_out_models = []
+                for future in not_done:
+                    model = future_to_model[future]
+                    reason = (
+                        f"[{model}] Timed out after {timeout}s "
+                        "waiting for judge model response"
+                    )
+                    print(f"[Judge] {reason}")
                     judgments[model] = self._failed_judgment(
-                        f"[{model}] Error: {e}",
+                        reason,
                         category=task_dict.get("category", "cooperative"),
                     )
+                    timed_out_models.append(model)
+                    future.cancel()
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
 
-            for future in not_done:
-                model = future_to_model[future]
-                reason = (
-                    f"[{model}] Timed out after {self.COUNCIL_WALL_TIMEOUT_S}s "
-                    "waiting for judge model response"
-                )
-                print(f"[Judge] {reason}")
-                judgments[model] = self._failed_judgment(
-                    reason,
-                    category=task_dict.get("category", "cooperative"),
-                )
-                future.cancel()
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            # Retry timed-out models (infrastructure failures only)
+            retry_models = [
+                m for m in timed_out_models
+                if m in judgments and self._is_infra_failure(judgments[m])
+            ]
+            if not retry_models or attempt >= self.COUNCIL_RETRY_ATTEMPTS:
+                break
+            print(f"[Judge] Retrying {len(retry_models)} timed-out model(s): {', '.join(retry_models)}")
+            models_to_evaluate = retry_models
 
         # Check novelty if diversity tracker is available
         if self.diversity_tracker:
@@ -1258,10 +1276,7 @@ The user specifically requested:
             if self._is_infra_failure(j)
         }
         if infra_failures:
-            if os.getenv("TASKGEN_ALLOW_INCOMPLETE_COUNCIL", "").strip().lower() in {"1", "true", "yes"}:
-                for m in list(infra_failures.keys()):
-                    judgments.pop(m, None)
-            else:
+            if os.getenv("TASKGEN_REQUIRE_FULL_COUNCIL", "").strip().lower() in {"1", "true", "yes"}:
                 # NOTE: Avoid backslashes inside f-string expressions (SyntaxError on Python 3.9).
                 failed_models = ", ".join(infra_failures.keys())
                 raise RuntimeError(
@@ -1270,6 +1285,14 @@ The user specifically requested:
                     "All council models are required for consistent task quality. "
                     "Check API keys, billing, and network connectivity."
                 )
+            else:
+                failed_models = ", ".join(infra_failures.keys())
+                print(
+                    f"[Judge] WARNING: {failed_models} failed (infrastructure). "
+                    "Continuing with remaining models. Set TASKGEN_REQUIRE_FULL_COUNCIL=true to enforce all models."
+                )
+                for m in list(infra_failures.keys()):
+                    judgments.pop(m, None)
 
         if not judgments:
             raise RuntimeError("Judge council incomplete: all models failed due to infrastructure errors.")

@@ -62,6 +62,24 @@ def compute_strict_tom_metadata(
                 "tom_reasoning": "Structural-only fallback: using authored epistemic nesting depth.",
             }
     if solver_result is None:
+        # Competitive OR-goals are structurally incompatible with the epistemic
+        # solver (it assumes a single cooperative objective). Fall back to the
+        # syntactic epistemic nesting depth so competitive tasks can still carry
+        # K-level metadata.
+        category = task_data.get("category", "")
+        depth = proof.get("epistemic_goal_depth")
+        if category == "competitive" and isinstance(depth, int) and depth > 0:
+            return {
+                "tom_level": depth,
+                "epistemic_goal_depth": depth,
+                "proved_unsat_below": proof.get("proved_unsat_below", []),
+                "proof_backend": "competitive_syntactic_fallback",
+                "proof_strict": False,
+                "tom_reasoning": (
+                    "Competitive OR-goal structure is incompatible with epistemic "
+                    "solver; using authored epistemic nesting depth."
+                ),
+            }
         last_error = (
             proof["proof_attempts"][-1]["error"]
             if proof.get("proof_attempts")

@@ -467,7 +467,10 @@ def main() -> None:
     sampled_tasks_dir.mkdir(parents=True, exist_ok=True)
     (working_dir / "agent_trajectories").mkdir(parents=True, exist_ok=True)
     (working_dir / "submitted_tasks").mkdir(parents=True, exist_ok=True)
-    current_k_level = random.choice(k_levels) if k_levels else random.choice([1, 2, 3])
+    if k_levels:
+        current_k_level = random.choice(k_levels)
+    else:
+        current_k_level = random.choice([1, 2, 3])
 
     if not test_model:
         test_model = target_model

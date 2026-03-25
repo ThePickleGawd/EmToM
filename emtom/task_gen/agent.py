@@ -2397,6 +2397,15 @@ Use new_scene[] if you want a different scene, or start creating your next task.
                         task_data["num_agents"] = num_agents
                         if self.scene_data.agent_spawns:
                             task_data["agent_spawns"] = self.scene_data.agent_spawns
+                        # Clear derived fields that reference the old scene
+                        for field in (
+                            "golden_trajectory",
+                            "functional_goal_pddl",
+                            "literal_tom_probes",
+                            "calibration",
+                            "benchmark_results",
+                        ):
+                            task_data.pop(field, None)
                         with open(task_file, "w") as f:
                             json.dump(task_data, f, indent=2)
                     except (json.JSONDecodeError, KeyError):

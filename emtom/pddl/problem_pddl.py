@@ -115,13 +115,11 @@ def replace_goal_in_problem_pddl(problem_pddl: str, new_goal_pddl: str) -> str:
     if not raw:
         raise ValueError("problem_pddl is empty")
 
-    lower = raw.lower()
-    needle = "(:goal"
-    idx = lower.find(needle)
+    idx = _find_goal_idx(raw)
     if idx < 0:
         raise ValueError("problem_pddl is missing (:goal ...)")
 
-    pos = idx + len(needle)
+    pos = idx + len("(:goal")
     while pos < len(raw) and raw[pos].isspace():
         pos += 1
     if pos >= len(raw) or raw[pos] != "(":
@@ -348,14 +346,23 @@ def _extract_section(text: str, section: str) -> str:
     return text[start:end].strip()
 
 
+def _find_goal_idx(text: str) -> int:
+    """Find the index of ``(:goal`` that is NOT ``(:goal-owners``.
+
+    PDDL section keywords are always followed by whitespace or ``(``,
+    so we match ``(:goal`` only when the next char is whitespace or ``(``.
+    This avoids the prefix collision with ``(:goal-owners``.
+    """
+    m = re.search(r"\(:goal(?=[\s(])", text, re.IGNORECASE)
+    return m.start() if m else -1
+
+
 def _extract_goal(text: str) -> str:
-    lower = text.lower()
-    needle = "(:goal"
-    idx = lower.find(needle)
+    idx = _find_goal_idx(text)
     if idx < 0:
         raise ValueError("problem_pddl is missing (:goal ...)")
 
-    pos = idx + len(needle)
+    pos = idx + len("(:goal")
     while pos < len(text) and text[pos].isspace():
         pos += 1
     if pos >= len(text) or text[pos] != "(":
