@@ -511,16 +511,60 @@ class TestJudgeTask:
         )
 
         with patch(
-            "emtom.pddl.fd_solver.FastDownwardSolver.solve",
-            return_value=SolverResult(solvable=True, belief_depth=0, solve_time=0.0, plan=[]),
+            "emtom.pddl.tom_verifier.prove_minimal_tom_level",
+            return_value={
+                "tom_level": 1,
+                "epistemic_goal_depth": 1,
+                "proved_unsat_below": [0],
+                "proof_backend": "fast_downward_strict",
+                "proof_strict": True,
+                "solver_result": SolverResult(
+                    solvable=True,
+                    belief_depth=1,
+                    solve_time=0.0,
+                    plan=[],
+                ),
+            },
         ), patch(
-            "emtom.pddl.tom_verifier.generate_tom_reasoning",
-            return_value="first-order knowledge required",
+            "emtom.pddl.tom_verifier.explain_tom_depth",
+            return_value={
+                "tom_level": 1,
+                "tom_reasoning": "first-order knowledge required",
+            },
         ):
             metadata = compute_strict_tom_metadata(task, scene_data=None)
 
         assert metadata["tom_level"] == 1
         assert metadata["epistemic_goal_depth"] == 1
+
+    def test_strict_tom_metadata_rejects_structural_fallback(self):
+        from emtom.cli.task_metadata import compute_strict_tom_metadata
+
+        task = _make_minimal_task(
+            problem_pddl=(
+                "(define (problem test_k1) "
+                "(:domain emtom) "
+                "(:objects agent_0 agent_1 - agent kitchen_1 - room cabinet_27 - furniture) "
+                "(:init (agent_in_room agent_0 kitchen_1) "
+                "(agent_in_room agent_1 kitchen_1) "
+                "(is_in_room cabinet_27 kitchen_1)) "
+                "(:goal (K agent_0 (is_open cabinet_27))))"
+            ),
+        )
+
+        with patch(
+            "emtom.pddl.tom_verifier.prove_minimal_tom_level",
+            return_value={
+                "tom_level": 1,
+                "epistemic_goal_depth": 1,
+                "proved_unsat_below": [],
+                "proof_backend": "pdkb_structural",
+                "proof_strict": False,
+                "solver_result": None,
+            },
+        ):
+            with pytest.raises(ValueError, match="Fast Downward strict backend"):
+                compute_strict_tom_metadata(task, scene_data=None)
 
 
 # ---------------------------------------------------------------------------

@@ -48,6 +48,7 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 ## Task Generation Gates
 
 - `verify_golden_trajectory` remains the canonical deterministic solvability gate. It proves the authored task spec is functionally solvable under the planner/runtime semantics.
+- Judge-time ToM evidence must come from the strict Fast Downward proof path. Structural or syntactic fallback metadata is not valid submission evidence.
 - `test_task` now runs both `standard` and `baseline` in parallel.
 - Dataset difficulty calibration uses the `standard` result only, with a target pass rate of 20% by default for the current target model.
 - `baseline` does not replace the planner/golden-trajectory check; it is an additional empirical check that the task becomes solvable when private information is removed.

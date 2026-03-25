@@ -164,6 +164,17 @@ Concrete K=3 pattern that IS supported:
 
 Do NOT fail a run because `:init` is deterministic. You do NOT need disjunction, equality, or epistemic facts inside `:init` to build a valid ToM-3 task.
 
+## Easiest Passing Strict-K Recipe
+When in doubt, use the simplest pattern that still creates a real non-trivial K-goal:
+- Keep the physical core SMALL: usually 1-2 physical conjuncts, not 4-6.
+- Use exactly one non-trivial K-chain unless the task truly needs more.
+- Reuse the same grounded fact for both the physical goal and the K() probe when possible, e.g. `(is_open cabinet_28)` plus `(K agent_0 (K agent_1 (is_open cabinet_28)))`.
+- Make the outer knower unable to directly observe the final fact. Enforce that with `room_restriction` and/or `restricted_communication`, not with prose in secrets.
+- Keep mechanic count minimal: start with `room_restriction` + `restricted_communication`. Add `limited_bandwidth` only if the relay still has enough messages.
+- Never rely on secrets alone to create access asymmetry. If a secret says an agent cannot enter a room or cannot message someone, there MUST be a matching mechanic binding.
+- Prefer target facts about final world state (`is_open`, `is_closed`, `is_on_top`) over decorative K() facts about support predicates or mechanics.
+- Do not make the K() agent the same agent who performs the final confirming action unless another mechanic prevents direct observation; otherwise the K() goal becomes trivial.
+
 ## CRITICAL: Physical Goals Must Require Communication
 **The #1 failure mode in task generation is creating physical goals that agents can solve in parallel without talking.** If every agent already knows which object to move and where to put it, communication is unnecessary and the task is trivially easy — regardless of K-level, bandwidth limits, or mechanics.
 
@@ -176,6 +187,7 @@ Do NOT fail a run because `:init` is deterministic. You do NOT need disjunction,
 
 **Self-test before submitting**: Remove all Communicate actions from the golden trajectory. Can agents still achieve 100% of physical goals just by executing their independent actions? If yes, the task does NOT test functional ToM — redesign it.
 Private target assignments alone are NOT enough. If one unrestricted agent could still do every physical goal, the regenerated golden trajectory will collapse to one active agent and judge will reject the task.
+**Second self-test for strict K()**: Can the agent in the OUTERMOST `K()` directly walk to the relevant room and see the fact? If yes, the K() goal is trivial and strict ToM verification will reject it.
 
 ## Functional ToM Patterns
 Use at least one of these as the core difficulty driver. Do not reduce them to simple fact relay.
@@ -559,6 +571,15 @@ def _strip_section(text: str, heading: str) -> str:
     return pattern.sub("", text)
 
 
+def _strip_subsection(text: str, heading: str) -> str:
+    """Remove a markdown subsection (### heading) and everything until the next ###/## heading."""
+    pattern = re.compile(
+        r"(^|\n)###\s+" + re.escape(heading) + r".*?(?=\n###\s|\n##\s|\Z)",
+        re.DOTALL,
+    )
+    return pattern.sub("", text)
+
+
 def _strip_pddl_from_guidance(guidance: str) -> str:
     """Remove PDDL-specific sections and references from guidance when --remove pddl."""
     # Remove entire PDDL-focused sections (## level)
@@ -696,6 +717,44 @@ def _strip_simulation_from_guidance(guidance: str) -> str:
     return guidance
 
 
+def _compress_external_guidance(guidance: str) -> str:
+    """Trim bulky examples/catalogs from the external prompt while preserving core instructions."""
+    for heading in [
+        "Functional ToM Patterns",
+        "Mechanic Usage Guidelines",
+        "Common Pitfalls — Learn from These",
+    ]:
+        guidance = _strip_section(guidance, heading)
+
+    guidance = _strip_subsection(guidance, "Secret Examples — BAD vs GOOD")
+    for heading in [
+        "Example: K=0 (no epistemic reasoning)",
+        "Example: K=1 (first-order functional ToM)",
+        "Example: K=2 (second-order functional ToM)",
+        "Example: K=3 (third-order functional ToM)",
+    ]:
+        guidance = _strip_subsection(guidance, heading)
+
+    guidance = guidance.replace(
+        "## Available PDDL Predicates\n{available_predicates}",
+        "## Available PDDL Predicates\nSee `available_predicates.md` in the workspace.",
+    )
+    guidance = guidance.replace(
+        "## Available Items\n{available_items}",
+        "## Available Items\nSee `available_items.md` in the workspace.",
+    )
+    guidance = guidance.replace(
+        "## Available Mechanics\n{available_mechanics}",
+        "## Available Mechanics\nSee `available_mechanics.md` in the workspace.",
+    )
+    guidance = guidance.replace(
+        "## Available Actions\n{action_descriptions}",
+        "## Available Actions\nSee `available_actions.md` in the workspace.",
+    )
+    guidance = re.sub(r"\n{3,}", "\n\n", guidance)
+    return guidance
+
+
 def build_external_taskgen_prompt(
     *,
     working_dir: str,
@@ -721,6 +780,7 @@ def build_external_taskgen_prompt(
     category_index = SYSTEM_PROMPT.find("## Category:")
     guidance = SYSTEM_PROMPT[category_index:] if category_index >= 0 else SYSTEM_PROMPT
     guidance = _rewrite_react_tool_syntax(guidance)
+    guidance = _compress_external_guidance(guidance)
 
     # Strip sections/references for removed pipeline components
     if _skip_pddl:

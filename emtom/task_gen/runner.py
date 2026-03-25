@@ -272,13 +272,15 @@ def _build_extra_sections(
                 "## Difficulty: MEDIUM\n"
                 "- Use 3-4 agents with distinct roles.\n"
                 "- Favor restricted communication and room restrictions.\n"
-                "- Keep 3-5 subtasks and at least one K() epistemic goal.\n"
+                "- Keep the physical core small: 2-4 subtasks and usually one non-trivial K() chain.\n"
+                "- Prefer one grounded final-state fact reused by both the physical goal and the K() goal.\n"
             ),
             "hard": (
                 "## Difficulty: HARD\n"
                 "- Prefer tasks that GPT-5.2 fails.\n"
                 "- Force relay chains, genuine delegation choices, and room-gated roles.\n"
                 "- Keep mechanics purposeful and avoid prescriptive secrets.\n"
+                "- Keep the physical core compact; strict K() evidence is easier to pass with one strong non-trivial K-chain than many weak ones.\n"
             ),
         }
         sections.append(difficulty_guidance[difficulty])
@@ -361,8 +363,16 @@ def _write_bootstrap_files(
     *,
     working_dir: Path,
     prompt_text: str,
+    available_items: str,
+    available_mechanics: str,
+    available_predicates: str,
+    action_descriptions: str,
 ) -> None:
     (working_dir / "taskgen_prompt.md").write_text(prompt_text)
+    (working_dir / "available_items.md").write_text(available_items)
+    (working_dir / "available_mechanics.md").write_text(available_mechanics)
+    (working_dir / "available_predicates.md").write_text(available_predicates)
+    (working_dir / "available_actions.md").write_text(action_descriptions)
     bootstrap_text = (
         "Read `taskgen_prompt.md` in the current directory and follow it exactly. "
         "Use the `taskgen` command surface documented there. "
@@ -523,14 +533,19 @@ def main() -> None:
         seed_fail_ratio=seed_fail_ratio,
     )
 
+    available_items = ItemRegistry.get_items_for_task_generation()
+    available_mechanics = get_mechanics_for_task_generation()
+    available_predicates = get_predicates_for_prompt()
+    action_descriptions = ActionRegistry.get_all_action_descriptions()
+
     prompt_text = build_external_taskgen_prompt(
         working_dir=str(working_dir),
         task_file=str(working_dir / "working_task.json"),
         category=category or "random",
-        available_items=ItemRegistry.get_items_for_task_generation(),
-        available_mechanics=get_mechanics_for_task_generation(),
-        available_predicates=get_predicates_for_prompt(),
-        action_descriptions=ActionRegistry.get_all_action_descriptions(),
+        available_items=available_items,
+        available_mechanics=available_mechanics,
+        available_predicates=available_predicates,
+        action_descriptions=action_descriptions,
         extra_sections=extra_sections,
         num_tasks=num_tasks,
         agents_min=agents_min,
@@ -539,7 +554,14 @@ def main() -> None:
         subtasks_max=subtasks_max,
         skip_steps=skip_steps,
     )
-    _write_bootstrap_files(working_dir=working_dir, prompt_text=prompt_text)
+    _write_bootstrap_files(
+        working_dir=working_dir,
+        prompt_text=prompt_text,
+        available_items=available_items,
+        available_mechanics=available_mechanics,
+        available_predicates=available_predicates,
+        action_descriptions=action_descriptions,
+    )
 
     state = default_state(
         working_dir=str(working_dir),

@@ -17,75 +17,24 @@ def compute_strict_tom_metadata(
     from emtom.task_gen.task_generator import GeneratedTask
 
     generated = GeneratedTask.from_dict(task_data)
-    proof = prove_minimal_tom_level(generated, scene_data=scene_data, strict=False)
-    # If taskgen runs with a lightweight synthetic scene (or otherwise without
-    # observability grounding), the verifier cannot reliably prove minimal ToM
-    # levels above 1 even when the authored goals contain deeper nesting.
-    #
-    # NOTE: scene_data may be either a plain dict (common in JSON workflows) or
-    # a SceneData dataclass instance (taskgen internal loader). Avoid dict-only
-    # APIs like `.get()`.
-    def _rooms_empty(sd: Any) -> bool:
-        if sd is None:
-            return True
-        if isinstance(sd, dict):
-            return not bool(sd.get("rooms"))
-        rooms = getattr(sd, "rooms", None)
-        return not bool(rooms)
-
-    if _rooms_empty(scene_data):
-        depth = proof.get("epistemic_goal_depth")
-        if isinstance(depth, int) and depth > 0:
-            return {
-                "tom_level": depth,
-                "epistemic_goal_depth": depth,
-                "proved_unsat_below": proof.get("proved_unsat_below", []),
-                "proof_backend": "synthetic_scene_fallback",
-                "proof_strict": proof.get("proof_strict", False),
-                "tom_reasoning": (
-                    "No scene observability data available (synthetic/minimal scene); "
-                    "falling back to authored epistemic nesting depth."
-                ),
-            }
+    proof = prove_minimal_tom_level(generated, scene_data=scene_data, strict=True)
+    backend = proof.get("proof_backend")
+    if backend != "fast_downward_strict":
+        raise ValueError(
+            "Strict ToM verification requires the Fast Downward strict backend; "
+            f"got {backend!r}."
+        )
     solver_result = proof.get("solver_result")
-    # In structural-only environments, the solver cannot establish minimal ToM level.
-    # Fall back to the authored epistemic goal nesting depth as tom_level.
-    if proof.get("proof_backend") == "pdkb_structural":
-        depth = proof.get("epistemic_goal_depth")
-        if isinstance(depth, int) and depth > 0:
-            return {
-                "tom_level": depth,
-                "epistemic_goal_depth": depth,
-                "proved_unsat_below": proof.get("proved_unsat_below", []),
-                "proof_backend": proof.get("proof_backend"),
-                "proof_strict": proof.get("proof_strict", False),
-                "tom_reasoning": "Structural-only fallback: using authored epistemic nesting depth.",
-            }
     if solver_result is None:
-        # Competitive OR-goals are structurally incompatible with the epistemic
-        # solver (it assumes a single cooperative objective). Fall back to the
-        # syntactic epistemic nesting depth so competitive tasks can still carry
-        # K-level metadata.
-        category = task_data.get("category", "")
-        depth = proof.get("epistemic_goal_depth")
-        if category == "competitive" and isinstance(depth, int) and depth > 0:
-            return {
-                "tom_level": depth,
-                "epistemic_goal_depth": depth,
-                "proved_unsat_below": proof.get("proved_unsat_below", []),
-                "proof_backend": "competitive_syntactic_fallback",
-                "proof_strict": False,
-                "tom_reasoning": (
-                    "Competitive OR-goal structure is incompatible with epistemic "
-                    "solver; using authored epistemic nesting depth."
-                ),
-            }
         last_error = (
             proof["proof_attempts"][-1]["error"]
             if proof.get("proof_attempts")
             else "unknown reason"
         )
-        raise ValueError(f"PDDL goal is not solvable: {last_error}")
+        raise ValueError(
+            "Strict Fast Downward ToM proof failed. "
+            f"{last_error}"
+        )
 
     tom_info = explain_tom_depth(
         generated,
