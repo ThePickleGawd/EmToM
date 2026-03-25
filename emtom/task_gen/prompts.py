@@ -55,7 +55,7 @@ Assigned!
 ## Workflow
 1. `new_scene[N]` → load scene with N agents
 2. **Before first edit**, inspect examples in `{working_dir}/sampled_tasks/` (selector-curated seed tasks from the task pool)
-3. Edit `{task_file}` — write `problem_pddl` FIRST (inline full problem file), lock the formal task structure, then make `task`, `agent_secrets`, `team_secrets`, and mechanics match that spec
+3. Edit `{task_file}` — author the `problem_pddl :goal` (and optional `:goal-owners`) FIRST, then make `task`, `agent_secrets`, `team_secrets`, and mechanics match that formal goal. Do NOT hand-author `:objects` or `:init`; they are regenerated from the loaded scene and mechanics.
 4. `judge[]` → runs strict PDDL verification, regenerates the golden trajectory, simulator-verifies it when needed, then runs LLM quality evaluation → fix → repeat until pass
 5. `test_task[]` → runs `standard` + `baseline`, records both, and calibrates difficulty from `standard`
 6. `submit_task[]`
@@ -109,7 +109,7 @@ Assigned!
 - Every agent essential; **no assigned roles**
 - Agent-necessity target: each agent should contribute a DISTINCT required capability, access path, observation, inventory dependency, or private incentive. Do not aim for a brittle proof that success is mathematically impossible without them; aim for a design where removing one agent would materially collapse the intended plan.
 - `task` is GLOBAL and should stay high-level; it may describe the shared objective vaguely without exact IDs
-- Author `problem_pddl` FIRST. Treat it as the source of truth, then write the story/natural-language fields to match it exactly. Do not invent narrative requirements that are not in the formal spec.
+- Author the `problem_pddl :goal` FIRST. Treat the formal goal as the source of truth, then write the story/natural-language fields to match it exactly. Do not invent narrative requirements that are not in the formal spec.
 - Secrets state WHAT (constraints, roles, goals with exact IDs) but NEVER HOW (coordination strategy, relay chains, who to tell what)
 - Secrets MUST include hints about active mechanics that affect an agent's area. If a cabinet has `inverse_state`, at least one agent's secret must mention "the handle is reversed — opening closes it and closing opens it." If `remote_control` links two objects, a secret should hint "operating the cabinet in the office seems to affect something in the kitchen." Without these hints, agents cannot discover mechanics through trial-and-error.
 - Secrets create asymmetry; agents must figure out HOW to communicate to combine clues — that IS the ToM challenge
@@ -293,11 +293,11 @@ If the scene fails any check, immediately call `new_scene[N]` — do NOT waste i
 ## PDDL-Scene Consistency Rules
 The most common source of judge failures is mismatches between `problem_pddl` and scene data. Before running `judge[]`:
 
-1. **`:objects` section must list only scene IDs**: Every agent, object, furniture, and room in `:objects` must exist in the current scene data. Never invent IDs.
-2. **`:init` must reflect actual scene state**: If an object is on table_29 in the scene, write `(is_on_top object table_29)` in `:init`. Do NOT invent initial locations.
+1. **Do not hand-edit `:objects` or `:init`**: Taskgen regenerates them from `current_scene.json`, task items, and mechanic bindings.
+2. **Only use real scene IDs in goals/secrets/mechanics**: Any object, furniture, room, or agent you reference in the goal must exist in the loaded scene or in `items`.
 3. **Do not duplicate room restrictions in `problem_pddl`**: Author room restrictions only in `mechanic_bindings`. The planner derives `(is_restricted agent_X room_Y)` automatically at compile time.
 4. **Furniture-room consistency**: If a goal requires placing an object on furniture_X in room_Y, verify that furniture_X is actually in room_Y by checking the scene data room listings.
-5. **Secrets must match `:init`**: If a secret says "the cup is in the bedroom drawer," the `:init` must have `(is_on_top cup_X drawer_Y)` or `(is_inside cup_X drawer_Y)` where drawer_Y is in a bedroom. Mismatches cause judge "narrative_consistency" failures.
+5. **Secrets must match real scene state**: If a secret says "the cup is in the bedroom drawer," that must match the loaded scene or a task item placement. Mismatches cause judge "narrative_consistency" failures.
 
 ## Common Pitfalls — Learn from These
 These are the most frequent failure patterns. Avoid them:
@@ -338,7 +338,7 @@ These are the most frequent failure patterns. Avoid them:
   "message_targets": {{"agent_0": ["agent_1"], "agent_1": ["agent_0"]}},
   "mechanic_bindings": [{{"mechanic_type": "limited_bandwidth", "message_limits": {{"agent_0": 3, "agent_1": 3}}}}],
   "pddl_domain": "emtom",
-  "problem_pddl": "(define (problem task_x)\\n  (:domain emtom)\\n  (:objects\\n    agent_0 agent_1 - agent\\n    kitchen_1 - room\\n    bottle_4 - object\\n    cabinet_27 table_13 - furniture\\n  )\\n  (:init\\n    (agent_in_room agent_0 kitchen_1)\\n    (agent_in_room agent_1 kitchen_1)\\n    (is_in_room bottle_4 kitchen_1)\\n    (is_in_room cabinet_27 kitchen_1)\\n    (is_in_room table_13 kitchen_1)\\n  )\\n  (:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))\\n)",
+  "problem_pddl": "(define (problem task_x)\\n  (:domain emtom)\\n  (:objects ... auto-generated from scene ...)\\n  (:init ... auto-generated from scene/mechanics ...)\\n  (:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))\\n)",
   "items": [{{"item_id": "item_X", "inside": "container"}}],
   "locked_containers": {{"container": "item_key"}}
 }}
@@ -354,12 +354,11 @@ Do not use shorthand fields like `agent_id`, `allowed_rooms`, or `max_messages`.
 {available_predicates}
 
 ## PDDL Goal Format
-Use `problem_pddl` as the single goal source. It must contain a full PDDL problem:
-- Required sections: `(:domain ...)`, `(:objects ...)`, `(:init ...)`, `(:goal ...)`
-- `problem_pddl` must be **self-contained for scene/world facts**. Do not rely on scene augmentation during verification. Mechanic-derived init facts such as room restrictions come from `mechanic_bindings`, not handwritten `(is_restricted ...)`.
-- Every goal/mechanic-relevant object or furniture must have explicit room grounding in `:init` via `is_in_room`.
-- Every declared agent must have an explicit `agent_in_room` fact in `:init`.
-- Communication constraints must be encoded in `:init` with `can_communicate`.
+Use `problem_pddl` as the single goal source. It remains a full PDDL problem on disk, but taskgen should treat only the goal sections as authored:
+- Keep `(:domain ...)`, `(:goal ...)`, and optional `(:goal-owners ...)` correct.
+- `:objects` and `:init` are regenerated from the loaded scene, task items, and mechanic bindings during validation/judge/submit.
+- Do NOT hand-author scene grounding or communication wiring in `:init`.
+- Do NOT hand-author mechanic-derived facts such as `(is_restricted ...)` or `(can_communicate ...)`.
 - Do not emit compatibility-only predicates like `is_openable`; use only predicates from the list above.
 - Single goal example: `(:goal (is_open cabinet_27))`
 - Conjunction: `(:goal (and (is_open cabinet_27) (is_on_top bottle_4 table_13)))`
@@ -810,7 +809,7 @@ def build_external_taskgen_prompt(
         )
     else:
         workflow.append(
-            f"{step_num}. Edit `{task_file}`. Author `problem_pddl` first, then make the natural-language fields and mechanics match it."
+            f"{step_num}. Edit `{task_file}`. Author the `problem_pddl` goal first, then make the natural-language fields and mechanics match it. Do not hand-edit `:objects` or `:init`."
         )
     step_num += 1
 

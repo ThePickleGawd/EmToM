@@ -28,6 +28,7 @@ from typing import Any, Dict, Optional
 
 from emtom.cli import CLIResult, failure, success
 from emtom.cli.task_metadata import compute_strict_tom_metadata
+from emtom.task_gen.task_bootstrap import canonicalize_task_problem_pddl
 
 
 def _load_scene_data(working_dir: Optional[str], scene_file: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -138,6 +139,7 @@ def run(
     except json.JSONDecodeError as e:
         return failure(f"Invalid JSON: {e}")
     scene_data = _load_scene_data(working_dir=working_dir, scene_file=scene_file)
+    canonicalize_task_problem_pddl(task_data, scene_data)
 
     # Validate task structure
     from emtom.cli.validate_task import run as validate_run

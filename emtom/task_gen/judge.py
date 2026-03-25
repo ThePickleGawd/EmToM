@@ -98,17 +98,18 @@ def _detect_provider_for_model(model: str) -> str:
                 pass
         return "bedrock_claude"
 
-    # NOTE: The default judge council includes "kimi-k2.5".
-    # In many taskgen environments we do not have Fireworks credentials,
-    # and treating Kimi as an OpenAI-chat model can trigger hard
-    # infrastructure failures (e.g., missing FIREWORKS_API_KEY).
-    # Map Kimi models to Fireworks when possible; otherwise fall back.
     if normalized.startswith("kimi"):
-        if os.getenv("FIREWORKS_API_KEY", "").strip():
-            return "fireworks"
         return "openai_chat"
 
     return "openai_chat"
+
+
+def _resolve_client_model_name(model: str) -> str:
+    """Expand lightweight aliases into provider-native model names."""
+    normalized = (model or "").strip().lower()
+    if normalized == "kimi-k2.5" and os.getenv("FIREWORKS_API_KEY", "").strip():
+        return "accounts/fireworks/models/kimi-k2p5"
+    return model
 
 
 @dataclass
@@ -450,6 +451,7 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
   - `K()` goals are design-time / probe-time only and become end-of-episode literal-ToM probes
 - Category intent must be reflected in `problem_pddl` objective structure
 - Raw `problem_pddl` should be self-contained for scene/world facts: required symbols belong in `:objects`, relevant room grounding belongs in `:init`, while mechanic-derived init facts like room restrictions should come from `mechanic_bindings`
+- For solvability and mechanic-awareness, treat the Compiled Formal View below as authoritative. Do NOT penalize raw `problem_pddl` for omitting mechanic-derived init facts such as `is_restricted` or `can_communicate`; those are expected to be compiled from `mechanic_bindings`.
 - **Mechanic consistency**: Every mechanic referenced in `task` or `agent_secrets` (e.g., "the handle is reversed", "you have limited messages") MUST have a corresponding entry in `mechanic_bindings`. If secrets describe constraints that aren't in bindings, the simulator won't enforce them.
 - **K() goal backing**: Every `K()` goal in `problem_pddl` (or legacy goal field) must be backed by a mechanic that prevents the agent from directly observing the fact (e.g., `room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). If the agent could just walk there and see, the K() goal is fake.
 - **Functional projection quality**: Penalize tasks whose non-epistemic projection becomes vacuous, trivial, effectively single-agent, or no longer reflects the intended coordination challenge.
@@ -462,6 +464,13 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 ## Derived Runtime View
 Use this derived runtime view when judging split-semantics quality.
 {runtime_semantics_section}
+
+## Compiled Formal View
+Use this normalized formal problem when checking mechanic-aware solvability claims.
+It reflects the authored `problem_pddl` after mechanic-derived and planner-required
+init facts are compiled in. This is the authoritative formal view for
+`pddl_solvability`; raw `problem_pddl` may omit mechanic-derived init facts.
+{compiled_formal_view_section}
 
 ## Benchmark Comparison
 Use this when calibration data exists.
@@ -611,6 +620,38 @@ def _build_runtime_semantics_section(task_dict: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _build_compiled_formal_view_section(
+    task_dict: Dict[str, Any],
+    scene_data: Optional["SceneData"],
+) -> str:
+    """Build the normalized formal problem view used by the verifier."""
+    try:
+        from emtom.pddl.compiler import compile_task
+        from emtom.task_gen.task_generator import GeneratedTask
+
+        task = GeneratedTask.from_dict(task_dict)
+        scene_payload: Optional[Dict[str, Any]]
+        if scene_data is None:
+            scene_payload = None
+        elif hasattr(scene_data, "to_dict"):
+            scene_payload = scene_data.to_dict()  # type: ignore[assignment]
+        elif isinstance(scene_data, dict):
+            scene_payload = scene_data
+        else:
+            scene_payload = None
+
+        compiled = compile_task(task, scene_payload)
+        lines = [
+            "Compiled problem used for mechanic-aware solvability checks:",
+            "```lisp",
+            compiled.to_pddl(),
+            "```",
+        ]
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"Compiled formal view unavailable: {exc}"
+
+
 def _build_benchmark_comparison_section(task_dict: Dict[str, Any]) -> str:
     """Summarize the latest standard vs baseline calibration pair when present."""
     from emtom.evolve.benchmark_wrapper import _migrate_legacy_calibration
@@ -743,6 +784,7 @@ class Judge:
                 return self._llm_clients[model]
 
             provider = _detect_provider_for_model(model)
+            client_model = _resolve_client_model_name(model)
             # Allow disabling LLM council in lightweight taskgen environments.
             if os.environ.get("TASKGEN_SKIP_LLM", "").lower() in {"1","true","yes"}:
                 class _DummyLLM:
@@ -757,7 +799,7 @@ class Judge:
             self._llm_clients[model] = instantiate_llm(
                 provider,
                 generation_params={
-                    "model": model,
+                    "model": client_model,
                     "temperature": 0.0,
                     "max_tokens": 3000,
                 }
@@ -1053,6 +1095,7 @@ The user specifically requested:
             difficulty_section=difficulty_section,
             user_requirements_section=user_requirements_section,
             runtime_semantics_section=_build_runtime_semantics_section(task_dict),
+            compiled_formal_view_section=_build_compiled_formal_view_section(task_dict, scene_data),
             benchmark_comparison_section=_build_benchmark_comparison_section(task_dict),
             criteria_section=_build_criteria_section(category, self.user_query),
             response_format=_build_response_format(category, self.user_query),

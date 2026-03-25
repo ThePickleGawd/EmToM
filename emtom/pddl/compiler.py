@@ -111,8 +111,8 @@ def compile_task(
         _ensure_locked_containers(task, problem)
         _ensure_room_restrictions(task, problem)
         _ensure_mechanic_init_facts(task, problem)
-        # Add default init facts (e.g., furniture starts closed)
-        _add_default_init_facts(problem)
+        # Add default init facts for articulated furniture only.
+        _add_default_init_facts(problem, scene_data)
 
         # Auto-populate grounding facts from scene data where missing.
         if scene_data:
@@ -128,17 +128,48 @@ def compile_task(
     )
 
 
-def _add_default_init_facts(problem: Problem) -> None:
+def _looks_articulated_furniture(obj_id: str) -> bool:
+    """Conservative fallback when scene metadata is unavailable."""
+    prefixes = (
+        "cabinet_",
+        "drawer_",
+        "chest_of_drawers_",
+        "wardrobe_",
+        "fridge_",
+        "microwave_",
+        "safe_",
+        "dishwasher_",
+        "washer_dryer_",
+        "locker_",
+        "cupboard_",
+    )
+    return obj_id.startswith(prefixes)
+
+
+def _add_default_init_facts(
+    problem: Problem,
+    scene_data: Optional[Dict[str, Any]] = None,
+) -> None:
     """Add default init facts for the planner.
 
-    In the real simulator, furniture starts closed and objects have default
-    states. The planner needs these facts explicitly under CWA.
+    Only articulated furniture gets default closed-state facts. Open surfaces
+    like tables should not be compiled as closed containers.
     """
     existing = {(l.predicate, l.args) for l in problem.init}
+    articulated_ids = set()
+    if scene_data:
+        raw_articulated = scene_data.get("articulated_furniture") or []
+        articulated_ids = {
+            obj_id for obj_id in raw_articulated if isinstance(obj_id, str) and obj_id
+        }
 
     for obj_id, typ in problem.objects.items():
         if typ == "furniture":
-            # Furniture defaults to closed (unless explicitly open)
+            is_articulated = obj_id in articulated_ids
+            if not articulated_ids:
+                is_articulated = _looks_articulated_furniture(obj_id)
+            if not is_articulated:
+                continue
             if (("is_open", (obj_id,)) not in existing
                     and ("is_closed", (obj_id,)) not in existing):
                 problem.init.append(Literal("is_closed", (obj_id,)))

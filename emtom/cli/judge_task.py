@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 from emtom.cli import CLIResult, failure, success
 from emtom.cli.task_metadata import compute_strict_tom_metadata
 from emtom.cli.validate_task import static_validate_trajectory
+from emtom.task_gen.task_bootstrap import canonicalize_task_problem_pddl
 
 
 SKIPPABLE_STEPS = {"pddl", "tom", "simulation", "structure", "llm-council"}
@@ -172,6 +173,11 @@ def run(
         return failure(f"Invalid JSON: {e}")
 
     scene_data = _load_scene_data(working_dir, scene_file)
+    changed = canonicalize_task_problem_pddl(task_data, scene_data)
+    if changed:
+        with open(task_path, "w") as f:
+            json.dump(task_data, f, indent=2)
+            f.write("\n")
 
     # Deterministic strict PDDL verification is the first judge gate.
     if "pddl" in _skip:

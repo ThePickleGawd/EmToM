@@ -25,6 +25,7 @@ from emtom.task_gen.spec_validator import (
     validate_blocking_spec,
     validate_room_restriction_trajectory,
 )
+from emtom.task_gen.task_bootstrap import canonicalize_task_problem_pddl
 
 if TYPE_CHECKING:
     from emtom.task_gen.scene_loader import SceneData
@@ -89,6 +90,8 @@ def validate(
     Returns:
         CLIResult with data keys: valid, task_id, title, mechanics, tom_required, summary.
     """
+    canonicalize_task_problem_pddl(task_data, scene_data)
+
     # Core required fields
     required_fields = [
         "task_id", "title", "task", "episode_id",
@@ -483,6 +486,12 @@ def run(
             )
         except Exception:
             pass  # Proceed without scene data
+
+    changed = canonicalize_task_problem_pddl(task_data, scene_data)
+    if changed:
+        with open(task_path, "w") as f:
+            json.dump(task_data, f, indent=2)
+            f.write("\n")
 
     return validate(task_data, scene_data)
 

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from emtom.cli import CLIResult, failure, success
+from emtom.task_gen.task_bootstrap import canonicalize_task_problem_pddl
 
 
 def _build_failure_summary(
@@ -158,6 +159,22 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     except json.JSONDecodeError as e:
         return failure(f"Invalid JSON: {e}")
 
+    scene_data: Optional[Dict[str, Any]] = None
+    if working_dir:
+        scene_file = Path(working_dir) / "current_scene.json"
+        if scene_file.exists():
+            try:
+                with open(scene_file) as sf:
+                    scene_data = json.load(sf)
+            except (json.JSONDecodeError, IOError):
+                scene_data = None
+
+    changed = canonicalize_task_problem_pddl(task_data, scene_data)
+    if changed:
+        with open(task_path, "w") as f:
+            json.dump(task_data, f, indent=2)
+            f.write("\n")
+
     # Build GoalSpec from canonical inline problem_pddl.
     from emtom.pddl.goal_spec import GoalSpec
     from emtom.pddl.domain import EMTOM_DOMAIN
@@ -234,17 +251,6 @@ def run(task_file: str, working_dir: str = None) -> CLIResult:
     # Build task object
     from emtom.task_gen.task_generator import GeneratedTask
     task = GeneratedTask.from_dict(task_data)
-
-    # Load scene data from current_scene.json if available
-    scene_data: Optional[Dict[str, Any]] = None
-    if working_dir:
-        scene_file = Path(working_dir) / "current_scene.json"
-        if scene_file.exists():
-            try:
-                with open(scene_file) as sf:
-                    scene_data = json.load(sf)
-            except (json.JSONDecodeError, IOError):
-                pass
 
     # Compile and solve functional projection only.
     from emtom.pddl.compiler import compile_task

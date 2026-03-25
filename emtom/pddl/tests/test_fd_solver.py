@@ -517,6 +517,63 @@ class TestCompilerTypeInference:
                        if l.predicate == "is_closed" and l.args == ("cabinet_27",)]
         assert len(closed_lits) == 0
 
+    def test_default_closed_not_added_for_non_articulated_furniture(self):
+        from unittest.mock import MagicMock
+        from emtom.pddl.compiler import compile_task
+
+        task = MagicMock()
+        task.task_id = "test_001"
+        task.num_agents = 1
+        task.items = []
+        task.initial_states = {}
+        task.mechanic_bindings = []
+        task.locked_containers = {}
+        task.message_targets = None
+        task.problem_pddl = (
+            "(define (problem test_001)\n"
+            "  (:domain emtom)\n"
+            "  (:objects agent_0 - agent kitchen_1 - room table_13 cabinet_27 - furniture)\n"
+            "  (:init (agent_in_room agent_0 kitchen_1) (is_in_room table_13 kitchen_1) (is_in_room cabinet_27 kitchen_1))\n"
+            "  (:goal (is_open cabinet_27))\n"
+            ")"
+        )
+
+        problem = compile_task(
+            task,
+            scene_data={"articulated_furniture": ["cabinet_27"]},
+        )
+        closed_lits = {(l.predicate, l.args) for l in problem.init if l.predicate == "is_closed"}
+
+        assert ("is_closed", ("cabinet_27",)) in closed_lits
+        assert ("is_closed", ("table_13",)) not in closed_lits
+
+    def test_default_closed_uses_conservative_name_fallback_without_scene_data(self):
+        from unittest.mock import MagicMock
+        from emtom.pddl.compiler import compile_task
+
+        task = MagicMock()
+        task.task_id = "test_001"
+        task.num_agents = 1
+        task.items = []
+        task.initial_states = {}
+        task.mechanic_bindings = []
+        task.locked_containers = {}
+        task.message_targets = None
+        task.problem_pddl = (
+            "(define (problem test_001)\n"
+            "  (:domain emtom)\n"
+            "  (:objects agent_0 - agent kitchen_1 - room table_13 cabinet_27 - furniture)\n"
+            "  (:init (agent_in_room agent_0 kitchen_1) (is_in_room table_13 kitchen_1) (is_in_room cabinet_27 kitchen_1))\n"
+            "  (:goal (is_open cabinet_27))\n"
+            ")"
+        )
+
+        problem = compile_task(task)
+        closed_lits = {(l.predicate, l.args) for l in problem.init if l.predicate == "is_closed"}
+
+        assert ("is_closed", ("cabinet_27",)) in closed_lits
+        assert ("is_closed", ("table_13",)) not in closed_lits
+
 
 class TestCompilerCanCommunicate:
     def _make_task(self, mechanic_bindings=None, message_targets=None):
