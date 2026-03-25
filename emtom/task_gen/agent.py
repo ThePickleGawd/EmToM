@@ -482,7 +482,7 @@ class TaskGeneratorAgent:
                 "Do NOT attempt to run or rely on these components. They will be automatically skipped.\n"
             )
             if "pddl" in self.skip_steps:
-                skip_notice += "- PDDL verification is disabled. Do NOT write or reference `problem_pddl`. Do NOT call any PDDL-related tool.\n"
+                skip_notice += "- PDDL verification is disabled. You still MUST write `problem_pddl` as the canonical goal format — only the automated PDDL solvability check is skipped.\n"
             if "tom" in self.skip_steps:
                 skip_notice += "- ToM level verification is disabled. Do NOT worry about tom_level computation.\n"
             if "simulation" in self.skip_steps:

@@ -1182,6 +1182,36 @@ class TestOwnerDecomposition:
         owners = _parse_goal_owners(pddl)
         assert owners.get("(is_open cabinet_27)") == "team_0"
 
+    def test_personal_owner_wrapper_is_accepted(self):
+        from emtom.pddl.problem_pddl import _parse_goal_owners
+
+        pddl = (
+            "(define (problem test)\n"
+            "  (:domain emtom)\n"
+            "  (:init)\n"
+            "  (:goal (is_open cabinet_27))\n"
+            "  (:goal-owners\n"
+            "    (personal agent_0 (is_open cabinet_27)))\n"
+            ")"
+        )
+        owners = _parse_goal_owners(pddl)
+        assert owners.get("(is_open cabinet_27)") == "agent_0"
+
+    def test_shared_owner_wrapper_is_ignored(self):
+        from emtom.pddl.problem_pddl import _parse_goal_owners
+
+        pddl = (
+            "(define (problem test)\n"
+            "  (:domain emtom)\n"
+            "  (:init)\n"
+            "  (:goal (is_open cabinet_27))\n"
+            "  (:goal-owners\n"
+            "    (shared (is_open cabinet_27)))\n"
+            ")"
+        )
+        owners = _parse_goal_owners(pddl)
+        assert owners == {}
+
     def test_from_task_data_competitive(self):
         """Full round-trip: task_data → PDDLGoalChecker with Or branches and owners."""
         task_data = {

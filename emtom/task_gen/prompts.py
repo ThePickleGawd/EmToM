@@ -61,6 +61,7 @@ Exactly one action per turn.
 ## References
 - Working task: `{task_file}`
 - Current scene: `{working_dir}/current_scene.json`
+- Sampled seed summary: `{working_dir}/sampled_tasks/SUMMARY.md`
 - Sampled seeds: `{working_dir}/sampled_tasks/`
 - Template: `{working_dir}/template.json`
 
@@ -107,7 +108,7 @@ def _strip_pddl_from_guidance(guidance: str) -> str:
     )
     guidance = guidance.replace(
         "- Treat `problem_pddl` as machine-owned except for `:goal` and optional `:goal-owners`.\n",
-        "- PDDL is disabled for this run. Do not write or reference `problem_pddl`.\n",
+        "- PDDL solvability verification is disabled, but you MUST still write `problem_pddl` as the canonical goal format. Author `:goal` and optional `:goal-owners` normally.\n",
     )
     guidance = guidance.replace(
         "- Do not hand-edit `:objects`, `:init`, or `golden_trajectory`.\n",
@@ -152,7 +153,7 @@ def _build_external_category_guidance(category: str, skip_pddl: bool) -> str:
         )
         if not skip_pddl:
             lines.append("- `problem_pddl :goal` must be a top-level `(or ...)` with exactly two mutually exclusive branches.")
-            lines.append("- Use `:goal-owners` for team-owned goals.")
+            lines.append("- Use `:goal-owners` for team-owned goals with entries like `(team_0 (is_on_top bottle_1 table_10))`, not wrapper forms like `(team team_0 ...)`.")
     elif category == "mixed":
         lines.extend(
             [
@@ -161,7 +162,7 @@ def _build_external_category_guidance(category: str, skip_pddl: bool) -> str:
             ]
         )
         if not skip_pddl:
-            lines.append("- Put personal objectives in `:goal-owners`.")
+            lines.append("- Put personal objectives in `:goal-owners` using entries like `(agent_0 (is_open cabinet_10))`, not `(personal agent_0 ...)`.")
     else:
         lines.append("- Pick the category that best fits the scene and obey its invariants.")
     return "\n".join(lines)
@@ -183,7 +184,8 @@ def _build_external_spec_guidance(
         f"- Commands already start in `{working_dir}`. Do not prefix every command with `cd {working_dir} &&`.",
     ]
     if not skip_evolution:
-        lines.append(f"- `{working_dir}/sampled_tasks/`: optional structural inspiration only.")
+        lines.append(f"- `{working_dir}/sampled_tasks/SUMMARY.md`: compact seed-task fields. Read this first.")
+        lines.append(f"- `{working_dir}/sampled_tasks/`: raw seed task JSONs for deeper inspection only when needed.")
     lines.extend(
         [
             "- `available_predicates.md`, `available_mechanics.md`, `available_actions.md`, `available_items.md`: inspect only when needed.",
@@ -231,6 +233,20 @@ def _build_external_tom_guidance(skip_pddl: bool) -> str:
                 "- The outermost `K()` agent should not be able to directly observe the fact with no blocker.",
             ]
         )
+    return "\n".join(lines)
+
+
+def _build_external_empirical_guidance(skip_test: bool) -> str:
+    lines = [
+        "## Empirical Solvability",
+        "- Keep the physical execution short and direct. Prefer tasks that baseline/full-info can finish in roughly 6-10 turns.",
+        "- Prefer one clean asymmetry over stacked brittle mechanics. One room/access blocker plus one decisive hidden fact is better than a long chain of dependencies.",
+        "- Use actionable targets that runtime tools can find by exact ID. Avoid relying on vague aliases like 'display table' or hidden trigger objects whose exact runtime ID is hard to recover.",
+        "- Avoid long cross-house transport chains unless that complexity is the core benchmark point.",
+        "- If a task passes `judge` but fails `test_task`, simplify the physical core first before adding more ToM structure.",
+    ]
+    if not skip_test:
+        lines.append("- `taskgen test_task` is the real execution gate: `judge` is not enough if baseline/full-info still cannot complete the task.")
     return "\n".join(lines)
 
 
@@ -322,7 +338,7 @@ def build_external_taskgen_prompt(
     if not skip_evolution:
         workflow.insert(
             2,
-            f"3. Inspect `{working_dir}/sampled_tasks/` only for structural inspiration. Do not copy IDs directly.",
+            f"3. Read `{working_dir}/sampled_tasks/SUMMARY.md` first, then inspect at least 2 sampled seed tasks in `{working_dir}/sampled_tasks/`, including one matching the target category when possible. Reuse only structural patterns that look empirically solvable. Do not copy IDs directly.",
         )
         if skip_pddl:
             workflow[3] = f"4. Edit `{task_file}`. Write the natural-language task, secrets, and mechanics."
@@ -359,6 +375,7 @@ Use the repo-owned `taskgen` commands for scene loading, judging, testing, submi
         "## Workflow\n" + "\n".join(workflow),
         _build_external_category_guidance(category, skip_pddl),
         _build_external_tom_guidance(skip_pddl),
+        _build_external_empirical_guidance(skip_test),
         _build_external_checklist(skip_pddl, skip_test),
         "## References\n"
         "- `available_predicates.md`: valid predicates and goal syntax.\n"

@@ -153,6 +153,89 @@ def _copy_sample(src_path: Path, sampled_tasks_dir: Path, index: int) -> None:
     shutil.copy(src_path, sampled_tasks_dir / f"task_{index}.json")
 
 
+def _truncate_text(value: Any, limit: int = 220) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _summarize_goal_metadata(task_data: dict) -> tuple[str, str]:
+    problem_pddl = task_data.get("problem_pddl")
+    if not isinstance(problem_pddl, str) or not problem_pddl.strip():
+        return "none", "none"
+
+    try:
+        from emtom.pddl.problem_pddl import parse_problem_pddl
+
+        parsed = parse_problem_pddl(problem_pddl)
+        goal_summary = _truncate_text(parsed.goal_pddl, limit=260)
+        owners = parsed.owners or {}
+        if owners:
+            owner_counts: dict[str, int] = {}
+            for owner in owners.values():
+                owner_counts[owner] = owner_counts.get(owner, 0) + 1
+            owner_summary = ", ".join(
+                f"{owner}:{count}" for owner, count in sorted(owner_counts.items())
+            )
+        else:
+            owner_summary = "none"
+        return goal_summary, owner_summary
+    except Exception:
+        return _truncate_text(problem_pddl, limit=260), "unknown"
+
+
+def _write_sampled_tasks_summary(sampled_tasks_dir: Path) -> None:
+    sample_files = sorted(sampled_tasks_dir.glob("task_*.json"))
+    if not sample_files:
+        return
+
+    lines = [
+        "# Sampled Task Summary",
+        "",
+        "Read this file first. It contains the compact fields that matter for seed-task inspiration.",
+        "Use sampled tasks for structure only. Do not copy scene IDs, object IDs, agent IDs, or exact wording.",
+        "",
+    ]
+
+    for path in sample_files:
+        try:
+            with open(path) as f:
+                task_data = json.load(f)
+        except Exception:
+            continue
+
+        title = _truncate_text(task_data.get("title") or path.name, limit=120)
+        category = task_data.get("category", "unknown")
+        num_agents = task_data.get("num_agents", "unknown")
+        mechanics = task_data.get("active_mechanics")
+        if not mechanics and isinstance(task_data.get("mechanic_bindings"), list):
+            mechanics = [
+                binding.get("mechanic_type")
+                for binding in task_data["mechanic_bindings"]
+                if isinstance(binding, dict) and binding.get("mechanic_type")
+            ]
+        mechanics_str = ", ".join(str(m) for m in (mechanics or [])) or "none"
+        task_text = _truncate_text(task_data.get("task"), limit=240)
+        goal_summary, owner_summary = _summarize_goal_metadata(task_data)
+
+        lines.extend(
+            [
+                f"## {path.name}",
+                f"- Title: {title}",
+                f"- Category: {category}",
+                f"- Agents: {num_agents}",
+                f"- Mechanics: {mechanics_str}",
+                f"- Task: {task_text}",
+                f"- Goal: {goal_summary}",
+                f"- Goal owners: {owner_summary}",
+                "",
+            ]
+        )
+
+    (sampled_tasks_dir / "SUMMARY.md").write_text("\n".join(lines))
+
+
 def populate_sampled_tasks_dir(
     sampled_tasks_dir: Path,
     selection_config: SeedSelectionConfig,
@@ -161,6 +244,7 @@ def populate_sampled_tasks_dir(
     selected = select_seed_tasks(selection_config, count=sample_count)
     for i, candidate in enumerate(selected, 1):
         _copy_sample(candidate.path, sampled_tasks_dir, i)
+    _write_sampled_tasks_summary(sampled_tasks_dir)
     return selection_config.tasks_dir if selected else None, len(selected)
 
 
@@ -323,6 +407,7 @@ def _build_extra_sections(
                     "## Sampled Task Context",
                     f"`{seed_tasks_dir}` is used to populate `{Path(seed_tasks_dir).name}` examples for inspiration.",
                     f"Target model: {target_model}. Logical sampled-task mix: fail {seed_fail_ratio:.0%}, pass {seed_pass_ratio:.0%}.",
+                    "You should inspect sampled tasks before authoring. Borrow only structural patterns that look empirically solvable under test_task, especially short physical cores and clean mechanic usage.",
                     "Start each task from the scene-grounded template in working_task.json. Do not copy a seed task directly.",
                 ]
             )
@@ -497,6 +582,7 @@ def main() -> None:
         for i, task_path in enumerate(selected, 1):
             shutil.copy(task_path, sampled_tasks_dir / task_path.name)
             _copy_sample(task_path, sampled_tasks_dir, i)
+        _write_sampled_tasks_summary(sampled_tasks_dir)
     elif seed_tasks_dir is not None:
         selection_config = SeedSelectionConfig(
             tasks_dir=seed_tasks_dir,

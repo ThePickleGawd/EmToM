@@ -238,7 +238,11 @@ def canonicalize_problem_pddl_with_scene(
     parsed = parse_problem_pddl(raw_problem)
     relevant_ids: Set[str] = set(collect_object_ids_from_formula(parsed.goal_formula))
     for formula_pddl in (parsed.owners or {}).keys():
-        relevant_ids.update(collect_object_ids_from_formula(parse_goal_string(formula_pddl)))
+        try:
+            owner_formula = parse_goal_string(formula_pddl)
+        except ValueError:
+            continue
+        relevant_ids.update(collect_object_ids_from_formula(owner_formula))
 
     for item_data in task_data.get("items") if isinstance(task_data.get("items"), list) else []:
         if not isinstance(item_data, dict):
