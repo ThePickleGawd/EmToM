@@ -373,12 +373,7 @@ def _write_bootstrap_files(
     (working_dir / "available_mechanics.md").write_text(available_mechanics)
     (working_dir / "available_predicates.md").write_text(available_predicates)
     (working_dir / "available_actions.md").write_text(action_descriptions)
-    bootstrap_text = (
-        "Read `taskgen_prompt.md` in the current directory and follow it exactly. "
-        "Use the `taskgen` command surface documented there. "
-        "Run `taskgen finish` only after the required number of tasks has been submitted."
-    )
-    (working_dir / "bootstrap_prompt.txt").write_text(bootstrap_text)
+    (working_dir / "bootstrap_prompt.txt").write_text(prompt_text)
 
 
 def main() -> None:

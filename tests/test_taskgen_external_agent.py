@@ -3,8 +3,8 @@ import json
 from pathlib import Path
 
 from emtom.task_gen.external_agent import ExternalAgentLauncher
-from emtom.task_gen.prompts import build_external_taskgen_prompt
-from emtom.task_gen.runner import _copy_sample_with_aliases, build_workspace_id
+from emtom.task_gen.prompts import SYSTEM_PROMPT, build_external_taskgen_prompt
+from emtom.task_gen.runner import _copy_sample, _write_bootstrap_files, build_workspace_id
 from emtom.task_gen.session import TaskGenSession, default_state
 
 
@@ -111,6 +111,33 @@ def test_build_external_prompt_rewrites_taskgen_commands():
     assert "judge[]" not in prompt
     assert "submit_task[]" not in prompt
     assert "sampled_trajectories" not in prompt
+    assert "## Good ToM" in prompt
+    assert "Functional ToM Patterns" not in prompt
+    assert "Mechanic Usage Guidelines" not in prompt
+    assert len(prompt) < 6000
+
+
+def test_system_prompt_is_compact():
+    assert len(SYSTEM_PROMPT) < 5000
+    assert "Functional ToM Patterns" not in SYSTEM_PROMPT
+    assert "Mechanic Usage Guidelines" not in SYSTEM_PROMPT
+    assert "Common Pitfalls — Learn from These" not in SYSTEM_PROMPT
+
+
+def test_bootstrap_prompt_contains_full_taskgen_prompt(tmp_path):
+    prompt = "full task instructions"
+
+    _write_bootstrap_files(
+        working_dir=tmp_path,
+        prompt_text=prompt,
+        available_items="item_a",
+        available_mechanics="room_restriction",
+        available_predicates="is_open",
+        action_descriptions="Navigate",
+    )
+
+    assert (tmp_path / "bootstrap_prompt.txt").read_text() == prompt
+    assert (tmp_path / "taskgen_prompt.md").read_text() == prompt
 
 
 def test_sampled_task_aliases_preserve_original_text(tmp_path):
@@ -121,12 +148,10 @@ def test_sampled_task_aliases_preserve_original_text(tmp_path):
     }
     source.write_text(json.dumps(original))
 
-    _copy_sample_with_aliases(source, tmp_path, 1)
+    _copy_sample(source, tmp_path, 1)
 
     copied = json.loads((tmp_path / "task_1.json").read_text())
-    padded = json.loads((tmp_path / "task_001.json").read_text())
     assert copied == original
-    assert padded == original
 
 
 def test_build_workspace_id_starts_with_timestamp():
@@ -145,9 +170,9 @@ def test_taskgen_session_finish_and_fail(tmp_path):
         subtasks_min=2,
         subtasks_max=4,
         category=None,
-        seed_task=None,
         seed_tasks_dir=None,
-        random_seed_task=False,
+        seed_pass_ratio=0.2,
+        seed_fail_ratio=0.8,
         judge_threshold=None,
         difficulty=None,
         test_model=None,

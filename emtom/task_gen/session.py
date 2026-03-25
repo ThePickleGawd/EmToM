@@ -622,19 +622,34 @@ class TaskGenSession:
     def _parse_benchmark_subprocess(
         self, proc: subprocess.CompletedProcess[str], run_dir: Path
     ) -> Dict[str, Any]:
+        """Parse JSON result from a benchmark subprocess.
+
+        Some simulator dependencies emit noisy logs to stdout (and/or stderr)
+        before printing the CLIResult JSON payload. We therefore scan stdout for
+        the first JSON object and attempt to decode from there.
+        """
+
+        stdout = proc.stdout or ""
+        json_start = stdout.find("{")
+        if json_start >= 0:
+            stdout = stdout[json_start:]
+
         try:
-            stdout = proc.stdout
-            json_start = stdout.find("{")
-            if json_start >= 0:
-                stdout = stdout[json_start:]
             result_data = json.loads(stdout)
         except (json.JSONDecodeError, ValueError):
-            return {
-                "steps": 0,
-                "done": False,
-                "error": f"Failed to parse output: {proc.stderr[:500]}",
-                "trajectory_dir": str(run_dir),
-            }
+            # Fall back: sometimes warnings/logs appear after the JSON payload.
+            # Decode only the first complete JSON object.
+            try:
+                decoder = json.JSONDecoder()
+                result_data, _ = decoder.raw_decode(stdout)
+            except Exception:
+                noisy = (proc.stdout or proc.stderr or "")[:500]
+                return {
+                    "steps": 0,
+                    "done": False,
+                    "error": f"Failed to parse output: {noisy}",
+                    "trajectory_dir": str(run_dir),
+                }
 
         if not isinstance(result_data, dict):
             return {

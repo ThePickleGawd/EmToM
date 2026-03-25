@@ -151,10 +151,22 @@ def validate(
             data={"errors": spec_errors, "summary": f"Task has {len(spec_errors)} validation error(s)"},
         )
 
-    # Collect defined item IDs from task
-    defined_items = set()
+    # Collect defined item IDs from task.
+    #
+    # Historically `items` has existed in two shapes:
+    #   1) list[dict] with keys like {"item_id": "item_magic_key_0", ...}
+    #   2) list[str] of item_id values
+    # Some pipeline stages (e.g. older templates / regenerators) may still emit
+    # the string form. Be permissive here so validation never crashes.
+    defined_items: set[str] = set()
     for item in task_data.get("items", []):
-        item_id = item.get("item_id")
+        if isinstance(item, str):
+            item_id = item
+        elif isinstance(item, dict):
+            item_id = item.get("item_id")
+        else:
+            item_id = None
+
         if item_id:
             defined_items.add(item_id)
 
@@ -243,6 +255,8 @@ def validate(
 
     # Validate items inside references are articulated furniture
     for item in task_data.get("items", []):
+        if not isinstance(item, dict):
+            continue
         inside = item.get("inside") or item.get("hidden_in")
         if inside and scene_data:
             all_articulated = set(scene_data.articulated_furniture)
