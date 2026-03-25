@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from emtom.cli.validate_task import validate_runtime_grounding
+
 
 def find_calibration_entry(
     calibration,
@@ -240,6 +242,30 @@ class BenchmarkResults:
     results: List[TaskResult] = field(default_factory=list)
 
 
+def _screen_benchmarkable_tasks(task_files: List[Path]) -> tuple[List[Path], List[str]]:
+    """Split task files into benchmarkable and invalid subsets."""
+    valid: List[Path] = []
+    errors: List[str] = []
+
+    for task_file in task_files:
+        try:
+            with open(task_file) as f:
+                task_data = json.load(f)
+        except Exception as e:
+            errors.append(f"{task_file.name}: invalid JSON ({e})")
+            continue
+
+        grounding_error = validate_runtime_grounding(task_data, scene_data=None)
+        if grounding_error:
+            task_id = task_data.get("task_id") or task_file.stem
+            errors.append(f"{task_id}: {grounding_error}")
+            continue
+
+        valid.append(task_file)
+
+    return valid, errors
+
+
 def run_benchmark(
     tasks_dir: str,
     model: str,
@@ -455,6 +481,19 @@ def run_benchmark_parallel(
         if not task_files:
             print(f"{log_prefix} WARNING: no {category} tasks in {tasks_dir}", file=sys.stderr)
             return BenchmarkResults(model=model, total=0, passed=0, failed=0, pass_rate=0.0)
+
+    task_files, invalid_task_errors = _screen_benchmarkable_tasks(task_files)
+    if invalid_task_errors:
+        preview = "\n".join(f"  - {msg}" for msg in invalid_task_errors[:10])
+        print(
+            f"{log_prefix} WARNING: skipping {len(invalid_task_errors)} unbenchmarkable task(s):\n{preview}",
+            file=sys.stderr,
+        )
+    if not task_files:
+        raise RuntimeError(
+            "No benchmarkable tasks found. "
+            "All selected tasks use placeholder or invalid runtime scene metadata."
+        )
 
     # Detect GPUs for round-robin distribution
     gpu_ids = _detect_gpu_ids()

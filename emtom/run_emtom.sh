@@ -716,7 +716,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
         if [ "$NO_CALIBRATION" = true ]; then
             PARALLEL_CMD="$PARALLEL_CMD --no-calibration"
         fi
-        eval $PARALLEL_CMD || true
+        eval $PARALLEL_CMD
         python -m emtom.utils.task_summary --stats "$TASK_DIR"
     else
         # ── Sequential mode: one run_habitat_benchmark.py per agent-count group ──

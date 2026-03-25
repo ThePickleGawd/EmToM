@@ -32,6 +32,38 @@ if TYPE_CHECKING:
 
 
 ID_PATTERN = re.compile(r"\b[a-z_]+_\d+\b")
+PLACEHOLDER_SCENE_IDS = {"", "unknown", "synthetic_scene"}
+PLACEHOLDER_EPISODE_IDS = {"", "unknown", "synthetic_episode"}
+
+
+def validate_runtime_grounding(
+    task_data: Dict[str, Any],
+    scene_data: Optional["SceneData"] = None,
+) -> Optional[str]:
+    """
+    Validate that a task is grounded in a real benchmark scene.
+
+    Synthetic fallback scenes are useful for lightweight taskgen/judging
+    environments, but they cannot run in Habitat benchmark mode.
+    """
+    scene_id = str(task_data.get("scene_id", "")).strip()
+    episode_id = str(task_data.get("episode_id", "")).strip()
+
+    if scene_id in PLACEHOLDER_SCENE_IDS or episode_id in PLACEHOLDER_EPISODE_IDS:
+        return (
+            "Task is not benchmarkable: scene_id/episode_id must come from a real "
+            "dataset scene, not placeholder synthetic values."
+        )
+
+    if scene_data:
+        expected_episode = scene_data.episode_id
+        if episode_id != expected_episode:
+            return (
+                f"episode_id must be '{expected_episode}' (from loaded scene), "
+                f"got '{episode_id}'"
+            )
+
+    return None
 
 
 def _extract_known_task_ids(task_data: Dict[str, Any]) -> set[str]:
@@ -103,14 +135,9 @@ def validate(
     if missing:
         return failure(f"Missing required fields: {missing}")
 
-    # Validate episode_id matches the loaded scene
-    if scene_data:
-        expected_episode = scene_data.episode_id
-        task_episode = task_data.get("episode_id", "")
-        if task_episode != expected_episode:
-            return failure(
-                f"episode_id must be '{expected_episode}' (from loaded scene), got '{task_episode}'"
-            )
+    grounding_error = validate_runtime_grounding(task_data, scene_data=scene_data)
+    if grounding_error:
+        return failure(grounding_error)
 
     # Shared deterministic spec checks
     spec_errors = validate_blocking_spec(task_data, scene_data)

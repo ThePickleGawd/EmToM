@@ -53,6 +53,7 @@ def _make_minimal_task(**overrides) -> dict:
         "task_id": "test_001",
         "title": "Test Task for Validation",
         "task": "This is a sufficiently long task description for validation purposes.",
+        "scene_id": "scene_test",
         "episode_id": "1234",
         "num_agents": 2,
         "mechanic_bindings": [],
@@ -103,6 +104,17 @@ class TestValidateTask:
         result = validate(task, None)
         assert result["success"] is False
         assert "at least 20" in result["error"]
+
+    def test_rejects_synthetic_placeholder_scene(self):
+        from emtom.cli.validate_task import validate
+
+        task = _make_minimal_task(
+            scene_id="synthetic_scene",
+            episode_id="synthetic_episode",
+        )
+        result = validate(task, None)
+        assert result["success"] is False
+        assert "not benchmarkable" in result["error"]
 
     def test_agent_secrets_not_dict(self):
         from emtom.cli.validate_task import validate
