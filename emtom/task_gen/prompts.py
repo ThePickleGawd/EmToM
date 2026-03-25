@@ -142,7 +142,7 @@ Each secret states only: team membership, room restrictions, communication const
 - Good functional-ToM pressure: one message can go to only one teammate; one teammate can act but cannot observe; another can observe but cannot act; a mixed-task partner may sacrifice the shared plan for a private goal; a relay path changes which teammate will know enough to act next.
 - Each agent's secrets MUST include which other agents are on their team (e.g., "You are on a team with agent_1." for cooperative, or "You are on team_0 with agent_1. The opposing team is agent_2." for competitive)
 - Do NOT describe K() goals as runtime success conditions in `task`, `agent_secrets`, or `team_secrets`. Never write phrases like "must know", "knowledge is required", "final knows check", or "epistemic requirement". Instead phrase epistemic goals abstractly, e.g. "by the end, you must be confident that a teammate knows cabinet_26 is open" — never name WHICH teammate or HOW the information should travel.
-- Do NOT use positive `is_inside` goals unless the object is already inside in `:init` and meant to remain there. Prefer `is_on_top` for movable-placement goals.
+- Use `is_on_top` only for non-articulated support surfaces such as tables, shelves, stands, couches, beds, or the floor. For cabinets, drawers, fridges, safes, wardrobes, and similar articulated containers, use `is_inside` when containment is the intended final state.
 - Do NOT use `has_most` or `has_at_least` in `problem_pddl` goals; they are not part of deterministic PDDL solvability checks in this pipeline.
 - `judge[]` automatically runs strict PDDL verification first. Do not call a separate PDDL-verification tool.
 - Avoid `python3 -c "..."` commands that include literal `\\n` escapes.
@@ -152,12 +152,12 @@ Each secret states only: team membership, room restrictions, communication const
 Strict PDDL verification assumes a deterministic `:init`. That does NOT make K=2/K=3 tasks impossible.
 
 Keep these three layers separate:
-- **Physical solvability**: use ordinary fixed goal literals such as `(is_open cabinet_28)` or `(is_on_top bottle_2 table_12)`.
+- **Physical solvability**: use ordinary fixed goal literals such as `(is_open cabinet_28)`, `(is_on_top bottle_2 table_12)` for surfaces, or `(is_inside bottle_2 cabinet_28)` for containers.
 - **Agent-side information asymmetry**: make the correct action depend on private secrets, room-restricted clues, mechanic access, or communication limits. The acting agent does not need the clue in `:init`; it can come from another agent's secret or observation.
 - **ToM depth**: create nested epistemic goals over deterministic facts, e.g. `(K agent_0 (K agent_1 (K agent_2 (is_open cabinet_28))))`.
 
 Concrete K=3 pattern that IS supported:
-- One fixed physical target literal such as `(is_open cabinet_28)` or `(is_on_top bottle_2 table_12)`
+- One fixed physical target literal such as `(is_open cabinet_28)`, `(is_on_top bottle_2 table_12)` for surfaces, or `(is_inside bottle_2 cabinet_28)` for containers
 - One nested K=3 literal about that same deterministic fact or another grounded fact
 - `room_restriction` and/or `restricted_communication` so the observing agent cannot directly inform the final acting agent
 - `limited_bandwidth` only when you still leave enough messages to realize the chain

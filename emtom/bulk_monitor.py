@@ -85,36 +85,59 @@ def parse_log(log_path: Path) -> dict:
         info["max_iterations"] = int(last.group(2))
         info["submitted"] = int(last.group(3))
         info["target"] = int(last.group(4))
+    else:
+        step_matches = list(re.finditer(r"mini-swe-agent \(step (\d+),", tail))
+        if step_matches:
+            info["iteration"] = int(step_matches[-1].group(1))
 
     # Count judge results in tail
     info["judge_passes"] = len(re.findall(r"\[Judge\] Result: PASS", tail))
     info["judge_fails"] = len(re.findall(r"\[Judge\] Result: FAIL", tail))
+    info["judge_passes"] += len(re.findall(r"Task passed judge", tail))
+    info["judge_fails"] += len(re.findall(r'"summary": "FAIL - Task did not pass council', tail))
+    info["judge_fails"] += len(re.findall(r"Static quality lint failed", tail))
 
     # Count test results
     info["test_passes"] = len(re.findall(r"Result: PASSED", tail))
     info["test_fails"] = len(re.findall(r"Result: FAILED", tail))
+    info["test_fails"] += len(re.findall(r"Success condition not met after trajectory", tail))
+    info["test_fails"] += len(re.findall(r"Golden trajectory static validation failed", tail))
 
     # Determine status (check failure before "Done!" since the shell wrapper
     # prints "Done!" even when the agent failed)
-    if "Agent FAILED:" in tail:
+    if "Generation Result" in tail and "Failed: True" in tail:
+        info["status"] = "failed"
+        fail_match = re.search(r"\n([^\n]*Unable to produce[^\n]*)\n?$", tail)
+        if fail_match:
+            info["fail_reason"] = fail_match.group(1)[:80]
+    elif "Agent FAILED:" in tail:
         info["status"] = "failed"
         fail_match = re.search(r"Agent FAILED: (.+)", tail)
         if fail_match:
             info["fail_reason"] = fail_match.group(1)[:80]
+    elif "Generation Result" in tail and "Finished: True" in tail:
+        info["status"] = "done"
     elif "Done!" in tail[-200:]:
         if info["submitted"] > 0 or re.search(r"Submitted: [1-9]", tail):
             info["status"] = "done"
         else:
             info["status"] = "done_empty"
-    elif iter_matches:
+    elif iter_matches or re.search(r"mini-swe-agent \(step \d+,", tail):
         info["status"] = "running"
     else:
         info["status"] = "starting"
 
-    # Last agent action
-    action_matches = list(re.finditer(r"Action: (\w+)\[", tail))
-    if action_matches:
-        info["last_action"] = action_matches[-1].group(1)
+    # Last agent action / command
+    command_blocks = list(re.finditer(r"```\n(.*?)```", tail, flags=re.DOTALL))
+    if command_blocks:
+        last_block = command_blocks[-1].group(1).strip().splitlines()
+        if last_block:
+            first_line = last_block[0].strip()
+            info["last_action"] = first_line[:15]
+    else:
+        action_matches = list(re.finditer(r"Action: (\w+)\[", tail))
+        if action_matches:
+            info["last_action"] = action_matches[-1].group(1)
 
     return info
 
@@ -229,6 +252,8 @@ def render_dashboard(log_dir, infos):
             filled = int(pct * bar_width)
             bar = "█" * filled + "░" * (bar_width - filled)
             progress = f"{bar} {pct:>3.0%}"
+        elif info["iteration"] > 0:
+            progress = f"step {info['iteration']:<6}"
         else:
             progress = f"{'░' * 10}  - "
 

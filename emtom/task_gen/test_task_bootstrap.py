@@ -65,6 +65,17 @@ def test_bootstrap_problem_falls_back_to_scene_rooms_for_position_spawns() -> No
     assert "(agent_in_room agent_1 hallway_2)" in problem_pddl
 
 
+def test_bootstrap_problem_prefers_non_articulated_surface_for_goal() -> None:
+    problem_pddl = build_scene_bootstrap_problem_pddl(
+        _scene({"agent_0": "kitchen_1", "agent_1": "hallway_2"}),
+        2,
+        problem_name="scene_102817140",
+    )
+
+    assert "(is_on_top laptop_0 table_99)" in problem_pddl
+    assert "(is_on_top laptop_0 cabinet_18)" not in problem_pddl
+
+
 def test_canonicalize_problem_pddl_rebuilds_init_from_scene_and_preserves_goal() -> None:
     task_data = {
         "num_agents": 2,

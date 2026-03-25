@@ -166,12 +166,19 @@ def build_scene_bootstrap_problem_pddl(
         lines.append(f"    (is_inside {item_id} {inside})")
 
     goal_literals: List[str] = []
-    if ordered_objects and ordered_furniture:
+    support_surfaces = [
+        furniture_id for furniture_id in ordered_furniture if furniture_id not in articulated
+    ]
+    if ordered_objects and support_surfaces:
         goal_object = ordered_objects[0]
         current_parent = object_to_furniture.get(goal_object)
         target_furniture = next(
-            (furniture_id for furniture_id in ordered_furniture if furniture_id != current_parent),
-            ordered_furniture[0],
+            (
+                furniture_id
+                for furniture_id in support_surfaces
+                if furniture_id != current_parent
+            ),
+            support_surfaces[0],
         )
         goal_literals.append(f"(is_on_top {goal_object} {target_furniture})")
 

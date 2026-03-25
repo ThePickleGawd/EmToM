@@ -222,6 +222,54 @@ def _collect_literals(formula: Any) -> List[Any]:
     return literals
 
 
+def _looks_container_like_furniture(furniture_id: str) -> bool:
+    prefixes = (
+        "cabinet_",
+        "drawer_",
+        "chest_of_drawers_",
+        "wardrobe_",
+        "fridge_",
+        "microwave_",
+        "safe_",
+        "dishwasher_",
+        "washer_dryer_",
+        "locker_",
+        "cupboard_",
+    )
+    return isinstance(furniture_id, str) and furniture_id.startswith(prefixes)
+
+
+def _validate_goal_support_surfaces(
+    goal_formula: Any,
+    articulated: Set[str],
+) -> List[str]:
+    errors: List[str] = []
+    if not articulated:
+        return errors
+
+    for literal in _collect_literals(goal_formula):
+        if getattr(literal, "negated", False):
+            continue
+        if getattr(literal, "predicate", None) != "is_on_top":
+            continue
+        args = getattr(literal, "args", ())
+        if len(args) != 2:
+            continue
+        obj_id, furniture_id = args
+        if furniture_id not in articulated:
+            continue
+        if not _looks_container_like_furniture(furniture_id):
+            continue
+        errors.append(
+            "problem_pddl goal uses "
+            f"(is_on_top {obj_id} {furniture_id}) on articulated/container furniture. "
+            "Use is_inside for cabinets, drawers, fridges, safes, and similar containers, "
+            "or choose a non-articulated support surface like a table, shelf, stand, or floor."
+        )
+
+    return errors
+
+
 def _collect_epistemic_goals(formula: Any) -> List[Any]:
     goals: List[Any] = []
     for node in _iter_formula_nodes(formula):
@@ -606,6 +654,9 @@ def validate_blocking_spec(
 
             spec = GoalSpec.from_legacy(parsed_problem.goal_pddl, [], {})
             errors.extend(spec.validate(EMTOM_DOMAIN, valid_agent_ids))
+            errors.extend(
+                _validate_goal_support_surfaces(parsed_problem.goal_formula, articulated)
+            )
 
             goal_lower = parsed_problem.goal_pddl.lower()
             has_or = any(

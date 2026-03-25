@@ -124,6 +124,42 @@ class TestValidateTask:
         assert result["success"] is False
         assert "must be a dict" in result["error"]
 
+    def test_rejects_is_on_top_goal_on_articulated_container(self):
+        from emtom.cli.validate_task import validate
+        from emtom.task_gen.scene_loader import SceneData
+
+        task = _make_minimal_task(
+            problem_pddl=(
+                "(define (problem test_001) "
+                "(:domain emtom) "
+                "(:objects agent_0 agent_1 - agent kitchen_1 - room cup_1 - object cabinet_27 - furniture) "
+                "(:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1) "
+                "(is_in_room cup_1 kitchen_1) (is_in_room cabinet_27 kitchen_1)) "
+                "(:goal (and (is_on_top cup_1 cabinet_27))))"
+            ),
+            golden_trajectory=[
+                {"actions": [
+                    {"agent": "agent_0", "action": "Wait[]"},
+                    {"agent": "agent_1", "action": "Wait[]"},
+                ]},
+            ],
+        )
+        scene_data = SceneData(
+            episode_id="1234",
+            scene_id="scene_test",
+            rooms=["kitchen_1"],
+            furniture=["cabinet_27"],
+            objects=["cup_1"],
+            articulated_furniture=["cabinet_27"],
+            furniture_in_rooms={"kitchen_1": ["cabinet_27"]},
+        )
+
+        result = validate(task, scene_data)
+
+        assert result["success"] is False
+        assert "is_on_top" in result["error"]
+        assert "articulated/container furniture" in result["error"]
+
     def test_static_validate_trajectory_tolerates_items_none(self):
         from emtom.cli.validate_task import static_validate_trajectory
 

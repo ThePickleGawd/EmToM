@@ -74,6 +74,7 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - Keep the public `task` high-level and non-leaking; use exact scene IDs in `agent_secrets` and `team_secrets` for goal-critical targets so private grounding remains precise.
 - Runtime task success ignores `K()` and uses the projected non-epistemic goal only.
 - `verify-pddl`, deterministic planning, and golden trajectory verification all solve the same projected non-epistemic functional goal.
+- Authored placement goals must use `is_on_top` only with non-articulated support surfaces. For articulated/container furniture such as cabinets, drawers, fridges, safes, and wardrobes, use `is_inside` when containment is intended. Validation rejects articulated `is_on_top` goals because planner translation and runtime success semantics do not agree on them.
 - Mechanic predicates such as `is_inverse`, `controls*`, `mirrors*`, `requires_item`, `unlocks`, `is_restricted`, and communication wiring are init-only support facts. They must never appear in `pddl_goal`, including inside `K()`.
 - The deterministic planner is the canonical mechanic implementation path. Runtime handlers and compiled planner facts must agree on mechanic semantics.
 - End-of-episode literal ToM probes are derived deterministically from `K()` formulas and reported separately from task success.

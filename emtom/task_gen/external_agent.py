@@ -187,10 +187,7 @@ class ExternalAgentLauncher:
             cmd = [
                 executable,
                 "exec",
-                "--sandbox",
-                "workspace-write",
-                "--ask-for-approval",
-                "never",
+                "--dangerously-bypass-approvals-and-sandbox",
                 "--cd",
                 str(workspace_dir),
             ]

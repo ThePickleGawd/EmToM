@@ -351,8 +351,12 @@ def _write_taskgen_shim(working_dir: Path) -> None:
     bin_dir = working_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     shim_path = bin_dir / "taskgen"
+    project_root = Path(__file__).resolve().parent.parent.parent
     shim_contents = f"""#!/usr/bin/env bash
 set -euo pipefail
+PROJECT_ROOT="{project_root}"
+export PYTHONPATH="$PROJECT_ROOT${{PYTHONPATH:+:$PYTHONPATH}}"
+cd "$PROJECT_ROOT"
 exec "{sys.executable}" -m emtom.cli.taskgen --working-dir "{working_dir}" "$@"
 """
     shim_path.write_text(shim_contents)
