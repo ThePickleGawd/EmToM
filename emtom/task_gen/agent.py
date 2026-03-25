@@ -315,6 +315,7 @@ class TaskGeneratorAgent:
             user_query=judge_query,
             diversity_tracker=self.diversity_tracker,
             difficulty=difficulty,
+            skip_steps=self.skip_steps or None,
         )
         if judge_threshold is not None:
             judge_kwargs["overall_threshold"] = judge_threshold

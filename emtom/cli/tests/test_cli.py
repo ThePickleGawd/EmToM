@@ -566,6 +566,52 @@ class TestJudgeTask:
             with pytest.raises(ValueError, match="Fast Downward strict backend"):
                 compute_strict_tom_metadata(task, scene_data=None)
 
+    def test_judge_prompt_omits_pddl_criterion_when_removed(self):
+        from emtom.task_gen.judge import (
+            _build_compiled_formal_view_block,
+            _build_criteria_section,
+            _build_formal_checks_section,
+            _build_response_format,
+        )
+
+        criteria_section = _build_criteria_section("cooperative", skip_steps=["pddl"])
+        response_format = _build_response_format("cooperative", skip_steps=["pddl"])
+        formal_checks = _build_formal_checks_section(["pddl"])
+        compiled_view = _build_compiled_formal_view_block({}, None, skip_steps=["pddl"])
+
+        assert "Formal Goal Quality & Epistemic Coherence" not in criteria_section
+        assert '"pddl_solvability"' not in response_format
+        assert "Do NOT score or discuss `pddl_solvability`" in formal_checks
+        assert "ignore formal solvability and compiled-plan evidence" in compiled_view
+
+    def test_judge_receives_skip_steps(self):
+        from emtom.cli.judge_task import run
+        from emtom.task_gen.judge import CouncilVerdict
+
+        task = _make_minimal_task()
+
+        with tempfile.TemporaryDirectory() as td:
+            task_path = Path(td) / "task.json"
+            with open(task_path, "w") as f:
+                json.dump(task, f)
+
+            with patch("emtom.task_gen.judge.Judge") as mock_judge_cls:
+                mock_judge = mock_judge_cls.return_value
+                mock_judge.min_criterion_threshold = 0.5
+                mock_judge.overall_threshold = 0.65
+                mock_judge.evaluate.return_value = CouncilVerdict(
+                    judgments={},
+                    passed=True,
+                    overall_score=1.0,
+                    required_fixes=[],
+                    disagreements=[],
+                )
+
+                result = run(str(task_path), skip_steps=["pddl", "tom", "simulation"])
+
+        assert result["success"] is True
+        assert mock_judge_cls.call_args.kwargs["skip_steps"] == ["pddl", "tom", "simulation"]
+
 
 # ---------------------------------------------------------------------------
 # static_validate_trajectory tests

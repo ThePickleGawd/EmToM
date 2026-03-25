@@ -447,6 +447,7 @@ def run(
         overall_threshold=threshold,
         difficulty=difficulty,
         user_query=user_query if not difficulty else None,
+        skip_steps=skip_steps,
     )
 
     try:

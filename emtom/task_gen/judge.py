@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from habitat_llm.llm.base_llm import BaseLLM
@@ -450,27 +450,14 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
   - functional benchmark success uses the non-epistemic projection only
   - `K()` goals are design-time / probe-time only and become end-of-episode literal-ToM probes
 - Category intent must be reflected in `problem_pddl` objective structure
-- Raw `problem_pddl` should be self-contained for scene/world facts: required symbols belong in `:objects`, relevant room grounding belongs in `:init`, while mechanic-derived init facts like room restrictions should come from `mechanic_bindings`
-- For solvability and mechanic-awareness, treat the Compiled Formal View below as authoritative. Do NOT penalize raw `problem_pddl` for omitting mechanic-derived init facts such as `is_restricted` or `can_communicate`; those are expected to be compiled from `mechanic_bindings`.
 - **Mechanic consistency**: Every mechanic referenced in `task` or `agent_secrets` (e.g., "the handle is reversed", "you have limited messages") MUST have a corresponding entry in `mechanic_bindings`. `message_targets` is a valid standalone way to encode communication restrictions and does not require a duplicate `restricted_communication` binding.
-- **K() goal backing**: Every `K()` goal in `problem_pddl` (or legacy goal field) must be backed by a mechanic that prevents the agent from directly observing the fact (e.g., `room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). If the agent could just walk there and see, the K() goal is fake.
-- **Functional projection quality**: Penalize tasks whose non-epistemic projection becomes vacuous, trivial, effectively single-agent, or no longer reflects the intended coordination challenge.
-- **Probe quality**: Reward K() goals when they probe who knows functionally relevant facts under real asymmetry. Do NOT require K() to be part of runtime pass/fail.
-- **Functional ToM quality**: Reward tasks where the best action depends on a partner-specific model (who can act, who will relay, who may prioritize a private goal, who has the last message). Penalize tasks that reduce to "agent A sees a hidden fact and tells agent B."
-- Distinguish **formal validity** from **design quality**:
-  - If the formal task is invalid, contradictory, or not self-contained, score `Formal Goal Quality & Epistemic Coherence` near 0.
-  - If the formal task is valid, judge whether both the functional projection and the literal-ToM probe structure are meaningful for the benchmark rather than merely technically valid.
+{formal_checks_section}
 
 ## Derived Runtime View
 Use this derived runtime view when judging split-semantics quality.
 {runtime_semantics_section}
 
-## Compiled Formal View
-Use this normalized formal problem when checking mechanic-aware solvability claims.
-It reflects the authored `problem_pddl` after mechanic-derived and planner-required
-init facts are compiled in. This is the authoritative formal view for
-`pddl_solvability`; raw `problem_pddl` may omit mechanic-derived init facts.
-{compiled_formal_view_section}
+{compiled_formal_view_block}
 
 ## Benchmark Comparison
 Use this when calibration data exists.
@@ -551,17 +538,32 @@ This task must be difficult enough that GPT-5.2 CANNOT solve it. Apply strict st
 }
 
 
-def _get_criteria_for_category(category: str, user_query: Optional[str] = None) -> List[str]:
-    """Get the list of criteria for a category, optionally including user_requirements_alignment."""
+def _normalize_skip_steps(skip_steps: Optional[List[str]]) -> Set[str]:
+    """Normalize skip-step names for prompt and parser logic."""
+    return {str(step).strip().lower() for step in (skip_steps or []) if str(step).strip()}
+
+
+def _get_criteria_for_category(
+    category: str,
+    user_query: Optional[str] = None,
+    skip_steps: Optional[List[str]] = None,
+) -> List[str]:
+    """Get the active criteria for a category under the current pipeline config."""
     criteria = list(CATEGORY_CRITERIA.get(category, SHARED_CRITERIA))
+    if "pddl" in _normalize_skip_steps(skip_steps):
+        criteria = [criterion for criterion in criteria if criterion != "pddl_solvability"]
     if user_query:
         criteria.append("user_requirements_alignment")
     return criteria
 
 
-def _build_criteria_section(category: str, user_query: Optional[str] = None) -> str:
+def _build_criteria_section(
+    category: str,
+    user_query: Optional[str] = None,
+    skip_steps: Optional[List[str]] = None,
+) -> str:
     """Build the criteria section for a given category."""
-    criteria = _get_criteria_for_category(category, user_query)
+    criteria = _get_criteria_for_category(category, user_query, skip_steps=skip_steps)
     lines = []
     for i, criterion in enumerate(criteria, 1):
         info = CRITERIA_DESCRIPTIONS.get(criterion, {})
@@ -572,13 +574,56 @@ def _build_criteria_section(category: str, user_query: Optional[str] = None) -> 
     return "\n".join(lines)
 
 
-def _build_response_format(category: str, user_query: Optional[str] = None) -> str:
+def _build_response_format(
+    category: str,
+    user_query: Optional[str] = None,
+    skip_steps: Optional[List[str]] = None,
+) -> str:
     """Build the JSON response format for a given category."""
-    criteria = _get_criteria_for_category(category, user_query)
+    criteria = _get_criteria_for_category(category, user_query, skip_steps=skip_steps)
     lines = []
     for criterion in criteria:
         lines.append(f'  "{criterion}": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},')
     return "\n".join(lines)
+
+
+def _build_formal_checks_section(skip_steps: Optional[List[str]] = None) -> str:
+    """Build the formal-solvability instructions for the council prompt."""
+    if "pddl" in _normalize_skip_steps(skip_steps):
+        return (
+            "- PDDL solvability verification is disabled for this run. Do NOT score or discuss "
+            "`pddl_solvability`, formal proof quality, or compiled solvability evidence.\n"
+            "- You may still use `problem_pddl` to understand authored goals, but judge only task "
+            "design quality, runtime functional pressure, mechanic coherence, and split-semantics "
+            "meaningfulness."
+        )
+
+    return (
+        "- Raw `problem_pddl` should be self-contained for scene/world facts: required symbols belong "
+        "in `:objects`, relevant room grounding belongs in `:init`, while mechanic-derived init facts "
+        "like room restrictions should come from `mechanic_bindings`\n"
+        "- For solvability and mechanic-awareness, treat the Compiled Formal View below as authoritative. "
+        "Do NOT penalize raw `problem_pddl` for omitting mechanic-derived init facts such as "
+        "`is_restricted` or `can_communicate`; those are expected to be compiled from "
+        "`mechanic_bindings`.\n"
+        "- **K() goal backing**: Every `K()` goal in `problem_pddl` (or legacy goal field) must be "
+        "backed by a mechanic that prevents the agent from directly observing the fact (e.g., "
+        "`room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). "
+        "If the agent could just walk there and see, the K() goal is fake.\n"
+        "- **Functional projection quality**: Penalize tasks whose non-epistemic projection becomes "
+        "vacuous, trivial, effectively single-agent, or no longer reflects the intended coordination "
+        "challenge.\n"
+        "- **Probe quality**: Reward K() goals when they probe who knows functionally relevant facts "
+        "under real asymmetry. Do NOT require K() to be part of runtime pass/fail.\n"
+        "- **Functional ToM quality**: Reward tasks where the best action depends on a partner-specific "
+        "model (who can act, who will relay, who may prioritize a private goal, who has the last "
+        "message). Penalize tasks that reduce to \"agent A sees a hidden fact and tells agent B.\"\n"
+        "- Distinguish **formal validity** from **design quality**:\n"
+        "  - If the formal task is invalid, contradictory, or not self-contained, score `Formal Goal "
+        "Quality & Epistemic Coherence` near 0.\n"
+        "  - If the formal task is valid, judge whether both the functional projection and the "
+        "literal-ToM probe structure are meaningful for the benchmark rather than merely technically valid."
+    )
 
 
 def _build_runtime_semantics_section(task_dict: Dict[str, Any]) -> str:
@@ -650,6 +695,28 @@ def _build_compiled_formal_view_section(
         return "\n".join(lines)
     except Exception as exc:
         return f"Compiled formal view unavailable: {exc}"
+
+
+def _build_compiled_formal_view_block(
+    task_dict: Dict[str, Any],
+    scene_data: Optional["SceneData"],
+    skip_steps: Optional[List[str]] = None,
+) -> str:
+    """Build the compiled-formal-view block, or omit it when PDDL judging is disabled."""
+    if "pddl" in _normalize_skip_steps(skip_steps):
+        return (
+            "## Compiled Formal View\n"
+            "PDDL verification is disabled for this run, so ignore formal solvability and compiled-plan evidence."
+        )
+
+    return (
+        "## Compiled Formal View\n"
+        "Use this normalized formal problem when checking mechanic-aware solvability claims.\n"
+        "It reflects the authored `problem_pddl` after mechanic-derived and planner-required\n"
+        "init facts are compiled in. This is the authoritative formal view for\n"
+        "`pddl_solvability`; raw `problem_pddl` may omit mechanic-derived init facts.\n"
+        f"{_build_compiled_formal_view_section(task_dict, scene_data)}"
+    )
 
 
 def _build_benchmark_comparison_section(task_dict: Dict[str, Any]) -> str:
@@ -740,6 +807,7 @@ class Judge:
         user_query: Optional[str] = None,
         diversity_tracker: Optional["DiversityTracker"] = None,
         difficulty: Optional[str] = None,
+        skip_steps: Optional[List[str]] = None,
     ):
         """
         Initialize the judge.
@@ -752,6 +820,7 @@ class Judge:
             user_query: Optional user query that the task should align with
             diversity_tracker: Optional tracker to check task novelty against existing tasks
             difficulty: Intended difficulty level ("easy", "medium", "hard") for calibrated evaluation
+            skip_steps: Optional pipeline steps removed for this run (e.g. ["pddl"])
         """
         self.models = models or self.DEFAULT_MODELS
         self.overall_threshold = overall_threshold
@@ -760,6 +829,7 @@ class Judge:
         self.user_query = user_query
         self.diversity_tracker = diversity_tracker
         self.difficulty = difficulty
+        self.skip_steps = sorted(_normalize_skip_steps(skip_steps))
 
         # LLM clients (created lazily)
         self._llm_clients: Dict[str, "BaseLLM"] = {}
@@ -1112,11 +1182,24 @@ The user specifically requested:
             category_description=CATEGORY_PROMPT_DESCRIPTIONS.get(category, ""),
             difficulty_section=difficulty_section,
             user_requirements_section=user_requirements_section,
+            formal_checks_section=_build_formal_checks_section(self.skip_steps),
             runtime_semantics_section=_build_runtime_semantics_section(task_dict),
-            compiled_formal_view_section=_build_compiled_formal_view_section(task_dict, scene_data),
+            compiled_formal_view_block=_build_compiled_formal_view_block(
+                task_dict,
+                scene_data,
+                skip_steps=self.skip_steps,
+            ),
             benchmark_comparison_section=_build_benchmark_comparison_section(task_dict),
-            criteria_section=_build_criteria_section(category, self.user_query),
-            response_format=_build_response_format(category, self.user_query),
+            criteria_section=_build_criteria_section(
+                category,
+                self.user_query,
+                skip_steps=self.skip_steps,
+            ),
+            response_format=_build_response_format(
+                category,
+                self.user_query,
+                skip_steps=self.skip_steps,
+            ),
             task_json=task_json,
             available_actions=grounding["available_actions"],
             available_mechanics=grounding["available_mechanics"],
@@ -1168,9 +1251,22 @@ The user specifically requested:
             print(f"[Judge/{model}] Received response ({len(response or '')} chars)")
 
         # Parse response (pass user_query so it knows which criteria to expect)
-        return self._parse_response(response or "", model, category, self.user_query)
+        return self._parse_response(
+            response or "",
+            model,
+            category,
+            self.user_query,
+            skip_steps=self.skip_steps,
+        )
 
-    def _parse_response(self, response: str, model: str, category: str = "cooperative", user_query: Optional[str] = None) -> Judgment:
+    def _parse_response(
+        self,
+        response: str,
+        model: str,
+        category: str = "cooperative",
+        user_query: Optional[str] = None,
+        skip_steps: Optional[List[str]] = None,
+    ) -> Judgment:
         """Parse LLM response into Judgment."""
         # Extract JSON
         json_match = re.search(r"\{[\s\S]*\}", response)
@@ -1183,7 +1279,7 @@ The user specifically requested:
             return self._failed_judgment(f"[{model}] JSON parse error: {e}", category)
 
         # Get criteria for this category (includes user_requirements_alignment if query provided)
-        criteria_names = _get_criteria_for_category(category, user_query)
+        criteria_names = _get_criteria_for_category(category, user_query, skip_steps=skip_steps)
 
         criteria_scores = {}
         scores = []
@@ -1252,7 +1348,11 @@ The user specifically requested:
 
     def _failed_judgment(self, reason: str, category: str = "cooperative") -> Judgment:
         """Create a failed judgment for parse errors."""
-        criteria_names = CATEGORY_CRITERIA.get(category, SHARED_CRITERIA)
+        criteria_names = _get_criteria_for_category(
+            category,
+            self.user_query,
+            skip_steps=self.skip_steps,
+        )
         failed_scores = {
             name: CriterionScore(score=0.0, reasoning=reason)
             for name in criteria_names
