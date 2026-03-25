@@ -38,6 +38,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
+from .authoring_surface import (
+    AUTHORING_ITEMS_NOTICE,
+    format_supported_mechanics,
+    get_authoring_action_descriptions,
+    get_authoring_mechanics,
+    get_authoring_predicates,
+)
+
 if TYPE_CHECKING:
     from habitat_llm.llm.base_llm import BaseLLM
     from .task_generator import GeneratedTask
@@ -434,7 +442,7 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 {available_actions}
 ### Available Mechanics
 {available_mechanics}
-### Available Items
+### Item Status
 {available_items}
 ### Available Predicates (for success_condition)
 {available_predicates}
@@ -883,34 +891,24 @@ class Judge:
         """Get cached grounding information about system capabilities."""
         if self._available_actions is None:
             try:
-                from emtom.actions import ActionRegistry
-                self._available_actions = ActionRegistry.get_all_action_descriptions()
+                self._available_actions = get_authoring_action_descriptions()
             except Exception:
-                self._available_actions = "Navigate, Open, Close, Pick, Place, UseItem, Communicate, Wait"
+                self._available_actions = "Navigate, Open, Close, Pick, Place, Communicate, Wait"
 
         if self._available_mechanics is None:
             try:
-                from emtom.mechanics import get_mechanics_for_task_generation
-                self._available_mechanics = get_mechanics_for_task_generation()
+                self._available_mechanics = get_authoring_mechanics()
             except Exception:
-                self._available_mechanics = "inverse_state, remote_control, state_mirroring, conditional_unlock"
+                self._available_mechanics = format_supported_mechanics()
 
         if self._available_items is None:
-            try:
-                from emtom.state.item_registry import ItemRegistry
-                self._available_items = ItemRegistry.get_items_for_task_generation()
-            except Exception:
-                self._available_items = "item_small_key_1, item_radio_1, item_oracle_crystal_1"
+            self._available_items = AUTHORING_ITEMS_NOTICE
 
         if self._available_predicates is None:
             try:
-                from emtom.evaluation import PARTNR_PREDICATES, EMTOM_PREDICATES
-                all_predicates = PARTNR_PREDICATES | EMTOM_PREDICATES
-                all_predicates.add("has_item")
-                all_predicates.add("is_unlocked")
-                self._available_predicates = ", ".join(sorted(all_predicates))
+                self._available_predicates = get_authoring_predicates()
             except Exception:
-                self._available_predicates = "is_on_top, is_inside, is_in_room, is_on_floor, is_next_to, is_open, is_closed, is_clean, is_dirty, is_filled, is_empty, is_powered_on, is_held_by, has_item, is_unlocked"
+                self._available_predicates = "is_on_top, is_inside, is_in_room, is_on_floor, is_next_to, is_open, is_closed, is_clean, is_dirty, is_filled, is_empty, is_powered_on, is_unlocked, is_locked, is_held_by, agent_in_room"
 
         return {
             "available_actions": self._available_actions,

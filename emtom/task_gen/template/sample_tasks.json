@@ -5,8 +5,6 @@
   "episode_id": "1512",
   "scene_id": "107734449_176000403",
   "active_mechanics": ["inverse_state"],
-  "items": [],
-  "locked_containers": {},
   "mechanic_bindings": [
     {
       "mechanic_type": "inverse_state",

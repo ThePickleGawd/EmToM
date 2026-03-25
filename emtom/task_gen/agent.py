@@ -26,6 +26,13 @@ from omegaconf import DictConfig
 
 from .prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, _strip_pddl_from_guidance, _strip_simulation_from_guidance
 from .judge import Judge, Judgment, CouncilVerdict, Colors
+from .authoring_surface import (
+    AUTHORING_ITEMS_NOTICE,
+    get_authoring_action_descriptions,
+    get_authoring_default_actions,
+    get_authoring_mechanics,
+    get_authoring_predicates,
+)
 from .diversity import DiversityTracker
 from .seed_sanitizer import sanitize_task_for_seeding
 from .seed_selector import SeedSelectionConfig, build_seed_candidates, select_seed_tasks
@@ -34,7 +41,6 @@ from .spec_validator import (
     validate_room_restriction_trajectory,
 )
 from .task_bootstrap import build_scene_bootstrap_problem_pddl
-from emtom.actions import ActionRegistry
 
 if TYPE_CHECKING:
     from habitat_llm.llm.base_llm import BaseLLM
@@ -280,7 +286,7 @@ class TaskGeneratorAgent:
                 template = json.load(f)
             # Set num_agents to max (LLM will choose within range)
             template["num_agents"] = self.agents_max
-            default_actions = ["Navigate", "Open", "Close", "Pick", "Place", "UseItem", "Communicate", "Wait"]
+            default_actions = get_authoring_default_actions(include_find_tools=False)
             template["agent_secrets"] = {
                 f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
                 for i in range(self.agents_max)
@@ -431,13 +437,8 @@ class TaskGeneratorAgent:
         # Don't create working_task.json yet - agent must call new_scene first
         # self._create_working_task_from_template() is called in _new_scene()
 
-        # Get available items from registry
-        from emtom.state.item_registry import ItemRegistry
-        available_items = ItemRegistry.get_items_for_task_generation()
-
-        # Get available mechanics
-        from emtom.mechanics import get_mechanics_for_task_generation
-        available_mechanics = get_mechanics_for_task_generation()
+        available_items = AUTHORING_ITEMS_NOTICE
+        available_mechanics = get_authoring_mechanics()
 
         # Select category (random if not specified)
         task_category = self.category or random.choice(["cooperative", "competitive", "mixed"])
@@ -449,13 +450,11 @@ class TaskGeneratorAgent:
             # Default: random from 1, 2, 3
             self._current_k_level = random.choice([1, 2, 3])
 
-        # Get available predicates from domain
-        from emtom.pddl.domain import get_predicates_for_prompt
-        available_predicates = get_predicates_for_prompt()
+        available_predicates = get_authoring_predicates()
 
         # Initialize conversation with action descriptions and paths injected
         replacements = {
-            "{action_descriptions}": ActionRegistry.get_all_action_descriptions(),
+            "{action_descriptions}": get_authoring_action_descriptions(),
             "{task_file}": str(self.task_file),
             "{working_dir}": str(self.working_dir),
             "{available_items}": available_items,
@@ -549,7 +548,7 @@ Your previous task did not pass the ToM verification. You MUST address these iss
                     "## Difficulty: EASY\n"
                     "Generate SIMPLE tasks that weaker models can solve:\n"
                     "- Use 0-1 mechanics (prefer limited_bandwidth or room_restriction)\n"
-                    "- Avoid inverse_state and chained conditional_unlock — models cannot discover these\n"
+                    "- Avoid inverse_state on easy tasks unless the secret states it plainly\n"
                     "- 2-3 agents with clear roles\n"
                     "- 2-3 subtasks maximum\n"
                     "- Secrets MUST explain any active mechanic in plain language\n"
@@ -886,7 +885,7 @@ Always rewrite `title`, `task`, `agent_secrets`, and `team_secrets` from scratch
         # Only generate placeholder agent fields when not using a seed task
         if seed_path is None:
             # Include Find* tools so agents can discover objects at runtime instead of hardcoded IDs
-            default_actions = ["Navigate", "Open", "Close", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
+            default_actions = get_authoring_default_actions(include_find_tools=True)
             task["agent_secrets"] = {
                 f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
                 for i in range(num_agents)
@@ -2460,7 +2459,7 @@ working_task.json reset."""
 
         # Guidance about IDs vs natural language
         lines.append("**ID Usage Rules:**")
-        lines.append("- `problem_pddl`, `mechanic_bindings`, `locked_containers`: Use EXACT object IDs from this list")
+        lines.append("- `problem_pddl` and `mechanic_bindings`: Use EXACT object IDs from this list")
         lines.append("- `task` description: Keep it high-level and non-leaking; natural language is preferred and exact IDs are optional")
         lines.append("- `agent_secrets`: Use EXACT scene IDs for goal-critical objects, furniture, and rooms whenever the agent needs precise grounding\n")
 

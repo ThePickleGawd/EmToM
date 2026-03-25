@@ -68,8 +68,10 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - Keep one clear implementation path.
 - Prefer direct data flow over hidden coupling.
 - Treat verification as a hard gate, not a warning system.
+- Task authoring currently supports only these mechanics: `room_restriction`, `limited_bandwidth`, `restricted_communication`, `remote_control`, `state_mirroring`, and `inverse_state`.
+- Task-added items are temporarily hidden from authoring. Do not rely on `items`, `locked_containers`, or `UseItem` in newly generated benchmark tasks.
 - Keep `problem_pddl` as the single authored source of epistemic structure and goals.
-- Generate `problem_pddl :objects` and `:init` deterministically from the loaded scene snapshot, task items, and mechanic bindings instead of hand-authoring scene state.
+- Generate `problem_pddl :objects` and `:init` deterministically from the loaded scene snapshot and mechanic bindings instead of hand-authoring scene state.
 - Keep benchmark mechanics authored once in `mechanic_bindings`; derive all planner-only mechanic init facts from those bindings instead of duplicating them in `problem_pddl`.
 - Keep the public `task` high-level and non-leaking; use exact scene IDs in `agent_secrets` and `team_secrets` for goal-critical targets so private grounding remains precise.
 - Runtime task success ignores `K()` and uses the projected non-epistemic goal only.

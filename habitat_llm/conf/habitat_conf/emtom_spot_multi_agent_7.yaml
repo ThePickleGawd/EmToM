@@ -144,7 +144,7 @@ habitat:
         return_image: False
         is_return_image_bbox: False
   environment:
-    max_episode_steps: 1000
+    max_episode_steps: 20000
   simulator:
     type: CollaborationSim-v0
     additional_object_paths:

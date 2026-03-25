@@ -13,6 +13,7 @@ from emtom.cli import CLIResult, failure, success
 from emtom.cli.judge_task import run as judge_task_run
 from emtom.cli.submit_task import run as submit_task_run
 from emtom.cli.validate_task import validate
+from emtom.task_gen.authoring_surface import get_authoring_default_actions
 from emtom.task_gen.scene_loader import SceneData
 from emtom.task_gen.task_bootstrap import build_scene_bootstrap_problem_pddl
 
@@ -351,19 +352,7 @@ class TaskGenSession:
     def _create_working_task_from_template(self, num_agents: int) -> None:
         with open(self.template_file) as f:
             task = json.load(f)
-        default_actions = [
-            "Navigate",
-            "Open",
-            "Close",
-            "Pick",
-            "Place",
-            "UseItem",
-            "FindObjectTool",
-            "FindReceptacleTool",
-            "FindRoomTool",
-            "Communicate",
-            "Wait",
-        ]
+        default_actions = get_authoring_default_actions(include_find_tools=True)
         task["agent_secrets"] = {
             f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"] for i in range(num_agents)
         }

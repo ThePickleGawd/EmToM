@@ -188,7 +188,7 @@ def _build_external_spec_guidance(
         lines.append(f"- `{working_dir}/sampled_tasks/`: raw seed task JSONs for deeper inspection only when needed.")
     lines.extend(
         [
-            "- `available_predicates.md`, `available_mechanics.md`, `available_actions.md`, `available_items.md`: inspect only when needed.",
+            "- `available_predicates.md`, `available_mechanics.md`, `available_actions.md`: inspect only when needed.",
             "",
             "## Hard Authoring Rules",
             "- Use exact scene IDs and only valid agent IDs returned by `taskgen new_scene`.",
@@ -197,6 +197,7 @@ def _build_external_spec_guidance(
             "- Every mechanic must materially affect the task.",
             "- Do not hand-author `golden_trajectory`.",
             "- If `message_targets` is present, it already acts as a valid communication restriction.",
+            "- Task-added items are disabled for now. Do not use `items`, `locked_containers`, or `UseItem`.",
             "- Use canonical mechanic schema only:",
             "  `room_restriction` -> `restricted_rooms` + `for_agents`",
             "  `limited_bandwidth` -> `message_limits`",
@@ -254,7 +255,7 @@ def _build_external_checklist(skip_pddl: bool, skip_test: bool) -> str:
     lines = [
         "## Pre-Submit Checklist",
         "- The physical goal requires communication or partner modeling.",
-        "- All referenced agents, objects, furniture, and rooms exist in the current scene or declared items.",
+        "- All referenced agents, objects, furniture, and rooms exist in the current scene.",
         "- Category fields are valid for the selected category.",
         "- Mechanics and secrets agree about actual constraints, but secrets do not explain the coordination plan.",
         "- No malformed bindings, missing required mechanic fields, or invalid message limits.",
@@ -381,7 +382,6 @@ Use the repo-owned `taskgen` commands for scene loading, judging, testing, submi
         "- `available_predicates.md`: valid predicates and goal syntax.\n"
         "- `available_mechanics.md`: mechanic names and fields.\n"
         "- `available_actions.md`: supported runtime actions.\n"
-        "- `available_items.md`: optional task-added items.\n"
         "- Avoid repeating the same mechanic stack or target pattern across tasks in this run.",
     ]
 

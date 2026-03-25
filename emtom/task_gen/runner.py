@@ -22,11 +22,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from emtom.actions import ActionRegistry
-from emtom.mechanics import get_mechanics_for_task_generation
-from emtom.pddl.domain import get_predicates_for_prompt
 from emtom.task_gen.event_log import append_event, maybe_int, write_run_manifest, write_worker_snapshot
 from emtom.task_gen.external_agent import ExternalAgentError, ExternalAgentLauncher
+from emtom.task_gen.authoring_surface import (
+    AUTHORING_ITEMS_NOTICE,
+    get_authoring_action_descriptions,
+    get_authoring_default_actions,
+    get_authoring_mechanics,
+    get_authoring_predicates,
+)
 from emtom.task_gen.prompts import build_external_taskgen_prompt
 from emtom.task_gen.seed_selector import (
     SeedSelectionConfig,
@@ -35,7 +39,6 @@ from emtom.task_gen.seed_selector import (
     select_seed_tasks,
 )
 from emtom.task_gen.session import default_state
-from emtom.state.item_registry import ItemRegistry
 
 
 def parse_extra_args():
@@ -185,7 +188,9 @@ def _summarize_goal_metadata(task_data: dict) -> tuple[str, str]:
         return _truncate_text(problem_pddl, limit=260), "unknown"
 
 
-def _write_sampled_tasks_summary(sampled_tasks_dir: Path) -> None:
+def _write_sampled_tasks_summary(sampled_tasks_dir: Path, model: str = "gpt-5.2") -> None:
+    from emtom.evolve.benchmark_wrapper import cal_passed, cal_progress, find_calibration_entry
+
     sample_files = sorted(sampled_tasks_dir.glob("task_*.json"))
     if not sample_files:
         return
@@ -195,6 +200,10 @@ def _write_sampled_tasks_summary(sampled_tasks_dir: Path) -> None:
         "",
         "Read this file first. It contains the compact fields that matter for seed-task inspiration.",
         "Use sampled tasks for structure only. Do not copy scene IDs, object IDs, agent IDs, or exact wording.",
+        "",
+        "**Benchmark column**: PASS = baseline solved the task and it was submitted successfully.",
+        "FAIL = task was benchmarked but baseline could not solve it. UNTESTED = no benchmark data.",
+        "Prefer structural patterns from PASS tasks — they are empirically solvable.",
         "",
     ]
 
@@ -219,6 +228,17 @@ def _write_sampled_tasks_summary(sampled_tasks_dir: Path) -> None:
         task_text = _truncate_text(task_data.get("task"), limit=240)
         goal_summary, owner_summary = _summarize_goal_metadata(task_data)
 
+        # Benchmark pass/fail signal from calibration data
+        cal = find_calibration_entry(task_data.get("calibration", []), model=model)
+        if cal is None:
+            benchmark_str = "UNTESTED"
+        elif cal_passed(cal):
+            progress = cal_progress(cal)
+            benchmark_str = f"PASS (progress={progress:.0%})"
+        else:
+            progress = cal_progress(cal)
+            benchmark_str = f"FAIL (progress={progress:.0%})"
+
         lines.extend(
             [
                 f"## {path.name}",
@@ -229,6 +249,7 @@ def _write_sampled_tasks_summary(sampled_tasks_dir: Path) -> None:
                 f"- Task: {task_text}",
                 f"- Goal: {goal_summary}",
                 f"- Goal owners: {owner_summary}",
+                f"- Benchmark: {benchmark_str}",
                 "",
             ]
         )
@@ -244,7 +265,7 @@ def populate_sampled_tasks_dir(
     selected = select_seed_tasks(selection_config, count=sample_count)
     for i, candidate in enumerate(selected, 1):
         _copy_sample(candidate.path, sampled_tasks_dir, i)
-    _write_sampled_tasks_summary(sampled_tasks_dir)
+    _write_sampled_tasks_summary(sampled_tasks_dir, model=selection_config.target_model)
     return selection_config.tasks_dir if selected else None, len(selected)
 
 
@@ -421,7 +442,7 @@ def _write_template_file(template_file: Path, agents_max: int) -> None:
     with open(source_template) as f:
         template = json.load(f)
     template["num_agents"] = agents_max
-    default_actions = ["Navigate", "Open", "Close", "Pick", "Place", "UseItem", "Communicate", "Wait"]
+    default_actions = get_authoring_default_actions(include_find_tools=False)
     template["agent_secrets"] = {
         f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"] for i in range(agents_max)
     }
@@ -582,7 +603,7 @@ def main() -> None:
         for i, task_path in enumerate(selected, 1):
             shutil.copy(task_path, sampled_tasks_dir / task_path.name)
             _copy_sample(task_path, sampled_tasks_dir, i)
-        _write_sampled_tasks_summary(sampled_tasks_dir)
+        _write_sampled_tasks_summary(sampled_tasks_dir, model=target_model)
     elif seed_tasks_dir is not None:
         selection_config = SeedSelectionConfig(
             tasks_dir=seed_tasks_dir,
@@ -614,10 +635,10 @@ def main() -> None:
         seed_fail_ratio=seed_fail_ratio,
     )
 
-    available_items = ItemRegistry.get_items_for_task_generation()
-    available_mechanics = get_mechanics_for_task_generation()
-    available_predicates = get_predicates_for_prompt()
-    action_descriptions = ActionRegistry.get_all_action_descriptions()
+    available_items = AUTHORING_ITEMS_NOTICE
+    available_mechanics = get_authoring_mechanics()
+    available_predicates = get_authoring_predicates()
+    action_descriptions = get_authoring_action_descriptions()
 
     prompt_text = build_external_taskgen_prompt(
         working_dir=str(working_dir),

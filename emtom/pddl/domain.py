@@ -5,6 +5,10 @@ Encodes all EmToM actions, predicates, and types with conditional effects
 for mechanics (inverse_state, state_mirroring, remote_control, etc.).
 """
 
+from __future__ import annotations
+
+from typing import Optional, Set
+
 from emtom.pddl.dsl import (
     Type,
     Predicate,
@@ -182,7 +186,7 @@ def validate_goal_formula_allowed(formula: Formula) -> list[str]:
     return errors
 
 
-def get_predicates_for_prompt() -> str:
+def get_predicates_for_prompt(allowed_predicates: Optional[Set[str]] = None) -> str:
     """
     Generate predicate signatures for the LLM system prompt.
 
@@ -191,15 +195,20 @@ def get_predicates_for_prompt() -> str:
     pred_map = {p.name: p for p in EMTOM_PREDICATES}
     lines = []
     for group_name, pred_names in _PREDICATE_GROUPS:
-        lines.append(f"### {group_name}")
+        group_lines = []
         for name in pred_names:
+            if allowed_predicates is not None and name not in allowed_predicates:
+                continue
             pred = pred_map.get(name)
             if not pred:
                 continue
             params_str = " ".join(f"{p.name}:{p.type}" for p in pred.params)
             desc = _PREDICATE_DESCRIPTIONS.get(name, "")
-            lines.append(f"- `({name} {params_str})` — {desc}")
-        lines.append("")
+            group_lines.append(f"- `({name} {params_str})` — {desc}")
+        if group_lines:
+            lines.append(f"### {group_name}")
+            lines.extend(group_lines)
+            lines.append("")
     return "\n".join(lines)
 
 
