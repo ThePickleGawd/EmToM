@@ -51,6 +51,7 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - `test_task` now runs both `standard` and `baseline` in parallel.
 - Dataset difficulty calibration uses the `standard` result only, with a target pass rate of 20% by default for the current target model.
 - `baseline` does not replace the planner/golden-trajectory check; it is an additional empirical check that the task becomes solvable when private information is removed.
+- Submitted benchmark tasks must stay grounded in a real dataset `scene_id` and `episode_id`. Synthetic fallback scenes are allowed for lightweight authoring environments, but they must be rejected before submission and benchmark runs.
 
 ## Code Ownership
 
