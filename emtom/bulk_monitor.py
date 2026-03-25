@@ -5,7 +5,8 @@ Parses log files from bulk_generate.sh and displays a live dashboard.
 
 Usage:
     ./emtom/bulk_monitor.sh                           # Auto-detect latest run
-    ./emtom/bulk_monitor.sh outputs/bulk_gen_logs/2026-02-03_19-22-36-bulk-generate
+    ./emtom/bulk_monitor.sh outputs/generations/2026-03-25_13-27-04-generation
+    ./emtom/bulk_monitor.sh outputs/generations/2026-03-25_13-27-04-generation/logs
 """
 
 import argparse
@@ -14,6 +15,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 # ANSI colors
 RED = "\033[0;31m"
@@ -44,8 +46,10 @@ def parse_log(log_path: Path) -> dict:
         "fail_reason": "",
     }
 
-    # Extract GPU/category from filename: gpu0_slot1_competitive.log
-    match = re.match(r"gpu(\d+)_slot(\d+)_(\w+)\.log", log_path.name)
+    # Extract GPU/category from filename:
+    #   gpu0_slot1_competitive.log
+    #   gpu0_slot1_competitive_worker0001.log
+    match = re.match(r"gpu(\d+)_slot(\d+)_([a-zA-Z0-9]+?)(?:_worker\d+)?\.log", log_path.name)
     if match:
         info["gpu"] = match.group(1)
         info["category"] = match.group(3)
@@ -116,12 +120,44 @@ def parse_log(log_path: Path) -> dict:
 
 
 def find_latest_bulk_dir(project_root: Path):
-    """Find the most recent bulk-generate output directory."""
-    outputs_dir = project_root / "outputs" / "bulk_gen_logs"
+    """Find the most recent bulk generation directory in the current layout."""
+    outputs_dir = project_root / "outputs" / "generations"
     if not outputs_dir.exists():
         return None
-    bulk_dirs = sorted(outputs_dir.glob("*-bulk-generate"), reverse=True)
-    return bulk_dirs[0] if bulk_dirs else None
+
+    generation_dirs = [p for p in outputs_dir.glob("*-generation") if p.is_dir()]
+    if not generation_dirs:
+        return None
+
+    def _sort_key(path: Path):
+        launcher = path / "launcher.log"
+        try:
+            return launcher.stat().st_mtime if launcher.exists() else path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return max(generation_dirs, key=_sort_key)
+
+
+def resolve_log_dir(project_root: Path, raw_path: Optional[str]) -> Optional[Path]:
+    """Resolve a user-supplied path or auto-detect the latest generation log dir."""
+    if raw_path:
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = project_root / candidate
+    else:
+        candidate = find_latest_bulk_dir(project_root)
+        if candidate is None:
+            return None
+
+    if candidate.name == "logs":
+        return candidate
+
+    logs_dir = candidate / "logs"
+    if logs_dir.exists():
+        return logs_dir
+
+    return candidate
 
 
 def render_dashboard(log_dir, infos):
@@ -252,13 +288,11 @@ def main():
     project_root = Path(__file__).resolve().parent.parent
 
     if args.log_dir:
-        log_dir = Path(args.log_dir)
-        if not log_dir.is_absolute():
-            log_dir = project_root / log_dir
+        log_dir = resolve_log_dir(project_root, args.log_dir)
     else:
-        log_dir = find_latest_bulk_dir(project_root)
+        log_dir = resolve_log_dir(project_root, None)
         if log_dir is None:
-            print(f"{RED}No bulk-generate output found in outputs/bulk_gen_logs/{NC}")
+            print(f"{RED}No bulk-generate output found in outputs/generations/{NC}")
             sys.exit(1)
 
     if not log_dir.exists():
