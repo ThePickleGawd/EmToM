@@ -49,7 +49,7 @@ except ImportError:
 # NOTE: In some benchmark harness environments unified-planning may be partially
 # available or misconfigured, leading to opaque parse errors. We treat the
 # strict backend as unavailable unless explicitly enabled.
-FORCE_DISABLE_UP = True  # forced off in taskgen workspace: UP/FD parse errors are flaky here
+FORCE_DISABLE_UP = False
 
 
 
