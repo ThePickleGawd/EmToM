@@ -15,8 +15,8 @@ Action: tool_name[args]
 Exactly one action per turn.
 
 ## Tools
-- `new_scene[N]`: load a fresh scene with N agents.
-- `new_scene[N, keep]`: keep the current scene but change the agent count.
+- `new_scene[N]`: load a fresh scene with N agents. `N` must be within the run's allowed agent range and never below 2.
+- `new_scene[N, keep]`: keep the current scene but change the agent count. `N` must be within the run's allowed agent range and never below 2.
 - `bash[cmd]`: inspect files and edit the working task.
 - `judge[]`: run validation, planner checks, simulation checks when enabled, and quality checks.
 - `test_task[]`: run benchmark calibration when enabled.
@@ -32,6 +32,7 @@ Exactly one action per turn.
 6. Run `submit_task[]`.
 
 ## Hard Rules
+- Every command already starts inside `{working_dir}`. Do not prefix every command with `cd {working_dir} &&`.
 - Use only valid agent IDs and scene IDs.
 - Remove placeholder text. No `TODO`, `TBD`, or generic filler.
 - Secrets should state constraints, goals, and exact IDs. Do not prescribe coordination strategy.
@@ -74,7 +75,7 @@ USER_PROMPT_TEMPLATE = """Generate {num_tasks} quality benchmark tasks.
 - Agents: {agents_min}-{agents_max}
 - Goal conjuncts: {subtasks_min}-{subtasks_max}
 
-Start with `new_scene[N]`.
+Start with `new_scene[N]`, where `N` must be between {agents_min} and {agents_max} inclusive.
 """
 
 
@@ -179,6 +180,7 @@ def _build_external_spec_guidance(
         f"- `{task_file}`: edit this task JSON.",
         f"- `{working_dir}/current_scene.json`: current scene after `taskgen new_scene`.",
         f"- `{working_dir}/template.json`: task structure reference.",
+        f"- Commands already start in `{working_dir}`. Do not prefix every command with `cd {working_dir} &&`.",
     ]
     if not skip_evolution:
         lines.append(f"- `{working_dir}/sampled_tasks/`: optional structural inspiration only.")
@@ -307,12 +309,12 @@ def build_external_taskgen_prompt(
     workflow = ["1. Run `taskgen status`."]
     if skip_pddl:
         workflow.append(
-            "2. Run `taskgen new_scene N`. Use only the returned `valid_agent_ids` in mechanic bindings, secrets, message targets, and teams."
+            f"2. Run `taskgen new_scene N` with `N` between {agents_min} and {agents_max}. Never use `1`. Use only the returned `valid_agent_ids` in mechanic bindings, secrets, message targets, and teams."
         )
         workflow.append(f"3. Edit `{task_file}`. Write the natural-language task, secrets, and mechanics.")
     else:
         workflow.append(
-            "2. Run `taskgen new_scene N`. Use only the returned `valid_agent_ids` in mechanic bindings, secrets, message targets, and teams."
+            f"2. Run `taskgen new_scene N` with `N` between {agents_min} and {agents_max}. Never use `1`. Use only the returned `valid_agent_ids` in mechanic bindings, secrets, message targets, and teams."
         )
         workflow.append(
             f"3. Edit `{task_file}`. Author `problem_pddl :goal` first, then make the natural-language fields and mechanics match it."

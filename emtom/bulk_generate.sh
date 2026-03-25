@@ -649,7 +649,7 @@ echo ""
 echo -e "${CYAN}Monitoring:${NC}"
 echo "  watch -n 1 nvidia-smi          # GPU usage"
 echo "  tail -f $LOG_DIR/*.log         # Worker stdout logs"
-echo "  pkill -9 -f 'emtom/task_gen/runner.py'  # Kill all"
+echo "  pkill -9 -u \$(whoami) -f 'mini.*task_gen|emtom/task_gen/runner.py'  # Kill all your workers"
 echo ""
 
 echo -e "${BOLD}Waiting for completion...${NC}"
