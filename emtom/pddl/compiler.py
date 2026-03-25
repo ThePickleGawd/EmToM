@@ -491,11 +491,16 @@ def _ensure_can_communicate(task: "GeneratedTask", problem: Problem) -> None:
     # Check for message_targets
     message_targets = task.message_targets
 
-    if restricted_targets is not None:
-        # Only add allowed pairs from allowed_targets dict
+    if isinstance(restricted_targets, dict):
+        # Only add allowed pairs from allowed_targets dict.
         for agent, targets in restricted_targets.items():
+            if not isinstance(agent, str):
+                continue
+            if not isinstance(targets, (list, tuple, set)):
+                continue
             for target in targets:
-                problem.init.append(Literal("can_communicate", (agent, target)))
+                if isinstance(target, str):
+                    problem.init.append(Literal("can_communicate", (agent, target)))
     elif message_targets:
         # message_targets: agent -> list of targets
         for agent, targets in message_targets.items():

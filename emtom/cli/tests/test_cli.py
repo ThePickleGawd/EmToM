@@ -124,6 +124,14 @@ class TestValidateTask:
         assert result["success"] is False
         assert "must be a dict" in result["error"]
 
+    def test_static_validate_trajectory_tolerates_items_none(self):
+        from emtom.cli.validate_task import static_validate_trajectory
+
+        task = _make_minimal_task(items=None)
+        errors = static_validate_trajectory(task, task["golden_trajectory"], scene_data=None)
+
+        assert isinstance(errors, list)
+
     def test_valid_task_passes(self):
         from emtom.cli.validate_task import validate
 

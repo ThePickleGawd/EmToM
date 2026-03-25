@@ -444,6 +444,23 @@ class TestCompiler:
         with pytest.raises(ValueError, match="problem_pddl"):
             compile_task(task)
 
+    def test_message_targets_used_when_restricted_communication_binding_is_malformed(self):
+        task = self._make_task()
+        task.mechanic_bindings = [
+            {
+                "mechanic_type": "restricted_communication",
+                "allowed_targets": ["agent_1"],
+            }
+        ]
+        task.message_targets = {"agent_0": ["agent_1"]}
+
+        problem = compile_task(task)
+
+        assert any(
+            lit.predicate == "can_communicate" and lit.args == ("agent_0", "agent_1")
+            for lit in problem.init
+        )
+
 
 # ---------------------------------------------------------------------------
 # Epistemic parser tests

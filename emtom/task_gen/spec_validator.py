@@ -551,11 +551,6 @@ def validate_blocking_spec(
         for b in (mechanic_bindings or [])
         if isinstance(b, dict) and isinstance(b.get("mechanic_type"), str)
     }
-    if raw_mt and "restricted_communication" not in mechanic_types:
-        errors.append(
-            "message_targets is set but restricted_communication mechanic is missing. "
-            "Add restricted_communication so messaging constraints are simulator-enforced."
-        )
     if category in {"cooperative", "mixed"} and num_agents > 1:
         asymmetry_mechanics = {
             "room_restriction",

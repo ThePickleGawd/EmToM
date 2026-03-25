@@ -75,7 +75,11 @@ def _extract_known_task_ids(task_data: Dict[str, Any]) -> set[str]:
     """
     ids: set[str] = set()
 
-    for item in task_data.get("items", []):
+    raw_items = task_data.get("items", [])
+    if not isinstance(raw_items, list):
+        raw_items = []
+
+    for item in raw_items:
         if isinstance(item, dict):
             item_id = item.get("item_id")
             if isinstance(item_id, str) and item_id:
@@ -401,10 +405,13 @@ def static_validate_trajectory(
         valid_ids.update(scene_data.furniture)
         valid_ids.update(scene_data.objects)
 
+    raw_items = task_data.get("items", [])
+    if not isinstance(raw_items, list):
+        raw_items = []
     defined_items = {
         item.get("item_id")
-        for item in task_data.get("items", [])
-        if item.get("item_id")
+        for item in raw_items
+        if isinstance(item, dict) and item.get("item_id")
     }
     valid_ids.update(defined_items)
     valid_ids.update(_extract_known_task_ids(task_data))

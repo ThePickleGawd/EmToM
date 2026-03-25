@@ -89,3 +89,14 @@ def test_shorthand_mechanic_bindings_are_accepted() -> None:
 
     assert not any("room_restriction" in error for error in errors)
     assert not any("limited_bandwidth" in error for error in errors)
+
+
+def test_message_targets_do_not_require_duplicate_restricted_communication_binding() -> None:
+    task = _base_task()
+    task["message_targets"] = {"agent_0": ["agent_1"]}
+
+    errors = validate_blocking_spec(task)
+
+    assert not any(
+        "restricted_communication mechanic is missing" in error for error in errors
+    )

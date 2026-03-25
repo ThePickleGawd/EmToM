@@ -100,7 +100,7 @@ Assigned!
 - Maps agent_id to a list of allowed recipient agent_ids
 - Agents NOT listed in message_targets have no restrictions
 - Pairs well with competitive tasks to prevent cross-team communication
-- If you set `message_targets`, also add a `restricted_communication` mechanic binding that encodes the same graph.
+- `message_targets` is already enforced by the runner and planner; do NOT duplicate the same graph in a separate `restricted_communication` binding unless you are intentionally authoring that mechanic directly.
 - Example: `"message_targets": {{"agent_0": ["agent_1"], "agent_2": ["agent_3"]}}` — team members can only message their own team
 
 ## Core Rules
