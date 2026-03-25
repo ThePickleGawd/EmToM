@@ -121,9 +121,9 @@ def scan_log_failures(log_dir):
             content,
         )
 
-        # Extract "Improve X (score)" suggestions which indicate failing criteria
+        # Extract fallback required-fix lines like "Fix criterion (score): ..."
         improve_matches = re.findall(
-            r"Improve (\w+) \(([\d.]+)\)",
+            r"(?:Fix|Improve) (\w+) \(([\d.]+)\)",
             content,
         )
 

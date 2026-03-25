@@ -7,7 +7,7 @@ Evaluates tasks using category-specific criteria:
 - Competitive: agent necessity, secrets, goal opposition
 - Mixed: agent necessity, secrets, subgoal tension
 
-Priority criteria (evaluated first, suggestions prioritized):
+Priority criteria (evaluated first, fixes prioritized):
 - agent_necessity: Every agent must be indispensable
 - secret_relevance: Secrets must be required for task completion
 
@@ -368,7 +368,7 @@ class Judgment:
     overall_score: float
     is_valid: bool
     overall_reasoning: str
-    suggestions: List[str] = field(default_factory=list)
+    required_fixes: List[str] = field(default_factory=list)
 
     # Optional rollout-based assessment
     rollout_assessment: Optional[str] = None
@@ -385,7 +385,7 @@ class Judgment:
             "overall_score": self.overall_score,
             "criteria": criteria,
             "overall_reasoning": self.overall_reasoning,
-            "suggestions": self.suggestions,
+            "required_fixes": self.required_fixes,
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -400,7 +400,7 @@ class CouncilVerdict:
     judgments: Dict[str, Judgment]  # model -> judgment
     passed: bool  # True only if ALL models pass
     overall_score: float  # Average of all model scores
-    suggestions: List[str]  # Merged from all models, deduplicated
+    required_fixes: List[str]  # Merged from all models, deduplicated
     disagreements: List[str] = field(default_factory=list)  # Where models disagreed
 
     def to_dict(self) -> Dict[str, Any]:
@@ -411,7 +411,7 @@ class CouncilVerdict:
             "model_judgments": {
                 model: j.to_dict() for model, j in self.judgments.items()
             },
-            "suggestions": self.suggestions,
+            "required_fixes": self.required_fixes,
             "disagreements": self.disagreements,
         }
 
@@ -428,7 +428,7 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 {difficulty_section}
 {user_requirements_section}
 
-## System Capabilities (use these in suggestions)
+## System Capabilities (use these in required fixes)
 ### Available Actions
 {available_actions}
 ### Available Mechanics
@@ -481,11 +481,17 @@ Respond with ONLY valid JSON. Keep reasoning brief (under 15 words each).
 {{
 {response_format}
   "overall_reasoning": "<1 sentence>",
-  "suggestions": ["<high-impact fix>", "..."]
+  "required_fixes": ["<minimum concrete fix required to pass>", "..."]
 }}
 
-## Suggestion Requirements
-Be specific and only use available system capabilities. Prioritize the most important fixes. Prefer suggestions that strengthen the functional projection after dropping K(), make K()-derived probes more grounded and informative without making them runtime success conditions, and increase partner-dependent action choice rather than fact relay.
+## Required Fix Rules
+- List only the minimum concrete changes required for this task to pass.
+- Do NOT include optional improvements, stretch ideas, or alternate redesigns.
+- Prefer 1-3 fixes total.
+- Preserve the current scene, category, and main objects/goals when possible.
+- Be specific and only use available system capabilities.
+- Prefer fixes that strengthen the functional projection after dropping K(), make K()-derived probes more grounded and informative without making them runtime success conditions, and increase partner-dependent action choice rather than fact relay.
+- If the task already passes, return `"required_fixes": []`.
 """
 
 # Category descriptions for the prompt
@@ -667,18 +673,18 @@ class Judge:
     - Competitive: 6 criteria (5 shared + goal_opposition)
     - Mixed: 6 criteria (5 shared + subgoal_tension)
 
-    Priority criteria (suggestions appear first):
+    Priority criteria (required fixes appear first):
     - agent_necessity: Every agent must be essential
     - secret_quality: Secrets must be actionable, natural, and non-leaking
 
     Both models must agree for a task to pass.
     """
 
-    # Priority criteria - suggestions for these appear first
+    # Priority criteria - required fixes should focus here first
     PRIORITY_CRITERIA = ["agent_necessity", "secret_quality"]
 
     # Default council models
-    DEFAULT_MODELS = ["gpt-5.2"]
+    DEFAULT_MODELS = ["kimi-k2.5", "gpt-5.2"]
     MODEL_REQUEST_TIMEOUT_S = 45
     COUNCIL_WALL_TIMEOUT_S = 180
 
@@ -866,7 +872,7 @@ class Judge:
 
         Args:
             task: GeneratedTask object or task dictionary
-            scene_data: Optional scene data for grounded suggestions
+            scene_data: Optional scene data for grounded required fixes
             trajectory_dir: Optional path to benchmark rollout data
 
         Returns:
@@ -916,7 +922,7 @@ class Judge:
                 judgments={},
                 passed=True,
                 overall_score=1.0,
-                suggestions=[f"Skipped LLM council due to missing deps: {e}"],
+                required_fixes=[],
                 disagreements=[],
             )
 
@@ -978,14 +984,15 @@ class Judge:
             # Inject novelty score into each judgment
             for model, judgment in judgments.items():
                 judgment.criteria_scores["task_novelty"] = novelty_score
-                # Add suggestion if novelty is low
+                # Add a required fix if novelty is low.
                 if novelty_result["score"] < self.min_criterion_threshold:
                     similar_str = ", ".join(novelty_result.get("similar_to", [])[:3])
                     suggestion = f"[Task Novelty] Task is too similar to existing patterns"
                     if similar_str:
                         suggestion += f" (similar to: {similar_str})"
                     suggestion += ". Try a different win condition, mechanics, or dependency structure."
-                    judgment.suggestions.insert(0, suggestion)
+                    if suggestion not in judgment.required_fixes:
+                        judgment.required_fixes.insert(0, suggestion)
                 # Recalculate overall score to include novelty
                 all_scores = [c.score for c in judgment.criteria_scores.values()]
                 judgment.overall_score = sum(all_scores) / len(all_scores)
@@ -1138,15 +1145,29 @@ The user specifically requested:
             and all(s >= self.min_criterion_threshold for s in scores)
         )
 
-        # Extract suggestions
-        suggestions = data.get("suggestions", [])
-        if not isinstance(suggestions, list):
-            suggestions = [str(suggestions)]
+        # Extract minimum required fixes.
+        raw_required_fixes = data.get("required_fixes", [])
+        if not isinstance(raw_required_fixes, list):
+            raw_required_fixes = [str(raw_required_fixes)]
+        required_fixes: List[str] = []
+        for fix in raw_required_fixes:
+            fix_text = str(fix).strip()
+            if fix_text and fix_text not in required_fixes:
+                required_fixes.append(fix_text)
 
-        # Add auto-suggestions for low scores
-        for name, criterion in criteria_scores.items():
-            if criterion.score < self.min_criterion_threshold:
-                suggestions.append(f"Improve {name} ({criterion.score:.2f}): {criterion.reasoning}")
+        # Fall back to criterion-scoped fixes only when the model omitted
+        # concrete required_fixes entirely.
+        if not required_fixes:
+            for name, criterion in criteria_scores.items():
+                if criterion.score < self.min_criterion_threshold:
+                    fallback_fix = f"Fix {name} ({criterion.score:.2f}): {criterion.reasoning}"
+                    if fallback_fix not in required_fixes:
+                        required_fixes.append(fallback_fix)
+
+        if not required_fixes and not is_valid and overall_score < self.overall_threshold:
+            required_fixes.append(
+                f"Raise overall task quality above {self.overall_threshold:.2f} without weakening current strengths."
+            )
 
         return Judgment(
             category=category,
@@ -1154,7 +1175,7 @@ The user specifically requested:
             overall_score=overall_score,
             is_valid=is_valid,
             overall_reasoning=data.get("overall_reasoning", "No reasoning provided"),
-            suggestions=suggestions,
+            required_fixes=required_fixes[:3],
         )
 
     @staticmethod
@@ -1181,7 +1202,7 @@ The user specifically requested:
             overall_score=0.0,
             is_valid=False,
             overall_reasoning=reason,
-            suggestions=["Re-run evaluation"],
+            required_fixes=["Re-run evaluation"],
         )
 
     def _aggregate(self, judgments: Dict[str, Judgment]) -> CouncilVerdict:
@@ -1217,21 +1238,14 @@ The user specifically requested:
         # Average overall scores
         avg_score = sum(j.overall_score for j in judgments.values()) / len(judgments)
 
-        # Merge suggestions (deduplicated), prioritizing agent_necessity and secret_relevance
-        priority_suggestions = []
-        other_suggestions = []
+        # Merge required fixes (deduplicated) across models.
+        required_fixes = []
         seen = set()
         for j in judgments.values():
-            for s in j.suggestions:
-                if s not in seen:
-                    seen.add(s)
-                    # Check if this suggestion relates to priority criteria
-                    is_priority = any(crit in s.lower() for crit in self.PRIORITY_CRITERIA)
-                    if is_priority:
-                        priority_suggestions.append(s)
-                    else:
-                        other_suggestions.append(s)
-        all_suggestions = priority_suggestions + other_suggestions
+            for fix in j.required_fixes:
+                if fix not in seen:
+                    seen.add(fix)
+                    required_fixes.append(fix)
 
         # Find disagreements
         disagreements = []
@@ -1249,7 +1263,7 @@ The user specifically requested:
             judgments=judgments,
             passed=all_pass,
             overall_score=avg_score,
-            suggestions=all_suggestions,
+            required_fixes=required_fixes[:3],
             disagreements=disagreements,
         )
 
@@ -1281,9 +1295,9 @@ The user specifically requested:
                 icon = "+" if criterion.score >= self.min_criterion_threshold else "!"
                 lines.append(f"  [{icon}] {name}: {criterion.score:.2f}")
 
-        if verdict.suggestions:
-            lines.append("\nSuggestions:")
-            for i, s in enumerate(verdict.suggestions[:10], 1):  # Limit to 10
+        if verdict.required_fixes:
+            lines.append("\nRequired Fixes:")
+            for i, s in enumerate(verdict.required_fixes[:10], 1):
                 lines.append(f"  {i}. {s}")
 
         lines.append("=" * 60)

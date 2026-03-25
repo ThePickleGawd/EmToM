@@ -226,7 +226,7 @@ def _load_verification_feedback(path_str: Optional[str]) -> Optional[dict]:
     if verification_data.get("is_valid_tom", True):
         return None
     return {
-        "suggestions": verification_data.get("suggestions", []),
+        "required_fixes": verification_data.get("required_fixes", []),
         "criteria": verification_data.get("criteria", {}),
         "overall_reasoning": verification_data.get("overall_reasoning", ""),
     }
@@ -253,10 +253,10 @@ def _build_extra_sections(
             "## Previous ToM Verification Failed",
             verification_feedback.get("overall_reasoning", ""),
             "",
-            "Suggestions:",
+            "Required Fixes:",
         ]
-        for suggestion in verification_feedback.get("suggestions", []):
-            lines.append(f"- {suggestion}")
+        for fix in verification_feedback.get("required_fixes", []):
+            lines.append(f"- {fix}")
         sections.append("\n".join(lines))
 
     if difficulty:

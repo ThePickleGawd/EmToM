@@ -219,7 +219,7 @@ class TaskGeneratorAgent:
             log_dir: Directory for log files (defaults to Hydra output or output_dir/logs)
             max_context_chars: Max context size before summarizing. Auto-detected from model if None.
             query: Optional seed query to guide task generation (e.g., "A task where agents use the radio")
-            verification_feedback: Optional dict with suggestions from a failed ToM verification to incorporate
+            verification_feedback: Optional dict with required fixes from a failed ToM verification to incorporate
             calibration_stats: Dataset calibration stats (pass rate, target rate) for difficulty guidance
             category: Task category to generate: "cooperative", "competitive", or "mixed" (None = random)
             seed_task: Optional path to existing task JSON to use as seed instead of blank template
@@ -513,7 +513,7 @@ class TaskGeneratorAgent:
         # Build verification feedback section if retrying from failed verification
         verification_section = ""
         if self.verification_feedback:
-            suggestions = self.verification_feedback.get("suggestions", [])
+            required_fixes = self.verification_feedback.get("required_fixes", [])
             overall_reasoning = self.verification_feedback.get("overall_reasoning", "")
             criteria = self.verification_feedback.get("criteria", {})
 
@@ -532,9 +532,9 @@ Your previous task did not pass the ToM verification. You MUST address these iss
                 status = "✓" if score >= 0.5 else "✗"
                 verification_section += f"- {criterion}: {score:.2f} {status} - {reasoning}\n"
 
-            verification_section += "\n**Suggestions to Incorporate**:\n"
-            for i, suggestion in enumerate(suggestions, 1):
-                verification_section += f"{i}. {suggestion}\n"
+            verification_section += "\n**Required Fixes**:\n"
+            for i, fix in enumerate(required_fixes, 1):
+                verification_section += f"{i}. {fix}\n"
 
             verification_section += "\nCreate a NEW task that specifically addresses these issues.\n"
 
@@ -2021,14 +2021,13 @@ SUMMARY:"""
         # Reconstruct CouncilVerdict for state tracking
         if data["passed"]:
             self.consecutive_tom_failures = 0
-            data.pop("suggestions", None)
             data["next_step"] = (
                 "Task passed judge. Do NOT change the task design. "
                 "Run test_task[] -> submit_task[]."
             )
         else:
             self.consecutive_tom_failures += 1
-            data["action_required"] = "Modify the task based on suggestions and run judge[] again."
+            data["action_required"] = "Modify the task using required_fixes and run judge[] again."
             data["failure_count"] = self.consecutive_tom_failures
             if self.consecutive_tom_failures >= 3:
                 data["recommendation"] = (
@@ -2052,7 +2051,7 @@ SUMMARY:"""
                 ),
                 "hint": "Run judge[] to verify the task quality.",
                 "last_score": self.last_judgment.overall_score if self.last_judgment else None,
-                "suggestions": self.last_judgment.suggestions if self.last_judgment else []
+                "required_fixes": self.last_judgment.required_fixes if self.last_judgment else []
             })
         # In some environments simulator verification is unavailable (e.g., missing Hydra/GL deps).
         # When simulation is skipped, allow submission as long as judge + test passed.

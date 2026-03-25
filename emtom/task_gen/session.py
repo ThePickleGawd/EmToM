@@ -895,6 +895,10 @@ class TaskGenSession:
                 self.state.get("consecutive_judge_failures", 0) + 1
             )
             data["failure_count"] = self.state["consecutive_judge_failures"]
+            data.setdefault(
+                "action_required",
+                "Modify the task using required_fixes and run taskgen judge again.",
+            )
         self._write_state()
         return success(data)
 

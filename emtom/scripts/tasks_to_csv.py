@@ -121,7 +121,7 @@ Score each criterion from 0.0 to 1.0:
         prompt += "6. Subgoal Tension - Do hidden subgoals create meaningful conflict?\n"
 
     prompt += """
-Respond with JSON containing scores, reasoning, and suggestions for improvement.
+Respond with JSON containing scores, reasoning, and required fixes.
 """
     return prompt
 
@@ -130,7 +130,7 @@ def find_judgment_file(task: Dict[str, Any], judgments_dir: Path) -> Tuple[str, 
     """
     Find and extract judge data from judgment files.
 
-    Returns: (judge_prompt, judge_suggestions, judge_score)
+    Returns: (judge_prompt, judge_required_fixes, judge_score)
 
     Note: Judgment files must contain a 'task_id' field that matches the task.
     Without this linking, we cannot match judgments to tasks.
@@ -155,9 +155,9 @@ def find_judgment_file(task: Dict[str, Any], judgments_dir: Path) -> Tuple[str, 
             judgment_task_id = judgment.get("task_id", "")
             if judgment_task_id and judgment_task_id == task_id:
                 score = judgment.get("overall_score", "")
-                suggestions = judgment.get("suggestions", [])
-                suggestions_str = "; ".join(suggestions) if suggestions else ""
-                return ("", suggestions_str, str(score) if score else "")
+                required_fixes = judgment.get("required_fixes", [])
+                required_fixes_str = "; ".join(required_fixes) if required_fixes else ""
+                return ("", required_fixes_str, str(score) if score else "")
 
         except Exception:
             continue
@@ -329,11 +329,11 @@ def process_task_file(filepath: Path, judgments_dir: Path = None) -> Dict[str, A
 
     # Try to find judgment data
     if judgments_dir:
-        _, judge_suggestions, judge_score = find_judgment_file(task, judgments_dir)
-        row["judge_suggestions"] = judge_suggestions
+        _, judge_required_fixes, judge_score = find_judgment_file(task, judgments_dir)
+        row["judge_required_fixes"] = judge_required_fixes
         row["judge_score"] = judge_score
     else:
-        row["judge_suggestions"] = ""
+        row["judge_required_fixes"] = ""
         row["judge_score"] = ""
 
     return row
@@ -442,7 +442,7 @@ def main():
         "category",
         "scene_id",
         "judge_prompt",
-        "judge_suggestions",
+        "judge_required_fixes",
         "judge_score",
     ])
 
