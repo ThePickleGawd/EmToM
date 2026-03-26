@@ -2146,15 +2146,19 @@ SUMMARY:"""
         # Reconstruct CouncilVerdict for state tracking
         if data["passed"]:
             self.consecutive_tom_failures = 0
+            # Strip required_fixes on pass — the LLM judge sometimes returns
+            # suggestions even for passing tasks, which misleads the agent into
+            # editing instead of progressing to test_task/submit.
+            data.pop("required_fixes", None)
             data["next_step"] = (
                 "Task passed judge. Do NOT change the task design. "
-                "Run test_task[] -> submit_task[]."
+                "Run test_task[] -> submit_task[] immediately."
             )
         else:
             self.consecutive_tom_failures += 1
             data["action_required"] = "Modify the task using required_fixes and run judge[] again."
             data["failure_count"] = self.consecutive_tom_failures
-            if self.consecutive_tom_failures >= 3:
+            if self.consecutive_tom_failures >= 5:
                 data["recommendation"] = (
                     f"You've failed judge {self.consecutive_tom_failures} times. "
                     "Consider new_scene[] for a fresh start."
@@ -2580,13 +2584,14 @@ working_task.json reset."""
 
         This should only be used for truly unrecoverable errors.
         """
-        # Prevent premature give-up: require at least 25% of iteration budget
-        min_iterations = max(30, self.iterations_per_task // 4)
+        # Prevent premature give-up: require at least 40% of iteration budget
+        min_iterations = max(60, int(self.iterations_per_task * 0.4))
         if self.iteration_count < min_iterations:
             return (
                 f"Cannot abort yet — only {self.iteration_count}/{min_iterations} "
                 f"minimum iterations used. Keep trying: load a new_scene[], "
                 f"simplify the task design, or try a different approach. "
+                f"Do NOT call fail[] again until you have used at least {min_iterations} iterations. "
                 f"Your reason was: {reason}"
             )
         self.failed = True

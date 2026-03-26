@@ -188,6 +188,130 @@ def _summarize_goal_metadata(task_data: dict) -> tuple[str, str]:
         return _truncate_text(problem_pddl, limit=260), "unknown"
 
 
+def _latest_calibration_pair(task_data: dict, model: str) -> tuple[Optional[dict], Optional[dict]]:
+    from emtom.evolve.benchmark_wrapper import find_calibration_entry
+
+    standard = find_calibration_entry(task_data.get("calibration", []), model=model, run_mode="standard")
+    baseline = find_calibration_entry(task_data.get("calibration", []), model=model, run_mode="baseline")
+    return standard, baseline
+
+
+def _calibration_outcome_label(entry: Optional[dict]) -> str:
+    from emtom.evolve.benchmark_wrapper import cal_passed, cal_progress
+
+    if not entry:
+        return "missing"
+    progress = cal_progress(entry)
+    status = "PASS" if cal_passed(entry) else "FAIL"
+    steps = entry.get("steps")
+    step_text = f", steps={steps}" if isinstance(steps, int) else ""
+    return f"{status} (progress={progress:.0%}{step_text})"
+
+
+def _calibration_gap_label(standard: Optional[dict], baseline: Optional[dict]) -> str:
+    from emtom.evolve.benchmark_wrapper import cal_passed
+
+    if baseline is None and standard is None:
+        return "UNTESTED"
+    if baseline is None:
+        return "NO_BASELINE"
+    if standard is None:
+        return "NO_STANDARD"
+    standard_passed = cal_passed(standard)
+    baseline_passed = cal_passed(baseline)
+    if baseline_passed and not standard_passed:
+        return "GOOD_HARD_GAP"
+    if baseline_passed and standard_passed:
+        return "TOO_EASY"
+    if not baseline_passed:
+        return "UNSOLVABLE"
+    return "MIXED"
+
+
+def _calibration_gap_reason(standard: Optional[dict], baseline: Optional[dict]) -> str:
+    from emtom.evolve.benchmark_wrapper import cal_passed, cal_progress
+
+    gap_label = _calibration_gap_label(standard, baseline)
+    if gap_label == "GOOD_HARD_GAP":
+        std_progress = cal_progress(standard)
+        base_progress = cal_progress(baseline)
+        return (
+            "Baseline solved while standard failed. Inspect which hidden fact, observation, or communication bottleneck "
+            f"explains the {base_progress - std_progress:.0%} progress gap."
+        )
+    if gap_label == "TOO_EASY":
+        return "Both runs solved it. This pattern is probably too easy for a hard target unless you deepen the information asymmetry."
+    if gap_label == "UNSOLVABLE":
+        return "Baseline failed too. The physical plan or mechanic stack is probably brittle, not just ToM-demanding."
+    if gap_label == "NO_BASELINE":
+        return "Only a standard calibration entry is available."
+    if gap_label == "NO_STANDARD":
+        return "Only a baseline calibration entry is available."
+    return "No clear standard-vs-baseline lesson yet."
+
+
+def _trajectory_digest(entry: Optional[dict], max_turns: int = 4) -> list[str]:
+    if not entry:
+        return ["- No saved trajectory."]
+
+    trajectory = entry.get("trajectory")
+    if not isinstance(trajectory, list) or not trajectory:
+        return ["- No saved trajectory."]
+
+    lines: list[str] = []
+    subtask_events = sum(len(turn.get("subtasks_completed", []) or []) for turn in trajectory if isinstance(turn, dict))
+    lines.append(f"- Saved turns: {len(trajectory)}; subtask events: {subtask_events}.")
+
+    for turn in trajectory[:max_turns]:
+        if not isinstance(turn, dict):
+            continue
+        agents = turn.get("agents", {}) if isinstance(turn.get("agents"), dict) else {}
+        action_bits = []
+        for agent_id in sorted(agents):
+            agent_data = agents.get(agent_id) or {}
+            action = _truncate_text(agent_data.get("action", "unknown"), limit=80)
+            action_bits.append(f"{agent_id}: {action}")
+        subtasks = turn.get("subtasks_completed", []) or []
+        subtask_text = f" | subtasks: {', '.join(str(s) for s in subtasks[:3])}" if subtasks else ""
+        action_text = "; ".join(action_bits) if action_bits else "no agent actions saved"
+        lines.append(f"- Turn {turn.get('turn', '?')}: {action_text}{subtask_text}")
+
+    if len(trajectory) > max_turns:
+        lines.append("- Additional turns omitted here; inspect raw `calibration[*].trajectory` in the task JSON for the full trace.")
+
+    return lines
+
+
+def _write_sampled_task_analysis_file(sample_path: Path, task_data: dict, model: str) -> None:
+    standard, baseline = _latest_calibration_pair(task_data, model)
+    analysis_lines = [
+        f"# {sample_path.name} Analysis",
+        "",
+        f"- Title: {_truncate_text(task_data.get('title') or sample_path.name, limit=140)}",
+        f"- Category: {task_data.get('category', 'unknown')}",
+        f"- Agents: {task_data.get('num_agents', 'unknown')}",
+        f"- Standard: {_calibration_outcome_label(standard)}",
+        f"- Baseline: {_calibration_outcome_label(baseline)}",
+        f"- Gap label: {_calibration_gap_label(standard, baseline)}",
+        f"- Lesson: {_calibration_gap_reason(standard, baseline)}",
+        "",
+        "## How To Use This Example",
+        "- Ask why baseline/full-info succeeded or failed.",
+        "- If baseline passed and standard failed, identify the private fact or communication bottleneck that standard could not recover.",
+        "- If baseline failed too, treat this as a structural anti-example rather than a ToM-gap example.",
+        "",
+        "## Standard Trajectory Digest",
+        *_trajectory_digest(standard),
+        "",
+        "## Baseline Trajectory Digest",
+        *_trajectory_digest(baseline),
+        "",
+        "## Raw Trace Location",
+        f"- Inspect `{sample_path.name}` and its `calibration[*].trajectory` entries for the full saved trace.",
+    ]
+    (sample_path.with_suffix("").with_name(sample_path.stem + "_analysis.md")).write_text("\n".join(analysis_lines))
+
+
 def _write_sampled_tasks_summary(sampled_tasks_dir: Path, model: str = "gpt-5.2") -> None:
     from emtom.evolve.benchmark_wrapper import cal_passed, cal_progress, find_calibration_entry
 
@@ -204,6 +328,8 @@ def _write_sampled_tasks_summary(sampled_tasks_dir: Path, model: str = "gpt-5.2"
         "**Benchmark column**: PASS = baseline solved the task and it was submitted successfully.",
         "FAIL = task was benchmarked but baseline could not solve it. UNTESTED = no benchmark data.",
         "Prefer structural patterns from PASS tasks — they are empirically solvable.",
+        "For hard tasks, prioritize examples labeled `GOOD_HARD_GAP`: baseline passes, standard fails, and the gap is likely informational rather than physical.",
+        "If you get stuck, inspect more sampled tasks plus their `task_N_analysis.md` files and compare the standard vs baseline traces directly.",
         "",
     ]
 
@@ -227,6 +353,9 @@ def _write_sampled_tasks_summary(sampled_tasks_dir: Path, model: str = "gpt-5.2"
         mechanics_str = ", ".join(str(m) for m in (mechanics or [])) or "none"
         task_text = _truncate_text(task_data.get("task"), limit=240)
         goal_summary, owner_summary = _summarize_goal_metadata(task_data)
+        standard_cal, baseline_cal = _latest_calibration_pair(task_data, model)
+        gap_label = _calibration_gap_label(standard_cal, baseline_cal)
+        gap_reason = _calibration_gap_reason(standard_cal, baseline_cal)
 
         # Benchmark pass/fail signal from calibration data
         cal = find_calibration_entry(task_data.get("calibration", []), model=model)
@@ -250,21 +379,25 @@ def _write_sampled_tasks_summary(sampled_tasks_dir: Path, model: str = "gpt-5.2"
                 f"- Goal: {goal_summary}",
                 f"- Goal owners: {owner_summary}",
                 f"- Benchmark: {benchmark_str}",
+                f"- Standard: {_calibration_outcome_label(standard_cal)}",
+                f"- Baseline: {_calibration_outcome_label(baseline_cal)}",
+                f"- Standard vs baseline: {gap_label}",
+                f"- Why this matters: {gap_reason}",
+                f"- Analysis file: {path.stem}_analysis.md",
                 "",
             ]
         )
+        _write_sampled_task_analysis_file(path, task_data, model)
 
     # Add failure analysis section based on sampled tasks
     failed_patterns: list[str] = []
     passed_patterns: list[str] = []
+    hard_gap_patterns: list[str] = []
     for path in sample_files:
         try:
             with open(path) as f:
                 task_data = json.load(f)
         except Exception:
-            continue
-        cal = find_calibration_entry(task_data.get("calibration", []), model=model)
-        if cal is None:
             continue
         category = task_data.get("category", "unknown")
         mechanics = task_data.get("active_mechanics") or []
@@ -275,11 +408,19 @@ def _write_sampled_tasks_summary(sampled_tasks_dir: Path, model: str = "gpt-5.2"
         num_agents = task_data.get("num_agents", 0)
         mech_str = "+".join(sorted(set(str(m) for m in mechanics if m))) or "none"
         label = f"{category}/{num_agents}a/{mech_str}/K={'yes' if has_K else 'no'}"
+        standard_cal, baseline_cal = _latest_calibration_pair(task_data, model)
+        gap_label = _calibration_gap_label(standard_cal, baseline_cal)
+
+        cal = find_calibration_entry(task_data.get("calibration", []), model=model)
+        if cal is None:
+            continue
 
         if cal_passed(cal):
             passed_patterns.append(label)
         else:
             failed_patterns.append(label)
+        if gap_label == "GOOD_HARD_GAP":
+            hard_gap_patterns.append(label)
 
     if failed_patterns or passed_patterns:
         lines.extend([
@@ -288,6 +429,11 @@ def _write_sampled_tasks_summary(sampled_tasks_dir: Path, model: str = "gpt-5.2"
             "# Failure Analysis (learn from these patterns)",
             "",
         ])
+        if hard_gap_patterns:
+            lines.append("**Patterns with GOOD_HARD_GAP** (baseline passes, standard fails; inspect these first for hard ToM examples):")
+            for p in dict.fromkeys(hard_gap_patterns):
+                lines.append(f"  - {p}")
+            lines.append("")
         if passed_patterns:
             lines.append("**Patterns that PASS** (reuse these structural shapes):")
             for p in dict.fromkeys(passed_patterns):  # dedupe preserving order
@@ -832,7 +978,11 @@ def main() -> None:
     if final_state.get("failed"):
         raise SystemExit(final_state.get("fail_reason") or "Task generation failed.")
     if not final_state.get("finished"):
-        raise SystemExit("Task generation did not call taskgen finish.")
+        # If tasks were submitted despite not finishing, treat as partial success
+        if final_submitted_tasks:
+            print(f"Warning: Agent exited without calling taskgen finish, but submitted {len(final_submitted_tasks)} task(s).")
+        else:
+            raise SystemExit("Task generation did not call taskgen finish.")
 
 
 if __name__ == "__main__":

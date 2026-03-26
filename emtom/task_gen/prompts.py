@@ -24,7 +24,7 @@ Generate {num_tasks} quality benchmark tasks.
 - `taskgen judge`
 {test_command}- `taskgen submit_task`
 - `taskgen finish`
-- `taskgen fail "reason"`
+- `taskgen fail "reason"` (ONLY for truly unrecoverable errors like broken environment; NEVER for judge failures)
 
 ## Workflow
 {workflow_block}
@@ -63,6 +63,7 @@ Generate {num_tasks} quality benchmark tasks.
 - Good pattern: agent A cannot determine the right object, room, or target state until agent B observes or communicates it.
 - Bad pattern: agents can finish the physical goal independently and communication only reports what already happened.
 - Every essential agent should contribute distinct knowledge, access, or incentive.
+- The main difference between standard and baseline is information access. For hard tasks, focus first on secrets, knowledge placement, and answerable hidden facts before adding more physical complexity.
 - Use `K()` only for facts that matter for planning or coordination.
 - The outermost `K()` agent should not be able to directly observe the fact with no blocker.
 
@@ -76,6 +77,7 @@ Generate {num_tasks} quality benchmark tasks.
 ## Empirical Solvability
 - Keep the physical execution short and direct. Prefer tasks that baseline/full-info can finish in roughly 6-10 turns.
 - Prefer one clean asymmetry over stacked brittle mechanics. One room/access blocker plus one decisive hidden fact is better than a long chain of dependencies.
+- If you want baseline to pass but standard to fail, first improve the agent secrets and information split. Do not default to piling on extra objects, rooms, or mechanics.
 - Use actionable targets that runtime tools can find by exact ID. Avoid relying on vague aliases like 'display table' or hidden trigger objects whose exact runtime ID is hard to recover.
 - NEVER design tasks requiring object handoff through a shared room, agents try Place[obj, on, room_name] and fail at runtime.
 - If a task passes `judge` but fails `test_task`, simplify the physical core first before adding more ToM structure.
@@ -156,30 +158,29 @@ def build_external_taskgen_prompt(
     calibration_block = ""
     if difficulty:
         difficulty_map = {
-            "easy": (
-                "## Difficulty: EASY\n"
-                "- Prefer 0-1 mechanics.\n"
-                "- Keep tasks simple and directly actionable.\n"
-                "- Use 2-3 subtasks and 2-3 agents.\n"
-                "- Secrets must explain active mechanics plainly.\n"
-                "- Even easy tasks must contain one grounded non-trivial K() dependency; never generate K=0 tasks."
-            ),
             "medium": (
                 "## Difficulty: MEDIUM\n"
-                "- Use 3-4 agents with distinct roles.\n"
-                "- Favor restricted communication and room restrictions.\n"
                 "- Keep the physical core small: 2-4 subtasks and usually one non-trivial K() chain.\n"
+                "- Put most of the challenge in the information split, not in extra physical clutter.\n"
+                "- Favor secrets that cleanly encode who knows the object, target, or decisive state fact.\n"
                 "- Prefer one grounded final-state fact reused by both the physical goal and the K() goal."
             ),
             "hard": (
                 "## Difficulty: HARD\n"
                 "- Prefer tasks that GPT-5.2 fails.\n"
-                "- Force relay chains, genuine delegation choices, and room-gated roles.\n"
+                "- Force genuine information bottlenecks, relay chains, or room-gated roles.\n"
+                "- Put the difficulty in agent secrets, hidden facts, and communication requirements rather than in extra physical clutter.\n"
                 "- Keep mechanics purposeful and avoid prescriptive secrets.\n"
                 "- Keep the physical core compact; strict K() evidence is easier to pass with one strong non-trivial K-chain than many weak ones."
             ),
         }
-        calibration_block = "\n\n" + difficulty_map[difficulty]
+        default_difficulty_text = (
+            "## Difficulty Guidance\n"
+            "- Keep the physical core compact and scene-grounded.\n"
+            "- Preserve a real hidden-information dependency; do not weaken secrets just to make the task easier.\n"
+            "- Prefer answerable K() facts and clean information flow over extra mechanics."
+        )
+        calibration_block = "\n\n" + difficulty_map.get(difficulty, default_difficulty_text)
     else:
         calibration_stats = calibration_stats or {}
         model = calibration_stats.get("model", "unknown")
@@ -193,13 +194,17 @@ def build_external_taskgen_prompt(
         elif current_rate > target_rate + 0.05:
             calibration_text = (
                 f"Current {model} pass rate is {current_rate:.1%}, above the {target_rate:.0%} target.\n"
-                "Aim for tasks where baseline passes but standard mode is challenging, with tighter bandwidth or deeper information gaps.\n"
-                "The test gate requires baseline to pass; standard failures are preferred but do not obsess over forcing them."
+                "The test gate REQUIRES standard to FAIL while baseline passes. Tasks where standard also passes will be rejected.\n"
+                "To create tasks that standard fails:\n"
+                "- The decisive action must depend on a fact the standard agent cannot observe (room restriction blocks it).\n"
+                "- The fact must be non-binary (not just open/closed) so the agent cannot guess correctly.\n"
+                "- Limit bandwidth to 1 message per agent so information must be routed efficiently.\n"
+                "- The physical core should be simple (2-3 goals) so baseline easily passes."
             )
         elif current_rate < target_rate - 0.05:
             calibration_text = (
                 f"Current {model} pass rate is {current_rate:.1%}, below the {target_rate:.0%} target.\n"
-                "Generate tasks with clearer information paths so standard mode has a better chance of passing.\n"
+                "Keep the physical core compact and make the hidden information easier to recover, without removing the real ToM dependency.\n"
                 "The test gate requires baseline to pass."
             )
         else:
@@ -227,11 +232,15 @@ def build_external_taskgen_prompt(
             f"`{seed_tasks_dir}` is used to populate `{Path(seed_tasks_dir).name}` examples for inspiration.\n"
             f"Target model: {target_model}. Logical sampled-task mix: fail {seed_fail_ratio:.0%}, pass {seed_pass_ratio:.0%}.\n"
             "You should inspect sampled tasks before authoring. Borrow only structural patterns that look empirically solvable under test_task, especially short physical cores and clean mechanic usage.\n"
+            "Do not just read PASS/FAIL. Compare `Standard` vs `Baseline` outcomes and ask what private fact, observation, or communication bottleneck created the gap.\n"
+            "When targeting hard tasks, prioritize `GOOD_HARD_GAP` examples: baseline passes, standard fails.\n"
+            "When stuck after two weak iterations, inspect more sampled tasks plus their `task_N_analysis.md` files and reason explicitly about why the standard run failed while baseline succeeded, or why baseline failed too.\n"
             "Start each task from the scene-grounded template in working_task.json. Do not copy a seed task directly."
         )
         sampled_files_block = (
             f"- `{working_dir}/sampled_tasks/SUMMARY.md`: compact seed-task fields. Read this first.\n"
             f"- `{working_dir}/sampled_tasks/`: raw seed task JSONs for deeper inspection only when needed.\n"
+            f"- `{working_dir}/sampled_tasks/task_N_analysis.md`: compact standard-vs-baseline notes with trajectory digests. Inspect these when a sample looks promising or when you are stuck.\n"
         )
 
     test_command = "- `taskgen test_task`\n" if not skip_test else ""
@@ -263,7 +272,7 @@ def build_external_taskgen_prompt(
     ]
     if not skip_evolution:
         workflow_lines.append(
-            f"3. Read `{working_dir}/sampled_tasks/SUMMARY.md` first, then inspect at least 2 sampled seed tasks in `{working_dir}/sampled_tasks/`, including one matching the target category when possible. Reuse only structural patterns that look empirically solvable. Do not copy IDs directly."
+            f"3. Read `{working_dir}/sampled_tasks/SUMMARY.md` first, then inspect at least 3 sampled seed tasks in `{working_dir}/sampled_tasks/`, including one matching the target category when possible. For hard tasks, or if you get stuck after two weak judge/test iterations, inspect at least 5 total sampled tasks including `task_N_analysis.md` notes, with at least one `GOOD_HARD_GAP` example and one `UNSOLVABLE` or `TOO_EASY` example. Reuse only structural patterns that look empirically solvable. Do not copy IDs directly."
         )
     edit_step_number = len(workflow_lines) + 1
     edit_text = "Write the natural-language task, secrets, and mechanics." if skip_pddl else "Author `problem_pddl :goal` first, then make the natural-language fields and mechanics match it."

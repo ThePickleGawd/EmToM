@@ -48,6 +48,9 @@ def main():
         with open(args.task_file) as f:
             task_data = json.load(f)
     except Exception as e:
+        import traceback
+        print(traceback.format_exc(), file=sys.stderr)
+
         print_result(failure(f"Failed to load task: {e}"))
         sys.exit(1)
 
@@ -216,10 +219,17 @@ def main():
 
         max_steps = config.habitat.environment.get("max_episode_steps", 20000)
 
+        # Determine turn budget.
+        #
+        # Older/external task specs may omit golden_trajectory entirely or set it to
+        # a non-list placeholder. In those cases, default to a safe minimum rather
+        # than crashing with IndexError/TypeError inside len().
         if args.max_turns is not None:
             max_turns = args.max_turns
         else:
-            golden_trajectory = task_data.get("golden_trajectory", [])
+            golden_trajectory = task_data.get("golden_trajectory")
+            if not isinstance(golden_trajectory, list):
+                golden_trajectory = []
             max_turns = max(len(golden_trajectory) * 5, 20)
 
         results = runner.run(instruction=instruction, max_steps=max_steps, max_turns=max_turns)
@@ -301,6 +311,8 @@ def main():
         }))
 
     except Exception as e:
+        import traceback
+        print(traceback.format_exc(), file=sys.stderr)
         print_result(failure(
             str(e),
             data={

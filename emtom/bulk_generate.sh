@@ -671,7 +671,7 @@ for ((i=0; i<ACTIVE_WORKERS; i++)); do
     SLOT_INFO[$i]=${PROCESS_INFO[$i]}
 done
 
-MAX_ATTEMPTS_PER_SLOT=5  # Stop a slot after this many consecutive failures
+MAX_ATTEMPTS_PER_SLOT=20  # Stop a slot after this many consecutive failures
 
 # ── Main respawn loop: poll workers, respawn on success, stop on fail ──
 while true; do
@@ -737,8 +737,12 @@ while true; do
                 echo -e "${RED}[FAIL]${NC} ${SLOT_INFO[$i]}  (${attempt_num}/${MAX_ATTEMPTS_PER_SLOT} attempts, slot stopped)"
                 SLOT_PIDS[$i]=-1
             else
-                echo -e "${RED}[FAIL]${NC} ${SLOT_INFO[$i]}  (attempt ${attempt_num}, stopping slot)"
-                SLOT_PIDS[$i]=-1
+                echo -e "${YELLOW}[FAIL]${NC} ${SLOT_INFO[$i]}  (attempt ${attempt_num}/${MAX_ATTEMPTS_PER_SLOT}, respawning)"
+                next_attempt=$((attempt_num + 1))
+                SLOT_ATTEMPTS[$i]=$next_attempt
+                launch_single_worker "$i" "$next_attempt"
+                SLOT_PIDS[$i]=${PIDS[-1]}
+                SLOT_INFO[$i]=${PROCESS_INFO[-1]}
             fi
         fi
     done

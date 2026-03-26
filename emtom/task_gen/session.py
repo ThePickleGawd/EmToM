@@ -162,6 +162,44 @@ def build_mode_comparison(
     }
 
 
+def _build_test_task_retry_guidance(comparison: Dict[str, Any]) -> str:
+    requirement = comparison.get("standard_requirement")
+    standard_passed = bool(comparison.get("standard_passed"))
+    baseline_passed = bool(comparison.get("baseline_passed"))
+
+    if requirement == "must_fail" and standard_passed and baseline_passed:
+        return (
+            "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
+            "Do not call `taskgen fail`. This was rejected because the task is too easy for standard mode. "
+            "The standard agent solved it, meaning the hidden info was recoverable without communication. "
+            "Make it harder: (1) ensure the decisive fact is only observable from a restricted room, "
+            "(2) make the choice non-binary so guessing fails (e.g. which of 3+ objects, which of 3+ rooms), "
+            "(3) reduce bandwidth to 1 message per agent. Keep the physical core simple."
+        )
+
+    if not baseline_passed:
+        return (
+            "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
+            "Do not call `taskgen fail`. Baseline also failed, meaning the task is physically broken or too complex even with full info. "
+            "Simplify NOW: (1) reduce to 2-3 goals max, (2) remove unnecessary mechanics, "
+            "(3) ensure all objects/furniture exist in the scene with correct IDs, "
+            "(4) ensure agents can physically reach the objects they need. "
+            "Use `taskgen new_scene N --keep` to reload the current scene and verify IDs."
+        )
+
+    if requirement == "must_pass" and not standard_passed:
+        return (
+            "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
+            "Do not call `taskgen fail`. Standard needs a clearer path to success in this calibration regime. "
+            "Keep the ToM dependency, but make the hidden fact easier to communicate or verify."
+        )
+
+    return (
+        "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
+        "Do not call `taskgen fail` unless the environment itself is broken."
+    )
+
+
 def default_state(
     *,
     working_dir: str,
@@ -387,6 +425,19 @@ class TaskGenSession:
         )
 
     def fail(self, reason: str) -> CLIResult:
+        # Soft guard: if the agent hasn't tried enough judge iterations, push back.
+        judge_failures = self.state.get("consecutive_judge_failures", 0)
+        submitted = len(self.state.get("submitted_tasks", []))
+        if submitted == 0 and judge_failures < 10:
+            return success({
+                "message": (
+                    f"Cannot abort yet — only {judge_failures} consecutive judge failures. "
+                    "Keep trying: run `taskgen new_scene N` for a fresh scene, "
+                    "simplify the task design, or try a different approach. "
+                    f"Your reason was: {reason}"
+                ),
+                "blocked": True,
+            })
         self.state["failed"] = True
         self.state["fail_reason"] = reason
         self._write_state()
@@ -881,6 +932,11 @@ class TaskGenSession:
         payload.update(results)
         payload["gate"] = "PASSED" if self.state["last_test_passed"] else "REJECTED"
         payload["gate_reason"] = " ".join(results["comparison"].get("reasons", []))
+        if self.state["last_test_passed"]:
+            payload["next_step"] = "Test passed. Submit the task without changing the spec."
+        else:
+            payload["action_required"] = _build_test_task_retry_guidance(results["comparison"])
+            payload["next_step"] = payload["action_required"]
         return success(payload)
 
     def verify_golden_trajectory(self) -> CLIResult:
@@ -936,6 +992,9 @@ class TaskGenSession:
         self.state["last_judge_passed"] = bool(data.get("passed"))
         if self.state["last_judge_passed"]:
             self.state["consecutive_judge_failures"] = 0
+            # Strip required_fixes on pass — the LLM judge sometimes returns
+            # suggestions even for passing tasks, which misleads the agent.
+            data.pop("required_fixes", None)
             data["next_step"] = (
                 "Task passed judge. Do not change the task spec. "
                 "Run taskgen test_task, then taskgen submit_task."
