@@ -24,14 +24,9 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from omegaconf import DictConfig
 
-from .prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, _strip_pddl_from_guidance, _strip_simulation_from_guidance
 from .judge import Judge, Judgment, CouncilVerdict, Colors
 from .authoring_surface import (
-    AUTHORING_ITEMS_NOTICE,
-    get_authoring_action_descriptions,
     get_authoring_default_actions,
-    get_authoring_mechanics,
-    get_authoring_predicates,
 )
 from .diversity import DiversityTracker
 from .seed_sanitizer import sanitize_task_for_seeding
@@ -50,6 +45,108 @@ if TYPE_CHECKING:
 _DIVERSITY_START_MARKER = "<!-- DIVERSITY_SECTION_START -->"
 _DIVERSITY_END_MARKER = "<!-- DIVERSITY_SECTION_END -->"
 _CALIBRATION_TOLERANCE = 0.05
+
+_SYSTEM_PROMPT = """You are a puzzle designer creating multi-agent collaboration benchmark tasks.
+
+## Response Format
+Respond in this format:
+Thought: [brief reasoning]
+Action: tool_name[args]
+
+Exactly one action per turn.
+
+## Tools
+- `new_scene[N]`: load a fresh scene with N agents. `N` must be within the run's allowed agent range and never below 2.
+- `new_scene[N, keep]`: keep the current scene but change the agent count. `N` must be within the run's allowed agent range and never below 2.
+- `bash[cmd]`: inspect files and edit the working task.
+- `judge[]`: run validation, planner checks, simulation checks when enabled, and quality checks.
+- `test_task[]`: run benchmark calibration when enabled.
+- `submit_task[]`: save a passing task.
+- `fail[reason]`: stop only for unrecoverable infrastructure issues.
+
+## Workflow
+1. Call `new_scene[N]`.
+2. Inspect the scene and any sampled seed tasks.
+3. Edit `{task_file}`.
+4. Run `judge[]`, fix issues, and repeat until it passes.
+5. Run `test_task[]` when required.
+6. Run `submit_task[]`.
+
+## Hard Rules
+- Every command already starts inside `{working_dir}`. Do not prefix every command with `cd {working_dir} &&`.
+- Use only valid agent IDs and scene IDs.
+- Remove placeholder text. No `TODO`, `TBD`, or generic filler.
+- Every essential agent must contribute distinct knowledge, access, or incentive.
+- The physical goal must require communication or partner modeling, not just parallel independent work.
+- `message_targets` already defines communication restrictions. Do not duplicate it unless you intentionally need an explicit `restricted_communication` mechanic binding.
+- Use canonical mechanic schema only:
+  `room_restriction` -> `restricted_rooms` + `for_agents`
+  `limited_bandwidth` -> `message_limits`
+  `restricted_communication` -> `allowed_targets`
+- Treat `problem_pddl` as machine-owned except for `:goal` and optional `:goal-owners`.
+- Do not hand-edit `:objects`, `:init`, or `golden_trajectory`.
+
+## Secret Formatting Rules (judge hard-blocks on violations)
+- Secrets must state ONLY facts: room bans, object IDs, goal states, and knowledge gaps.
+- NEVER use prescriptive language: 'Tell your partner', 'Ask them', 'Leave it at', 'Coordinate with', 'You should'.
+- NEVER describe other agent's knowledge: 'agent_1 knows X'. Instead: 'You do not know X'.
+- For K() goals: 'By the end, you must be confident about whether [furniture] in [room] is [state].'
+- BUG WARNING: 'agent_X cannot enter room_Y' in agent_Z's secrets is parsed as agent_Z's restriction. Use 'agent_X is barred from room_Y' for other agents' restrictions.
+
+## Category Rules
+- Cooperative: shared goals only; no `teams`; no `team_secrets`; no `:goal-owners`.
+- Competitive: exactly two teams; public task stays neutral; use incompatible team outcomes.
+- Mixed: public task covers the shared objective only; each relevant agent has a hidden personal objective.
+
+## Good ToM
+- Good ToM means an agent's correct action depends on another agent's private knowledge, access, or likely behavior.
+- Good pattern: agent A cannot determine the right object, room, or target state until agent B observes or communicates it.
+- Bad pattern: agents can finish the physical goal independently and communication only reports progress.
+- Use `K()` only for facts that matter for planning or coordination.
+- The outermost `K()` agent should not be able to directly observe the fact with no blocker.
+
+## References
+- Working task: `{task_file}`
+- Current scene: `{working_dir}/current_scene.json`
+- Sampled seed summary: `{working_dir}/sampled_tasks/SUMMARY.md`
+- Sampled seeds: `{working_dir}/sampled_tasks/`
+- Template: `{working_dir}/template.json`
+
+## Structural Diversity
+{diversity_section}
+"""
+
+_USER_PROMPT_TEMPLATE = """Generate {num_tasks} quality benchmark tasks.
+{extra_sections}
+## Constraints
+- Agents: {agents_min}-{agents_max}
+- Goal conjuncts: {subtasks_min}-{subtasks_max}
+
+Start with `new_scene[N]`, where `N` must be between {agents_min} and {agents_max} inclusive.
+"""
+
+
+def _strip_pddl_from_guidance(guidance: str) -> str:
+    guidance = guidance.replace(
+        "- `judge[]`: run validation, planner checks, simulation checks when enabled, and quality checks.\n",
+        "- `judge[]`: run non-PDDL validation and quality checks.\n",
+    )
+    guidance = guidance.replace(
+        "- Treat `problem_pddl` as machine-owned except for `:goal` and optional `:goal-owners`.\n",
+        "- PDDL solvability verification is disabled, but you MUST still write `problem_pddl` as the canonical goal format. Author `:goal` and optional `:goal-owners` normally.\n",
+    )
+    guidance = guidance.replace(
+        "- Do not hand-edit `:objects`, `:init`, or `golden_trajectory`.\n",
+        "- Do not hand-author `golden_trajectory`.\n",
+    )
+    return guidance
+
+
+def _strip_simulation_from_guidance(guidance: str) -> str:
+    return guidance.replace(
+        "- `judge[]`: run validation, planner checks, simulation checks when enabled, and quality checks.\n",
+        "- `judge[]`: run validation, planner checks when enabled, and quality checks.\n",
+    )
 
 
 def _evaluation_passed(category: str, evaluation: Dict[str, Any]) -> bool:
@@ -467,9 +564,6 @@ class TaskGeneratorAgent:
         # Don't create working_task.json yet - agent must call new_scene first
         # self._create_working_task_from_template() is called in _new_scene()
 
-        available_items = AUTHORING_ITEMS_NOTICE
-        available_mechanics = get_authoring_mechanics()
-
         # Select category (random if not specified)
         task_category = self.category or random.choice(["cooperative", "competitive", "mixed"])
 
@@ -480,20 +574,14 @@ class TaskGeneratorAgent:
             # Default: random from 1, 2, 3
             self._current_k_level = random.choice([1, 2, 3])
 
-        available_predicates = get_authoring_predicates()
-
         # Initialize conversation with action descriptions and paths injected
         replacements = {
-            "{action_descriptions}": get_authoring_action_descriptions(),
             "{task_file}": str(self.task_file),
             "{working_dir}": str(self.working_dir),
-            "{available_items}": available_items,
-            "{available_mechanics}": available_mechanics,
-            "{available_predicates}": available_predicates,
             "{category}": task_category.upper(),
             "{diversity_section}": self._wrap_diversity_section(self._build_diversity_section()),
         }
-        system_prompt = SYSTEM_PROMPT
+        system_prompt = _SYSTEM_PROMPT
 
         # Strip sections for removed pipeline components before replacements
         if "pddl" in (self.skip_steps or []):
@@ -698,7 +786,7 @@ Always rewrite `title`, `task`, `agent_secrets`, and `team_secrets` from scratch
         self._extra_sections = extra_sections
 
         # Initial user message - use template from prompts.py
-        user_msg = USER_PROMPT_TEMPLATE.format(
+        user_msg = _USER_PROMPT_TEMPLATE.format(
             num_tasks=num_tasks_target,
             extra_sections=extra_sections,
             agents_min=self.agents_min,

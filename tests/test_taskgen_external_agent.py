@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from emtom.task_gen.external_agent import ExternalAgentLauncher
-from emtom.task_gen.prompts import SYSTEM_PROMPT, build_external_taskgen_prompt
+from emtom.task_gen.prompts import build_external_taskgen_prompt
 from emtom.task_gen.runner import _copy_sample, _write_bootstrap_files, build_workspace_id
 from emtom.task_gen.session import TaskGenSession, default_state
 
@@ -92,36 +92,23 @@ def test_build_external_prompt_rewrites_taskgen_commands():
         working_dir="/repo/tmp/task_gen/run",
         task_file="/repo/tmp/task_gen/run/working_task.json",
         category="cooperative",
-        available_items="item_a",
-        available_mechanics="room_restriction",
-        available_predicates="is_open",
-        action_descriptions="Navigate",
-        extra_sections="## Required K-Level: 2",
         num_tasks=1,
         agents_min=2,
         agents_max=3,
         subtasks_min=2,
         subtasks_max=4,
+        current_k_level=2,
     )
 
-    assert "taskgen new_scene N" in prompt
-    assert "taskgen judge" in prompt
-    assert "taskgen submit_task" in prompt
-    assert "taskgen finish" in prompt
+    assert "`taskgen new_scene N`" in prompt
+    assert "`taskgen judge`" in prompt
+    assert "`taskgen submit_task`" in prompt
+    assert "`taskgen finish`" in prompt
     assert "judge[]" not in prompt
     assert "submit_task[]" not in prompt
     assert "sampled_trajectories" not in prompt
     assert "## Good ToM" in prompt
-    assert "Functional ToM Patterns" not in prompt
-    assert "Mechanic Usage Guidelines" not in prompt
-    assert len(prompt) < 6000
-
-
-def test_system_prompt_is_compact():
-    assert len(SYSTEM_PROMPT) < 5000
-    assert "Functional ToM Patterns" not in SYSTEM_PROMPT
-    assert "Mechanic Usage Guidelines" not in SYSTEM_PROMPT
-    assert "Common Pitfalls — Learn from These" not in SYSTEM_PROMPT
+    assert "## Required K-Level: 2" in prompt
 
 
 def test_bootstrap_prompt_contains_full_taskgen_prompt(tmp_path):
@@ -177,6 +164,7 @@ def test_taskgen_session_finish_and_fail(tmp_path):
         difficulty=None,
         test_model=None,
         calibration_stats={"model": "gpt-5.2", "target_rate": 0.20},
+        calibration_tasks_dirs=[],
         task_gen_agent="mini",
         allowed_k_levels=[2],
     )

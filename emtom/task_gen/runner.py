@@ -420,114 +420,6 @@ def _load_verification_feedback(path_str: Optional[str]) -> Optional[dict]:
     }
 
 
-def _build_extra_sections(
-    *,
-    query: Optional[str],
-    verification_feedback: Optional[dict],
-    calibration_stats: dict,
-    difficulty: Optional[str],
-    current_k_level: int,
-    seed_tasks_dir: Optional[str],
-    seed_pass_ratio: float,
-    seed_fail_ratio: float,
-) -> str:
-    sections: list[str] = []
-
-    if query:
-        sections.append(f"## User Requirements\n{query}")
-
-    if verification_feedback:
-        lines = [
-            "## Previous ToM Verification Failed",
-            verification_feedback.get("overall_reasoning", ""),
-            "",
-            "Required Fixes:",
-        ]
-        for fix in verification_feedback.get("required_fixes", []):
-            lines.append(f"- {fix}")
-        sections.append("\n".join(lines))
-
-    if difficulty:
-        difficulty_guidance = {
-            "easy": (
-                "## Difficulty: EASY\n"
-                "- Prefer 0-1 mechanics.\n"
-                "- Keep tasks simple and directly actionable.\n"
-                "- Use 2-3 subtasks and 2-3 agents.\n"
-                "- Secrets must explain active mechanics plainly.\n"
-                "- Even easy tasks must contain one grounded non-trivial K() dependency; never generate K=0 tasks.\n"
-            ),
-            "medium": (
-                "## Difficulty: MEDIUM\n"
-                "- Use 3-4 agents with distinct roles.\n"
-                "- Favor restricted communication and room restrictions.\n"
-                "- Keep the physical core small: 2-4 subtasks and usually one non-trivial K() chain.\n"
-                "- Prefer one grounded final-state fact reused by both the physical goal and the K() goal.\n"
-            ),
-            "hard": (
-                "## Difficulty: HARD\n"
-                "- Prefer tasks that GPT-5.2 fails.\n"
-                "- Force relay chains, genuine delegation choices, and room-gated roles.\n"
-                "- Keep mechanics purposeful and avoid prescriptive secrets.\n"
-                "- Keep the physical core compact; strict K() evidence is easier to pass with one strong non-trivial K-chain than many weak ones.\n"
-            ),
-        }
-        sections.append(difficulty_guidance[difficulty])
-    else:
-        model = calibration_stats.get("model", "unknown")
-        target_rate = calibration_stats.get("target_rate", 0.20)
-        current_rate = calibration_stats.get("rate")
-        if current_rate is None:
-            sections.append(
-                f"## Dataset Calibration\nNo calibration data yet for {model}. Generate varied tasks.\n"
-                "The test gate only requires baseline/full-info to pass. Standard mode results are tracked but do not block submission."
-            )
-        elif current_rate > target_rate + 0.05:
-            sections.append(
-                f"## Dataset Calibration\nCurrent {model} pass rate is {current_rate:.1%}, above the {target_rate:.0%} target.\n"
-                "Aim for tasks where baseline passes but standard mode is challenging (tighter bandwidth, deeper information gaps).\n"
-                "The test gate requires baseline to pass; standard failures are preferred but do not obsess over forcing them."
-            )
-        elif current_rate < target_rate - 0.05:
-            sections.append(
-                f"## Dataset Calibration\nCurrent {model} pass rate is {current_rate:.1%}, below the {target_rate:.0%} target.\n"
-                "Generate tasks with clearer information paths so standard mode has a better chance of passing.\n"
-                "The test gate requires baseline to pass."
-            )
-        else:
-            sections.append(
-                f"## Dataset Calibration\nCurrent {model} pass rate is {current_rate:.1%}, near the {target_rate:.0%} target. Keep varied difficulty.\n"
-                "The test gate requires baseline to pass."
-            )
-
-    sections.append(
-        "\n".join(
-            [
-                f"## Required K-Level: {current_k_level}",
-                f"This task must verify at ToM level {current_k_level}.",
-                "K=0 tasks are invalid and will be rejected.",
-                "Submissions are rejected if the computed tom_level does not match.",
-            ]
-        )
-    )
-
-    if seed_tasks_dir:
-        target_model = calibration_stats.get("model", "unknown")
-        sections.append(
-            "\n".join(
-                [
-                    "## Sampled Task Context",
-                    f"`{seed_tasks_dir}` is used to populate `{Path(seed_tasks_dir).name}` examples for inspiration.",
-                    f"Target model: {target_model}. Logical sampled-task mix: fail {seed_fail_ratio:.0%}, pass {seed_pass_ratio:.0%}.",
-                    "You should inspect sampled tasks before authoring. Borrow only structural patterns that look empirically solvable under test_task, especially short physical cores and clean mechanic usage.",
-                    "Start each task from the scene-grounded template in working_task.json. Do not copy a seed task directly.",
-                ]
-            )
-        )
-
-    return "\n\n".join(section for section in sections if section)
-
-
 def _write_template_file(template_file: Path, agents_max: int) -> None:
     source_template = Path(__file__).parent / "template" / "template.json"
     with open(source_template) as f:
@@ -718,17 +610,6 @@ def main() -> None:
     _write_template_file(working_dir / "template.json", agents_max)
     _write_taskgen_shim(working_dir)
 
-    extra_sections = _build_extra_sections(
-        query=query,
-        verification_feedback=verification_feedback,
-        calibration_stats=calibration_stats if not _skip_evolution else {},
-        difficulty=difficulty if not _skip_evolution else None,
-        current_k_level=current_k_level,
-        seed_tasks_dir=(str(seed_tasks_dir) if seed_tasks_dir is not None else None) if not _skip_evolution else None,
-        seed_pass_ratio=seed_pass_ratio,
-        seed_fail_ratio=seed_fail_ratio,
-    )
-
     available_items = AUTHORING_ITEMS_NOTICE
     available_mechanics = get_authoring_mechanics()
     available_predicates = get_authoring_predicates()
@@ -738,16 +619,19 @@ def main() -> None:
         working_dir=str(working_dir),
         task_file=str(working_dir / "working_task.json"),
         category=category or "random",
-        available_items=available_items,
-        available_mechanics=available_mechanics,
-        available_predicates=available_predicates,
-        action_descriptions=action_descriptions,
-        extra_sections=extra_sections,
         num_tasks=num_tasks,
         agents_min=agents_min,
         agents_max=agents_max,
         subtasks_min=subtasks_min,
         subtasks_max=subtasks_max,
+        query=query,
+        verification_feedback=verification_feedback,
+        calibration_stats=calibration_stats if not _skip_evolution else {},
+        difficulty=difficulty if not _skip_evolution else None,
+        current_k_level=current_k_level,
+        seed_tasks_dir=(str(seed_tasks_dir) if seed_tasks_dir is not None else None) if not _skip_evolution else None,
+        seed_pass_ratio=seed_pass_ratio,
+        seed_fail_ratio=seed_fail_ratio,
         skip_steps=skip_steps,
     )
     _write_bootstrap_files(
