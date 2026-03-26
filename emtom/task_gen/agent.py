@@ -108,8 +108,8 @@ Exactly one action per turn.
 ## References
 - Working task: `{task_file}`
 - Current scene: `{working_dir}/current_scene.json`
-- Sampled seed summary: `{working_dir}/sampled_tasks/SUMMARY.md`
-- Sampled seeds: `{working_dir}/sampled_tasks/`
+- Sampled seed field views: `{working_dir}/sampled_tasks/task_*_fields.json`
+- Raw sampled seeds: `{working_dir}/sampled_tasks/task_*.json`
 - Template: `{working_dir}/template.json`
 
 ## Structural Diversity

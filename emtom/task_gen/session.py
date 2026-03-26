@@ -784,6 +784,9 @@ class TaskGenSession:
             base_model = self.state.get("test_model") or "gpt-5.2"
             opponent = "sonnet" if base_model != "sonnet" else "gpt-5.2"
             cmd.extend(["--team-model-map", f"team_0={base_model},team_1={opponent}"])
+            # For competitive baseline: idle team_1 so team_0 can win unopposed
+            if run_mode == "baseline":
+                cmd.extend(["--idle-team", "team_1"])
 
         env = os.environ.copy()
         env = self._with_project_root_assets(env)
@@ -858,14 +861,25 @@ class TaskGenSession:
 
         self._refresh_calibration_stats()
         calibration_stats = self.state.get("calibration_stats") or {}
+        category = task_data.get("category", "cooperative")
+        cat_stats = calibration_stats.get("by_category", {}).get(category, {})
+        # Use per-category rate if available, fall back to global
+        if cat_stats.get("total", 0) > 0:
+            cal_rate = cat_stats.get("rate")
+            cal_passed = cat_stats.get("passed")
+            cal_failed = cat_stats.get("failed")
+        else:
+            cal_rate = calibration_stats.get("rate")
+            cal_passed = calibration_stats.get("passed")
+            cal_failed = calibration_stats.get("failed")
         comparison = build_mode_comparison(
-            task_data.get("category", ""),
+            category,
             mode_results["standard"],
             mode_results["baseline"],
-            current_rate=calibration_stats.get("rate"),
+            current_rate=cal_rate,
             target_rate=calibration_stats.get("target_rate", 0.20),
-            current_passed=calibration_stats.get("passed"),
-            current_failed=calibration_stats.get("failed"),
+            current_passed=cal_passed,
+            current_failed=cal_failed,
         )
         payload = {
             "standard": mode_results["standard"],

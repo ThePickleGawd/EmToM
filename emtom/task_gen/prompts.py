@@ -82,21 +82,26 @@ Generate {num_tasks} quality benchmark tasks.
 - NEVER design tasks requiring object handoff through a shared room, agents try Place[obj, on, room_name] and fail at runtime.
 - If a task passes `judge` but fails `test_task`, simplify the physical core first before adding more ToM structure.
 
-## Proven Baseline Pattern
-Use this as a starting skeleton, then vary it:
-- Agent A knows the object location but NOT the target surface.
-- Agent B knows the target surface but CANNOT access the object's room.
-- Agent A can reach BOTH source and destination rooms directly, no relay through a third room.
-- 3 goals: 1 object placement + 1 state change (open/close) + 1 K() epistemic goal.
-- Mechanics: room_restriction + limited_bandwidth (1-2 msgs per agent).
+## Empirical Winning Formula (from 46 tasks that passed test_task)
+These patterns reliably pass both judge AND the test gate (baseline=pass, standard=fail). **Start from one of these, then vary.**
+
+**Mechanics (always):** `room_restriction` + `limited_bandwidth` (1 msg per agent). Optionally add `restricted_communication`.
+**Physical goals:** 3-5 for cooperative, 6-9 for mixed. Keep physical actions simple (Place, Open, Close).
+**Agents:** 2-3 agents. 3 agents works best for mixed (one per hidden role).
+**Room restrictions:** 2 restrictions (each agent barred from one room). This creates natural information gaps.
+**Key insight:** The decisive physical action must depend on a fact observable ONLY from a restricted room. The agent who CAN observe it must communicate it within the 1-message limit.
+
+**Common failure modes to avoid:**
+- Cooperative tasks are "too easy" 67% of the time → the information gap isn't strong enough. Use non-binary choices (which of 3+ objects/surfaces) so the standard agent can't guess.
+- Tasks with 5+ room_restrictions almost always have baseline failures — too many access constraints create deadlocks.
 
 ## Task Diversity
 Vary at least TWO of these dimensions each task. Check sampled tasks to avoid duplicating patterns:
 - Object type: plates, cups, bottles, vases, toys, boxes, laptops, candle holders, or scene-native alternatives.
 - Room pair: kitchen<->bedroom, office<->dining, garage<->living, or other scene-supported topologies.
-- Agent count: 2 agents is the baseline; try 3-4 agents with chain communication or relay roles.
-- Mechanic stack: room_restriction alone; room_restriction + restricted_communication; limited_bandwidth with 1 msg vs 3 msgs.
-- Goal structure: placement only; placement + open; placement + close + K(); two placements + K().
+- Agent count: 2-3 agents (not 4+ unless the scene has 4+ rooms with distinct objects).
+- Mechanic stack: room_restriction + limited_bandwidth(1); or add restricted_communication for relay chains.
+- Goal structure: placement + state change + K(); or two placements + K(). 3-5 goals for cooperative, 6-9 for mixed.
 - Knowledge split: A knows object / B knows target; A knows both but cannot reach; B can reach but knows neither; both know partial info.
 - Narrative framing: household chore, museum setup, safety inspection, party prep, moving day, or another concrete scene-grounded story.
 {test_gate_line}
@@ -212,6 +217,15 @@ def build_external_taskgen_prompt(
                 f"Current {model} pass rate is {current_rate:.1%}, near the {target_rate:.0%} target. Keep varied difficulty.\n"
                 "The test gate requires baseline to pass."
             )
+        by_category = calibration_stats.get("by_category", {})
+        cat_lines = []
+        for cat_name in ("cooperative", "competitive", "mixed"):
+            cs = by_category.get(cat_name, {})
+            if cs.get("total", 0) > 0:
+                cat_lines.append(f"  {cat_name}: {cs['rate']:.0%} pass ({cs['passed']}/{cs['total']})")
+        if cat_lines:
+            calibration_text += "\n\nPer-category standard pass rates (each targeting 20%):\n" + "\n".join(cat_lines)
+
         calibration_block = f"\n\n## Dataset Calibration\n{calibration_text}"
 
     k_level_block = ""
@@ -231,16 +245,16 @@ def build_external_taskgen_prompt(
             "\n\n## Sampled Task Context\n"
             f"`{seed_tasks_dir}` is used to populate `{Path(seed_tasks_dir).name}` examples for inspiration.\n"
             f"Target model: {target_model}. Logical sampled-task mix: fail {seed_fail_ratio:.0%}, pass {seed_pass_ratio:.0%}.\n"
-            "You should inspect sampled tasks before authoring. Borrow only structural patterns that look empirically solvable under test_task, especially short physical cores and clean mechanic usage.\n"
-            "Do not just read PASS/FAIL. Compare `Standard` vs `Baseline` outcomes and ask what private fact, observation, or communication bottleneck created the gap.\n"
-            "When targeting hard tasks, prioritize `GOOD_HARD_GAP` examples: baseline passes, standard fails.\n"
-            "When stuck after two weak iterations, inspect more sampled tasks plus their `task_N_analysis.md` files and reason explicitly about why the standard run failed while baseline succeeded, or why baseline failed too.\n"
+            "You should inspect sampled tasks before authoring. Read ALL 10 `task_*_fields.json` files, not a prose summary.\n"
+            "Each filtered file contains only the fields you should study: `task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents`.\n"
+            "Open the matching raw `task_*.json` only when you want to inspect `calibration` and saved benchmark behavior.\n"
+            "Borrow only structural patterns that look empirically solvable under test_task, especially short physical cores, strong secrets, and clean mechanic usage.\n"
             "Start each task from the scene-grounded template in working_task.json. Do not copy a seed task directly."
         )
         sampled_files_block = (
-            f"- `{working_dir}/sampled_tasks/SUMMARY.md`: compact seed-task fields. Read this first.\n"
-            f"- `{working_dir}/sampled_tasks/`: raw seed task JSONs for deeper inspection only when needed.\n"
-            f"- `{working_dir}/sampled_tasks/task_N_analysis.md`: compact standard-vs-baseline notes with trajectory digests. Inspect these when a sample looks promising or when you are stuck.\n"
+            f"- `{working_dir}/sampled_tasks/task_*_fields.json`: filtered sampled-task views. Read all 10 before authoring.\n"
+            f"- `{working_dir}/sampled_tasks/task_*.json`: raw sampled task JSONs. Open these only when you need `calibration` or extra context.\n"
+            "- Study `task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents` first.\n"
         )
 
     test_command = "- `taskgen test_task`\n" if not skip_test else ""
@@ -272,7 +286,7 @@ def build_external_taskgen_prompt(
     ]
     if not skip_evolution:
         workflow_lines.append(
-            f"3. Read `{working_dir}/sampled_tasks/SUMMARY.md` first, then inspect at least 3 sampled seed tasks in `{working_dir}/sampled_tasks/`, including one matching the target category when possible. For hard tasks, or if you get stuck after two weak judge/test iterations, inspect at least 5 total sampled tasks including `task_N_analysis.md` notes, with at least one `GOOD_HARD_GAP` example and one `UNSOLVABLE` or `TOO_EASY` example. Reuse only structural patterns that look empirically solvable. Do not copy IDs directly."
+            f"3. Read all 10 `task_*_fields.json` sampled-task views in `{working_dir}/sampled_tasks/` before authoring. For each one, inspect `task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents`. Open the matching raw `task_*.json` only if you need `calibration` or extra benchmark-behavior detail. Look for good practices in secrets, information splits, and mechanic usage. Reuse only structural patterns that look empirically solvable. Do not copy IDs directly."
         )
     edit_step_number = len(workflow_lines) + 1
     edit_text = "Write the natural-language task, secrets, and mechanics." if skip_pddl else "Author `problem_pddl :goal` first, then make the natural-language fields and mechanics match it."

@@ -35,9 +35,9 @@ def test_build_external_taskgen_prompt_inlines_runtime_context():
     assert "## Required Commands" in prompt
     assert "1. Run `taskgen status`." in prompt
     assert "2. Run `taskgen new_scene N`" in prompt
-    assert "inspect at least 3 sampled seed tasks" in prompt
-    assert "GOOD_HARD_GAP" in prompt
-    assert "task_N_analysis.md" in prompt
+    assert "Read all 10 `task_*_fields.json`" in prompt
+    assert "`task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents`" in prompt
+    assert "Open the matching raw `task_*.json` only" in prompt
     assert "extra_sections" not in prompt
 
 
@@ -58,7 +58,7 @@ def test_build_external_taskgen_prompt_omits_sampled_task_context_when_evolution
     )
 
     assert "## Sampled Task Context" not in prompt
-    assert "Read `/tmp/taskgen/sampled_tasks/SUMMARY.md` first" not in prompt
+    assert "task_*_fields.json" not in prompt
 
 
 def test_build_external_taskgen_prompt_does_not_push_easy_tasks():

@@ -156,306 +156,28 @@ def _copy_sample(src_path: Path, sampled_tasks_dir: Path, index: int) -> None:
     shutil.copy(src_path, sampled_tasks_dir / f"task_{index}.json")
 
 
-def _truncate_text(value: Any, limit: int = 220) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3].rstrip() + "..."
-
-
-def _summarize_goal_metadata(task_data: dict) -> tuple[str, str]:
-    problem_pddl = task_data.get("problem_pddl")
-    if not isinstance(problem_pddl, str) or not problem_pddl.strip():
-        return "none", "none"
-
-    try:
-        from emtom.pddl.problem_pddl import parse_problem_pddl
-
-        parsed = parse_problem_pddl(problem_pddl)
-        goal_summary = _truncate_text(parsed.goal_pddl, limit=260)
-        owners = parsed.owners or {}
-        if owners:
-            owner_counts: dict[str, int] = {}
-            for owner in owners.values():
-                owner_counts[owner] = owner_counts.get(owner, 0) + 1
-            owner_summary = ", ".join(
-                f"{owner}:{count}" for owner, count in sorted(owner_counts.items())
-            )
-        else:
-            owner_summary = "none"
-        return goal_summary, owner_summary
-    except Exception:
-        return _truncate_text(problem_pddl, limit=260), "unknown"
-
-
-def _latest_calibration_pair(task_data: dict, model: str) -> tuple[Optional[dict], Optional[dict]]:
-    from emtom.evolve.benchmark_wrapper import find_calibration_entry
-
-    standard = find_calibration_entry(task_data.get("calibration", []), model=model, run_mode="standard")
-    baseline = find_calibration_entry(task_data.get("calibration", []), model=model, run_mode="baseline")
-    return standard, baseline
-
-
-def _calibration_outcome_label(entry: Optional[dict]) -> str:
-    from emtom.evolve.benchmark_wrapper import cal_passed, cal_progress
-
-    if not entry:
-        return "missing"
-    progress = cal_progress(entry)
-    status = "PASS" if cal_passed(entry) else "FAIL"
-    steps = entry.get("steps")
-    step_text = f", steps={steps}" if isinstance(steps, int) else ""
-    return f"{status} (progress={progress:.0%}{step_text})"
-
-
-def _calibration_gap_label(standard: Optional[dict], baseline: Optional[dict]) -> str:
-    from emtom.evolve.benchmark_wrapper import cal_passed
-
-    if baseline is None and standard is None:
-        return "UNTESTED"
-    if baseline is None:
-        return "NO_BASELINE"
-    if standard is None:
-        return "NO_STANDARD"
-    standard_passed = cal_passed(standard)
-    baseline_passed = cal_passed(baseline)
-    if baseline_passed and not standard_passed:
-        return "GOOD_HARD_GAP"
-    if baseline_passed and standard_passed:
-        return "TOO_EASY"
-    if not baseline_passed:
-        return "UNSOLVABLE"
-    return "MIXED"
-
-
-def _calibration_gap_reason(standard: Optional[dict], baseline: Optional[dict]) -> str:
-    from emtom.evolve.benchmark_wrapper import cal_passed, cal_progress
-
-    gap_label = _calibration_gap_label(standard, baseline)
-    if gap_label == "GOOD_HARD_GAP":
-        std_progress = cal_progress(standard)
-        base_progress = cal_progress(baseline)
-        return (
-            "Baseline solved while standard failed. Inspect which hidden fact, observation, or communication bottleneck "
-            f"explains the {base_progress - std_progress:.0%} progress gap."
-        )
-    if gap_label == "TOO_EASY":
-        return "Both runs solved it. This pattern is probably too easy for a hard target unless you deepen the information asymmetry."
-    if gap_label == "UNSOLVABLE":
-        return "Baseline failed too. The physical plan or mechanic stack is probably brittle, not just ToM-demanding."
-    if gap_label == "NO_BASELINE":
-        return "Only a standard calibration entry is available."
-    if gap_label == "NO_STANDARD":
-        return "Only a baseline calibration entry is available."
-    return "No clear standard-vs-baseline lesson yet."
-
-
-def _trajectory_digest(entry: Optional[dict], max_turns: int = 4) -> list[str]:
-    if not entry:
-        return ["- No saved trajectory."]
-
-    trajectory = entry.get("trajectory")
-    if not isinstance(trajectory, list) or not trajectory:
-        return ["- No saved trajectory."]
-
-    lines: list[str] = []
-    subtask_events = sum(len(turn.get("subtasks_completed", []) or []) for turn in trajectory if isinstance(turn, dict))
-    lines.append(f"- Saved turns: {len(trajectory)}; subtask events: {subtask_events}.")
-
-    for turn in trajectory[:max_turns]:
-        if not isinstance(turn, dict):
-            continue
-        agents = turn.get("agents", {}) if isinstance(turn.get("agents"), dict) else {}
-        action_bits = []
-        for agent_id in sorted(agents):
-            agent_data = agents.get(agent_id) or {}
-            action = _truncate_text(agent_data.get("action", "unknown"), limit=80)
-            action_bits.append(f"{agent_id}: {action}")
-        subtasks = turn.get("subtasks_completed", []) or []
-        subtask_text = f" | subtasks: {', '.join(str(s) for s in subtasks[:3])}" if subtasks else ""
-        action_text = "; ".join(action_bits) if action_bits else "no agent actions saved"
-        lines.append(f"- Turn {turn.get('turn', '?')}: {action_text}{subtask_text}")
-
-    if len(trajectory) > max_turns:
-        lines.append("- Additional turns omitted here; inspect raw `calibration[*].trajectory` in the task JSON for the full trace.")
-
-    return lines
-
-
-def _write_sampled_task_analysis_file(sample_path: Path, task_data: dict, model: str) -> None:
-    standard, baseline = _latest_calibration_pair(task_data, model)
-    analysis_lines = [
-        f"# {sample_path.name} Analysis",
-        "",
-        f"- Title: {_truncate_text(task_data.get('title') or sample_path.name, limit=140)}",
-        f"- Category: {task_data.get('category', 'unknown')}",
-        f"- Agents: {task_data.get('num_agents', 'unknown')}",
-        f"- Standard: {_calibration_outcome_label(standard)}",
-        f"- Baseline: {_calibration_outcome_label(baseline)}",
-        f"- Gap label: {_calibration_gap_label(standard, baseline)}",
-        f"- Lesson: {_calibration_gap_reason(standard, baseline)}",
-        "",
-        "## How To Use This Example",
-        "- Ask why baseline/full-info succeeded or failed.",
-        "- If baseline passed and standard failed, identify the private fact or communication bottleneck that standard could not recover.",
-        "- If baseline failed too, treat this as a structural anti-example rather than a ToM-gap example.",
-        "",
-        "## Standard Trajectory Digest",
-        *_trajectory_digest(standard),
-        "",
-        "## Baseline Trajectory Digest",
-        *_trajectory_digest(baseline),
-        "",
-        "## Raw Trace Location",
-        f"- Inspect `{sample_path.name}` and its `calibration[*].trajectory` entries for the full saved trace.",
-    ]
-    (sample_path.with_suffix("").with_name(sample_path.stem + "_analysis.md")).write_text("\n".join(analysis_lines))
-
-
-def _write_sampled_tasks_summary(sampled_tasks_dir: Path, model: str = "gpt-5.2") -> None:
-    from emtom.evolve.benchmark_wrapper import cal_passed, cal_progress, find_calibration_entry
-
-    sample_files = sorted(sampled_tasks_dir.glob("task_*.json"))
-    if not sample_files:
-        return
-
-    lines = [
-        "# Sampled Task Summary",
-        "",
-        "Read this file first. It contains the compact fields that matter for seed-task inspiration.",
-        "Use sampled tasks for structure only. Do not copy scene IDs, object IDs, agent IDs, or exact wording.",
-        "",
-        "**Benchmark column**: PASS = baseline solved the task and it was submitted successfully.",
-        "FAIL = task was benchmarked but baseline could not solve it. UNTESTED = no benchmark data.",
-        "Prefer structural patterns from PASS tasks — they are empirically solvable.",
-        "For hard tasks, prioritize examples labeled `GOOD_HARD_GAP`: baseline passes, standard fails, and the gap is likely informational rather than physical.",
-        "If you get stuck, inspect more sampled tasks plus their `task_N_analysis.md` files and compare the standard vs baseline traces directly.",
-        "",
+def _write_sampled_task_field_views(sampled_tasks_dir: Path) -> None:
+    field_names = [
+        "task",
+        "active_mechanics",
+        "mechanic_bindings",
+        "agent_secrets",
+        "agent_actions",
+        "problem_pddl",
+        "num_agents",
     ]
 
-    for path in sample_files:
+    for task_path in sorted(sampled_tasks_dir.glob("task_*.json")):
         try:
-            with open(path) as f:
+            with open(task_path) as f:
                 task_data = json.load(f)
         except Exception:
             continue
 
-        title = _truncate_text(task_data.get("title") or path.name, limit=120)
-        category = task_data.get("category", "unknown")
-        num_agents = task_data.get("num_agents", "unknown")
-        mechanics = task_data.get("active_mechanics")
-        if not mechanics and isinstance(task_data.get("mechanic_bindings"), list):
-            mechanics = [
-                binding.get("mechanic_type")
-                for binding in task_data["mechanic_bindings"]
-                if isinstance(binding, dict) and binding.get("mechanic_type")
-            ]
-        mechanics_str = ", ".join(str(m) for m in (mechanics or [])) or "none"
-        task_text = _truncate_text(task_data.get("task"), limit=240)
-        goal_summary, owner_summary = _summarize_goal_metadata(task_data)
-        standard_cal, baseline_cal = _latest_calibration_pair(task_data, model)
-        gap_label = _calibration_gap_label(standard_cal, baseline_cal)
-        gap_reason = _calibration_gap_reason(standard_cal, baseline_cal)
-
-        # Benchmark pass/fail signal from calibration data
-        cal = find_calibration_entry(task_data.get("calibration", []), model=model)
-        if cal is None:
-            benchmark_str = "UNTESTED"
-        elif cal_passed(cal):
-            progress = cal_progress(cal)
-            benchmark_str = f"PASS (progress={progress:.0%})"
-        else:
-            progress = cal_progress(cal)
-            benchmark_str = f"FAIL (progress={progress:.0%})"
-
-        lines.extend(
-            [
-                f"## {path.name}",
-                f"- Title: {title}",
-                f"- Category: {category}",
-                f"- Agents: {num_agents}",
-                f"- Mechanics: {mechanics_str}",
-                f"- Task: {task_text}",
-                f"- Goal: {goal_summary}",
-                f"- Goal owners: {owner_summary}",
-                f"- Benchmark: {benchmark_str}",
-                f"- Standard: {_calibration_outcome_label(standard_cal)}",
-                f"- Baseline: {_calibration_outcome_label(baseline_cal)}",
-                f"- Standard vs baseline: {gap_label}",
-                f"- Why this matters: {gap_reason}",
-                f"- Analysis file: {path.stem}_analysis.md",
-                "",
-            ]
-        )
-        _write_sampled_task_analysis_file(path, task_data, model)
-
-    # Add failure analysis section based on sampled tasks
-    failed_patterns: list[str] = []
-    passed_patterns: list[str] = []
-    hard_gap_patterns: list[str] = []
-    for path in sample_files:
-        try:
-            with open(path) as f:
-                task_data = json.load(f)
-        except Exception:
-            continue
-        category = task_data.get("category", "unknown")
-        mechanics = task_data.get("active_mechanics") or []
-        if not mechanics and isinstance(task_data.get("mechanic_bindings"), list):
-            mechanics = [b.get("mechanic_type") for b in task_data["mechanic_bindings"] if isinstance(b, dict)]
-        pddl = task_data.get("problem_pddl", "")
-        has_K = "(K " in pddl
-        num_agents = task_data.get("num_agents", 0)
-        mech_str = "+".join(sorted(set(str(m) for m in mechanics if m))) or "none"
-        label = f"{category}/{num_agents}a/{mech_str}/K={'yes' if has_K else 'no'}"
-        standard_cal, baseline_cal = _latest_calibration_pair(task_data, model)
-        gap_label = _calibration_gap_label(standard_cal, baseline_cal)
-
-        cal = find_calibration_entry(task_data.get("calibration", []), model=model)
-        if cal is None:
-            continue
-
-        if cal_passed(cal):
-            passed_patterns.append(label)
-        else:
-            failed_patterns.append(label)
-        if gap_label == "GOOD_HARD_GAP":
-            hard_gap_patterns.append(label)
-
-    if failed_patterns or passed_patterns:
-        lines.extend([
-            "---",
-            "",
-            "# Failure Analysis (learn from these patterns)",
-            "",
-        ])
-        if hard_gap_patterns:
-            lines.append("**Patterns with GOOD_HARD_GAP** (baseline passes, standard fails; inspect these first for hard ToM examples):")
-            for p in dict.fromkeys(hard_gap_patterns):
-                lines.append(f"  - {p}")
-            lines.append("")
-        if passed_patterns:
-            lines.append("**Patterns that PASS** (reuse these structural shapes):")
-            for p in dict.fromkeys(passed_patterns):  # dedupe preserving order
-                lines.append(f"  - {p}")
-            lines.append("")
-        if failed_patterns:
-            lines.append("**Patterns that FAIL** (avoid or redesign):")
-            for p in dict.fromkeys(failed_patterns):
-                lines.append(f"  - {p}")
-            lines.append("")
-        lines.extend([
-            "## Common Anti-Patterns (from empirical testing)",
-            "- Cross-room object relay (Place on room name instead of furniture) → runtime crash",
-            "- Prescriptive secrets ('Tell your partner', 'Ask them') → judge blocks on secret_quality",
-            "- Meta-knowledge in secrets ('agent_1 knows X') → judge blocks on secret_quality",
-            "- Independent parallel work (no info exchange needed) → judge blocks on task_interdependence",
-            "- K=0 tasks (no K() goal in PDDL) → rejected at submit",
-            "- 'agent_X cannot enter room' in wrong agent's secret → compiler assigns restriction to wrong agent",
-            "",
-        ])
-
-    (sampled_tasks_dir / "SUMMARY.md").write_text("\n".join(lines))
+        filtered = {field: task_data.get(field) for field in field_names}
+        view_path = task_path.with_name(f"{task_path.stem}_fields.json")
+        with open(view_path, "w") as f:
+            json.dump(filtered, f, indent=2)
 
 
 def populate_sampled_tasks_dir(
@@ -466,13 +188,14 @@ def populate_sampled_tasks_dir(
     selected = select_seed_tasks(selection_config, count=sample_count)
     for i, candidate in enumerate(selected, 1):
         _copy_sample(candidate.path, sampled_tasks_dir, i)
-    _write_sampled_tasks_summary(sampled_tasks_dir, model=selection_config.target_model)
+    _write_sampled_task_field_views(sampled_tasks_dir)
     return selection_config.tasks_dir if selected else None, len(selected)
 
 
 def compute_calibration_stats(tasks_dir: Union[str, Iterable[str]], model: str) -> dict:
     from emtom.evolve.benchmark_wrapper import cal_passed, find_calibration_entry
 
+    _empty_cat = lambda: {"passed": 0, "failed": 0, "total": 0, "rate": None}
     stats = {
         "passed": 0,
         "failed": 0,
@@ -483,6 +206,11 @@ def compute_calibration_stats(tasks_dir: Union[str, Iterable[str]], model: str) 
         "tom_total": 0,
         "tom_unknown": 0,
         "tom_ratios": {0: None, 1: None, 2: None, 3: None},
+        "by_category": {
+            "cooperative": _empty_cat(),
+            "competitive": _empty_cat(),
+            "mixed": _empty_cat(),
+        },
     }
     task_dirs = [tasks_dir] if isinstance(tasks_dir, str) else list(tasks_dir)
     task_paths = [Path(path) for path in task_dirs if path]
@@ -529,17 +257,26 @@ def compute_calibration_stats(tasks_dir: Union[str, Iterable[str]], model: str) 
                 continue
 
             cal = find_calibration_entry(task.get("calibration", []), model=model)
+            category = task.get("category", "cooperative")
+            cat_bucket = stats["by_category"].get(category)
             if cal is None:
                 stats["untested"] += 1
             elif cal_passed(cal):
                 stats["passed"] += 1
+                if cat_bucket is not None:
+                    cat_bucket["passed"] += 1
             else:
                 stats["failed"] += 1
+                if cat_bucket is not None:
+                    cat_bucket["failed"] += 1
         except Exception:
             continue
 
     stats["total"] = stats["passed"] + stats["failed"]
     stats["rate"] = stats["passed"] / stats["total"] if stats["total"] > 0 else None
+    for cat_stats in stats["by_category"].values():
+        cat_stats["total"] = cat_stats["passed"] + cat_stats["failed"]
+        cat_stats["rate"] = cat_stats["passed"] / cat_stats["total"] if cat_stats["total"] > 0 else None
     if stats["tom_total"] > 0:
         for level in (0, 1, 2, 3):
             stats["tom_ratios"][level] = stats["tom_counts"][level] / stats["tom_total"]
@@ -735,7 +472,7 @@ def main() -> None:
         for i, task_path in enumerate(selected, 1):
             shutil.copy(task_path, sampled_tasks_dir / task_path.name)
             _copy_sample(task_path, sampled_tasks_dir, i)
-        _write_sampled_tasks_summary(sampled_tasks_dir, model=target_model)
+        _write_sampled_task_field_views(sampled_tasks_dir)
     elif seed_tasks_dir is not None:
         selection_config = SeedSelectionConfig(
             tasks_dir=seed_tasks_dir,
