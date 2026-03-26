@@ -169,6 +169,12 @@ def run(
     except Exception as e:
         return failure(f"Failed to compute tom_level during submit: {e}")
 
+    if task_data["tom_level"] < 1:
+        return failure(
+            "Task tom_level is 0. EMTOM tasks must require at least one grounded K() dependency.",
+            data={"computed_tom_level": task_data["tom_level"], "required_min": 1},
+        )
+
     # Enforce allowed ToM levels when specified.
     if allowed_tom_levels and task_data["tom_level"] not in allowed_tom_levels:
         allowed_str = ", ".join(str(l) for l in sorted(allowed_tom_levels))

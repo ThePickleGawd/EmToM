@@ -452,6 +452,57 @@ class TestSubmitTask:
             assert result["success"] is False
             assert "Failed to compute tom_level" in result["error"]
 
+    def test_submit_rejects_tom_level_zero(self):
+        from emtom.cli.submit_task import run
+
+        task = {
+            "task_id": "draft_task",
+            "title": "Submission ToM Zero Test",
+            "category": "cooperative",
+            "task": "This is a sufficiently long task description for submit testing.",
+            "scene_id": "scene_test",
+            "episode_id": "episode_test",
+            "num_agents": 2,
+            "active_mechanics": [],
+            "mechanic_bindings": [],
+            "agent_secrets": {"agent_0": ["s0"], "agent_1": ["s1"]},
+            "agent_actions": {"agent_0": ["Wait"], "agent_1": ["Wait"]},
+            "items": [],
+            "locked_containers": {},
+            "initial_states": {},
+            "message_targets": {},
+            "teams": {},
+            "team_secrets": {},
+            "pddl_domain": "emtom",
+            "problem_pddl": (
+                "(define (problem t_submit)"
+                " (:domain emtom)"
+                " (:objects agent_0 agent_1 - agent kitchen_1 - room cup_1 - object table_1 - furniture)"
+                " (:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1)"
+                "        (is_in_room cup_1 kitchen_1) (is_in_room table_1 kitchen_1)"
+                "        (is_on_top cup_1 table_1))"
+                " (:goal (is_on_top cup_1 table_1)))"
+            ),
+        }
+
+        with tempfile.TemporaryDirectory() as td:
+            task_path = Path(td) / "task.json"
+            out_dir = Path(td) / "out"
+            with open(task_path, "w") as f:
+                json.dump(task, f)
+
+            with patch("emtom.cli.validate_task.run", return_value=success({"valid": True})), \
+                 patch("emtom.cli.submit_task._compute_tom_metadata", return_value={"tom_level": 0}):
+                result = run(
+                    str(task_path),
+                    output_dir=str(out_dir),
+                    subtasks_min=1,
+                    subtasks_max=20,
+                )
+
+            assert result["success"] is False
+            assert "tom_level is 0" in result["error"]
+
 
 # ---------------------------------------------------------------------------
 # judge_task tests

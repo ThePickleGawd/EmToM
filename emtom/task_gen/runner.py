@@ -20,7 +20,7 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional, Union
 
 from emtom.task_gen.event_log import append_event, maybe_int, write_run_manifest, write_worker_snapshot
 from emtom.task_gen.external_agent import ExternalAgentError, ExternalAgentLauncher
@@ -269,35 +269,63 @@ def populate_sampled_tasks_dir(
     return selection_config.tasks_dir if selected else None, len(selected)
 
 
-def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
+def compute_calibration_stats(tasks_dir: Union[str, Iterable[str]], model: str) -> dict:
     from emtom.evolve.benchmark_wrapper import cal_passed, find_calibration_entry
 
     stats = {
         "passed": 0,
         "failed": 0,
         "untested": 0,
+        "excluded_tom_level_zero": 0,
         "model": model,
         "tom_counts": {0: 0, 1: 0, 2: 0, 3: 0},
         "tom_total": 0,
         "tom_unknown": 0,
         "tom_ratios": {0: None, 1: None, 2: None, 3: None},
     }
-    tasks_path = Path(tasks_dir)
-    if not tasks_path.exists():
+    task_dirs = [tasks_dir] if isinstance(tasks_dir, str) else list(tasks_dir)
+    task_paths = [Path(path) for path in task_dirs if path]
+    if not task_paths:
         stats["total"] = 0
         stats["rate"] = None
         return stats
 
-    for task_file in tasks_path.glob("*.json"):
+    seen_keys = set()
+    task_files = []
+    for tasks_path in task_paths:
+        if not tasks_path.exists():
+            continue
+        for task_file in tasks_path.glob("*.json"):
+            try:
+                with open(task_file) as f:
+                    task = json.load(f)
+            except Exception:
+                continue
+            if not isinstance(task, dict):
+                continue
+            task_key = task.get("task_id") or str(task_file.resolve())
+            if task_key in seen_keys:
+                continue
+            seen_keys.add(task_key)
+            task_files.append((task_file, task))
+
+    if not task_files:
+        stats["total"] = 0
+        stats["rate"] = None
+        return stats
+
+    for task_file, task in task_files:
         try:
-            with open(task_file) as f:
-                task = json.load(f)
             tom_level = _infer_task_tom_level(task)
             if tom_level in (0, 1, 2, 3):
                 stats["tom_counts"][tom_level] += 1
                 stats["tom_total"] += 1
             else:
                 stats["tom_unknown"] += 1
+
+            if isinstance(tom_level, int) and tom_level < 1:
+                stats["excluded_tom_level_zero"] += 1
+                continue
 
             cal = find_calibration_entry(task.get("calibration", []), model=model)
             if cal is None:
@@ -372,6 +400,7 @@ def _build_extra_sections(
                 "- Keep tasks simple and directly actionable.\n"
                 "- Use 2-3 subtasks and 2-3 agents.\n"
                 "- Secrets must explain active mechanics plainly.\n"
+                "- Even easy tasks must contain one grounded non-trivial K() dependency; never generate K=0 tasks.\n"
             ),
             "medium": (
                 "## Difficulty: MEDIUM\n"
@@ -415,6 +444,7 @@ def _build_extra_sections(
             [
                 f"## Required K-Level: {current_k_level}",
                 f"This task must verify at ToM level {current_k_level}.",
+                "K=0 tasks are invalid and will be rejected.",
                 "Submissions are rejected if the computed tom_level does not match.",
             ]
         )
@@ -587,8 +617,11 @@ def main() -> None:
         test_model = target_model
 
     seed_tasks_dir = resolve_seed_tasks_dir(seed_tasks_dir_arg, output_dir)
-    calibration_tasks_dir = str(seed_tasks_dir) if seed_tasks_dir is not None else output_dir
-    calibration_stats = compute_calibration_stats(calibration_tasks_dir, target_model)
+    calibration_task_dirs = []
+    if seed_tasks_dir is not None:
+        calibration_task_dirs.append(str(seed_tasks_dir))
+    calibration_task_dirs.append(output_dir)
+    calibration_stats = compute_calibration_stats(calibration_task_dirs, target_model)
     calibration_stats["target_rate"] = target_pass_rate
 
     # When task-evolution is removed, skip seed task population and calibration guidance
@@ -681,6 +714,7 @@ def main() -> None:
         difficulty=difficulty,
         test_model=test_model,
         calibration_stats=calibration_stats,
+        calibration_tasks_dirs=calibration_task_dirs,
         task_gen_agent=task_gen_agent,
         allowed_k_levels=k_levels,
         skip_steps=skip_steps,

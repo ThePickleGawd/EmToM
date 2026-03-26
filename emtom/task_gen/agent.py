@@ -101,8 +101,21 @@ def _standard_requirement(
     current_rate: Optional[float],
     target_rate: float,
     tolerance: float = _CALIBRATION_TOLERANCE,
+    current_passed: Optional[int] = None,
+    current_failed: Optional[int] = None,
 ) -> str:
     """Return how the next standard run should calibrate the dataset."""
+    if current_passed is not None and current_failed is not None:
+        total = current_passed + current_failed
+        next_total = total + 1
+        pass_rate_if_pass = (current_passed + 1) / next_total
+        pass_rate_if_fail = current_passed / next_total
+        pass_delta = abs(pass_rate_if_pass - target_rate)
+        fail_delta = abs(pass_rate_if_fail - target_rate)
+        if abs(pass_delta - fail_delta) <= 1e-9:
+            return "either"
+        return "must_pass" if pass_delta < fail_delta else "must_fail"
+
     if current_rate is None:
         return "either"
     if current_rate > target_rate + tolerance:
@@ -119,6 +132,8 @@ def _build_mode_comparison(
     current_rate: Optional[float],
     target_rate: float,
     tolerance: float = _CALIBRATION_TOLERANCE,
+    current_passed: Optional[int] = None,
+    current_failed: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Summarize the dual benchmark run and acceptance gates."""
     std_eval = standard.get("evaluation", {})
@@ -127,7 +142,19 @@ def _build_mode_comparison(
     baseline_passed = _evaluation_passed(category, base_eval)
     standard_progress = _evaluation_progress(category, std_eval)
     baseline_progress = _evaluation_progress(category, base_eval)
-    requirement = _standard_requirement(current_rate, target_rate, tolerance=tolerance)
+    requirement = _standard_requirement(
+        current_rate,
+        target_rate,
+        tolerance=tolerance,
+        current_passed=current_passed,
+        current_failed=current_failed,
+    )
+    next_rate_if_pass = None
+    next_rate_if_fail = None
+    if current_passed is not None and current_failed is not None:
+        next_total = current_passed + current_failed + 1
+        next_rate_if_pass = (current_passed + 1) / next_total
+        next_rate_if_fail = current_passed / next_total
 
     gate_passed = baseline_passed
     reasons: List[str] = []
@@ -139,12 +166,12 @@ def _build_mode_comparison(
     if requirement == "must_fail" and standard_passed:
         gate_passed = False
         reasons.append(
-            f"Standard run must fail because current pass rate ({current_rate:.1%}) is above the {target_rate:.0%} target."
+            f"Standard run must fail because another pass would move the dataset away from the {target_rate:.0%} target."
         )
     elif requirement == "must_pass" and not standard_passed:
         gate_passed = False
         reasons.append(
-            f"Standard run must pass because current pass rate ({current_rate:.1%}) is below the {target_rate:.0%} target."
+            f"Standard run must pass because another fail would move the dataset away from the {target_rate:.0%} target."
         )
 
     if not reasons:
@@ -156,6 +183,8 @@ def _build_mode_comparison(
         "standard_requirement": requirement,
         "current_standard_pass_rate": current_rate,
         "target_standard_pass_rate": target_rate,
+        "next_standard_pass_rate_if_pass": next_rate_if_pass,
+        "next_standard_pass_rate_if_fail": next_rate_if_fail,
         "standard_passed": standard_passed,
         "baseline_passed": baseline_passed,
         "standard_progress": standard_progress,
@@ -310,6 +339,7 @@ class TaskGeneratorAgent:
         self.last_judgment: Optional[CouncilVerdict] = None  # Last judgment result
         self.failed = False  # Track if agent called fail[]
         self.fail_reason = ""  # Reason for failure
+        self._last_test_comparison: Optional[Dict[str, Any]] = None
         self.task_memories: List[str] = []  # Learnings from completed tasks
         self.consecutive_tom_failures = 0  # Track failures to suggest new_scene
         self.diversity_tracker = DiversityTracker(llm=self.llm)  # Track task patterns for diversity
@@ -553,7 +583,7 @@ Your previous task did not pass the ToM verification. You MUST address these iss
                     "- 2-3 subtasks maximum\n"
                     "- Secrets MUST explain any active mechanic in plain language\n"
                     "- All effects should be observable (no remote effects in unseen rooms)\n"
-                    "- tom_level 0-1 only\n"
+                    "- tom_level 1 only; K=0 tasks are invalid\n"
                     "- limited_bandwidth with generous limits (4-5 messages) works well at this level\n"
                 ),
                 "medium": (
@@ -634,6 +664,7 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
             tom_calibration_section = (
                 f"\n## Required K-Level: {target_k}\n"
                 f"This task MUST be Theory-of-Mind level {target_k}.\n"
+                "K=0 tasks are invalid and will be rejected.\n"
                 f"Design epistemic goals so that `judge[]`'s strict PDDL verification computes tom_level = {target_k}.\n"
                 f"submit_task[] will REJECT the task if the computed tom_level is not {target_k}.\n"
             )
@@ -1410,6 +1441,7 @@ SUMMARY:"""
                 self.last_verified_spec_hash = None
                 self.last_verified_trajectory_hash = None
                 self.last_test_passed = False
+                self._last_test_comparison = None
             return self._bash(args)
         elif tool == "test_task":
             return self._test_task()
@@ -1640,6 +1672,7 @@ SUMMARY:"""
             # Benchmark ran successfully - merge results with validation
             validation_result.update(results)
             comparison = results.get("comparison", {})
+            self._last_test_comparison = comparison
             self.last_test_passed = comparison.get("gate_passed", False)
             validation_result["gate"] = "PASSED" if self.last_test_passed else "REJECTED"
             validation_result["gate_reason"] = " ".join(comparison.get("reasons", []))
@@ -1829,6 +1862,8 @@ SUMMARY:"""
             mode_results["baseline"],
             current_rate=self.calibration_stats.get("rate"),
             target_rate=self.calibration_stats.get("target_rate", 0.20),
+            current_passed=self.calibration_stats.get("passed"),
+            current_failed=self.calibration_stats.get("failed"),
         )
         merged = {
             "standard": mode_results["standard"],
@@ -2093,12 +2128,14 @@ SUMMARY:"""
 
         data = result["data"]
         self.submitted_tasks.append(data["output_path"])
+        self._advance_calibration_stats(self._last_test_comparison)
 
         # Reset verification state for next task
         self.last_verify_passed = False
         self.last_judge_passed = False
         self.last_test_passed = False
         self.last_judgment = None
+        self._last_test_comparison = None
         self.consecutive_tom_failures = 0
 
         # Extract memory and track diversity
@@ -2127,6 +2164,24 @@ SUMMARY:"""
             f"  - {data.get('submitted_path', 'N/A')} (session)\n"
             f"Total submitted: {len(self.submitted_tasks)}\n\n"
             "[Context reset for next task.]"
+        )
+
+    def _advance_calibration_stats(self, comparison: Optional[Dict[str, Any]]) -> None:
+        if not comparison or "standard_passed" not in comparison:
+            return
+
+        passed = int(self.calibration_stats.get("passed", 0))
+        failed = int(self.calibration_stats.get("failed", 0))
+        if comparison.get("standard_passed"):
+            passed += 1
+        else:
+            failed += 1
+
+        self.calibration_stats["passed"] = passed
+        self.calibration_stats["failed"] = failed
+        self.calibration_stats["total"] = passed + failed
+        self.calibration_stats["rate"] = (
+            passed / (passed + failed) if (passed + failed) > 0 else None
         )
 
     def _extract_task_memory(self, task_title: str) -> str:
@@ -2223,6 +2278,7 @@ Use these learnings to improve your next task. Avoid repeating mistakes."""
             k_section = (
                 f"\n## Required K-Level: {self._current_k_level}\n"
                 f"This task MUST be Theory-of-Mind level {self._current_k_level}.\n"
+                "K=0 tasks are invalid and will be rejected.\n"
                 f"Design epistemic goals so that `judge[]`'s strict PDDL verification computes tom_level = {self._current_k_level}.\n"
                 f"submit_task[] will REJECT the task if the computed tom_level is not {self._current_k_level}.\n"
             )

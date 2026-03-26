@@ -64,7 +64,20 @@ def _standard_requirement(
     current_rate: Optional[float],
     target_rate: float,
     tolerance: float = 0.05,
+    current_passed: Optional[int] = None,
+    current_failed: Optional[int] = None,
 ) -> str:
+    if current_passed is not None and current_failed is not None:
+        total = current_passed + current_failed
+        next_total = total + 1
+        pass_rate_if_pass = (current_passed + 1) / next_total
+        pass_rate_if_fail = current_passed / next_total
+        pass_delta = abs(pass_rate_if_pass - target_rate)
+        fail_delta = abs(pass_rate_if_fail - target_rate)
+        if abs(pass_delta - fail_delta) <= 1e-9:
+            return "either"
+        return "must_pass" if pass_delta < fail_delta else "must_fail"
+
     if current_rate is None:
         return "either"
     if current_rate > target_rate + tolerance:
@@ -81,6 +94,8 @@ def build_mode_comparison(
     current_rate: Optional[float],
     target_rate: float,
     tolerance: float = 0.05,
+    current_passed: Optional[int] = None,
+    current_failed: Optional[int] = None,
 ) -> Dict[str, Any]:
     std_eval = standard.get("evaluation", {})
     base_eval = baseline.get("evaluation", {})
@@ -88,7 +103,20 @@ def build_mode_comparison(
     baseline_passed = _evaluation_passed(category, base_eval)
     standard_progress = _evaluation_progress(category, std_eval)
     baseline_progress = _evaluation_progress(category, base_eval)
-    requirement = _standard_requirement(current_rate, target_rate, tolerance=tolerance)
+    requirement = _standard_requirement(
+        current_rate,
+        target_rate,
+        tolerance=tolerance,
+        current_passed=current_passed,
+        current_failed=current_failed,
+    )
+    next_total = None
+    next_rate_if_pass = None
+    next_rate_if_fail = None
+    if current_passed is not None and current_failed is not None:
+        next_total = current_passed + current_failed + 1
+        next_rate_if_pass = (current_passed + 1) / next_total
+        next_rate_if_fail = current_passed / next_total
 
     gate_passed = baseline_passed
     reasons: List[str] = []
@@ -100,12 +128,12 @@ def build_mode_comparison(
     if requirement == "must_fail" and standard_passed:
         gate_passed = False
         reasons.append(
-            f"Standard run must fail because current pass rate ({current_rate:.1%}) is above the {target_rate:.0%} target."
+            f"Standard run must fail because another pass would move the dataset away from the {target_rate:.0%} target."
         )
     elif requirement == "must_pass" and not standard_passed:
         gate_passed = False
         reasons.append(
-            f"Standard run must pass because current pass rate ({current_rate:.1%}) is below the {target_rate:.0%} target."
+            f"Standard run must pass because another fail would move the dataset away from the {target_rate:.0%} target."
         )
 
     if not reasons:
@@ -117,6 +145,8 @@ def build_mode_comparison(
         "standard_requirement": requirement,
         "current_standard_pass_rate": current_rate,
         "target_standard_pass_rate": target_rate,
+        "next_standard_pass_rate_if_pass": next_rate_if_pass,
+        "next_standard_pass_rate_if_fail": next_rate_if_fail,
         "standard_passed": standard_passed,
         "baseline_passed": baseline_passed,
         "standard_progress": standard_progress,
@@ -149,6 +179,7 @@ def default_state(
     difficulty: Optional[str],
     test_model: Optional[str],
     calibration_stats: Dict[str, Any],
+    calibration_tasks_dirs: Optional[List[str]],
     task_gen_agent: str,
     allowed_k_levels: Optional[List[int]],
     generation_run_id: Optional[str] = None,
@@ -190,6 +221,7 @@ def default_state(
         "scene_id": None,
         "episode_id": None,
         "calibration_stats": calibration_stats,
+        "calibration_tasks_dirs": calibration_tasks_dirs or [],
         "generation_run_id": generation_run_id,
         "generation_run_dir": generation_run_dir,
         "generation_worker_id": generation_worker_id,
@@ -283,6 +315,17 @@ class TaskGenSession:
     def _pick_k_level(self) -> int:
         allowed = self.state.get("allowed_k_levels") or [1, 2, 3]
         return random.choice(allowed)
+
+    def _refresh_calibration_stats(self) -> None:
+        from emtom.task_gen.runner import compute_calibration_stats
+
+        task_dirs = self.state.get("calibration_tasks_dirs") or [self.state.get("output_dir")]
+        current = self.state.get("calibration_stats") or {}
+        model = current.get("model") or self.state.get("test_model") or "gpt-5.2"
+        target_rate = current.get("target_rate", 0.20)
+        stats = compute_calibration_stats(task_dirs, model)
+        stats["target_rate"] = target_rate
+        self.state["calibration_stats"] = stats
 
     def _reset_gate_state(self) -> None:
         self.state["last_judge_passed"] = False
@@ -762,6 +805,7 @@ class TaskGenSession:
                 "trajectory_dir": str(run_dir),
             }
 
+        self._refresh_calibration_stats()
         calibration_stats = self.state.get("calibration_stats") or {}
         comparison = build_mode_comparison(
             task_data.get("category", ""),
@@ -769,6 +813,8 @@ class TaskGenSession:
             mode_results["baseline"],
             current_rate=calibration_stats.get("rate"),
             target_rate=calibration_stats.get("target_rate", 0.20),
+            current_passed=calibration_stats.get("passed"),
+            current_failed=calibration_stats.get("failed"),
         )
         payload = {
             "standard": mode_results["standard"],
@@ -943,6 +989,7 @@ class TaskGenSession:
 
         data = result["data"]
         self.state.setdefault("submitted_tasks", []).append(data["output_path"])
+        self._refresh_calibration_stats()
         self._reset_gate_state()
         self.state["_test_run_count"] = 0
         if len(self.state["submitted_tasks"]) < self.state["num_tasks_target"]:

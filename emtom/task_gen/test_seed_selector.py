@@ -99,3 +99,17 @@ def test_seed_selector_falls_back_to_untested_when_no_calibrated_buckets_exist(t
     selected = select_seed_tasks(config, count=1, rng=random.Random(0))
 
     assert selected[0].path.name in {"unknown_a.json", "unknown_b.json"}
+
+
+def test_seed_selector_excludes_k_zero_tasks(tmp_path):
+    model = "gpt-5.2"
+    _write_task(tmp_path / "k0.json", "k0", tom_level=0)
+    _write_task(tmp_path / "k1.json", "k1", tom_level=1)
+
+    config = SeedSelectionConfig(
+        tasks_dir=tmp_path,
+        target_model=model,
+    )
+    selected = build_seed_candidates(config)
+
+    assert [candidate.path.name for candidate in selected] == ["k1.json"]

@@ -231,6 +231,28 @@ def run(
     strict_tom_level = strict_tom.get("tom_level")
     if False:
         pass
+    if "tom" not in _skip and isinstance(strict_tom_level, int) and strict_tom_level < 1:
+        return _stage_failure(
+            stage="pddl",
+            error="Strict tom_level is 0. EMTOM tasks must require at least one grounded K() dependency.",
+            blocking_failures=[
+                {
+                    "criterion": "strict_tom_level",
+                    "consensus": True,
+                    "models": {},
+                    "evidence": [
+                        "Computed strict tom_level is 0, which means the task has no benchmark-valid ToM requirement.",
+                    ],
+                }
+            ],
+            required_fixes=[
+                "Add a grounded K() dependency so strict tom_level is at least 1.",
+            ],
+            extra={
+                "computed_tom_level": strict_tom_level,
+                "strict_tom_verification": strict_tom,
+            },
+        )
     if "tom" not in _skip and required_tom_level is not None and strict_tom_level != required_tom_level:
         return _stage_failure(
             stage="pddl",
