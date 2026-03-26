@@ -553,6 +553,7 @@ run_benchmark() {
 
     OBSERVATION_MODE_OVERRIDE="++benchmark_observation_mode=$OBSERVATION_MODE"
     RUN_MODE_OVERRIDE="++benchmark_run_mode=$RUN_MODE"
+    PRIVACY_OVERRIDES="++world_model.partial_obs=true ++agent_asymmetry=true"
     VISION_SELECTOR_OVERRIDES=""
     if [ "$OBSERVATION_MODE" = "vision" ]; then
         VISION_SELECTOR_OVERRIDES="++benchmark_vision.selector_min_frames=$SELECTOR_MIN_FRAMES ++benchmark_vision.selector_max_frames=$SELECTOR_MAX_FRAMES ++benchmark_vision.selector_max_candidates=$SELECTOR_MAX_CANDIDATES"
@@ -619,6 +620,7 @@ run_benchmark() {
             $SAVE_VIDEO_OVERRIDE \
             $OBSERVATION_MODE_OVERRIDE \
             $RUN_MODE_OVERRIDE \
+            $PRIVACY_OVERRIDES \
             $VISION_SELECTOR_OVERRIDES \
             $CATEGORY_OVERRIDE \
             +task=$TASK_FILE \
@@ -746,6 +748,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
                 $SAVE_VIDEO_OVERRIDE \
                 $OBSERVATION_MODE_OVERRIDE \
                 $RUN_MODE_OVERRIDE \
+                $PRIVACY_OVERRIDES \
                 $VISION_SELECTOR_OVERRIDES \
                 $CATEGORY_OVERRIDE \
                 +num_agents_filter=$NUM_AGENTS \

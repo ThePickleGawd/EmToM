@@ -343,12 +343,17 @@ def apply_agent_llm_configs(config: DictConfig, agent_model_mapping: Dict[str, D
 
 
 def ensure_benchmark_observation_config(config: DictConfig) -> None:
-    """Populate benchmark observation defaults."""
+    """Populate benchmark defaults and enforce EMTOM private observation semantics."""
     with open_dict(config):
         if not hasattr(config, "benchmark_observation_mode"):
             config.benchmark_observation_mode = "text"
         if not hasattr(config, "benchmark_run_mode"):
             config.benchmark_run_mode = "standard"
+        # EMTOM benchmark modes differ in prompt/tool access, not in raw world-state
+        # visibility. Keep all modes on asymmetric partial-observation graphs.
+        if hasattr(config, "world_model"):
+            config.world_model.partial_obs = True
+        config.agent_asymmetry = True
         if not hasattr(config, "benchmark_vision") or config.benchmark_vision is None:
             config.benchmark_vision = OmegaConf.create(
                 {
