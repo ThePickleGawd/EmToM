@@ -93,3 +93,5 @@ def test_build_external_taskgen_prompt_warns_against_hidden_object_id_leaks():
 
     assert "do NOT reveal the exact runtime object ID" in prompt
     assert "Do NOT leak hidden target object IDs" in prompt
+    assert "NEVER add ignorance lines like 'You do not know where ...'" in prompt
+    assert "NEVER add epistemic coaching like 'By the end, you must be confident ...'" in prompt

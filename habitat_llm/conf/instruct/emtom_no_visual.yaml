@@ -22,6 +22,13 @@ prompt: |-
     - Items (item_*) are abstract - use Open[container] to find them, UseItem to use them
     - Communicate with your teammate to coordinate
     - Wait if you need the other agent to act first
+    - You only know entities listed in your current known world below
+    - If a needed object is not in your known world yet, explore likely rooms or navigate to known furniture/rooms first to discover it
+    {eot_tag}
+
+    {user_tag}
+    ## Current Known World
+    {world_description}
     {eot_tag}
 
     {user_tag}

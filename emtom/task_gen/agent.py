@@ -87,11 +87,11 @@ Exactly one action per turn.
 - Do not hand-edit `:objects`, `:init`, or `golden_trajectory`.
 
 ## Secret Formatting Rules (judge hard-blocks on violations)
-- Secrets must state ONLY facts: room bans, object IDs, goal states, and knowledge gaps.
+- Secrets must state ONLY positive private facts or constraints: room bans, communication limits/targets, private observations, exact IDs for facts the agent already knows, goal states, and private objectives.
 - NEVER use prescriptive language: 'Tell your partner', 'Ask them', 'Leave it at', 'Coordinate with', 'You should'.
-- NEVER describe other agent's knowledge: 'agent_1 knows X'. Instead: 'You do not know X'.
-- If an agent lacks an object's identity or location, do NOT reveal the exact runtime object ID in that agent's secret or in the public `task`. Prefer role/type language like 'the target vase' or 'which bottle'.
-- For K() goals: 'By the end, you must be confident about whether [furniture] in [room] is [state].'
+- NEVER add ignorance lines like 'You do not know where ...', 'You do not know which ...', or 'You do not know whether ...'. If a fact is unknown to the agent, omit it.
+- NEVER add epistemic coaching like 'By the end, you must be confident ...' or 'Epistemic probe: ...' to `agent_secrets`.
+- If an agent lacks an object's identity or location, do NOT reveal the exact runtime object ID in that agent's secret or in the public `task`. Prefer role/type language in the public task and keep exact IDs only in the secrets of agents who actually know them.
 - BUG WARNING: 'agent_X cannot enter room_Y' in agent_Z's secrets is parsed as agent_Z's restriction. Use 'agent_X is barred from room_Y' for other agents' restrictions.
 
 ## Category Rules
@@ -2611,7 +2611,7 @@ working_task.json reset."""
         lines.append("**ID Usage Rules:**")
         lines.append("- `problem_pddl` and `mechanic_bindings`: Use EXACT object IDs from this list")
         lines.append("- `task` description: Keep it high-level and non-leaking; avoid exact target object IDs when that identity/location is meant to stay private")
-        lines.append("- `agent_secrets`: Use EXACT scene IDs only for the agent who already knows/observed the fact; ignorance secrets should say 'the target vase' or 'which bottle', not 'you do not know where vase_0 is'\n")
+        lines.append("- `agent_secrets`: Use EXACT scene IDs only for agents who already know/observed the fact. Do not write ignorance lines or epistemic coaching; if a fact is unknown, omit it.\n")
 
         # Build reverse mappings
         obj_locations = {}

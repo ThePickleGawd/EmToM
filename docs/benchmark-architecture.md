@@ -45,6 +45,7 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - `baseline`: all task secrets are shared with all agents, and agents may read other agents' completed Thought+Action trajectories through a runtime benchmark tool.
 - `full_info`: all task secrets are shared with all agents, and agents may read other agents' completed Observation+Thought+Action trajectories through a runtime benchmark tool.
 - All benchmark modes must still run with partial observability and per-agent asymmetric world graphs. Baseline/full_info change secret and trace access, not raw world-state visibility.
+- Under partial observability, each agent's world graph must be private: only that agent's own observations may add or update entities. Communication may inform planning, but it must not directly mutate the recipient's world graph.
 
 ## Task Generation Gates
 
@@ -76,8 +77,9 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - Keep `problem_pddl` as the single authored source of epistemic structure and goals.
 - Generate `problem_pddl :objects` and `:init` deterministically from the loaded scene snapshot and mechanic bindings instead of hand-authoring scene state.
 - Keep benchmark mechanics authored once in `mechanic_bindings`; derive all planner-only mechanic init facts from those bindings instead of duplicating them in `problem_pddl`.
-- Keep the public `task` high-level and non-leaking; use exact scene IDs in `agent_secrets` and `team_secrets` for goal-critical targets so private grounding remains precise.
-- When an object's identity or location is the hidden fact, do not name its exact runtime object ID in the public `task` or in ignorance-secrets like 'you do not know where ...'. Reserve exact IDs for the agents who actually know or observed that fact, plus `problem_pddl`.
+- Keep the public `task` high-level and non-leaking; use exact scene IDs in `agent_secrets` and `team_secrets` only for goal-critical facts that the agent actually knows or observed.
+- `agent_secrets` should contain positive private facts, constraints, and private objectives only. Do not add ignorance lines like 'you do not know ...', self-intro boilerplate, or epistemic coaching like 'By the end, you must be confident ...'.
+- When an object's identity or location is the hidden fact, do not name its exact runtime object ID in the public `task` or in any secret for an agent who does not already know that fact. Reserve exact IDs for the agents who actually know or observed that fact, plus `problem_pddl`.
 - Runtime task success ignores `K()` and uses the projected non-epistemic goal only.
 - `verify-pddl`, deterministic planning, and golden trajectory verification all solve the same projected non-epistemic functional goal.
 - Mechanic predicates such as `is_inverse`, `controls*`, `mirrors*`, `requires_item`, `unlocks`, `is_restricted`, and communication wiring are init-only support facts. They must never appear in `pddl_goal`, including inside `K()`.

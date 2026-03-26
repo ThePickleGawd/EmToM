@@ -253,12 +253,12 @@ CRITERIA_DESCRIPTIONS = {
     },
     "secret_quality": {
         "name": "Secret Quality",
-        "description": "Secrets must state constraints and goals precisely, but NEVER prescribe communication strategy, relay chains, or coordination method. Exact IDs are appropriate only for agents who already know or observed that fact. Agents must figure out HOW to coordinate themselves — that IS the ToM challenge.",
-        "rubric": """0.0: Secrets prescribe the full relay chain, or they leak hidden target IDs via ignorance statements like 'you do not know where vase_0 is'
-0.3: Secrets hint at the coordination strategy (e.g., parenthetical suggestions, 'forward to agent_X', 'wait for agent_Y to tell you')
-0.5: Secrets state goals and constraints but include some strategy leakage or use exact object IDs for agents who are explicitly missing that object's identity/location
-0.7: Secrets state only constraints, precise facts for the agents who know them, and end-state goals. No strategy hints remain, with at most minor leakage risk.
-1.0: Secrets are minimal and precise — only constraints, roles, and abstract epistemic goals, with exact IDs reserved for the agents who genuinely know those facts. Zero communication strategy leaked.""",
+        "description": "Secrets must state only positive private facts, constraints, and private objectives. They must NEVER prescribe communication strategy, encode missing knowledge as 'you do not know ...', or coach the agent with epistemic directives like 'By the end, you must be confident ...'. Exact IDs are appropriate only for agents who already know or observed that fact.",
+        "rubric": """0.0: Secrets prescribe the relay chain, include ignorance lines like 'you do not know ...', or include epistemic coaching like 'By the end, you must be confident ...'
+0.3: Secrets hint at coordination strategy, contain boilerplate/self-intro text, or include other non-actionable task coaching
+0.5: Secrets state mostly useful facts and constraints, but still include some leakage, redundancy, or overly directive phrasing
+0.7: Secrets are mostly clean and actionable, with only minor redundancy or wording issues
+1.0: Secrets are minimal and precise — only positive private facts, constraints, and private objectives, with exact IDs reserved for agents who genuinely know those facts.""",
     },
     "task_naturalness": {
         "name": "Public/Secret Grounding Split",
@@ -451,9 +451,10 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 
 ## Checks
 - `task` is GLOBAL; for competitive/mixed it must not leak secret targets or team-specific objectives
-- Secrets must be actionable (room/furniture/key/constraint) and required
+- Secrets must be actionable positive facts or constraints, not missing-knowledge reminders or epistemic coaching
 - Secrets must be explicit and actionable, naming exact IDs/states only for agents who already know those facts, and not step-by-step
-- Penalize exact-ID leakage: if the public `task` or an ignorance secret names the exact hidden object ID, the task is too revealing
+- Penalize exact-ID leakage: if the public `task` or a secret for an uninformed agent names the exact hidden object ID, the task is too revealing
+- Penalize banned secret styles: 'you do not know ...', 'By the end, you must be confident ...', 'Epistemic probe: ...', or self-intro boilerplate
 - Single-format goal source is `problem_pddl`
 - Runtime semantics are split:
   - functional benchmark success uses the non-epistemic projection only
@@ -466,8 +467,8 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 Use this derived runtime view when judging split-semantics quality.
 {runtime_semantics_section}
 
-## Exact-ID Leakage Heuristics
-Use these concrete leakage checks as hard evidence for `secret_quality` and `task_naturalness`.
+## Secret Text Heuristics
+Use these concrete leakage and secret-style checks as hard evidence for `secret_quality` and `task_naturalness`.
 {id_leakage_section}
 
 {compiled_formal_view_block}
@@ -576,15 +577,18 @@ def _extract_typed_problem_objects(task_dict: Dict[str, Any], target_type: str) 
 
 
 def _analyze_id_leakage(task_dict: Dict[str, Any]) -> Dict[str, List[str]]:
-    """Find exact-ID leakage patterns that make hidden-info tasks too revealing."""
+    """Find exact-ID leakage and banned secret text patterns."""
     object_ids = _extract_typed_problem_objects(task_dict, "object")
     if not object_ids:
-        return {"public_task_object_ids": [], "ignorance_secret_ids": []}
+        object_ids = set()
 
     task_text = str(task_dict.get("task", "") or "")
     public_task_object_ids = sorted(obj_id for obj_id in object_ids if obj_id in task_text)
 
     ignorance_secret_ids: Set[str] = set()
+    ignorance_secret_lines: List[str] = []
+    epistemic_prompt_lines: List[str] = []
+    boilerplate_secret_lines: List[str] = []
     for secrets in (task_dict.get("agent_secrets") or {}).values():
         if not isinstance(secrets, list):
             continue
@@ -592,15 +596,33 @@ def _analyze_id_leakage(task_dict: Dict[str, Any]) -> Dict[str, List[str]]:
             if not isinstance(secret, str):
                 continue
             secret_lower = secret.lower()
-            if "do not know where" not in secret_lower and "don't know where" not in secret_lower:
-                continue
-            for obj_id in object_ids:
-                if obj_id in secret:
-                    ignorance_secret_ids.add(obj_id)
+            if (
+                "do not know" in secret_lower
+                or "don't know" in secret_lower
+            ):
+                ignorance_secret_lines.append(secret)
+                for obj_id in object_ids:
+                    if obj_id in secret:
+                        ignorance_secret_ids.add(obj_id)
+            if (
+                "by the end, you must be confident" in secret_lower
+                or "by the end, you should be confident" in secret_lower
+                or secret_lower.startswith("epistemic probe:")
+                or secret_lower.startswith("one success condition is:")
+            ):
+                epistemic_prompt_lines.append(secret)
+            if re.fullmatch(
+                r"\s*you are agent_\d+\. shared objective is the public task\.?\s*",
+                secret_lower,
+            ):
+                boilerplate_secret_lines.append(secret)
 
     return {
         "public_task_object_ids": public_task_object_ids,
         "ignorance_secret_ids": sorted(ignorance_secret_ids),
+        "ignorance_secret_lines": ignorance_secret_lines,
+        "epistemic_prompt_lines": epistemic_prompt_lines,
+        "boilerplate_secret_lines": boilerplate_secret_lines,
     }
 
 
@@ -623,8 +645,26 @@ def _build_id_leakage_section(task_dict: Dict[str, Any]) -> str:
             + ", ".join(ignorance_secret_ids)
         )
 
+    ignorance_secret_lines = leakage["ignorance_secret_lines"]
+    if ignorance_secret_lines:
+        lines.append(
+            f"- Secrets still contain ignorance text ({len(ignorance_secret_lines)} line(s))"
+        )
+
+    epistemic_prompt_lines = leakage["epistemic_prompt_lines"]
+    if epistemic_prompt_lines:
+        lines.append(
+            f"- Secrets still contain epistemic coaching ({len(epistemic_prompt_lines)} line(s))"
+        )
+
+    boilerplate_secret_lines = leakage["boilerplate_secret_lines"]
+    if boilerplate_secret_lines:
+        lines.append(
+            f"- Secrets still contain boilerplate/self-intro text ({len(boilerplate_secret_lines)} line(s))"
+        )
+
     if not lines:
-        return "- No obvious exact object-ID leakage detected by heuristic checks."
+        return "- No obvious secret leakage or banned secret-text patterns detected by heuristic checks."
     return "\n".join(lines)
 
 
@@ -638,7 +678,16 @@ def _apply_id_leakage_penalties(
     leakage = _analyze_id_leakage(task_dict)
     public_task_ids = leakage["public_task_object_ids"]
     ignorance_secret_ids = leakage["ignorance_secret_ids"]
-    if not public_task_ids and not ignorance_secret_ids:
+    ignorance_secret_lines = leakage["ignorance_secret_lines"]
+    epistemic_prompt_lines = leakage["epistemic_prompt_lines"]
+    boilerplate_secret_lines = leakage["boilerplate_secret_lines"]
+    if (
+        not public_task_ids
+        and not ignorance_secret_ids
+        and not ignorance_secret_lines
+        and not epistemic_prompt_lines
+        and not boilerplate_secret_lines
+    ):
         return judgment
 
     if public_task_ids and "task_naturalness" in judgment.criteria_scores:
@@ -651,23 +700,42 @@ def _apply_id_leakage_penalties(
             ).strip(),
         )
 
-    if ignorance_secret_ids and "secret_quality" in judgment.criteria_scores:
+    if (
+        ignorance_secret_ids
+        or ignorance_secret_lines
+        or epistemic_prompt_lines
+        or boilerplate_secret_lines
+    ) and "secret_quality" in judgment.criteria_scores:
         current = judgment.criteria_scores["secret_quality"]
+        reasons: List[str] = []
+        if ignorance_secret_ids:
+            reasons.append(
+                "Ignorance secrets leak exact object IDs: "
+                + ", ".join(ignorance_secret_ids)
+            )
+        if ignorance_secret_lines:
+            reasons.append("Secrets contain 'you do not know ...' style lines.")
+        if epistemic_prompt_lines:
+            reasons.append("Secrets contain epistemic coaching lines.")
+        if boilerplate_secret_lines:
+            reasons.append("Secrets contain boilerplate self-intro text.")
         judgment.criteria_scores["secret_quality"] = CriterionScore(
             score=min(current.score, 0.3),
-            reasoning=(
-                f"{current.reasoning} Ignorance secrets leak exact object IDs: "
-                + ", ".join(ignorance_secret_ids)
-            ).strip(),
+            reasoning=(f"{current.reasoning} " + " ".join(reasons)).strip(),
         )
 
-    fix = (
-        "Remove exact hidden object IDs from the public task and from "
-        "'you do not know where ...' secrets; keep exact IDs only in the "
-        "knowing agent's secret and in problem_pddl."
-    )
-    if fix not in judgment.required_fixes:
-        judgment.required_fixes.insert(0, fix)
+    fixes: List[str] = []
+    if public_task_ids or ignorance_secret_ids:
+        fixes.append(
+            "Remove exact hidden object IDs from the public task and from secrets for agents who do not already know that fact; keep exact IDs only in the knowing agent's secret and in problem_pddl."
+        )
+    if ignorance_secret_lines or epistemic_prompt_lines or boilerplate_secret_lines:
+        fixes.append(
+            "Delete non-knowledge secret lines such as 'you do not know ...', 'By the end, you must be confident ...', 'Epistemic probe: ...', and self-intro boilerplate."
+        )
+    for fix in reversed(fixes):
+        if fix not in judgment.required_fixes:
+            judgment.required_fixes.insert(0, fix)
 
     all_scores = [criterion.score for criterion in judgment.criteria_scores.values()]
     judgment.overall_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
