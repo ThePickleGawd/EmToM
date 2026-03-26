@@ -145,6 +145,28 @@ export default function TaskView({ task, onImageClick }: Props) {
         </div>
       )}
 
+      {isLibrary && Object.keys(task.instruction).length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div className="instruction-label">Agent Secrets</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {allAgents.map((agent) =>
+              task.instruction[agent] ? (
+                <div
+                  key={agent}
+                  className="instruction-block"
+                  style={{
+                    borderLeft: `3px solid ${agentColor(agent, allAgents)}`,
+                    margin: 0,
+                  }}
+                >
+                  <strong>{agent}</strong>: {task.instruction[agent]}
+                </div>
+              ) : null,
+            )}
+          </div>
+        </div>
+      )}
+
       {selectedCalibration && (
         <div className="calibration-panel-compact">
           <div className="calibration-meta">
