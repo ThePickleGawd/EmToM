@@ -90,6 +90,7 @@ Exactly one action per turn.
 - Secrets must state ONLY facts: room bans, object IDs, goal states, and knowledge gaps.
 - NEVER use prescriptive language: 'Tell your partner', 'Ask them', 'Leave it at', 'Coordinate with', 'You should'.
 - NEVER describe other agent's knowledge: 'agent_1 knows X'. Instead: 'You do not know X'.
+- If an agent lacks an object's identity or location, do NOT reveal the exact runtime object ID in that agent's secret or in the public `task`. Prefer role/type language like 'the target vase' or 'which bottle'.
 - For K() goals: 'By the end, you must be confident about whether [furniture] in [room] is [state].'
 - BUG WARNING: 'agent_X cannot enter room_Y' in agent_Z's secrets is parsed as agent_Z's restriction. Use 'agent_X is barred from room_Y' for other agents' restrictions.
 
@@ -2609,8 +2610,8 @@ working_task.json reset."""
         # Guidance about IDs vs natural language
         lines.append("**ID Usage Rules:**")
         lines.append("- `problem_pddl` and `mechanic_bindings`: Use EXACT object IDs from this list")
-        lines.append("- `task` description: Keep it high-level and non-leaking; natural language is preferred and exact IDs are optional")
-        lines.append("- `agent_secrets`: Use EXACT scene IDs for goal-critical objects, furniture, and rooms whenever the agent needs precise grounding\n")
+        lines.append("- `task` description: Keep it high-level and non-leaking; avoid exact target object IDs when that identity/location is meant to stay private")
+        lines.append("- `agent_secrets`: Use EXACT scene IDs only for the agent who already knows/observed the fact; ignorance secrets should say 'the target vase' or 'which bottle', not 'you do not know where vase_0 is'\n")
 
         # Build reverse mappings
         obj_locations = {}

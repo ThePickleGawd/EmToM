@@ -77,3 +77,19 @@ def test_build_external_taskgen_prompt_does_not_push_easy_tasks():
     assert "## Difficulty: EASY" not in prompt
     assert "Generate SIMPLE tasks" not in prompt
     assert "do not weaken secrets" in prompt
+
+
+def test_build_external_taskgen_prompt_warns_against_hidden_object_id_leaks():
+    prompt = build_external_taskgen_prompt(
+        working_dir="/tmp/taskgen",
+        task_file="/tmp/taskgen/working_task.json",
+        category="cooperative",
+        num_tasks=1,
+        agents_min=2,
+        agents_max=3,
+        subtasks_min=2,
+        subtasks_max=4,
+    )
+
+    assert "do NOT reveal the exact runtime object ID" in prompt
+    assert "Do NOT leak hidden target object IDs" in prompt

@@ -253,21 +253,21 @@ CRITERIA_DESCRIPTIONS = {
     },
     "secret_quality": {
         "name": "Secret Quality",
-        "description": "Secrets must state constraints and goals with exact IDs, but NEVER prescribe communication strategy, relay chains, or coordination method. Agents must figure out HOW to coordinate themselves — that IS the ToM challenge.",
-        "rubric": """0.0: Secrets prescribe the full relay chain or tell agents exactly what to communicate and to whom
+        "description": "Secrets must state constraints and goals precisely, but NEVER prescribe communication strategy, relay chains, or coordination method. Exact IDs are appropriate only for agents who already know or observed that fact. Agents must figure out HOW to coordinate themselves — that IS the ToM challenge.",
+        "rubric": """0.0: Secrets prescribe the full relay chain, or they leak hidden target IDs via ignorance statements like 'you do not know where vase_0 is'
 0.3: Secrets hint at the coordination strategy (e.g., parenthetical suggestions, 'forward to agent_X', 'wait for agent_Y to tell you')
-0.5: Secrets state goals and constraints but include some strategy leakage (e.g., 'you may need a relay', 'coordinate with agent_X about Y')
-0.7: Secrets state only constraints (room/comm restrictions), physical roles (object IDs, locations), and end-state goals. No strategy hints remain.
-1.0: Secrets are minimal and precise — only constraints, roles with exact IDs, and abstract epistemic goals. Zero communication strategy leaked.""",
+0.5: Secrets state goals and constraints but include some strategy leakage or use exact object IDs for agents who are explicitly missing that object's identity/location
+0.7: Secrets state only constraints, precise facts for the agents who know them, and end-state goals. No strategy hints remain, with at most minor leakage risk.
+1.0: Secrets are minimal and precise — only constraints, roles, and abstract epistemic goals, with exact IDs reserved for the agents who genuinely know those facts. Zero communication strategy leaked.""",
     },
     "task_naturalness": {
         "name": "Public/Secret Grounding Split",
-        "description": "Does the public `task` stay high-level while `agent_secrets` provide exact actionable grounding? The public task may be vague and should not read like a machine spec. Secrets should name exact IDs/states for goal-critical targets, especially when an agent cannot directly observe them.",
-        "rubric": """0.0: Public task leaks exact machine-style targets and secrets are still vague or generic
-0.3: Either the public task is overly specific, or the secrets still fail to identify exact target IDs/states
-0.5: Split is partly right, but public task still over-specifies some targets or secrets are inconsistent in explicitness
+        "description": "Does the public `task` stay high-level while `agent_secrets` provide the precise private grounding? The public task should not read like a machine spec or reveal hidden target object IDs. Secrets should carry exact IDs/states only for the agents who genuinely know those facts.",
+        "rubric": """0.0: Public task leaks exact hidden target IDs or other machine-style targets, and secrets are still vague or generic
+0.3: Either the public task is overly specific, or the secrets leak hidden object IDs to agents who are supposed to lack that information
+0.5: Split is partly right, but public task still over-specifies some targets or secrets are inconsistent in how they reveal private grounding
 0.7: Public task is mostly high-level and secrets are usually explicit, with only minor leakage or ambiguity
-1.0: Public task is clean, high-level, and non-leaking; secrets carry the exact actionable IDs/states agents need""",
+1.0: Public task is clean, high-level, and non-leaking; secrets carry the precise actionable grounding only where that private knowledge belongs""",
     },
     # Task quality criteria
     "narrative_consistency": {
@@ -452,7 +452,8 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 ## Checks
 - `task` is GLOBAL; for competitive/mixed it must not leak secret targets or team-specific objectives
 - Secrets must be actionable (room/furniture/key/constraint) and required
-- Secrets must be explicit and actionable, ideally naming exact target IDs/states, and not step-by-step
+- Secrets must be explicit and actionable, naming exact IDs/states only for agents who already know those facts, and not step-by-step
+- Penalize exact-ID leakage: if the public `task` or an ignorance secret names the exact hidden object ID, the task is too revealing
 - Single-format goal source is `problem_pddl`
 - Runtime semantics are split:
   - functional benchmark success uses the non-epistemic projection only
@@ -464,6 +465,10 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 ## Derived Runtime View
 Use this derived runtime view when judging split-semantics quality.
 {runtime_semantics_section}
+
+## Exact-ID Leakage Heuristics
+Use these concrete leakage checks as hard evidence for `secret_quality` and `task_naturalness`.
+{id_leakage_section}
 
 {compiled_formal_view_block}
 
@@ -527,7 +532,7 @@ DIFFICULTY_DESCRIPTIONS = {
 This task is designed for WEAKER models. Calibrate your evaluation accordingly:
 - **Agent necessity**: 2-3 agents with clear, distinct roles is sufficient. Simple role division (e.g., one agent fetches, another places) counts as high agent necessity.
 - **Task interdependence / goal opposition / subgoal tension**: Simple dependencies are fine. One clear handoff or information exchange between agents is enough.
-- **Secret quality**: Secrets should state constraints, roles, and goals with exact IDs. Mechanic hints (e.g., "the handle is reversed" for inverse_state) are required. But secrets must NEVER prescribe coordination strategy — no "tell agent_1 about X", "forward to agent_0", or parenthetical suggestions. Score LOW if secrets tell agents HOW to coordinate.
+- **Secret quality**: Secrets should state constraints, roles, and goals precisely. Mechanic hints (e.g., "the handle is reversed" for inverse_state) are required. But secrets must NEVER prescribe coordination strategy or leak hidden object IDs to agents who lack that information. Score LOW if secrets tell agents HOW to coordinate.
 - **Mechanic utilization**: Using 0-1 mechanics is sufficient. Prefer simple, observable mechanics. Avoid stacking multiple mechanics.
 - **Overall**: A well-structured simple task with clear agent roles, mechanic hints in secrets, and basic ToM should score HIGH. Do NOT penalize simplicity.""",
     "medium": """## Intended Difficulty: MEDIUM
@@ -540,10 +545,140 @@ This task targets mid-tier models. Standard evaluation applies:
 This task must be difficult enough that GPT-5.2 CANNOT solve it. Apply strict standards:
 - **Agent necessity**: Each agent MUST hold unique information. Score LOW if any agent is removable.
 - **Task interdependence / goal opposition / subgoal tension**: Require information relay chains. Score LOW unless at least one goal depends on relayed (not directly observed) information.
-- **Secret quality**: Secrets must state only constraints (room/comm restrictions), physical roles (exact object IDs), and abstract epistemic goals. NEVER prescribe relay chains, communication strategy, or what to tell other agents. Score 0 if any secret says "tell agent_X", "forward to agent_X", or includes parenthetical strategy hints.
+- **Secret quality**: Secrets must state only constraints, private facts, and abstract epistemic goals. NEVER prescribe relay chains, communication strategy, or what to tell other agents. Score 0 if any secret says "tell agent_X", "forward to agent_X", includes parenthetical strategy hints, or leaks the hidden object ID to an agent who is explicitly missing that information.
 - **Mechanic utilization**: limited_bandwidth MUST be present with 1 message per agent. 1-2 mechanics total is fine — complexity should come from ToM reasoning, not mechanic stacking. Score LOW if bandwidth > 1 per agent.
 - **Overall**: The task should require genuine Theory of Mind reasoning. Reward tasks where agents must infer what others know. Do NOT require complex mechanics — difficulty from information asymmetry is preferred.""",
 }
+
+
+def _extract_typed_problem_objects(task_dict: Dict[str, Any], target_type: str) -> Set[str]:
+    """Extract typed names from the `:objects` section of problem_pddl."""
+    problem_pddl = str(task_dict.get("problem_pddl", "") or "")
+    match = re.search(r"\(:objects(?P<body>[\s\S]*?)\)\s*\(:init", problem_pddl, re.IGNORECASE)
+    if not match:
+        return set()
+
+    tokens = match.group("body").split()
+    names: Set[str] = set()
+    pending: List[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-" and index + 1 < len(tokens):
+            if tokens[index + 1] == target_type:
+                names.update(pending)
+            pending = []
+            index += 2
+            continue
+        pending.append(token)
+        index += 1
+    return names
+
+
+def _analyze_id_leakage(task_dict: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Find exact-ID leakage patterns that make hidden-info tasks too revealing."""
+    object_ids = _extract_typed_problem_objects(task_dict, "object")
+    if not object_ids:
+        return {"public_task_object_ids": [], "ignorance_secret_ids": []}
+
+    task_text = str(task_dict.get("task", "") or "")
+    public_task_object_ids = sorted(obj_id for obj_id in object_ids if obj_id in task_text)
+
+    ignorance_secret_ids: Set[str] = set()
+    for secrets in (task_dict.get("agent_secrets") or {}).values():
+        if not isinstance(secrets, list):
+            continue
+        for secret in secrets:
+            if not isinstance(secret, str):
+                continue
+            secret_lower = secret.lower()
+            if "do not know where" not in secret_lower and "don't know where" not in secret_lower:
+                continue
+            for obj_id in object_ids:
+                if obj_id in secret:
+                    ignorance_secret_ids.add(obj_id)
+
+    return {
+        "public_task_object_ids": public_task_object_ids,
+        "ignorance_secret_ids": sorted(ignorance_secret_ids),
+    }
+
+
+def _build_id_leakage_section(task_dict: Dict[str, Any]) -> str:
+    """Format exact-ID leakage heuristics for the judge prompt."""
+    leakage = _analyze_id_leakage(task_dict)
+    lines: List[str] = []
+
+    public_task_ids = leakage["public_task_object_ids"]
+    if public_task_ids:
+        lines.append(
+            "- Public task names exact object IDs: "
+            + ", ".join(public_task_ids)
+        )
+
+    ignorance_secret_ids = leakage["ignorance_secret_ids"]
+    if ignorance_secret_ids:
+        lines.append(
+            "- Ignorance secrets still reveal exact object IDs: "
+            + ", ".join(ignorance_secret_ids)
+        )
+
+    if not lines:
+        return "- No obvious exact object-ID leakage detected by heuristic checks."
+    return "\n".join(lines)
+
+
+def _apply_id_leakage_penalties(
+    judgment: Judgment,
+    task_dict: Dict[str, Any],
+    overall_threshold: float,
+    min_criterion_threshold: float,
+) -> Judgment:
+    """Downgrade judge scores when hidden-information text leaks exact object IDs."""
+    leakage = _analyze_id_leakage(task_dict)
+    public_task_ids = leakage["public_task_object_ids"]
+    ignorance_secret_ids = leakage["ignorance_secret_ids"]
+    if not public_task_ids and not ignorance_secret_ids:
+        return judgment
+
+    if public_task_ids and "task_naturalness" in judgment.criteria_scores:
+        current = judgment.criteria_scores["task_naturalness"]
+        judgment.criteria_scores["task_naturalness"] = CriterionScore(
+            score=min(current.score, 0.3),
+            reasoning=(
+                f"{current.reasoning} Public task leaks exact object IDs: "
+                + ", ".join(public_task_ids)
+            ).strip(),
+        )
+
+    if ignorance_secret_ids and "secret_quality" in judgment.criteria_scores:
+        current = judgment.criteria_scores["secret_quality"]
+        judgment.criteria_scores["secret_quality"] = CriterionScore(
+            score=min(current.score, 0.3),
+            reasoning=(
+                f"{current.reasoning} Ignorance secrets leak exact object IDs: "
+                + ", ".join(ignorance_secret_ids)
+            ).strip(),
+        )
+
+    fix = (
+        "Remove exact hidden object IDs from the public task and from "
+        "'you do not know where ...' secrets; keep exact IDs only in the "
+        "knowing agent's secret and in problem_pddl."
+    )
+    if fix not in judgment.required_fixes:
+        judgment.required_fixes.insert(0, fix)
+
+    all_scores = [criterion.score for criterion in judgment.criteria_scores.values()]
+    judgment.overall_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
+    judgment.is_valid = (
+        judgment.overall_score >= overall_threshold
+        and all(
+            score.score >= min_criterion_threshold
+            for score in judgment.criteria_scores.values()
+        )
+    )
+    return judgment
 
 
 def _normalize_skip_steps(skip_steps: Optional[List[str]]) -> Set[str]:
@@ -1182,6 +1317,7 @@ The user specifically requested:
             user_requirements_section=user_requirements_section,
             formal_checks_section=_build_formal_checks_section(self.skip_steps),
             runtime_semantics_section=_build_runtime_semantics_section(task_dict),
+            id_leakage_section=_build_id_leakage_section(task_dict),
             compiled_formal_view_block=_build_compiled_formal_view_block(
                 task_dict,
                 scene_data,
@@ -1249,12 +1385,18 @@ The user specifically requested:
             print(f"[Judge/{model}] Received response ({len(response or '')} chars)")
 
         # Parse response (pass user_query so it knows which criteria to expect)
-        return self._parse_response(
+        judgment = self._parse_response(
             response or "",
             model,
             category,
             self.user_query,
             skip_steps=self.skip_steps,
+        )
+        return _apply_id_leakage_penalties(
+            judgment,
+            task_dict,
+            self.overall_threshold,
+            self.min_criterion_threshold,
         )
 
     def _parse_response(

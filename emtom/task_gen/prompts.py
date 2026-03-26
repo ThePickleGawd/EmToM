@@ -52,6 +52,7 @@ Generate {num_tasks} quality benchmark tasks.
 - Secrets must state ONLY facts: room bans, object IDs, goal states, and knowledge gaps.
 - NEVER use prescriptive language: 'Tell your partner', 'Ask them', 'Leave it at', 'Coordinate with', 'You should'.
 - NEVER describe other agent's knowledge: 'agent_1 knows X'. Instead use: 'You do not know X'.
+- If an agent lacks an object's identity or location, do NOT reveal the exact runtime object ID in that agent's secret or in the public `task`. Prefer role/type language like 'the target vase' or 'which bottle'.
 - For K() goals add: 'By the end, you must be confident about whether [furniture] in [room] is [state].'
 - BUG WARNING: writing 'agent_X cannot enter room_Y' in agent_Z's secrets is parsed as agent_Z's own restriction. Use 'agent_X is barred from room_Y' when describing another agent's restriction.
 
@@ -78,7 +79,8 @@ Generate {num_tasks} quality benchmark tasks.
 - Keep the physical execution short and direct. Prefer tasks that baseline/full-info can finish in roughly 6-10 turns.
 - Prefer one clean asymmetry over stacked brittle mechanics. One room/access blocker plus one decisive hidden fact is better than a long chain of dependencies.
 - If you want baseline to pass but standard to fail, first improve the agent secrets and information split. Do not default to piling on extra objects, rooms, or mechanics.
-- Use actionable targets that runtime tools can find by exact ID. Avoid relying on vague aliases like 'display table' or hidden trigger objects whose exact runtime ID is hard to recover.
+- Use exact scene IDs in `problem_pddl` and in the secrets of agents who already know the fact. Do NOT leak hidden target object IDs in the public `task` or in 'you do not know where ...' secrets.
+- Avoid relying on vague aliases like 'display table' or hidden trigger objects whose exact runtime ID is hard to recover.
 - NEVER design tasks requiring object handoff through a shared room, agents try Place[obj, on, room_name] and fail at runtime.
 - If a task passes `judge` but fails `test_task`, simplify the physical core first before adding more ToM structure.
 
