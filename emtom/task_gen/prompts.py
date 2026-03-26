@@ -393,7 +393,7 @@ Use the repo-owned `taskgen` commands for scene loading, judging, testing, submi
             "Do not attempt to run or rely on these components.\n"
         )
         if skip_pddl:
-            skip_notice += "- `pddl`: do not write or reference `problem_pddl`.\n"
+            skip_notice += "- `pddl`: PDDL solvability verification is skipped, but you MUST still write `problem_pddl` as the canonical goal format.\n"
         if "tom" in skip:
             skip_notice += "- `tom`: do not worry about tom_level computation.\n"
         if "simulation" in skip:
