@@ -690,7 +690,25 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         break
                     raise
                 except Exception as e:
-                    print(f"[Agent {uid} ERROR during planning] {e}", flush=True)
+                    err_msg = f"Unexpected failure! - Planning error: {type(e).__name__}: {e}"
+                    print(f"[Agent {uid} ERROR during planning] {err_msg}", flush=True)
+                    llm_agent_state[uid] = {
+                        'planner': self.planners.get(uid),
+                        'instruction': agent_instruction,
+                        'high_level_action': "Wait[planning_error]",
+                        'low_level_actions': {},
+                        'planner_info': {},
+                        'planner_done': False,
+                        'action_done': True,
+                        'response': err_msg,
+                        'skill_steps': 0,
+                        'mech_result': None,
+                        'orig_action': "Wait",
+                        'orig_target': None,
+                        'skip_mechanic_apply': True,
+                        'selected_frames': [],
+                        'selector': None,
+                    }
                     continue
 
             # Restore original post_message and flush buffered messages to queues
@@ -757,7 +775,12 @@ class BenchmarkRunner(EMTOMBaseRunner):
                                 state['action_done'] = True
 
                     except Exception as e:
-                        print(f"[Concurrent step error] {e}", flush=True)
+                        err_msg = f"Unexpected failure! - Sim step error: {type(e).__name__}: {e}"
+                        print(f"[Concurrent step error] {err_msg}", flush=True)
+                        for s in llm_agent_state.values():
+                            if not s['action_done']:
+                                s['response'] = err_msg
+                                s['action_done'] = True
                         break
 
                 total_skill_steps += 1
@@ -810,8 +833,19 @@ class BenchmarkRunner(EMTOMBaseRunner):
                             state['action_done'] = True
 
                     except Exception as e:
-                        print(f"[Agent {uid} step error] {e}", flush=True)
+                        err_msg = f"Unexpected failure! - {type(e).__name__}: {e}"
+                        print(f"[Agent {uid} step error] {err_msg}", flush=True)
+                        state['response'] = err_msg
                         state['action_done'] = True
+
+            # Mark agents that didn't finish within the skill-step budget
+            for uid, state in llm_agent_state.items():
+                if not state['action_done']:
+                    state['response'] = (
+                        f"Unexpected failure! - Action timed out after "
+                        f"{max_skill_steps} skill steps without completing."
+                    )
+                    state['action_done'] = True
 
             # =====================================================================
             # Phase 4: Log results and check completion for all LLM agents
