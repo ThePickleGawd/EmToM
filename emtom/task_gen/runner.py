@@ -254,6 +254,61 @@ def _write_sampled_tasks_summary(sampled_tasks_dir: Path, model: str = "gpt-5.2"
             ]
         )
 
+    # Add failure analysis section based on sampled tasks
+    failed_patterns: list[str] = []
+    passed_patterns: list[str] = []
+    for path in sample_files:
+        try:
+            with open(path) as f:
+                task_data = json.load(f)
+        except Exception:
+            continue
+        cal = find_calibration_entry(task_data.get("calibration", []), model=model)
+        if cal is None:
+            continue
+        category = task_data.get("category", "unknown")
+        mechanics = task_data.get("active_mechanics") or []
+        if not mechanics and isinstance(task_data.get("mechanic_bindings"), list):
+            mechanics = [b.get("mechanic_type") for b in task_data["mechanic_bindings"] if isinstance(b, dict)]
+        pddl = task_data.get("problem_pddl", "")
+        has_K = "(K " in pddl
+        num_agents = task_data.get("num_agents", 0)
+        mech_str = "+".join(sorted(set(str(m) for m in mechanics if m))) or "none"
+        label = f"{category}/{num_agents}a/{mech_str}/K={'yes' if has_K else 'no'}"
+
+        if cal_passed(cal):
+            passed_patterns.append(label)
+        else:
+            failed_patterns.append(label)
+
+    if failed_patterns or passed_patterns:
+        lines.extend([
+            "---",
+            "",
+            "# Failure Analysis (learn from these patterns)",
+            "",
+        ])
+        if passed_patterns:
+            lines.append("**Patterns that PASS** (reuse these structural shapes):")
+            for p in dict.fromkeys(passed_patterns):  # dedupe preserving order
+                lines.append(f"  - {p}")
+            lines.append("")
+        if failed_patterns:
+            lines.append("**Patterns that FAIL** (avoid or redesign):")
+            for p in dict.fromkeys(failed_patterns):
+                lines.append(f"  - {p}")
+            lines.append("")
+        lines.extend([
+            "## Common Anti-Patterns (from empirical testing)",
+            "- Cross-room object relay (Place on room name instead of furniture) → runtime crash",
+            "- Prescriptive secrets ('Tell your partner', 'Ask them') → judge blocks on secret_quality",
+            "- Meta-knowledge in secrets ('agent_1 knows X') → judge blocks on secret_quality",
+            "- Independent parallel work (no info exchange needed) → judge blocks on task_interdependence",
+            "- K=0 tasks (no K() goal in PDDL) → rejected at submit",
+            "- 'agent_X cannot enter room' in wrong agent's secret → compiler assigns restriction to wrong agent",
+            "",
+        ])
+
     (sampled_tasks_dir / "SUMMARY.md").write_text("\n".join(lines))
 
 
@@ -424,19 +479,25 @@ def _build_extra_sections(
         current_rate = calibration_stats.get("rate")
         if current_rate is None:
             sections.append(
-                f"## Dataset Calibration\nNo calibration data yet for {model}. Generate varied tasks."
+                f"## Dataset Calibration\nNo calibration data yet for {model}. Generate varied tasks.\n"
+                "The test gate only requires baseline/full-info to pass. Standard mode results are tracked but do not block submission."
             )
         elif current_rate > target_rate + 0.05:
             sections.append(
-                f"## Dataset Calibration\nCurrent {model} pass rate is {current_rate:.1%}, above the {target_rate:.0%} target. Generate harder tasks."
+                f"## Dataset Calibration\nCurrent {model} pass rate is {current_rate:.1%}, above the {target_rate:.0%} target.\n"
+                "Aim for tasks where baseline passes but standard mode is challenging (tighter bandwidth, deeper information gaps).\n"
+                "The test gate requires baseline to pass; standard failures are preferred but do not obsess over forcing them."
             )
         elif current_rate < target_rate - 0.05:
             sections.append(
-                f"## Dataset Calibration\nCurrent {model} pass rate is {current_rate:.1%}, below the {target_rate:.0%} target. Generate easier tasks."
+                f"## Dataset Calibration\nCurrent {model} pass rate is {current_rate:.1%}, below the {target_rate:.0%} target.\n"
+                "Generate tasks with clearer information paths so standard mode has a better chance of passing.\n"
+                "The test gate requires baseline to pass."
             )
         else:
             sections.append(
-                f"## Dataset Calibration\nCurrent {model} pass rate is {current_rate:.1%}, near the {target_rate:.0%} target. Keep varied difficulty."
+                f"## Dataset Calibration\nCurrent {model} pass rate is {current_rate:.1%}, near the {target_rate:.0%} target. Keep varied difficulty.\n"
+                "The test gate requires baseline to pass."
             )
 
     sections.append(

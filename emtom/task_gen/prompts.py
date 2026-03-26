@@ -35,7 +35,6 @@ Exactly one action per turn.
 - Every command already starts inside `{working_dir}`. Do not prefix every command with `cd {working_dir} &&`.
 - Use only valid agent IDs and scene IDs.
 - Remove placeholder text. No `TODO`, `TBD`, or generic filler.
-- Secrets should state constraints, goals, and exact IDs. Do not prescribe coordination strategy.
 - Every essential agent must contribute distinct knowledge, access, or incentive.
 - The physical goal must require communication or partner modeling, not just parallel independent work.
 - `message_targets` already defines communication restrictions. Do not duplicate it unless you intentionally need an explicit `restricted_communication` mechanic binding.
@@ -45,6 +44,13 @@ Exactly one action per turn.
   `restricted_communication` -> `allowed_targets`
 - Treat `problem_pddl` as machine-owned except for `:goal` and optional `:goal-owners`.
 - Do not hand-edit `:objects`, `:init`, or `golden_trajectory`.
+
+## Secret Formatting Rules (judge hard-blocks on violations)
+- Secrets must state ONLY facts: room bans, object IDs, goal states, and knowledge gaps.
+- NEVER use prescriptive language: 'Tell your partner', 'Ask them', 'Leave it at', 'Coordinate with', 'You should'.
+- NEVER describe other agent's knowledge: 'agent_1 knows X'. Instead: 'You do not know X'.
+- For K() goals: 'By the end, you must be confident about whether [furniture] in [room] is [state].'
+- BUG WARNING: 'agent_X cannot enter room_Y' in agent_Z's secrets is parsed as agent_Z's restriction. Use 'agent_X is barred from room_Y' for other agents' restrictions.
 
 ## Category Rules
 - Cooperative: shared goals only; no `teams`; no `team_secrets`; no `:goal-owners`.
@@ -114,14 +120,7 @@ def _strip_pddl_from_guidance(guidance: str) -> str:
         "- Do not hand-edit `:objects`, `:init`, or `golden_trajectory`.\n",
         "- Do not hand-author `golden_trajectory`.\n",
     )
-    guidance = guidance.replace(
-        "- Use `K()` only for facts that matter for planning or coordination.\n",
-        "",
-    )
-    guidance = guidance.replace(
-        "- The outermost `K()` agent should not be able to directly observe the fact with no blocker.\n",
-        "",
-    )
+    # Keep K() guidance even when PDDL is skipped — K() goals are still required.
     return guidance
 
 
@@ -193,7 +192,6 @@ def _build_external_spec_guidance(
             "## Hard Authoring Rules",
             "- Use exact scene IDs and only valid agent IDs returned by `taskgen new_scene`.",
             "- Remove placeholder text.",
-            "- Secrets should state constraints, goals, and exact IDs; do not prescribe strategy.",
             "- Every mechanic must materially affect the task.",
             "- Do not hand-author `golden_trajectory`.",
             "- If `message_targets` is present, it already acts as a valid communication restriction.",
@@ -202,6 +200,13 @@ def _build_external_spec_guidance(
             "  `room_restriction` -> `restricted_rooms` + `for_agents`",
             "  `limited_bandwidth` -> `message_limits`",
             "  `restricted_communication` -> `allowed_targets`",
+            "",
+            "## Secret Formatting Rules (judge hard-blocks on violations)",
+            "- Secrets must state ONLY facts: room bans, object IDs, goal states, and knowledge gaps.",
+            "- NEVER use prescriptive language: 'Tell your partner', 'Ask them', 'Leave it at', 'Coordinate with', 'You should'.",
+            "- NEVER describe other agent's knowledge: 'agent_1 knows X'. Instead use: 'You do not know X'.",
+            "- For K() goals add: 'By the end, you must be confident about whether [furniture] in [room] is [state].'",
+            "- BUG WARNING: writing 'agent_X cannot enter room_Y' in agent_Z's secrets is parsed as agent_Z's own restriction. Use 'agent_X is barred from room_Y' when describing another agent's restriction.",
         ]
     )
     if skip_pddl:
@@ -226,14 +231,17 @@ def _build_external_tom_guidance(skip_pddl: bool) -> str:
         "- Good pattern: agent A cannot determine the right object, room, or target state until agent B observes or communicates it.",
         "- Bad pattern: agents can finish the physical goal independently and communication only reports what already happened.",
         "- Every essential agent should contribute distinct knowledge, access, or incentive.",
+        # K() guidance always included — K≥1 is required regardless of PDDL skip.
+        "- Use `K()` only for facts that matter for planning or coordination.",
+        "- The outermost `K()` agent should not be able to directly observe the fact with no blocker.",
+        "",
+        "## K() Epistemic Goal Rules",
+        "- Every task MUST include at least one `(K agent_X (predicate args))` in problem_pddl `:goal`. K=0 is rejected.",
+        "- The K() agent must be restricted from the room where the predicate becomes true — forcing them to learn via communication.",
+        "- Example: agent_0 restricted from kitchen_1 → add `(K agent_0 (is_open fridge_27))` where fridge_27 is in kitchen_1.",
+        "- For competitive tasks, add K() outside the `(or ...)` branches as a shared epistemic requirement.",
+        "- Add a matching secret: 'By the end, you must be confident about whether [furniture] in [room] is [state].'",
     ]
-    if not skip_pddl:
-        lines.extend(
-            [
-                "- Use `K()` only for facts that matter for planning or coordination.",
-                "- The outermost `K()` agent should not be able to directly observe the fact with no blocker.",
-            ]
-        )
     return "\n".join(lines)
 
 
@@ -243,8 +251,27 @@ def _build_external_empirical_guidance(skip_test: bool) -> str:
         "- Keep the physical execution short and direct. Prefer tasks that baseline/full-info can finish in roughly 6-10 turns.",
         "- Prefer one clean asymmetry over stacked brittle mechanics. One room/access blocker plus one decisive hidden fact is better than a long chain of dependencies.",
         "- Use actionable targets that runtime tools can find by exact ID. Avoid relying on vague aliases like 'display table' or hidden trigger objects whose exact runtime ID is hard to recover.",
-        "- Avoid long cross-house transport chains unless that complexity is the core benchmark point.",
+        "- NEVER design tasks requiring object handoff through a shared room — agents try Place[obj, on, room_name] and fail at runtime.",
         "- If a task passes `judge` but fails `test_task`, simplify the physical core first before adding more ToM structure.",
+        "",
+        "## Proven Baseline Pattern (high pass rate — use as starting point, then vary)",
+        "The following pattern reliably passes both judge and test. Use it as a starting skeleton,",
+        "then introduce variations from the diversity list below.",
+        "- Agent A knows the object location but NOT the target surface.",
+        "- Agent B knows the target surface but CANNOT access the object's room (room_restriction).",
+        "- Agent A can reach BOTH source and destination rooms directly — no relay through a third room.",
+        "- 3 goals: 1 object placement + 1 state change (open/close) + 1 K() epistemic goal.",
+        "- Mechanics: room_restriction + limited_bandwidth (1-2 msgs per agent).",
+        "",
+        "## Task Diversity (IMPORTANT — do not generate the same task shape repeatedly)",
+        "Vary at least TWO of these dimensions each task. Check sampled tasks to avoid duplicating patterns:",
+        "- **Object type**: plates, cups, bottles, vases, toys, boxes, laptops, candle holders — use what the scene offers.",
+        "- **Room pair**: kitchen↔bedroom, office↔dining, garage↔living — different spatial topologies.",
+        "- **Agent count**: 2 agents is the baseline; try 3-4 agents with chain communication or relay roles.",
+        "- **Mechanic stack**: room_restriction alone; room_restriction + restricted_communication; limited_bandwidth with 1 msg (hard) vs 3 msgs (easy).",
+        "- **Goal structure**: placement only; placement + open; placement + close + K(); two placements + K().",
+        "- **Knowledge split**: A knows object / B knows target (default); A knows object AND target but can't reach / B can reach but knows neither; both know partial info.",
+        "- **Narrative framing**: household chore, museum setup, safety inspection, party prep, moving day — the story changes how agents reason about priorities.",
     ]
     if not skip_test:
         lines.append("- `taskgen test_task` is the real execution gate: `judge` is not enough if baseline/full-info still cannot complete the task.")
@@ -395,7 +422,7 @@ Use the repo-owned `taskgen` commands for scene loading, judging, testing, submi
         if skip_pddl:
             skip_notice += "- `pddl`: PDDL solvability verification is skipped, but you MUST still write `problem_pddl` as the canonical goal format.\n"
         if "tom" in skip:
-            skip_notice += "- `tom`: do not worry about tom_level computation.\n"
+            skip_notice += "- `tom`: strict FD solver verification is skipped, but you MUST still write K() goals in problem_pddl. Syntactic K-depth is checked at submit.\n"
         if "simulation" in skip:
             skip_notice += "- `simulation`: simulator verification is skipped inside `taskgen judge`.\n"
         if "llm-council" in skip:
