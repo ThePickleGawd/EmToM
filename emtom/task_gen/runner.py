@@ -188,74 +188,6 @@ def _summarize_goal_metadata(task_data: dict) -> tuple[str, str]:
         return _truncate_text(problem_pddl, limit=260), "unknown"
 
 
-def _analyze_calibration_failure(task_data: Dict[str, Any], cal: Dict[str, Any]) -> str:
-    """Extract a 1-line explanation of why a task failed in standard mode.
-
-    Looks at the calibration trajectory to identify concrete failure patterns
-    that help the task generator understand what makes tasks hard.
-    """
-    try:
-        traj = cal.get("trajectory", [])
-        results = cal.get("results", {})
-        steps = cal.get("steps", 0)
-        num_agents = task_data.get("num_agents", 2)
-
-        # Count communication actions
-        comm_count = 0
-        total_actions = 0
-        wait_count = 0
-        for turn in traj:
-            agents = turn.get("agents", {})
-            for agent_id, info in agents.items():
-                action = info.get("action", "")
-                total_actions += 1
-                if "Communicate[" in action:
-                    comm_count += 1
-                if "Wait[" in action:
-                    wait_count += 1
-
-        # Check bandwidth limits
-        bandwidth = {}
-        for m in task_data.get("mechanic_bindings", []):
-            if m.get("mechanic_type") == "limited_bandwidth":
-                bandwidth = m.get("message_limits", {})
-
-        reasons = []
-
-        # Ran out of messages
-        total_bandwidth = sum(bandwidth.values()) if bandwidth else 999
-        if bandwidth and comm_count >= total_bandwidth * 0.8:
-            reasons.append(f"agents used {comm_count}/{total_bandwidth} messages (bandwidth exhausted)")
-
-        # Too many waits = agents didn't know what to do
-        if total_actions > 0 and wait_count / total_actions > 0.4:
-            reasons.append(f"{wait_count}/{total_actions} actions were Wait (agents confused)")
-
-        # Incomplete progress
-        progress = results.get("progress", results.get("percent_complete", 0))
-        if isinstance(progress, (int, float)) and progress < 1.0:
-            completed = results.get("passed", False)
-            if not completed and progress == 0:
-                reasons.append("zero progress — agents never reached any goal")
-            elif not completed:
-                reasons.append(f"partial progress ({progress:.0%}) — some goals unreachable under information asymmetry")
-
-        # Category-specific
-        category = task_data.get("category", "")
-        if category == "competitive":
-            winner = results.get("winner")
-            if winner:
-                reasons.append(f"wrong team won ({winner})")
-            else:
-                reasons.append("no winner — neither team completed their goals")
-        elif category == "mixed" and not results.get("main_goal_success", results.get("passed", False)):
-            reasons.append("shared main goal not achieved despite personal goals being pursued")
-
-        return "; ".join(reasons[:2]) if reasons else "standard-mode agents could not coordinate under information asymmetry"
-    except Exception:
-        return "failure analysis unavailable"
-
-
 def _write_sampled_tasks_summary(sampled_tasks_dir: Path, model: str = "gpt-5.2") -> None:
     from emtom.evolve.benchmark_wrapper import cal_passed, cal_progress, find_calibration_entry
 
@@ -300,31 +232,27 @@ def _write_sampled_tasks_summary(sampled_tasks_dir: Path, model: str = "gpt-5.2"
         cal = find_calibration_entry(task_data.get("calibration", []), model=model)
         if cal is None:
             benchmark_str = "UNTESTED"
-            failure_analysis = ""
         elif cal_passed(cal):
             progress = cal_progress(cal)
             benchmark_str = f"PASS (progress={progress:.0%})"
-            failure_analysis = ""
         else:
             progress = cal_progress(cal)
             benchmark_str = f"FAIL (progress={progress:.0%})"
-            failure_analysis = _analyze_calibration_failure(task_data, cal)
 
-        entry_lines = [
-            f"## {path.name}",
-            f"- Title: {title}",
-            f"- Category: {category}",
-            f"- Agents: {num_agents}",
-            f"- Mechanics: {mechanics_str}",
-            f"- Task: {task_text}",
-            f"- Goal: {goal_summary}",
-            f"- Goal owners: {owner_summary}",
-            f"- Benchmark: {benchmark_str}",
-        ]
-        if failure_analysis:
-            entry_lines.append(f"- Why it's hard: {failure_analysis}")
-        entry_lines.append("")
-        lines.extend(entry_lines)
+        lines.extend(
+            [
+                f"## {path.name}",
+                f"- Title: {title}",
+                f"- Category: {category}",
+                f"- Agents: {num_agents}",
+                f"- Mechanics: {mechanics_str}",
+                f"- Task: {task_text}",
+                f"- Goal: {goal_summary}",
+                f"- Goal owners: {owner_summary}",
+                f"- Benchmark: {benchmark_str}",
+                "",
+            ]
+        )
 
     (sampled_tasks_dir / "SUMMARY.md").write_text("\n".join(lines))
 
