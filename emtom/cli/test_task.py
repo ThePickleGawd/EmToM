@@ -128,12 +128,10 @@ def main():
             output_dir = f"/tmp/emtom_test_{os.getpid()}"
         with open_dict(config):
             config.benchmark_run_mode = args.run_mode
-            # EMTOM benchmark semantics are always asymmetric and partial-observable.
-            # Baseline/full_info relax secret access and add trajectory tools, but they
-            # should not grant raw full-world perception to every agent.
+            is_standard = str(args.run_mode).strip().lower() == "standard"
             if "world_model" in config:
-                config.world_model.partial_obs = True
-            config.agent_asymmetry = True
+                config.world_model.partial_obs = is_standard
+            config.agent_asymmetry = is_standard
             if "evaluation" in config:
                 config.evaluation.output_dir = output_dir
             if "paths" in config:

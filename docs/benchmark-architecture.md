@@ -44,7 +44,8 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - `standard`: task secrets are private and agents only observe normal benchmark channels.
 - `baseline`: all task secrets are shared with all agents, and agents may read other agents' completed Thought+Action trajectories through a runtime benchmark tool.
 - `full_info`: all task secrets are shared with all agents, and agents may read other agents' completed Observation+Thought+Action trajectories through a runtime benchmark tool.
-- All benchmark modes must still run with partial observability and per-agent asymmetric world graphs. Baseline/full_info change secret and trace access, not raw world-state visibility.
+- `standard` must run with partial observability and per-agent asymmetric world graphs.
+- `baseline` and `full_info` must run with full observability and shared world-state visibility. Their purpose is to remove information bottlenecks, not preserve them.
 - Under partial observability, each agent's world graph must be private: only that agent's own observations may add or update entities. Communication may inform planning, but it must not directly mutate the recipient's world graph.
 
 ## Task Generation Gates
