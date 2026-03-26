@@ -723,17 +723,15 @@ while true; do
             fi
 
             # Respawn this slot with a fresh worker
-            local next_attempt=$((SLOT_ATTEMPTS[$i] + 1))
+            next_attempt=$((SLOT_ATTEMPTS[$i] + 1))
             SLOT_ATTEMPTS[$i]=$next_attempt
-            # Clear the slot's PID/info entries before relaunching
-            local old_pid_count=${#PIDS[@]}
             launch_single_worker "$i" "$next_attempt"
             SLOT_PIDS[$i]=${PIDS[-1]}
             SLOT_INFO[$i]=${PROCESS_INFO[-1]}
         else
             # FAIL: worker exited non-zero — stop this slot
             failed=$((failed + 1))
-            local attempt_num=${SLOT_ATTEMPTS[$i]}
+            attempt_num=${SLOT_ATTEMPTS[$i]}
 
             if [ "$attempt_num" -ge "$MAX_ATTEMPTS_PER_SLOT" ]; then
                 echo -e "${RED}[FAIL]${NC} ${SLOT_INFO[$i]}  (${attempt_num}/${MAX_ATTEMPTS_PER_SLOT} attempts, slot stopped)"
