@@ -715,12 +715,22 @@ function processTaskFile(taskFile: string): Record<string, any> | null {
   const calibration = data.calibration || [];
   const goldenHistory = flattenGolden(data.golden_trajectory || []);
   const calibrationByMode: Record<string, any> = {};
+  // Prefer gpt-5.2 calibration entries as the canonical reference.
+  // When multiple entries exist for the same run_mode, gpt-5.2 wins.
+  const isGpt52 = (models: Record<string, string>) =>
+    Object.values(models).some((m) => String(m).includes("gpt-5"));
   for (const cal of calibration) {
     const runMode = String(cal.run_mode || "standard");
+    const models = cal.agent_models || {};
+    const existing = calibrationByMode[runMode];
+    // Skip non-gpt-5.2 entries if we already have a gpt-5.2 entry for this mode
+    if (existing && isGpt52(existing.agent_models) && !isGpt52(models)) {
+      continue;
+    }
     calibrationByMode[runMode] = {
       run_mode: runMode,
       tested_at: cal.tested_at || "",
-      agent_models: cal.agent_models || {},
+      agent_models: models,
       passed: calibrationPassed(cal),
       progress: calibrationProgress(cal),
       steps: cal.steps || 0,
