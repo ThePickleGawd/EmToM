@@ -241,7 +241,7 @@ print_usage() {
     echo "  --num-tasks N       Total tasks for the whole bulk run (default: one full saturated run)"
     echo "                      The launcher divides N across fixed workers and starts them once"
     echo "  --task-gen-agent A  External generator agent: mini|claude|codex (default: mini)"
-    echo "  --category CAT      Only generate this category (cooperative, competitive, mixed)"
+    echo "  --category C [C ..] Categories to generate (cooperative, competitive, mixed). Default: all 3."
     echo "  --difficulty LEVEL  Difficulty for generation (easy, medium, hard)"
     echo "  --k-level L [L ...] Allowed k-levels, e.g. --k-level 2 3 (default: random per task)"
     echo "  --k-distribution D  Slots per k-level, e.g. 1:2,2:3,3:3 = 2 slots K=1, 3 K=2, 3 K=3"
@@ -293,8 +293,17 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --category)
-            CATEGORY_FILTER=$2
-            shift 2
+            shift
+            CATEGORY_FILTER=""
+            while [[ $# -gt 0 && "$1" != -* ]]; do
+                CATEGORY_FILTER="$CATEGORY_FILTER $1"
+                shift
+            done
+            CATEGORY_FILTER="${CATEGORY_FILTER# }"
+            if [ -z "$CATEGORY_FILTER" ]; then
+                echo "Error: --category requires at least one of: cooperative, competitive, mixed"
+                exit 1
+            fi
             ;;
         --difficulty)
             DIFFICULTY=$2
@@ -428,7 +437,8 @@ fi
 
 # Build category list
 if [ -n "$CATEGORY_FILTER" ]; then
-    CATEGORIES=("$CATEGORY_FILTER")
+    # shellcheck disable=SC2206
+    CATEGORIES=($CATEGORY_FILTER)
 else
     CATEGORIES=("cooperative" "competitive" "mixed")
 fi

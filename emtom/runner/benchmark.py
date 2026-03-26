@@ -58,6 +58,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
         task: Optional["GeneratedTask"] = None,
         save_video: Optional[bool] = None,
         human_agents: Optional[List[str]] = None,
+        idle_agents: Optional[List[str]] = None,
     ) -> None:
         """
         Setup benchmark runner.
@@ -70,6 +71,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
             save_video: Whether to save video
             human_agents: List of agent IDs to be human-controlled (e.g., ["agent_0"])
                          If None, all agents are LLM-controlled.
+            idle_agents: List of agent IDs that should do nothing (e.g., ["agent_2"]).
+                        Used for competitive baseline to idle one team.
         """
         self.task = task
 
@@ -97,16 +100,18 @@ class BenchmarkRunner(EMTOMBaseRunner):
         else:
             self._visual_store = None
 
-        # Set human agents
+        # Set human and idle agents
         if human_agents:
             self.human_agents = set(human_agents)
         else:
             self.human_agents = set()
+        self.idle_agents = set(idle_agents or [])
 
-        # Setup planners only for LLM agents
+        # Setup planners only for LLM agents (exclude human and idle)
+        excluded = self.human_agents | self.idle_agents
         llm_agent_uids = [
             uid for uid in self.agents.keys()
-            if f"agent_{uid}" not in self.human_agents
+            if f"agent_{uid}" not in excluded
         ]
         self._setup_planners(llm_agent_uids)
 

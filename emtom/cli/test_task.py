@@ -35,6 +35,8 @@ def main():
     parser.add_argument("--team-model-map", type=str, default=None,
                         help="Team->model mapping for competitive tasks, e.g. team_0=gpt-5.2,team_1=sonnet")
     parser.add_argument("--run-mode", default="standard", choices=["standard", "baseline", "full_info"])
+    parser.add_argument("--idle-team", type=str, default=None,
+                        help="Team to idle (agents do nothing). For competitive baseline.")
     args = parser.parse_args()
 
     # Add project root to path
@@ -207,12 +209,19 @@ def main():
 
         apply_agent_spawns(env_interface, task_data.get("agent_spawns", {}))
 
+        # Resolve idle agents from --idle-team
+        idle_agents = []
+        if args.idle_team:
+            team_assignment = task_data.get("team_assignment", {})
+            idle_agents = list(team_assignment.get(args.idle_team, []))
+
         runner = BenchmarkRunner(config)
         runner.setup(
             env_interface=env_interface,
             output_dir=output_dir,
             task=task,
             save_video=False,
+            idle_agents=idle_agents if idle_agents else None,
         )
 
         instruction = task_to_instruction(task)
