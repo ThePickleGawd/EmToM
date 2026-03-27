@@ -1345,6 +1345,16 @@ class BenchmarkRunner(EMTOMBaseRunner):
             team_progress = {}
             winner = None
 
+            # Resolve idle team: if idle_agents is set, find which team they
+            # belong to so that team cannot be declared the winner.
+            idle_team_id = None
+            if self.idle_agents and self.task:
+                team_assignment = getattr(self.task, "teams", None) or getattr(self.task, "team_assignment", None) or {}
+                for tid, members in team_assignment.items():
+                    if self.idle_agents & set(members):
+                        idle_team_id = tid
+                        break
+
             if checker.is_or_goal:
                 # Map each team to its Or-branch and use branch progress
                 for team_id in teams:
@@ -1357,7 +1367,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                         complete = False
                     team_progress[team_id] = progress
                     team_status[team_id] = complete
-                    if complete and winner is None:
+                    if complete and winner is None and team_id != idle_team_id:
                         winner = team_id
 
                 # Best branch progress as overall percent
@@ -1374,7 +1384,7 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     progress = done / len(team_conj)
                     team_progress[team_id] = progress
                     team_status[team_id] = progress == 1.0
-                    if team_status[team_id] and winner is None:
+                    if team_status[team_id] and winner is None and team_id != idle_team_id:
                         winner = team_id
                 best_progress = max(team_progress.values()) if team_progress else 0.0
 

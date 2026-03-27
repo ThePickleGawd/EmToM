@@ -815,7 +815,7 @@ class TaskGenSession:
         if task_data.get("category") == "competitive":
             base_model = self.state.get("test_model") or "gpt-5.2"
             opponent = "sonnet" if base_model != "sonnet" else "gpt-5.2"
-            team_assignment = task_data.get("team_assignment", {})
+            team_assignment = task_data.get("teams") or task_data.get("team_assignment") or {}
             agent_models: Dict[str, str] = {}
             for team_id, agents in team_assignment.items():
                 model = base_model if team_id == "team_0" else opponent

@@ -216,7 +216,7 @@ def main():
         # Resolve idle agents from --idle-team
         idle_agents = []
         if args.idle_team:
-            team_assignment = task_data.get("team_assignment", {})
+            team_assignment = task_data.get("teams") or task_data.get("team_assignment") or {}
             idle_agents = list(team_assignment.get(args.idle_team, []))
 
         runner = BenchmarkRunner(config)

@@ -510,7 +510,6 @@ def _run_benchmark(
             "--observation-mode", mode,
             "--max-workers", str(max_workers),
             "--output-dir", str(output_dir),
-            "--no-video",
         ]
     else:
         # Matchup: use team_0's model as the "base" model, override via team-model-map
@@ -527,7 +526,6 @@ def _run_benchmark(
             "--max-workers", str(max_workers),
             "--output-dir", str(output_dir),
             "--team-model-map", team_map,
-            "--no-video",
         ]
 
     print(f"\n{'=' * 60}")

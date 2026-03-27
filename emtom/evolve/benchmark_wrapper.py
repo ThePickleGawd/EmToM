@@ -302,8 +302,8 @@ def run_benchmark(
         "--selector-max-frames", str(selector_max_frames),
         "--selector-max-candidates", str(selector_max_candidates),
     ]
-    if no_video:
-        cmd.append("--no-video")
+    if not no_video:
+        cmd.append("--video")
     if category:
         cmd.extend(["--category", category])
 
@@ -578,8 +578,8 @@ def run_benchmark_parallel(
                     "--selector-max-candidates", str(selector_max_candidates),
                     "--no-calibration",
                 ]
-                if no_video:
-                    cmd.append("--no-video")
+                if not no_video:
+                    cmd.append("--video")
                 if category:
                     cmd.extend(["--category", category])
                 if team_model_map:

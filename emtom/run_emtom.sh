@@ -66,9 +66,9 @@ has_anthropic_api_key() {
 detect_llm_provider() {
     local model=$1
     case $model in
-        gpt-4o|gpt-4o-mini|gpt-5|gpt-5-mini|gpt-5.1|gpt-5.2|o3)
+        gpt-4o|gpt-4o-mini|gpt-5|gpt-5-mini|gpt-5.1|gpt-5.2|gpt-5.4|gpt-5.4-mini|o3)
             echo "openai_chat" ;;
-        sonnet|sonnet-4.5|sonnet4.5|haiku|haiku-4.5|haiku4.5|opus|opus-4.5|opus4.5)
+        sonnet|sonnet-4.5|sonnet4.5|sonnet-4.6|sonnet4.6|haiku|haiku-4.5|haiku4.5|opus|opus-4.5|opus4.5|opus-4.6|opus4.6)
             if has_anthropic_api_key; then
                 echo "anthropic_claude"
             else
@@ -76,6 +76,10 @@ detect_llm_provider() {
             fi
             ;;
         kimi-k2.5|accounts/fireworks/models/kimi-k2p5)
+            echo "openai_chat" ;;
+        deepseek-v3.2|accounts/fireworks/models/deepseek-v3p2)
+            echo "openai_chat" ;;
+        llama-4-maverick|accounts/fireworks/models/llama4-maverick-instruct-basic)
             echo "openai_chat" ;;
         kimi-k2-thinking|moonshot.kimi-k2-thinking)
             echo "bedrock_kimi" ;;
@@ -96,24 +100,23 @@ print_llm_options() {
     echo -e "┌───────────────────────────┬────────────────────┐"
     echo -e "│ ${BOLD}Model Name${NC}                │ ${BOLD}--model${NC}            │"
     echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ GPT-5                     │ ${GREEN}gpt-5${NC}              │"
-    echo -e "│ GPT-5 Mini                │ ${GREEN}gpt-5-mini${NC}         │"
-    echo -e "│ GPT-5.1                   │ ${GREEN}gpt-5.1${NC}            │"
-    echo -e "│ GPT-5.2 (default)         │ ${GREEN}gpt-5.2${NC}            │"
+    echo -e "│ GPT-5.4                   │ ${GREEN}gpt-5.4${NC}            │"
+    echo -e "│ GPT-5.4 Mini              │ ${GREEN}gpt-5.4-mini${NC}       │"
+    echo -e "│ GPT-5.2                   │ ${GREEN}gpt-5.2${NC}            │"
+    echo -e "│ O3                        │ ${GREEN}o3${NC}                 │"
     echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ Claude Sonnet             │ ${GREEN}sonnet${NC}             │"
-    echo -e "│ Claude Haiku              │ ${GREEN}haiku${NC}              │"
-    echo -e "│ Claude Opus               │ ${GREEN}opus${NC}               │"
+    echo -e "│ Claude Sonnet (4.6)       │ ${GREEN}sonnet${NC}             │"
+    echo -e "│ Claude Haiku (4.5)        │ ${GREEN}haiku${NC}              │"
+    echo -e "│ Claude Opus (4.6)         │ ${GREEN}opus${NC}               │"
     echo -e "├───────────────────────────┼────────────────────┤"
     echo -e "│ Kimi K2.5                │ ${GREEN}kimi-k2.5${NC}          │"
-    echo -e "│ Kimi K2 Thinking          │ ${GREEN}kimi-k2-thinking${NC}   │"
-    echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ Ministral 3 8B            │ ${GREEN}ministral-3-8b${NC}     │"
-    echo -e "│ Ministral 3 14B           │ ${GREEN}ministral-3-14b${NC}    │"
-    echo -e "│ Mistral Large 3           │ ${GREEN}mistral-large-3${NC}    │"
-    echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ Qwen3 Next 80B            │ ${GREEN}qwen3-next-80b${NC}     │"
+    echo -e "│ DeepSeek V3.2             │ ${GREEN}deepseek-v3.2${NC}      │"
+    echo -e "│ Llama 4 Maverick          │ ${GREEN}llama-4-maverick${NC}   │"
     echo -e "│ Qwen3 VL 235B             │ ${GREEN}qwen3-vl-235b${NC}      │"
+    echo -e "├───────────────────────────┼────────────────────┤"
+    echo -e "│ Mistral Large 3           │ ${GREEN}mistral-large-3${NC}    │"
+    echo -e "│ Kimi K2 Thinking          │ ${GREEN}kimi-k2-thinking${NC}   │"
+    echo -e "│ Qwen3 Next 80B            │ ${GREEN}qwen3-next-80b${NC}     │"
     echo -e "└───────────────────────────┴────────────────────┘"
     echo ""
     echo -e "${YELLOW}Example usage:${NC}"
