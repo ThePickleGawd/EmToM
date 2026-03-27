@@ -962,6 +962,16 @@ def _build_benchmark_comparison_section(task_dict: Dict[str, Any]) -> str:
                 f"passed={results['main_goal'].get('passed', False)}, "
                 f"progress={results['main_goal'].get('progress', 0.0):.0%}"
             )
+        if "phases" in results:
+            phase_bits = []
+            for phase_id, phase in sorted(results.get("phases", {}).items()):
+                status = "pass" if phase.get("passed", False) else "fail"
+                phase_bits.append(f"{phase_id}={status}")
+            return (
+                f"passed={results.get('passed', False)}, "
+                f"progress={results.get('progress', 0.0):.0%}, "
+                + ", ".join(phase_bits)
+            )
         if "winner" in results:
             teams = results.get("teams", {})
             max_progress = max((team.get("progress", 0.0) for team in teams.values()), default=0.0)

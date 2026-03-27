@@ -20,6 +20,9 @@ from emtom.task_gen.task_bootstrap import build_scene_bootstrap_problem_pddl
 
 def _evaluation_passed(category: str, evaluation: Dict[str, Any]) -> bool:
     if category == "competitive":
+        phase_results = evaluation.get("phase_results")
+        if isinstance(phase_results, dict) and phase_results:
+            return bool(evaluation.get("success", False))
         return evaluation.get("winner") is not None
     if category == "mixed":
         return evaluation.get("main_goal_success", False)
@@ -34,6 +37,23 @@ def _evaluation_progress(category: str, evaluation: Dict[str, Any]) -> float:
 
 def _build_results_block(category: str, evaluation: Dict[str, Any]) -> Dict[str, Any]:
     if category == "competitive":
+        phase_results = evaluation.get("phase_results")
+        if isinstance(phase_results, dict) and phase_results:
+            phases: Dict[str, Any] = {}
+            for phase_id, phase in phase_results.items():
+                phases[phase_id] = {
+                    "active_team": phase.get("active_team"),
+                    "idle_team": phase.get("idle_team"),
+                    "passed": phase.get("passed", False),
+                    "winner": phase.get("winner"),
+                    "progress": phase.get("progress", 0.0),
+                }
+            return {
+                "passed": evaluation.get("success", False),
+                "progress": _evaluation_progress(category, evaluation),
+                "phases": phases,
+            }
+
         teams: Dict[str, Any] = {}
         for team_id, prog in evaluation.get("team_progress", {}).items():
             teams[team_id] = {"progress": prog}
@@ -86,6 +106,85 @@ def _standard_requirement(
         return "must_pass"
     return "either"
 
+def _test_timeout_seconds(num_agents: int, category: str) -> int:
+    """Return a conservative timeout for one benchmark run (standard OR baseline).
+
+    The default 1200s can be too small in shared-worker environments,
+    especially for 3+ agents where planning can be slower. A timeout here is not
+    a task-quality signal, so we prefer a more forgiving bound.
+    """
+    base = 1800
+    extra = max(0, num_agents - 2) * 600
+    comp = 300 if category == "competitive" else 0
+    return base + extra + comp
+
+
+def _aggregate_competitive_baseline_phase_results(
+    phase_results: Dict[str, Dict[str, Any]]
+) -> Dict[str, Any]:
+    phase_summaries: Dict[str, Any] = {}
+    team_status: Dict[str, bool] = {}
+    team_progress: Dict[str, float] = {}
+    overall_passed = True
+    min_progress = 1.0
+    total_steps = 0
+    total_turns = 0
+    done = True
+
+    for phase_id, result in phase_results.items():
+        evaluation = result.get("evaluation", {})
+        active_team = result.get("active_team")
+        idle_team = result.get("idle_team")
+        winner = evaluation.get("winner")
+        progress = 0.0
+        if active_team:
+            progress = float(evaluation.get("team_progress", {}).get(active_team, 0.0) or 0.0)
+        passed = bool(active_team) and winner == active_team and bool(
+            evaluation.get("team_status", {}).get(active_team, False)
+        )
+        if result.get("error"):
+            passed = False
+
+        phase_summaries[phase_id] = {
+            "active_team": active_team,
+            "idle_team": idle_team,
+            "winner": winner,
+            "passed": passed,
+            "progress": progress,
+            "steps": result.get("steps", 0),
+            "turns": result.get("turns", 0),
+            "trajectory_dir": result.get("trajectory_dir"),
+        }
+        if active_team:
+            team_status[active_team] = passed
+            team_progress[active_team] = progress
+
+        overall_passed = overall_passed and passed
+        min_progress = min(min_progress, progress)
+        total_steps += int(result.get("steps", 0) or 0)
+        total_turns += int(result.get("turns", 0) or 0)
+        done = done and bool(result.get("done", False))
+
+    if not phase_summaries:
+        overall_passed = False
+        min_progress = 0.0
+        done = False
+
+    return {
+        "run_mode": "baseline",
+        "steps": total_steps,
+        "turns": total_turns,
+        "done": done,
+        "phase_results": phase_summaries,
+        "evaluation": {
+            "success": overall_passed,
+            "percent_complete": min_progress,
+            "team_status": team_status,
+            "team_progress": team_progress,
+            "phase_results": phase_summaries,
+        },
+    }
+
 
 def build_mode_comparison(
     category: str,
@@ -99,6 +198,14 @@ def build_mode_comparison(
 ) -> Dict[str, Any]:
     std_eval = standard.get("evaluation", {})
     base_eval = baseline.get("evaluation", {})
+    baseline_phase_results = base_eval.get("phase_results", {})
+    if not isinstance(baseline_phase_results, dict):
+        baseline_phase_results = {}
+    failed_baseline_phases = sorted(
+        phase_id
+        for phase_id, phase in baseline_phase_results.items()
+        if not phase.get("passed", False)
+    )
     standard_passed = _evaluation_passed(category, std_eval)
     baseline_passed = _evaluation_passed(category, base_eval)
     standard_progress = _evaluation_progress(category, std_eval)
@@ -122,9 +229,16 @@ def build_mode_comparison(
     reasons: List[str] = []
     if not baseline_passed:
         gate_passed = False
-        reasons.append(
-            "Baseline/full-info run must pass so the task is empirically solvable when information asymmetry is removed."
-        )
+        if category == "competitive" and failed_baseline_phases:
+            failed_label = ", ".join(failed_baseline_phases)
+            reasons.append(
+                "Competitive baseline must pass in both solo-team phases "
+                f"(team_0_only and team_1_only). Failed phases: {failed_label}."
+            )
+        else:
+            reasons.append(
+                "Baseline/full-info run must pass so the task is empirically solvable when information asymmetry is removed."
+            )
     if requirement == "must_fail" and standard_passed:
         gate_passed = False
         reasons.append(
@@ -149,6 +263,8 @@ def build_mode_comparison(
         "next_standard_pass_rate_if_fail": next_rate_if_fail,
         "standard_passed": standard_passed,
         "baseline_passed": baseline_passed,
+        "baseline_phase_results": baseline_phase_results,
+        "baseline_failed_phases": failed_baseline_phases,
         "standard_progress": standard_progress,
         "baseline_progress": baseline_progress,
         "progress_delta": baseline_progress - standard_progress,
@@ -166,6 +282,7 @@ def _build_test_task_retry_guidance(comparison: Dict[str, Any]) -> str:
     requirement = comparison.get("standard_requirement")
     standard_passed = bool(comparison.get("standard_passed"))
     baseline_passed = bool(comparison.get("baseline_passed"))
+    baseline_failed_phases = comparison.get("baseline_failed_phases") or []
 
     if requirement == "must_fail" and standard_passed and baseline_passed:
         return (
@@ -178,9 +295,16 @@ def _build_test_task_retry_guidance(comparison: Dict[str, Any]) -> str:
         )
 
     if not baseline_passed:
+        phase_note = ""
+        if baseline_failed_phases:
+            phase_note = (
+                " For competitive tasks, both solo baseline phases must pass "
+                f"(failed: {', '.join(baseline_failed_phases)})."
+            )
         return (
             "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
             "Do not call `taskgen fail`. Baseline also failed, meaning the task is physically broken or too complex even with full info. "
+            f"{phase_note}"
             "Simplify NOW: (1) reduce to 2-3 goals max, (2) remove unnecessary mechanics, "
             "(3) ensure all objects/furniture exist in the scene with correct IDs, "
             "(4) ensure agents can physically reach the objects they need. "
@@ -761,6 +885,8 @@ class TaskGenSession:
         temp_task_file: str,
         run_mode: str,
         run_dir: Path,
+        idle_team: Optional[str] = None,
+        active_team: Optional[str] = None,
     ) -> Dict[str, Any]:
         run_dir.mkdir(parents=True, exist_ok=True)
         num_agents = task_data.get("num_agents", 2)
@@ -784,9 +910,8 @@ class TaskGenSession:
             base_model = self.state.get("test_model") or "gpt-5.2"
             opponent = "sonnet" if base_model != "sonnet" else "gpt-5.2"
             cmd.extend(["--team-model-map", f"team_0={base_model},team_1={opponent}"])
-            # For competitive baseline: idle team_1 so team_0 can win unopposed
-            if run_mode == "baseline":
-                cmd.extend(["--idle-team", "team_1"])
+            if idle_team:
+                cmd.extend(["--idle-team", idle_team])
 
         env = os.environ.copy()
         env = self._with_project_root_assets(env)
@@ -795,7 +920,7 @@ class TaskGenSession:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=1200,
+                timeout=_test_timeout_seconds(num_agents, task_data.get("category", "cooperative")),
                 cwd=str(self.project_root),
                 env=env,
             )
@@ -809,6 +934,10 @@ class TaskGenSession:
             }
         result = self._parse_benchmark_subprocess(proc, run_dir)
         result["run_mode"] = run_mode
+        if idle_team:
+            result["idle_team"] = idle_team
+        if active_team:
+            result["active_team"] = active_team
         return result
 
     def _run_benchmark(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -827,19 +956,56 @@ class TaskGenSession:
                 json.dump(task_data, f)
 
             self._last_agent_models = self._determine_agent_models(task_data)
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            run_specs: List[Dict[str, Any]] = [
+                {
+                    "result_key": "standard",
+                    "run_mode": "standard",
+                    "run_dir": run_dir / "standard",
+                }
+            ]
+            if task_data.get("category") == "competitive":
+                run_specs.extend(
+                    [
+                        {
+                            "result_key": "baseline_team_0_only",
+                            "run_mode": "baseline",
+                            "run_dir": run_dir / "baseline_team_0_only",
+                            "active_team": "team_0",
+                            "idle_team": "team_1",
+                        },
+                        {
+                            "result_key": "baseline_team_1_only",
+                            "run_mode": "baseline",
+                            "run_dir": run_dir / "baseline_team_1_only",
+                            "active_team": "team_1",
+                            "idle_team": "team_0",
+                        },
+                    ]
+                )
+            else:
+                run_specs.append(
+                    {
+                        "result_key": "baseline",
+                        "run_mode": "baseline",
+                        "run_dir": run_dir / "baseline",
+                    }
+                )
+
+            with ThreadPoolExecutor(max_workers=len(run_specs)) as executor:
                 futures = {
-                    run_mode: executor.submit(
+                    spec["result_key"]: executor.submit(
                         self._run_benchmark_mode,
                         task_data,
                         temp_task_file,
-                        run_mode,
-                        run_dir / run_mode,
+                        spec["run_mode"],
+                        spec["run_dir"],
+                        idle_team=spec.get("idle_team"),
+                        active_team=spec.get("active_team"),
                     )
-                    for run_mode in ("standard", "baseline")
+                    for spec in run_specs
                 }
-                mode_results = {
-                    run_mode: future.result() for run_mode, future in futures.items()
+                raw_results = {
+                    result_key: future.result() for result_key, future in futures.items()
                 }
         finally:
             try:
@@ -849,7 +1015,7 @@ class TaskGenSession:
 
         mode_errors = {
             run_mode: result["error"]
-            for run_mode, result in mode_results.items()
+            for run_mode, result in raw_results.items()
             if result.get("error")
         }
         if mode_errors:
@@ -857,6 +1023,26 @@ class TaskGenSession:
                 "error": "; ".join(f"{mode}: {err}" for mode, err in sorted(mode_errors.items())),
                 "mode_errors": mode_errors,
                 "trajectory_dir": str(run_dir),
+            }
+
+        if task_data.get("category") == "competitive":
+            baseline_dir = run_dir / "baseline"
+            baseline_dir.mkdir(parents=True, exist_ok=True)
+            baseline = _aggregate_competitive_baseline_phase_results(
+                {
+                    "team_0_only": raw_results["baseline_team_0_only"],
+                    "team_1_only": raw_results["baseline_team_1_only"],
+                }
+            )
+            baseline["trajectory_dir"] = str(baseline_dir)
+            mode_results = {
+                "standard": raw_results["standard"],
+                "baseline": baseline,
+            }
+        else:
+            mode_results = {
+                "standard": raw_results["standard"],
+                "baseline": raw_results["baseline"],
             }
 
         self._refresh_calibration_stats()

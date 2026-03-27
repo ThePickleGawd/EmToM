@@ -21,7 +21,7 @@ Task generation should optimize for functional ToM, not just literal ToM:
 3. Generate a task grounded in the current scene and mechanics, starting from the blank task template and using the sampled examples only as inspiration.
 4. Verify the task statically and with runtime checks.
 5. Judge whether the task genuinely requires ToM reasoning.
-6. Benchmark agents on the final task in both `standard` and `baseline`, using `standard` for calibration and `baseline` as the full-info solvability check.
+6. Benchmark agents on the final task in both `standard` and `baseline`, using `standard` for calibration and `baseline` as the full-info solvability check. For competitive tasks, `baseline` is a two-phase solo-team check: once with only `team_0` active and once with only `team_1` active.
 
 Task generation runs through an external SWE-agent CLI (`mini`, `claude`, or `codex`) inside a repo-local workspace under `tmp/task_gen/`. The agent executable may come from the operator environment, but each task-generation run gets its own sandbox environment in `tmp/task_gen/<run_id>/.venv` so parallel runs stay isolated. The repo provides the prompt, sampled seed context, and a stable `taskgen` command surface for `new_scene`, `judge`, `verify_golden_trajectory`, `test_task`, `submit_task`, and `finish`.
 
@@ -44,6 +44,7 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - `standard`: task secrets are private and agents only observe normal benchmark channels.
 - `baseline`: all task secrets are shared with all agents, and agents may read other agents' completed Thought+Action trajectories through a runtime benchmark tool.
 - `full_info`: all task secrets are shared with all agents, and agents may read other agents' completed Observation+Thought+Action trajectories through a runtime benchmark tool.
+- For competitive `test_task` runs, `baseline` is evaluated in two full-info phases: `team_0_only` and `team_1_only`. Both phases must succeed for the baseline gate to pass.
 - `standard` must run with partial observability and per-agent asymmetric world graphs.
 - `baseline` and `full_info` must run with full observability and shared world-state visibility. Their purpose is to remove information bottlenecks, not preserve them.
 - Under partial observability, each agent's world graph must be private: only that agent's own observations may add or update entities. Communication may inform planning, but it must not directly mutate the recipient's world graph.
@@ -52,7 +53,7 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 
 - `verify_golden_trajectory` remains the canonical deterministic solvability gate. It proves the authored task spec is functionally solvable under the planner/runtime semantics.
 - Judge-time ToM evidence must come from the strict Fast Downward proof path. Structural or syntactic fallback metadata is not valid submission evidence.
-- `test_task` now runs both `standard` and `baseline` in parallel.
+- `test_task` now runs `standard` plus a `baseline` solvability check. For competitive tasks, that baseline check consists of two solo-team runs, one for each side.
 - Dataset difficulty calibration uses the `standard` result only, with a target pass rate of 20% by default for the current target model.
 - Calibration and sampled-task selection ignore `tom_level = 0` tasks. New submissions with `tom_level < 1` must be rejected.
 - The `test_task` acceptance gate should use the current calibrated pass/fail counts and accept only the next `standard` outcome that moves the dataset closer to the target pass rate.

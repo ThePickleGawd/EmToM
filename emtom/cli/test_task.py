@@ -36,7 +36,7 @@ def main():
                         help="Team->model mapping for competitive tasks, e.g. team_0=gpt-5.2,team_1=sonnet")
     parser.add_argument("--run-mode", default="standard", choices=["standard", "baseline", "full_info"])
     parser.add_argument("--idle-team", type=str, default=None,
-                        help="Team to idle (agents do nothing). For competitive baseline.")
+                        help="Team to idle (agents do nothing). Used by competitive solo-team baseline runs.")
     args = parser.parse_args()
 
     # Add project root to path
