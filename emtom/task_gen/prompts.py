@@ -74,6 +74,7 @@ Generate {num_tasks} quality benchmark tasks.
 - Example: agent_0 restricted from kitchen_1 -> add `(K agent_0 (is_open fridge_27))` where fridge_27 is in kitchen_1.
 - For competitive tasks, add K() outside the `(or ...)` branches as a shared epistemic requirement.
 - Do NOT add a matching `agent_secrets` line for the K() goal. The epistemic requirement belongs in `problem_pddl`, while secrets should only contain private facts and constraints.
+- NEVER expose K() goals in the `task` text field. The `task` must read as a natural household instruction with no mention of "must know", "knows that", belief, or epistemic requirements. K() goals live only in `problem_pddl`.
 
 ## Empirical Solvability
 - Keep the physical execution short and direct. Prefer tasks that baseline/full-info can finish in roughly 6-10 turns.

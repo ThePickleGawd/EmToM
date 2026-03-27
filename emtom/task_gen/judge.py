@@ -262,7 +262,7 @@ CRITERIA_DESCRIPTIONS = {
     },
     "task_naturalness": {
         "name": "Public/Secret Grounding Split",
-        "description": "Does the public `task` stay high-level while `agent_secrets` provide the precise private grounding? The public task should not read like a machine spec or reveal hidden target object IDs. Secrets should carry exact IDs/states only for the agents who genuinely know those facts.",
+        "description": "Does the public `task` stay high-level while `agent_secrets` provide the precise private grounding? The public task should not read like a machine spec, reveal hidden target object IDs, or expose epistemic K() goals (e.g. 'must know', 'knows that'). K() requirements belong only in `problem_pddl`. Secrets should carry exact IDs/states only for the agents who genuinely know those facts.",
         "rubric": """0.0: Public task leaks exact hidden target IDs or other machine-style targets, and secrets are still vague or generic
 0.3: Either the public task is overly specific, or the secrets leak hidden object IDs to agents who are supposed to lack that information
 0.5: Split is partly right, but public task still over-specifies some targets or secrets are inconsistent in how they reveal private grounding

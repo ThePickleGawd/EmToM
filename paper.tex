@@ -6,6 +6,7 @@
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{booktabs}
+\usepackage{tabularx}
 \usepackage{graphicx}
 \usepackage{xcolor}
 \usepackage{listings}
@@ -128,7 +129,7 @@ Literal Theory of Mind evaluations probe an agent's ability to report the belief
 
 Consider a task in which Agent~A must place a bowl on a table, and Agent~B must \emph{confirm} that the bowl has been placed. Agent~B can only confirm what it has observed or been told, so the task goal is not just that the bowl is on the table, but that B \emph{knows} it is. Now suppose a third party, Agent~C, needs to verify that B has confirmed the placement. C must reason about B's knowledge state, which in turn depends on what B observed about A's actions. Each additional layer of ``who knows what about whom'' demands a deeper level of Theory of Mind.
 
-We formalize these knowledge requirements with the epistemic operator $\K$. Writing $\K_i(\phi)$ asserts that agent $a_i$ knows fact $\phi$ by the end of an episode, which is satisfied only when $a_i$ has directly observed $\phi$ or received it through communication. In the example above, the goal that B knows the bowl is placed is written $\K_B(\texttt{is\_on\_top}(\texttt{bowl}, \texttt{table}))$. The further requirement that C knows B knows is written $\K_C(\K_B(\texttt{is\_on\_top}(\texttt{bowl}, \texttt{table})))$. \dylan{We do not check K-goals this way anymore since it is brittle (communication parsing doesn't account for lying or vague natural language). Instead, we directly probe agents by questioning at the end of episode (e.g. what state does agent 0 think the door is in?). K-goals no longer contribute to task success.}
+We formalize these knowledge requirements with the epistemic operator $\K$. Writing $\K_i(\phi)$ asserts that agent $a_i$ knows fact $\phi$ by the end of an episode, which is satisfied only when $a_i$ has directly observed $\phi$ or received it through communication. In the example above, the goal that B knows the bowl is placed is written $\K_B(\texttt{is\_on\_top}(\texttt{bowl}, \texttt{table}))$. The further requirement that C knows B knows is written $\K_C(\K_B(\texttt{is\_on\_top}(\texttt{bowl}, \texttt{table})))$. \dylan{We do not check K-goals this way anymore since it is brittle (communication parsing doesn't account for lying or vague natural language). Instead, we directly probe agents by questioning at the end of episode (e.g. what state does agent 0 think the door is in?). K-goals no longer contribute to task success, and are instead "probes" at the end of the episode to test literal ToM.}
 
 These operators nest to arbitrary depth $d$:
 %
@@ -150,7 +151,7 @@ We connect this to the level-$k$ reasoning framework from behavioral game theory
 \subsection{Epistemic planning via \pddl{}}
 \label{sec:epistemic_pddl}
 
-We use \pddl{} (Planning Domain Definition Language) to formally specify task goals and verify that they are solvable. A goal mixes physical predicates with epistemic $\K$-operators. Consider the goal in Figure~\ref{fig:pddl_example}: the bowl must end up on the table, the cabinet must be open, and agent\_0 must know that agent\_1 knows the bowl has been placed. The physical parts are standard \pddl{}, but the $\K$-goals require reasoning about knowledge and communication, which classical planners do not natively support. \dylan{We've removed K-goals as a task success criteria, since this is literal ToM. The K-goals now function as a literal ToM probe at the end of the episode.}
+We use \pddl{} (Planning Domain Definition Language) to formally specify task goals and verify that they are solvable. A goal mixes physical predicates with epistemic $\K$-operators. Consider the goal in Figure~\ref{fig:pddl_example}: the bowl must end up on the table, the cabinet must be open, and agent\_0 must know that agent\_1 knows the bowl has been placed. The physical parts are standard \pddl{}, but the $\K$-goals require reasoning about knowledge and communication, which classical planners do not natively support.
 
 \begin{figure}[h]
 \centering
@@ -486,9 +487,61 @@ GPT-5.2 shows deeper epistemic reasoning (4~instances of second-order ToM) and b
 
 \bibliography{colm2026_conference}
 \bibliographystyle{colm2026_conference}
-
+\newpage
 \appendix
+\section{Orders of Theory of Mind}
+\label{app:tom_orders}
 
+Table~\ref{tab:tom_orders} illustrates the successive orders of Theory of Mind with everyday analogies and corresponding \shortname{} task examples. Each order adds a layer of reasoning about what another agent knows.
+
+\begin{table}[h]
+\centering
+\footnotesize
+\renewcommand{\arraystretch}{1.5}
+\setlength{\tabcolsep}{5pt}
+\begin{tabularx}{\textwidth}{@{} >{\raggedright\arraybackslash}p{1.4cm} >{\centering\arraybackslash}p{2.6cm} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X @{}}
+\toprule
+\textbf{Order} & \textbf{Formal} & \textbf{Everyday analogy} & \textbf{EmToM example} \\
+\midrule
+
+\textbf{0} \newline \textit{No ToM}
+& $\phi$
+& You walk to the kitchen and open the fridge because you are thirsty. No one else is involved.
+& An agent navigates to a cabinet and opens it. No coordination needed. \\
+
+\addlinespace[3pt]
+
+\textbf{1} \newline \textit{Self-aware}
+& $\mathcal{K}_a(\phi)$
+& You cannot reach the top shelf, so you ask your roommate to check if the jar is there.
+& Agent~0 is barred from the kitchen. It asks Agent~1 to check whether the fridge is open and report back. Agent~0 models \emph{its own} knowledge gap, not Agent~1's mind. \\
+
+\addlinespace[3pt]
+
+\textbf{2} \newline \textit{Other-aware}
+& $\mathcal{K}_a\!\bigl(\mathcal{K}_b(\phi)\bigr)$
+& Your roommate left before the package arrived. You know \emph{they} don't know it is here, so you text them.
+& Agent~0 must ensure Agent~2 knows the bowl is on the table. Agent~2 is in another room and has not seen it. Agent~0 reasons about what Agent~2 lacks and relays the information. \\
+
+\addlinespace[3pt]
+
+\textbf{3} \newline \textit{Recursive}
+& $\mathcal{K}_a\!\bigl(\mathcal{K}_b\!\bigl(\mathcal{K}_c(\phi)\bigr)\bigr)$
+& You need to confirm your manager knows the client received the contract. Your assistant sent it, so you ask the assistant to confirm they told the manager.
+& Agent~0 must know that Agent~1 knows that Agent~2 knows the wardrobe is open. This requires a planned relay chain across three agents with restricted communication. \\
+
+\addlinespace[3pt]
+
+\textbf{4+} \newline \textit{Self-ref.}
+& $\mathcal{K}_a\!\bigl(\mathcal{K}_b\!\bigl(\cdots\bigr)\bigr)$
+& Poker: you think your opponent thinks you are bluffing, so you bet high---but they may know that you know they think this.
+& A competitive task requires $\mathcal{K}_{a_1}\!\bigl(\mathcal{K}_{a_0}\!\bigl(\mathcal{K}_{a_1}\!\bigl(\mathcal{K}_{a_0}(\phi)\bigr)\bigr)\bigr)$: a self-referential loop through the same two agents. \\
+
+\bottomrule
+\end{tabularx}
+\caption{Orders of Theory of Mind. Each row adds a layer of reasoning about other agents' epistemic states. Frontier models reliably handle order~1 but fail at order~2 and above (Section~\ref{sec:behaviors}).}
+\label{tab:tom_orders}
+\end{table}
 \section{Agent Trajectory Evidence}
 \label{app:traces}
 
@@ -801,6 +854,9 @@ This is a self-referential depth-4 chain: $a_1$ must know that $a_0$ knows that 
 Room restrictions add complexity: $a_0$ and $a_2$ cannot enter the kitchen, while $a_1$ and $a_3$ cannot enter rooms containing the remote-control trigger and inverse-state stand. Agents must reason about teammate beliefs and about what the opposing team believes about their strategy.
 
 \appendix
+
+
+
 
 \section{Epistemic compilation example}
 \label{app:compilation}
