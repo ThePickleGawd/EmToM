@@ -72,16 +72,54 @@ def _diverse_sample(
     return selected
 
 
+def _compact_trajectory(trajectory: list) -> list:
+    """Compact a full trajectory to reduce context size.
+
+    Keeps full detail for communication turns and final 3 turns.
+    Summarizes other turns to just actions (drops verbose observations).
+    """
+    if not trajectory:
+        return trajectory
+
+    total = len(trajectory)
+    compact = []
+    for turn in trajectory:
+        turn_num = turn.get("turn", 0)
+        agents = turn.get("agents", {})
+
+        has_comm = any(
+            "Communicate" in str(a.get("action", ""))
+            for a in agents.values()
+        )
+        is_endgame = turn_num > total - 3
+
+        if has_comm or is_endgame:
+            # Keep full detail — communication content and endgame state matter
+            compact.append(turn)
+        else:
+            # Actions only — drop observations to save space
+            compact.append({
+                "turn": turn_num,
+                "agents": {
+                    agent: {"action": data.get("action", "")}
+                    for agent, data in agents.items()
+                },
+            })
+
+    return compact
+
+
 def _build_benchmark_annotation(
     task_data: dict,
     model: str,
     outcome: str,
     pct: float,
 ) -> dict:
-    """Build _benchmark_result with trajectory from the target model only.
+    """Build _benchmark_result with compacted trajectory from the target model.
 
     Strips calibration data from other models so the generator only sees
-    the target model's behavior.
+    the target model's behavior. Trajectory is compacted: communication turns
+    and final turns keep full detail, others show actions only.
     """
     cal = find_calibration_entry(task_data.get("calibration", []), model=model)
     annotation: dict = {
@@ -94,7 +132,7 @@ def _build_benchmark_annotation(
         annotation["results"] = cal.get("results", {})
         trajectory = cal.get("trajectory", [])
         if trajectory:
-            annotation["trajectory"] = trajectory
+            annotation["trajectory"] = _compact_trajectory(trajectory)
     return annotation
 
 
@@ -149,10 +187,29 @@ def prepare_sampled_tasks_dir_from_calibration(
     selected_failed = _diverse_sample(failed, fail_count, model)
     selected_passed = _diverse_sample(passed, pass_count, model)
 
+    # Fields to strip — internal metadata that bloats context without helping
+    # the generator reason about difficulty.
+    _STRIP_KEYS = {
+        "calibration",            # other model results — replaced by _benchmark_result
+        "golden_trajectory",      # planner solution, not LLM agent behavior
+        "golden_trajectory_metadata",
+        "pddl_domain",            # identical across all tasks
+        "runtime_semantics_version",
+        "runtime_projection_valid",
+        "runtime_projection_errors",
+        "epistemic_conjuncts_removed",
+        "tom_level_method",
+        "task_id",
+        "agent_spawns",           # spawn coordinates — not useful for task design
+        "initial_states",         # raw sim state
+        "message_targets",        # derivable from mechanic_bindings
+    }
+
+    def _clean_for_icl(task_data: dict) -> dict:
+        return {k: v for k, v in task_data.items() if k not in _STRIP_KEYS}
+
     for i, (_, task_data, pct) in enumerate(selected_failed, 1):
-        annotated = dict(task_data)
-        # Strip all calibration data — only the target model's result matters
-        annotated.pop("calibration", None)
+        annotated = _clean_for_icl(task_data)
         annotated["_benchmark_result"] = _build_benchmark_annotation(
             task_data, model, "FAILED", pct,
         )
@@ -162,8 +219,7 @@ def prepare_sampled_tasks_dir_from_calibration(
             json.dump(annotated, f, indent=2)
 
     for i, (_, task_data, pct) in enumerate(selected_passed, 1):
-        annotated = dict(task_data)
-        annotated.pop("calibration", None)
+        annotated = _clean_for_icl(task_data)
         annotated["_benchmark_result"] = _build_benchmark_annotation(
             task_data, model, "PASSED", pct,
         )
