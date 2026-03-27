@@ -65,20 +65,13 @@ Exactly one action per turn.
 - `fail[reason]`: stop only for unrecoverable infrastructure issues.
 
 ## Workflow
-1. If `sampled_tasks/` contains files, read ALL of them and write `TASK_GEN_LEARNINGS.md` with your analysis (see below). This is MANDATORY before calling `new_scene`.
+1. If `sampled_tasks/` contains files, read ALL of them and analyze the `_benchmark_result` trajectories before authoring.
 2. Call `new_scene[N]`.
 3. Inspect the scene.
 4. Edit `{task_file}`.
 5. Run `judge[]`, fix issues, and repeat until it passes.
 6. Run `test_task[]` when required.
 7. Run `submit_task[]`.
-
-## TASK_GEN_LEARNINGS.md (required when sampled_tasks/ is non-empty)
-Before calling `new_scene`, you MUST write `TASK_GEN_LEARNINGS.md` with:
-- For each sampled task: one line summarizing WHY the agent passed or failed based on the `_benchmark_result` trajectory (e.g., "failed_3: agent_1 wasted all messages on meta-coordination, never relayed the hidden cabinet ID").
-- A "Patterns" section: what structural features distinguish passes from fails?
-- A "My Plan" section: what difficulty mechanism will YOUR task use, and how does it differ from the sampled tasks?
-Do NOT call `new_scene` until this file exists.
 
 ## Hard Rules
 - Every command already starts inside `{working_dir}`. Do not prefix every command with `cd {working_dir} &&`.
@@ -118,7 +111,6 @@ Do NOT call `new_scene` until this file exists.
 - Working task: `{task_file}`
 - Current scene: `{working_dir}/current_scene.json`
 - Sampled tasks: `{working_dir}/sampled_tasks/` (failed_*.json + passed_*.json with `_benchmark_result` trajectories)
-- Your analysis: `{working_dir}/TASK_GEN_LEARNINGS.md` (you must create this before `new_scene`)
 - Template: `{working_dir}/template.json`
 
 ## Structural Diversity
