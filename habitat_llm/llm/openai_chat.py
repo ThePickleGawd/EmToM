@@ -209,9 +209,9 @@ class OpenAIChat(BaseLLM):
         params["model"] = self.resolve_model_alias(params["model"])
 
         # Override stop if provided
-        if stop is None and len(self.generation_params.stop) > 0:
+        if stop is None and getattr(self.generation_params, "stop", None) is not None and len(self.generation_params.stop) > 0:
             stop = self.generation_params.stop
-        params["stop"] = stop
+        params.pop("stop", None)
 
         # Override max_length if provided
         if max_length is not None:
@@ -257,13 +257,23 @@ class OpenAIChat(BaseLLM):
             response = self.client.responses.create(**response_kwargs)
             text_response = self._extract_response_text(response)
         else:
+            # Fireworks uses max_tokens; OpenAI gpt-5.x uses max_completion_tokens.
+            is_fireworks = self._is_fireworks_model(params["model"])
+            token_limit = params.get("max_tokens")
+            if is_fireworks:
+                token_key = "max_tokens"
+            else:
+                token_key = "max_completion_tokens"
+
             completion_kwargs: Dict[str, Any] = {
                 "model": params["model"],
                 "messages": messages,
-                "max_tokens": params.get("max_tokens"),
-                "stop": stop,
+                token_key: token_limit,
                 "timeout": request_timeout,
             }
+            if stop is not None:
+                completion_kwargs["stop"] = stop
+
             if not uses_fixed_temp:
                 completion_kwargs["temperature"] = temperature
             response = self.client.chat.completions.create(**completion_kwargs)
