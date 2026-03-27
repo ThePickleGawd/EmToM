@@ -26,6 +26,10 @@ if TYPE_CHECKING:
     from emtom.task_gen import GeneratedTask
 
 
+class BenchmarkExecutionError(RuntimeError):
+    """Fatal benchmark execution error."""
+
+
 class BenchmarkRunner(EMTOMBaseRunner):
     """
     Unified runner for EMTOM benchmark evaluation.
@@ -39,6 +43,10 @@ class BenchmarkRunner(EMTOMBaseRunner):
     def __init__(self, config: DictConfig):
         super().__init__(config)
 
+
+        # Ensure per-agent recorder attribute always exists (robust against partial setup paths)
+        if not hasattr(self, "_per_agent_recorder"):
+            self._per_agent_recorder = None
         self.planners: Dict[int, Any] = {}
         self.task: Optional["GeneratedTask"] = None
         self.human_agents: Set[str] = set()
@@ -692,24 +700,9 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 except Exception as e:
                     err_msg = f"Unexpected failure! - Planning error: {type(e).__name__}: {e}"
                     print(f"[Agent {uid} ERROR during planning] {err_msg}", flush=True)
-                    llm_agent_state[uid] = {
-                        'planner': self.planners.get(uid),
-                        'instruction': agent_instruction,
-                        'high_level_action': "Wait[planning_error]",
-                        'low_level_actions': {},
-                        'planner_info': {},
-                        'planner_done': False,
-                        'action_done': True,
-                        'response': err_msg,
-                        'skill_steps': 0,
-                        'mech_result': None,
-                        'orig_action': "Wait",
-                        'orig_target': None,
-                        'skip_mechanic_apply': True,
-                        'selected_frames': [],
-                        'selector': None,
-                    }
-                    continue
+                    raise BenchmarkExecutionError(
+                        f"agent_{uid} planning failed during turn {turn_count}: {type(e).__name__}: {e}"
+                    ) from e
 
             # Restore original post_message and flush buffered messages to queues
             # These messages will be consumed at the start of NEXT turn
@@ -835,8 +828,10 @@ class BenchmarkRunner(EMTOMBaseRunner):
                     except Exception as e:
                         err_msg = f"Unexpected failure! - {type(e).__name__}: {e}"
                         print(f"[Agent {uid} step error] {err_msg}", flush=True)
-                        state['response'] = err_msg
-                        state['action_done'] = True
+                        raise BenchmarkExecutionError(
+                            f"agent_{uid} planning failed while advancing turn {turn_count}: "
+                            f"{type(e).__name__}: {e}"
+                        ) from e
 
             # Mark agents that didn't finish within the skill-step budget
             for uid, state in llm_agent_state.items():

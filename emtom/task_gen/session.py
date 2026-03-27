@@ -874,6 +874,8 @@ class TaskGenSession:
                 "done": False,
                 "error": result_data.get("error", "Unknown error"),
             }
+            if isinstance(result_data.get("data"), dict):
+                result.update(result_data["data"])
 
         result["trajectory_dir"] = str(run_dir)
         result.pop("planner_traces", None)
@@ -1120,10 +1122,19 @@ class TaskGenSession:
         try:
             results = self._run_benchmark(task_data)
         except Exception as e:
+            self.state["failed"] = True
+            self.state["fail_reason"] = f"Benchmark execution failed: {e}"
+            self._write_state()
             return failure(str(e), data=validation_result["data"])
 
         if results.get("error"):
-            return failure(results["error"], data=results)
+            self.state["failed"] = True
+            self.state["fail_reason"] = f"Benchmark execution failed: {results['error']}"
+            self._write_state()
+            failure_data = dict(validation_result["data"])
+            failure_data.update(results)
+            failure_data["fatal_infra"] = True
+            return failure(results["error"], data=failure_data)
 
         self._save_calibration_result(task_data, results)
         self.state["last_test_passed"] = results["comparison"]["gate_passed"]

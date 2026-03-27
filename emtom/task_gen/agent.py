@@ -1738,9 +1738,14 @@ SUMMARY:"""
             results = self._run_benchmark(task_data)
             # Check if benchmark returned an error (import error, etc.)
             if results.get("error"):
-                # Merge validation result with benchmark error
+                self.failed = True
+                self.fail_reason = f"Benchmark execution failed: {results['error']}"
+                self._log(f"FAIL: {self.fail_reason}")
                 validation_result["benchmark_error"] = results["error"]
-                validation_result["summary"] = f"Task structure valid. Benchmark skipped: {results['error']}"
+                validation_result["fatal_infra"] = True
+                validation_result["summary"] = (
+                    f"Task structure valid, but benchmark aborted: {results['error']}"
+                )
                 return json.dumps(validation_result, indent=2)
 
             # Save calibration results to task JSON for dataset tracking (needs action_history)
@@ -1768,10 +1773,12 @@ SUMMARY:"""
 
             return json.dumps(validation_result, indent=2)
         except Exception as e:
-            # If benchmark fails due to environment issues, return validation result
-            # with a note that benchmark couldn't run
+            self.failed = True
+            self.fail_reason = f"Benchmark execution failed: {e}"
+            self._log(f"FAIL: {self.fail_reason}")
             validation_result["benchmark_error"] = str(e)
-            validation_result["summary"] = f"Task structure valid. Benchmark skipped: {e}"
+            validation_result["fatal_infra"] = True
+            validation_result["summary"] = f"Task structure valid, but benchmark aborted: {e}"
             return json.dumps(validation_result, indent=2)
 
     def _build_trajectory(self, action_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -2042,6 +2049,8 @@ SUMMARY:"""
             result = result_data.get("data", {})
         else:
             result = {"steps": 0, "done": False, "error": result_data.get("error", "Unknown error")}
+            if isinstance(result_data.get("data"), dict):
+                result.update(result_data["data"])
 
         result["trajectory_dir"] = str(run_dir)
         result_txt_path = run_dir / "result.txt"
