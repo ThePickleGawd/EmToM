@@ -280,7 +280,7 @@ print_usage() {
     echo "  --selector-max-candidates N  Vision mode selector candidate pool size (default: $SELECTOR_MAX_CANDIDATES)"
     echo "  --max-workers N      Run benchmark in parallel (N concurrent processes, GPU round-robin)"
     echo "  --num-gpus N         Number of GPUs for round-robin assignment (default: $NUM_GPUS)"
-    echo "  --no-video           Disable video recording (default: on)"
+    echo "  --video              Enable video recording (default: off)"
     echo "  --no-calibration     Don't write results back into source task JSONs"
     echo ""
     echo -e "${BOLD}Test Options:${NC}"
@@ -710,8 +710,8 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
             --selector-min-frames $SELECTOR_MIN_FRAMES \
             --selector-max-frames $SELECTOR_MAX_FRAMES \
             --selector-max-candidates $SELECTOR_MAX_CANDIDATES"
-        if [ "$NO_VIDEO" = true ]; then
-            PARALLEL_CMD="$PARALLEL_CMD --no-video"
+        if [ "$NO_VIDEO" != true ]; then
+            PARALLEL_CMD="$PARALLEL_CMD --video"
         fi
         if [ -n "$CATEGORY" ]; then
             PARALLEL_CMD="$PARALLEL_CMD --category $CATEGORY"
@@ -1357,10 +1357,6 @@ while [[ $# -gt 0 ]]; do
                 echo "Error: --remove requires at least one step (pddl, llm-council, simulation, task-evolution, tom, structure, test)"
                 exit 1
             fi
-            ;;
-        --no-video)
-            NO_VIDEO=true
-            shift
             ;;
         --video)
             NO_VIDEO=false
