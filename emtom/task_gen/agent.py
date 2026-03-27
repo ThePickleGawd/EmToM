@@ -2415,16 +2415,6 @@ Use new_scene[] if you want a different scene, or start creating your next task.
         from emtom.task_gen.scene_loader import SceneData
         from habitat_llm.utils import get_random_seed
 
-        # Enforce TASK_GEN_LEARNINGS.md when sampled_tasks/ has files
-        sampled_dir = self.working_dir / "sampled_tasks"
-        learnings_file = self.working_dir / "TASK_GEN_LEARNINGS.md"
-        if sampled_dir.exists() and any(sampled_dir.glob("*.json")) and not learnings_file.exists():
-            return (
-                "Error: You must write TASK_GEN_LEARNINGS.md before calling new_scene.\n"
-                "Read all files in sampled_tasks/, analyze the _benchmark_result trajectories, "
-                "and write your analysis to TASK_GEN_LEARNINGS.md. See the Workflow section."
-            )
-
         args = args.strip()
         if not args:
             return "Error: new_scene requires num_agents. Usage: new_scene[N] or new_scene[N, keep]"
