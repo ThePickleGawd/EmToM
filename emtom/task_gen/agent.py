@@ -65,12 +65,20 @@ Exactly one action per turn.
 - `fail[reason]`: stop only for unrecoverable infrastructure issues.
 
 ## Workflow
-1. Call `new_scene[N]`.
-2. Inspect the scene and any sampled seed tasks.
-3. Edit `{task_file}`.
-4. Run `judge[]`, fix issues, and repeat until it passes.
-5. Run `test_task[]` when required.
-6. Run `submit_task[]`.
+1. If `sampled_tasks/` contains files, read ALL of them and write `TASK_GEN_LEARNINGS.md` with your analysis (see below). This is MANDATORY before calling `new_scene`.
+2. Call `new_scene[N]`.
+3. Inspect the scene.
+4. Edit `{task_file}`.
+5. Run `judge[]`, fix issues, and repeat until it passes.
+6. Run `test_task[]` when required.
+7. Run `submit_task[]`.
+
+## TASK_GEN_LEARNINGS.md (required when sampled_tasks/ is non-empty)
+Before calling `new_scene`, you MUST write `TASK_GEN_LEARNINGS.md` with:
+- For each sampled task: one line summarizing WHY the agent passed or failed based on the `_benchmark_result` trajectory (e.g., "failed_3: agent_1 wasted all messages on meta-coordination, never relayed the hidden cabinet ID").
+- A "Patterns" section: what structural features distinguish passes from fails?
+- A "My Plan" section: what difficulty mechanism will YOUR task use, and how does it differ from the sampled tasks?
+Do NOT call `new_scene` until this file exists.
 
 ## Hard Rules
 - Every command already starts inside `{working_dir}`. Do not prefix every command with `cd {working_dir} &&`.
@@ -109,8 +117,8 @@ Exactly one action per turn.
 ## References
 - Working task: `{task_file}`
 - Current scene: `{working_dir}/current_scene.json`
-- Sampled seed field views: `{working_dir}/sampled_tasks/task_*_fields.json`
-- Raw sampled seeds: `{working_dir}/sampled_tasks/task_*.json`
+- Sampled tasks: `{working_dir}/sampled_tasks/` (failed_*.json + passed_*.json with `_benchmark_result` trajectories)
+- Your analysis: `{working_dir}/TASK_GEN_LEARNINGS.md` (you must create this before `new_scene`)
 - Template: `{working_dir}/template.json`
 
 ## Structural Diversity
@@ -1119,7 +1127,7 @@ Always rewrite `title`, `task`, `agent_secrets`, and `team_secrets` from scratch
         """Get response from LLM."""
         prompt = self._format_messages_for_llm()
         # Stop on "Assigned!" - LLM outputs this after each action
-        response = self.llm.generate(prompt, stop="Assigned!")
+        response = self.llm.generate(prompt, stop=None)
         self._log(f"Agent: {response}", truncate_terminal=300)
         return response
 
@@ -2034,13 +2042,14 @@ SUMMARY:"""
     def _parse_benchmark_subprocess(self, proc: subprocess.CompletedProcess[str], run_dir: Path) -> Dict[str, Any]:
         """Parse the JSON payload emitted by emtom.cli.test_task."""
         try:
-            stdout = proc.stdout
+            stdout = (proc.stdout or "")
             json_start = stdout.find("{")
             if json_start >= 0:
                 stdout = stdout[json_start:]
             result_data = json.loads(stdout)
         except (json.JSONDecodeError, ValueError):
-            return {"steps": 0, "done": False, "error": f"Failed to parse output: {proc.stderr[:500]}", "trajectory_dir": str(run_dir)}
+            noisy = ((proc.stdout or "") + "\n" + (proc.stderr or ""))[:500]
+            return {"steps": 0, "done": False, "error": f"Failed to parse output: {noisy}", "trajectory_dir": str(run_dir)}
 
         if not isinstance(result_data, dict):
             return {"steps": 0, "done": False, "error": f"Unexpected output type ({type(result_data).__name__})", "trajectory_dir": str(run_dir)}
@@ -2406,6 +2415,16 @@ Use new_scene[] if you want a different scene, or start creating your next task.
         from emtom.task_gen.scene_loader import SceneData
         from habitat_llm.utils import get_random_seed
 
+        # Enforce TASK_GEN_LEARNINGS.md when sampled_tasks/ has files
+        sampled_dir = self.working_dir / "sampled_tasks"
+        learnings_file = self.working_dir / "TASK_GEN_LEARNINGS.md"
+        if sampled_dir.exists() and any(sampled_dir.glob("*.json")) and not learnings_file.exists():
+            return (
+                "Error: You must write TASK_GEN_LEARNINGS.md before calling new_scene.\n"
+                "Read all files in sampled_tasks/, analyze the _benchmark_result trajectories, "
+                "and write your analysis to TASK_GEN_LEARNINGS.md. See the Workflow section."
+            )
+
         args = args.strip()
         if not args:
             return "Error: new_scene requires num_agents. Usage: new_scene[N] or new_scene[N, keep]"
@@ -2448,7 +2467,7 @@ Use new_scene[] if you want a different scene, or start creating your next task.
 
                 try:
                     # Extract JSON from stdout (Hydra may prepend non-JSON lines)
-                    stdout = proc.stdout
+                    stdout = (proc.stdout or "")
                     json_start = stdout.find("{")
                     if json_start >= 0:
                         stdout = stdout[json_start:]

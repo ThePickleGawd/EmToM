@@ -469,10 +469,10 @@ def main() -> None:
         override_path = Path(sampled_tasks_override)
         override_files = [p for p in override_path.glob("*.json") if is_task_like_json(p)]
         selected = sorted(override_files)[:10]
-        for i, task_path in enumerate(selected, 1):
+        for task_path in selected:
+            # Copy as-is with original filenames (e.g. failed_1_50pct.json).
+            # Do NOT create task_N.json / task_N_fields.json duplicates.
             shutil.copy(task_path, sampled_tasks_dir / task_path.name)
-            _copy_sample(task_path, sampled_tasks_dir, i)
-        _write_sampled_task_field_views(sampled_tasks_dir)
     elif seed_tasks_dir is not None:
         selection_config = SeedSelectionConfig(
             tasks_dir=seed_tasks_dir,
