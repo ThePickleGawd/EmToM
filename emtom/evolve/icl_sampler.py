@@ -21,17 +21,26 @@ def _diverse_sample(
     count: int,
     model: str,
 ) -> List[Tuple[Path, dict, float]]:
-    """Select a diverse subset across category, tom_level, and progress range.
+    """Select a diverse subset, preferring tom_level >= 2 and multi-agent tasks.
 
-    Stratifies by (category, tom_level) then fills remaining slots by
-    spreading across progress buckets.
+    Prioritizes higher tom_level, then stratifies by (category, tom_level)
+    to ensure diversity across both dimensions.
     """
     if len(items) <= count:
         return items
 
-    # Build strata by (category, tom_level)
+    # Prefer tom_level >= 2, multi-agent, with mechanics
+    preferred = [
+        it for it in items
+        if it[1].get("tom_level", 0) >= 2
+        and it[1].get("num_agents", 0) >= 2
+    ]
+    fallback = [it for it in items if it not in preferred]
+
+    # Build strata by (category, tom_level) from preferred pool first
+    pool = preferred if len(preferred) >= count else items
     strata: Dict[tuple, list] = {}
-    for item in items:
+    for item in pool:
         _, data, _ = item
         key = (data.get("category", "?"), data.get("tom_level", 0))
         strata.setdefault(key, []).append(item)
@@ -53,11 +62,12 @@ def _diverse_sample(
                 seen.add(item_id)
         idx += 1
 
-    # If not enough from stratified sampling, fill randomly
-    remaining = [it for it in items if id(it) not in seen]
-    if len(selected) < count and remaining:
-        extra = random.sample(remaining, min(count - len(selected), len(remaining)))
-        selected.extend(extra)
+    # Fill remaining from fallback if needed
+    if len(selected) < count:
+        remaining = [it for it in items if id(it) not in seen]
+        if remaining:
+            extra = random.sample(remaining, min(count - len(selected), len(remaining)))
+            selected.extend(extra)
 
     return selected
 
@@ -249,30 +259,52 @@ def build_evolution_query(
     rate = pass_rate
 
     return (
-        f"The sampled_tasks/ directory contains benchmark results for {tier_model}.\n"
-        f"Each task has a `_benchmark_result` field with:\n"
-        f"  - `outcome`: PASSED or FAILED\n"
-        f"  - `percent_complete`: how much of the goal the agent achieved (0.0–1.0)\n"
-        f"  - `trajectory`: the full action/observation history per turn\n"
-        f"  - `results`: per-agent success breakdown\n\n"
+        f"## Calibrated Task Review\n"
+        f"The `sampled_tasks/` directory contains 10 calibrated tasks for {tier_model} "
+        f"standard mode: 2 passes and 8 fails from the same difficulty regime.\n"
         f"Files named `failed_*` = tasks {tier_model} COULD NOT solve.\n"
         f"Files named `passed_*` = tasks {tier_model} COULD solve.\n"
         f"Current pass rate for {tier_model}: {rate:.1f}%\n\n"
-        f"## Before authoring your task, analyze the trajectories:\n"
-        f"1. Read the `_benchmark_result.trajectory` for each failed task.\n"
-        f"2. Identify WHY the agent failed — was it:\n"
-        f"   - Higher-order ToM (agent couldn't reason about what others know)?\n"
-        f"   - Communication bottleneck (ran out of messages, wrong relay)?\n"
-        f"   - Information asymmetry (couldn't figure out hidden facts)?\n"
-        f"   - Deception/conflicting incentives (mixed tasks)?\n"
-        f"   - Coordination failure (agents duplicated work or got stuck)?\n"
-        f"3. Compare failed vs passed tasks — what structural difference made one solvable?\n"
-        f"4. Write a brief analysis before designing your task.\n\n"
-        f"## Diversity requirement:\n"
+        f"Each task JSON contains the task spec plus a `_benchmark_result` field with "
+        f"the {tier_model} calibration: `outcome`, `percent_complete`, `steps`, "
+        f"`results` (per-agent breakdown), and `trajectory` (the full rollout — "
+        f"action/observation/communication per turn).\n\n"
+        f"For each task, inspect: `task`, `title`, `category`, `tom_level`, "
+        f"`num_agents`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, "
+        f"`problem_pddl`, and the `_benchmark_result` trajectory.\n\n"
+        f"## Analysis (do this BEFORE authoring)\n"
+        f"For each task, reason about:\n"
+        f"- **Shared-plan clarity**: Can agents decompose the goal into roles early?\n"
+        f"- **Information topology**: Who knows what? Are hidden facts decisive or decorative?\n"
+        f"- **Communication topology**: Who can message whom, how many times, and is it enough?\n"
+        f"- **Epistemic dependency**: Does completing a physical goal require knowing something "
+        f"only another agent can observe?\n"
+        f"- **Search burden**: Must agents search broadly, or is the search space narrow?\n"
+        f"- **Conflict structure**: Do agents have misaligned private incentives?\n"
+        f"- **Recovery slack**: If an agent makes a wrong move, can they recover?\n"
+        f"- **Mechanic coupling**: Are mechanics load-bearing or cosmetic?\n"
+        f"- **Goal load**: Number of conjuncts — are they related or just piled on?\n"
+        f"- **Endgame fragility**: Does the task hinge on a final confirmation chain?\n\n"
+        f"Then compare passes vs fails: what made the passed tasks hard but still legible, "
+        f"and what made the failed tasks fail due to genuine Theory-of-Mind pressure versus "
+        f"clutter, search, or over-coupling?\n\n"
+        f"Write a brief analysis before designing your task.\n\n"
+        f"## Design Principles for New Tasks\n"
+        f"Make the core difficulty a **belief-routing problem**, not a search problem:\n"
+        f"- Use one or two decisive hidden facts, not a pile of decorative secrets.\n"
+        f"- Constrained but meaningful communication — messages must carry load.\n"
+        f"- Asymmetric room/action access that forces genuine delegation.\n"
+        f"- Precise confirmation chains (K() goals) that require agents to reason about "
+        f"what others have observed.\n"
+        f"- Keep shared goals crisp enough that a sensible role decomposition is possible early.\n\n"
+        f"**Avoid** making tasks hard by:\n"
+        f"- Piling on unrelated subtasks (goal load without epistemic depth).\n"
+        f"- Broad object/room search (search burden without ToM).\n"
+        f"- Too many overlapping private conflicts (clutter, not genuine tension).\n\n"
+        f"## Diversity Requirement\n"
         f"Your task MUST differ from the sampled tasks in at least TWO of:\n"
-        f"  - Difficulty mechanism (different failure mode than the examples)\n"
-        f"  - Scenario theme (not another staging/inspection/cleanup task)\n"
-        f"  - ToM structure (different K-level or nesting pattern)\n"
-        f"  - Mechanic combination (try different mechanic stacks)\n\n"
-        f"Generate a task that exploits {tier_model}'s weaknesses in a NOVEL way."
+        f"- Difficulty mechanism (different failure mode than the examples)\n"
+        f"- Scenario theme (not another staging/inspection/cleanup/walkthrough task)\n"
+        f"- ToM structure (different K-level or nesting pattern)\n"
+        f"- Mechanic combination (try different mechanic stacks)\n"
     )
