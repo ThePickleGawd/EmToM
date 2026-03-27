@@ -234,7 +234,7 @@ SHARED_CRITERIA = [
 
 # Category-specific criteria
 CATEGORY_CRITERIA = {
-    "cooperative": SHARED_CRITERIA + ["subgoal_tension"],
+    "cooperative": SHARED_CRITERIA + ["task_interdependence"],
     "competitive": SHARED_CRITERIA + ["goal_opposition"],
     "mixed": SHARED_CRITERIA + ["subgoal_tension"],
 }
@@ -307,7 +307,7 @@ CRITERIA_DESCRIPTIONS = {
 1.0: Mechanics are tightly integrated with the formal goals and task design; each one materially contributes to the benchmark challenge""",
     },
     # Cooperative-specific
-    "subgoal_tension": {
+    "task_interdependence": {
         "name": "Task Interdependence",
         "description": "Do agents genuinely NEED information from each other to complete physical goals? At least one physical goal must be information-dependent: an agent cannot determine WHAT to do or WHERE to act without receiving a message from another agent. If all physical goals can be completed in parallel without any communication, score 0.",
         "rubric": """0.0: All physical goals are independently solvable — agents can complete everything in parallel without communicating
@@ -998,7 +998,7 @@ class Judge:
     Multi-LLM council judge for task validation.
 
     Evaluates tasks using category-specific criteria:
-    - Cooperative: 6 criteria (5 shared + subgoal_tension)
+    - Cooperative: 6 criteria (5 shared + task_interdependence)
     - Competitive: 6 criteria (5 shared + goal_opposition)
     - Mixed: 6 criteria (5 shared + subgoal_tension)
 
@@ -1070,9 +1070,9 @@ class Judge:
             if os.environ.get("TASKGEN_SKIP_LLM", "").lower() in {"1","true","yes"}:
                 class _DummyLLM:
                     def generate(self, prompt, **kwargs):
-                        return "{\"agent_necessity\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"secret_quality\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"task_naturalness\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"narrative_consistency\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"goal_relevance\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"mechanic_utilization\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"subgoal_tension\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}}"
+                        return "{}"
                     def generate(self, prompt, **kwargs):
-                        return "{\"agent_necessity\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"secret_quality\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"task_naturalness\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"narrative_consistency\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"goal_relevance\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"mechanic_utilization\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"subgoal_tension\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}}"
+                        return "{}"
                 self._llm_clients[model] = _DummyLLM()
                 return self._llm_clients[model]
 
@@ -1082,9 +1082,9 @@ class Judge:
             if os.environ.get("TASKGEN_SKIP_LLM", "").lower() in {"1","true","yes"}:
                 class _DummyLLM:
                     def generate(self, prompt, **kwargs):
-                        return "{\"agent_necessity\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"secret_quality\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"task_naturalness\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"narrative_consistency\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"goal_relevance\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"mechanic_utilization\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"subgoal_tension\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}}"
+                        return "{}"
                     def generate(self, prompt, **kwargs):
-                        return "{\"agent_necessity\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"secret_quality\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"task_naturalness\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"narrative_consistency\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"goal_relevance\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"mechanic_utilization\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}, \"subgoal_tension\": {\"score\": 1.0, \"reasoning\": \"SKIP_LLM\"}}"
+                        return "{}"
                 self._llm_clients[model] = _DummyLLM()
                 return self._llm_clients[model]
 
@@ -1094,7 +1094,7 @@ class Judge:
                 generation_params={
                     "model": client_model,
                     "temperature": 0.0,
-                    "max_tokens": 4096,
+                    "max_tokens": 3000,
                 }
             )
 
