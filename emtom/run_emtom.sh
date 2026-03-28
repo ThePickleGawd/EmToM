@@ -148,6 +148,7 @@ RETRY_VERIFICATION=""  # Path to failed ToM verification file
 NO_AUTO_RETRY=false  # Disable automatic retry on judge failure
 CATEGORY=""  # Task category: cooperative, competitive, or mixed
 SEED_TASKS_DIR=""  # Task pool used by the sampled_tasks selector
+NO_ICL=false  # Disable ICL (calibration-based sampled tasks with trajectories)
 SEED_PASS_RATIO="0.20"  # Logical seed mix for target-model passing tasks
 SEED_FAIL_RATIO="0.80"  # Logical seed mix for target-model failing tasks
 NO_VIDEO=true  # Disable video saving (default: true for speed)
@@ -512,6 +513,9 @@ run_generate() {
     fi
     if [ -n "$REMOVE_STEPS" ]; then
         EXTRA_ARGS+=(--remove $REMOVE_STEPS)
+    fi
+    if [ "$NO_ICL" = true ]; then
+        EXTRA_ARGS+=(--no-icl)
     fi
 
     # Use Hydra config system with custom overrides
@@ -1367,6 +1371,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-calibration)
             NO_CALIBRATION=true
+            shift
+            ;;
+        --no-icl)
+            NO_ICL=true
             shift
             ;;
         --max-workers)

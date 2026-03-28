@@ -58,6 +58,8 @@ def parse_extra_args():
     parser.add_argument("--seed-pass-ratio", type=float, default=0.20)
     parser.add_argument("--seed-fail-ratio", type=float, default=0.80)
     parser.add_argument("--sampled-tasks-dir", type=str, default=None)
+    parser.add_argument("--no-icl", action="store_true",
+                        help="Disable ICL: do not prepare calibration-based sampled tasks")
     parser.add_argument("--judge-threshold", type=float, default=None)
     parser.add_argument(
         "--difficulty",
@@ -462,33 +464,55 @@ def main() -> None:
 
     # When task-evolution is removed, skip seed task population and calibration guidance
     _skip_evolution = skip_steps and "task-evolution" in skip_steps
+    _no_icl = extra_args.no_icl if extra_args else False
     sampled_tasks_override = extra_args.sampled_tasks_dir if extra_args else None
     if _skip_evolution:
         pass  # No seed tasks — agent generates from scratch
     elif sampled_tasks_override:
+        # Explicit override — copy files as-is
         override_path = Path(sampled_tasks_override)
         override_files = [p for p in override_path.glob("*.json") if is_task_like_json(p)]
         selected = sorted(override_files)[:10]
         for task_path in selected:
-            # Copy as-is with original filenames (e.g. failed_1_50pct.json).
-            # Do NOT create task_N.json / task_N_fields.json duplicates.
             shutil.copy(task_path, sampled_tasks_dir / task_path.name)
+    elif _no_icl:
+        # --no-icl: use basic seed selection (no calibration trajectories)
+        if seed_tasks_dir is not None:
+            selection_config = SeedSelectionConfig(
+                tasks_dir=seed_tasks_dir,
+                target_model=target_model,
+                target_pass_rate=target_pass_rate,
+                current_pass_rate=calibration_stats["rate"],
+                category=category,
+                tom_level=current_k_level,
+                pass_seed_ratio=seed_pass_ratio,
+                fail_seed_ratio=seed_fail_ratio,
+            )
+            populate_sampled_tasks_dir(
+                sampled_tasks_dir,
+                selection_config,
+                sample_count=10,
+            )
     elif seed_tasks_dir is not None:
-        selection_config = SeedSelectionConfig(
-            tasks_dir=seed_tasks_dir,
-            target_model=target_model,
-            target_pass_rate=target_pass_rate,
-            current_pass_rate=calibration_stats["rate"],
-            category=category,
-            tom_level=current_k_level,
-            pass_seed_ratio=seed_pass_ratio,
-            fail_seed_ratio=seed_fail_ratio,
+        # Default: ICL with calibration trajectories
+        from emtom.evolve.icl_sampler import (
+            prepare_sampled_tasks_dir_from_calibration,
+            compute_pass_rate_from_calibration,
+            build_evolution_query,
         )
-        populate_sampled_tasks_dir(
-            sampled_tasks_dir,
-            selection_config,
-            sample_count=10,
+        prepare_sampled_tasks_dir_from_calibration(
+            tasks_dir=str(seed_tasks_dir),
+            model=target_model,
+            output_dir=str(sampled_tasks_dir),
+            fail_count=8,
+            pass_count=2,
         )
+        # Build and inject evolution query if not already set
+        if not query:
+            stats = compute_pass_rate_from_calibration(str(seed_tasks_dir), target_model)
+            query = build_evolution_query(stats["pass_rate"], target_model, generation_idx=1)
+    else:
+        pass  # No seed tasks dir — generate from scratch
 
     _write_template_file(working_dir / "template.json", agents_max)
     _write_taskgen_shim(working_dir)

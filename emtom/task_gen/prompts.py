@@ -178,12 +178,26 @@ def build_external_taskgen_prompt(
             ),
             "hard": (
                 "## Difficulty: HARD\n"
-                "- Prefer tasks that GPT-5.2 fails.\n"
-                "- Force genuine information bottlenecks, relay chains, or room-gated roles.\n"
-                "- Put the difficulty in agent secrets, hidden facts, and communication requirements rather than in extra physical clutter.\n"
-                "- Actively consider `remote_control`, `state_mirroring`, or `inverse_state` when they create a clean hidden dependency.\n"
-                "- Keep mechanics purposeful and avoid prescriptive secrets.\n"
-                "- Keep the physical core compact; strict K() evidence is easier to pass with one strong non-trivial K-chain than many weak ones."
+                "- Prefer tasks that the target model fails.\n"
+                "- Make the core difficulty a **belief-routing problem**, not a search problem.\n"
+                "- Use one or two decisive hidden facts, not a pile of decorative secrets.\n"
+                "- Constrained but meaningful communication — messages must carry load.\n"
+                "- Asymmetric room/action access that forces genuine delegation.\n"
+                "- Precise confirmation chains (K() goals) that require agents to reason about "
+                "what others have observed.\n"
+                "- Keep shared goals crisp enough that a sensible role decomposition is possible early.\n"
+                "- Actively consider `remote_control`, `state_mirroring`, or `inverse_state` when they "
+                "create a clean hidden dependency; do not default to only room/access constraints.\n\n"
+                "**Avoid** making tasks hard by:\n"
+                "- Piling on unrelated subtasks (goal load without epistemic depth).\n"
+                "- Broad object/room search (search burden without ToM).\n"
+                "- Too many overlapping private conflicts (clutter, not genuine tension).\n\n"
+                "## Diversity Requirement\n"
+                "Your task MUST differ from any sampled tasks in at least TWO of:\n"
+                "- Difficulty mechanism (different failure mode)\n"
+                "- Scenario theme (not another staging/inspection/cleanup/walkthrough task)\n"
+                "- ToM structure (different K-level or nesting pattern)\n"
+                "- Mechanic combination (try different mechanic stacks)"
             ),
         }
         default_difficulty_text = (
