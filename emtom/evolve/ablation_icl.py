@@ -45,7 +45,7 @@ TEST_MODEL = "gpt-5.4"
 CALIBRATION_MODEL = "gpt-5.4"  # ICL samples drawn from this model's results
 DIFFICULTY = "hard"
 TASKS_PER_CATEGORY = 25
-WORKERS_PER_GROUP = 24  # 2 groups × 24 = 48 total
+WORKERS_PER_GROUP = 16  # 2 groups × 16 = 32 total
 MAX_SPAWNS_MULTIPLIER = 5  # max spawns = tasks × this
 ICL_FAIL_COUNT = 8
 ICL_PASS_COUNT = 2

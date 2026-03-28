@@ -196,9 +196,12 @@ class DebugVideoUtil:
             y_offset += 25
 
         for idx, action in hl_actions.items():
-            text = f"Agent_{idx}: {action[0]}[{action[1]}]"
-            if len(text) > 50:
-                text = text[:46] + "...]"
+            import re as _re
+            target = action[1] or ""
+            target = _re.sub(r'(,\s*None)+$', '', target)
+            text = f"Agent_{idx}: {action[0]}[{target}]"
+            if len(text) > 60:
+                text = text[:56] + "...]"
             frames_concat = cv2.putText(
                 frames_concat,
                 text,
@@ -441,7 +444,11 @@ class PerAgentThirdPersonRecorder:
         agent_num = agent_id.split("_")[-1] if "_" in agent_id else agent_id
         agent_label = f"Agent {agent_num}"
         if action:
-            action_text = f"{action[0]}[{action[1]}]" if action[1] else action[0]
+            target = action[1] or ""
+            # Strip trailing ", None" args from Place-style actions
+            import re as _re
+            target = _re.sub(r'(,\s*None)+$', '', target)
+            action_text = f"{action[0]}[{target}]" if target else action[0]
             agent_label = f"{agent_label}: {action_text}"
 
         cv2.putText(
