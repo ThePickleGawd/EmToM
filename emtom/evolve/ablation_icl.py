@@ -44,8 +44,8 @@ GENERATOR_MODEL = "gpt-5.4"
 TEST_MODEL = "gpt-5.4"
 CALIBRATION_MODEL = "gpt-5.4"  # ICL samples drawn from this model's results
 DIFFICULTY = "hard"
-TASKS_PER_CATEGORY = 25
-WORKERS_PER_GROUP = 16  # 2 groups × 16 = 32 total
+TASKS_PER_CATEGORY = 50
+WORKERS_PER_GROUP = 8  # 4 groups × 8 = 32 total
 MAX_SPAWNS_MULTIPLIER = 5  # max spawns = tasks × this
 ICL_FAIL_COUNT = 8
 ICL_PASS_COUNT = 2
@@ -57,7 +57,7 @@ REMOVE_STEPS = ["pddl", "simulation", "tom"]
 BASE_OUTPUT = Path("outputs/evolve_ablation")
 
 CONDITIONS = ["icl", "no_icl"]
-CATEGORIES = ["cooperative"]
+CATEGORIES = ["cooperative", "mixed"]
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -213,6 +213,19 @@ def run_generation_group(
     gpu_ids = _detect_gpu_ids()
     print(f"[ablation:{group_name}] GPUs detected: {gpu_ids}")
 
+    # Copy submitted tasks to the main task pool
+    tasks_pool = Path(SEED_TASKS_DIR)
+    copied_files: set = set()
+
+    def _copy_new_tasks():
+        for jf in output_dir.glob("*.json"):
+            if jf.name not in copied_files:
+                dest = tasks_pool / jf.name
+                if not dest.exists():
+                    import shutil
+                    shutil.copy2(jf, dest)
+                copied_files.add(jf.name)
+
     total_spawned = 0
     active: List[Tuple[subprocess.Popen, object]] = []
     baseline_count = _count_valid_json(output_dir)
@@ -266,6 +279,7 @@ def run_generation_group(
                       f"got {new_count}/{num_tasks}")
                 break
 
+            _copy_new_tasks()
             time.sleep(15)
 
     except Exception:

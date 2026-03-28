@@ -81,6 +81,8 @@ detect_llm_provider() {
             echo "openai_chat" ;;
         llama-4-maverick|accounts/fireworks/models/llama4-maverick-instruct-basic)
             echo "openai_chat" ;;
+        gemini-pro|gemini-flash|gemini-3.1-pro-preview|gemini-3-flash-preview)
+            echo "openai_chat" ;;
         kimi-k2-thinking|moonshot.kimi-k2-thinking)
             echo "bedrock_kimi" ;;
         ministral-3-8b|ministral-3-14b|mistral-large-3|mistral.ministral-3-8b-instruct|mistral.ministral-3-14b-instruct|mistral.mistral-large-3-675b-instruct)
@@ -113,6 +115,9 @@ print_llm_options() {
     echo -e "│ DeepSeek V3.2             │ ${GREEN}deepseek-v3.2${NC}      │"
     echo -e "│ Llama 4 Maverick          │ ${GREEN}llama-4-maverick${NC}   │"
     echo -e "│ Qwen3 VL 235B             │ ${GREEN}qwen3-vl-235b${NC}      │"
+    echo -e "├───────────────────────────┼────────────────────┤"
+    echo -e "│ Gemini 3.1 Pro            │ ${GREEN}gemini-pro${NC}         │"
+    echo -e "│ Gemini 3 Flash            │ ${GREEN}gemini-flash${NC}       │"
     echo -e "├───────────────────────────┼────────────────────┤"
     echo -e "│ Mistral Large 3           │ ${GREEN}mistral-large-3${NC}    │"
     echo -e "│ Kimi K2 Thinking          │ ${GREEN}kimi-k2-thinking${NC}   │"

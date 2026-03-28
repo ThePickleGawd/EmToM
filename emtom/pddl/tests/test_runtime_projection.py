@@ -74,9 +74,10 @@ def test_runtime_projection_derives_nested_probe():
     assert outer.expected_response["predicate"] == "is_open"
     assert outer.expected_response["holds"] is True
     assert outer.expected_response["args"] == ["cabinet_27"]
-    assert "Post-episode literal ToM probe" not in outer.question
-    assert '"answer"' not in outer.question
+    assert "predict what agent_1 would report" in outer.question
+    assert "is open" in outer.question
     assert 'predicate "unknown"' in outer.question
+    assert 'report whether "cabinet 27 is open"' in inner.question
     assert inner.agent_id == "agent_1"
 
 

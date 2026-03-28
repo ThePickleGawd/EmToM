@@ -95,6 +95,11 @@ class OpenAIChat(BaseLLM):
         return normalized.startswith("accounts/fireworks/models/")
 
     @staticmethod
+    def _is_gemini_model(model: str) -> bool:
+        normalized = (model or "").strip().lower()
+        return normalized.startswith("gemini-")
+
+    @staticmethod
     def _get_model_api_style(model: str) -> str:
         """Determine API parameter style for a model.
 
@@ -106,7 +111,9 @@ class OpenAIChat(BaseLLM):
         normalized = (model or "").strip().lower()
         if normalized.startswith("accounts/fireworks/models/"):
             return "fireworks"
-        if "gpt-5" in normalized:
+        if normalized.startswith("gemini-"):
+            return "openai"
+        if "gpt-5" in normalized or normalized in ("o3", "o3-mini", "o4-mini"):
             return "openai_new"
         return "openai"
 
@@ -179,6 +186,14 @@ class OpenAIChat(BaseLLM):
                 os.getenv("FIREWORKS_BASE_URL")
                 or os.getenv("OPENAI_BASE_URL")
                 or "https://api.fireworks.ai/inference/v1"
+            ).strip()
+        elif self._is_gemini_model(model_name):
+            api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+            if not api_key:
+                raise ValueError("No GEMINI_API_KEY provided")
+            base_url = (
+                os.getenv("GEMINI_BASE_URL")
+                or "https://generativelanguage.googleapis.com/v1beta/openai/"
             ).strip()
         else:
             api_key = (os.getenv("OPENAI_API_KEY") or "").strip()

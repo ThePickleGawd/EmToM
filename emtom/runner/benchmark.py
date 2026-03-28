@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 from omegaconf import DictConfig
 
 from emtom.actions.baseline_tools import ReadAgentTrajectoryTool
+from emtom.pddl.domain import get_predicates_for_prompt
 from emtom.vision import VisualObservationStore
 
 from .base import EMTOMBaseRunner
@@ -28,6 +29,87 @@ if TYPE_CHECKING:
 
 class BenchmarkExecutionError(RuntimeError):
     """Fatal benchmark execution error."""
+
+
+def _normalize_probe_answer(response_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a probe answer into the fixed comparison schema."""
+    if not isinstance(response_data, dict):
+        response_data = {}
+
+    predicate = str(response_data.get("predicate", "")).strip()
+    holds_raw = response_data.get("holds")
+    raw_args = response_data.get("args", []) or []
+    args = [str(x).strip() for x in raw_args]
+
+    if isinstance(holds_raw, bool):
+        holds = holds_raw
+    elif isinstance(holds_raw, str):
+        lowered = holds_raw.strip().lower()
+        if lowered == "true":
+            holds = True
+        elif lowered == "false":
+            holds = False
+        else:
+            holds = None
+    else:
+        holds = None
+
+    return {
+        "predicate": predicate,
+        "holds": holds,
+        "args": args,
+    }
+
+
+def _probe_answers_match(
+    response_data: Dict[str, Any],
+    target_data: Dict[str, Any],
+) -> bool:
+    """Return True when two probe answers match exactly under the JSON schema."""
+    return _normalize_probe_answer(response_data) == _normalize_probe_answer(target_data)
+
+
+def _probe_child_source_pddl(source_pddl: str) -> Optional[str]:
+    """Return the immediate inner K()/B() formula for a nested probe."""
+    if not source_pddl:
+        return None
+
+    from emtom.pddl.dsl import Believes, Knows, parse_goal_string
+
+    try:
+        parsed = parse_goal_string(source_pddl)
+    except Exception:
+        return None
+
+    if isinstance(parsed, (Knows, Believes)) and isinstance(parsed.inner, (Knows, Believes)):
+        return parsed.inner.to_pddl()
+    return None
+
+
+def _build_probe_dependency_maps(
+    probes: List[Any],
+) -> Tuple[Dict[str, str], Dict[str, str], Set[str]]:
+    """Build child/parent maps and identify scored root probes."""
+    probe_by_source = {
+        probe.source_pddl: probe.probe_id
+        for probe in probes
+        if getattr(probe, "source_pddl", "")
+    }
+    child_by_probe: Dict[str, str] = {}
+    parent_by_probe: Dict[str, str] = {}
+
+    for probe in probes:
+        child_source = _probe_child_source_pddl(getattr(probe, "source_pddl", ""))
+        if not child_source:
+            continue
+        child_id = probe_by_source.get(child_source)
+        if not child_id:
+            continue
+        child_by_probe[probe.probe_id] = child_id
+        parent_by_probe[child_id] = probe.probe_id
+
+    root_probe_ids = {probe.probe_id for probe in probes if probe.probe_id not in parent_by_probe}
+    return child_by_probe, parent_by_probe, root_probe_ids
 
 
 class BenchmarkRunner(EMTOMBaseRunner):
@@ -1544,6 +1626,8 @@ class BenchmarkRunner(EMTOMBaseRunner):
                 "summary": {"probe_count": 0, "supported_probe_count": 0, "passed_count": 0},
             }
 
+        child_by_probe, _parent_by_probe, scored_root_probe_ids = _build_probe_dependency_maps(probes)
+
         def check_fn(pred_name: str, args: Tuple[str, ...]) -> bool:
             prop = {"property": pred_name}
             if args:
@@ -1554,82 +1638,119 @@ class BenchmarkRunner(EMTOMBaseRunner):
             return bool(result and result.get("success", False))
 
         results: List[Dict[str, Any]] = []
-        supported_count = 0
-        passed_count = 0
+        scored_supported_count = 0
+        scored_passed_count = 0
+        normalized_answers: Dict[str, Dict[str, Any]] = {}
 
-        probe_groups: Dict[str, List[Any]] = defaultdict(list)
+        depth_groups: Dict[int, List[Any]] = defaultdict(list)
         for probe in probes:
-            probe_groups[probe.agent_id].append(probe)
+            depth_groups[int(getattr(probe, "depth", 0) or 0)].append(probe)
 
-        for agent_id, agent_probes in probe_groups.items():
-            batch_raw_response: Any = None
-            batch_answers: Dict[str, Dict[str, Any]] = {}
-            batch_error: Optional[str] = None
+        for depth in sorted(depth_groups.keys()):
+            probe_groups: Dict[str, List[Any]] = defaultdict(list)
+            for probe in depth_groups[depth]:
+                probe_groups[probe.agent_id].append(probe)
 
-            supported_agent_probes = [probe for probe in agent_probes if probe.supported]
-            if supported_agent_probes:
-                planner = self.planners.get(int(agent_id.split("_", 1)[1])) if agent_id else None
-                if planner is None or not hasattr(planner, "llm"):
-                    batch_error = "No LLM planner available for probed agent."
-                else:
-                    probe_prompt = self._build_literal_tom_probe_prompt(
-                        agent_id,
-                        supported_agent_probes,
-                        instruction,
-                    )
-                    try:
-                        batch_raw_response = planner.llm.generate(probe_prompt)
-                        response_data = self._extract_probe_json(batch_raw_response)
-                        batch_answers = self._extract_probe_answers(response_data)
-                    except Exception as exc:
-                        batch_error = f"Probe generation failed: {exc}"
+            for agent_id, agent_probes in probe_groups.items():
+                batch_raw_response: Any = None
+                batch_answers: Dict[str, Dict[str, Any]] = {}
+                batch_error: Optional[str] = None
 
-                    # Append probe prompt + response to the agent's prompt file
-                    self._append_probe_to_prompt_file(
-                        agent_id, probe_prompt, batch_raw_response, batch_error,
-                    )
+                supported_agent_probes = [probe for probe in agent_probes if probe.supported]
+                if supported_agent_probes:
+                    planner = self.planners.get(int(agent_id.split("_", 1)[1])) if agent_id else None
+                    if planner is None or not hasattr(planner, "llm"):
+                        batch_error = "No LLM planner available for probed agent."
+                    else:
+                        probe_prompt = self._build_literal_tom_probe_prompt(
+                            agent_id,
+                            supported_agent_probes,
+                            instruction,
+                        )
+                        try:
+                            batch_raw_response = planner.llm.generate(probe_prompt)
+                            response_data = self._extract_probe_json(batch_raw_response)
+                            batch_answers = self._extract_probe_answers(response_data)
+                        except Exception as exc:
+                            batch_error = f"Probe generation failed: {exc}"
 
-            for probe in agent_probes:
-                result_entry: Dict[str, Any] = {
-                    "probe_id": probe.probe_id,
-                    "agent_id": probe.agent_id,
-                    "source_pddl": probe.source_pddl,
-                    "question": probe.question,
-                    "supported": probe.supported,
-                }
-                if not probe.supported:
-                    result_entry["status"] = "unsupported"
-                    result_entry["reason"] = probe.unsupported_reason
+                        self._append_probe_to_prompt_file(
+                            agent_id, probe_prompt, batch_raw_response, batch_error,
+                        )
+
+                for probe in agent_probes:
+                    counted_in_score = probe.probe_id in scored_root_probe_ids
+                    result_entry: Dict[str, Any] = {
+                        "probe_id": probe.probe_id,
+                        "agent_id": probe.agent_id,
+                        "source_pddl": probe.source_pddl,
+                        "question": probe.question,
+                        "supported": probe.supported,
+                        "counted_in_score": counted_in_score,
+                    }
+                    if not probe.supported:
+                        result_entry["status"] = "unsupported"
+                        result_entry["reason"] = probe.unsupported_reason
+                        results.append(result_entry)
+                        continue
+
+                    if batch_error is not None:
+                        result_entry["status"] = "error"
+                        result_entry["reason"] = batch_error
+                        result_entry["raw_response"] = batch_raw_response
+                        results.append(result_entry)
+                        continue
+
+                    response_data = batch_answers.get(probe.probe_id, {})
+                    normalized_answer = _normalize_probe_answer(response_data)
+                    normalized_answers[probe.probe_id] = normalized_answer
+
+                    child_probe_id = child_by_probe.get(probe.probe_id)
+                    if child_probe_id:
+                        target_answer = normalized_answers.get(child_probe_id)
+                        if target_answer is None:
+                            passed = False
+                            details = {
+                                "behavioral_target_missing": True,
+                                "target_probe_id": child_probe_id,
+                                "parsed_response": normalized_answer,
+                            }
+                        else:
+                            passed = _probe_answers_match(normalized_answer, target_answer)
+                            details = {
+                                "behavioral_target_probe_id": child_probe_id,
+                                "behavioral_target_response": dict(target_answer),
+                                "parsed_response": normalized_answer,
+                            }
+                    else:
+                        passed, details = evaluate_literal_tom_probe(probe, response_data, check_fn)
+                        details["parsed_response"] = normalized_answer
+
+                    if counted_in_score:
+                        scored_supported_count += 1
+                        if passed:
+                            scored_passed_count += 1
+
+                    result_entry.update({
+                        "status": "passed" if passed else "failed",
+                        "raw_response": batch_raw_response,
+                        "details": details,
+                    })
                     results.append(result_entry)
-                    continue
 
-                supported_count += 1
-                if batch_error is not None:
-                    result_entry["status"] = "error"
-                    result_entry["reason"] = batch_error
-                    result_entry["raw_response"] = batch_raw_response
-                    results.append(result_entry)
-                    continue
-
-                response_data = batch_answers.get(probe.probe_id, {})
-                passed, details = evaluate_literal_tom_probe(probe, response_data, check_fn)
-                if passed:
-                    passed_count += 1
-                result_entry.update({
-                    "status": "passed" if passed else "failed",
-                    "raw_response": batch_raw_response,
-                    "details": details,
-                })
-                results.append(result_entry)
-
-        score = (passed_count / supported_count) if supported_count else None
+        score = (
+            scored_passed_count / scored_supported_count
+            if scored_supported_count
+            else None
+        )
         return {
             "score": score,
             "results": results,
             "summary": {
                 "probe_count": len(probes),
-                "supported_probe_count": supported_count,
-                "passed_count": passed_count,
+                "supported_probe_count": scored_supported_count,
+                "passed_count": scored_passed_count,
+                "intermediate_probe_count": len(probes) - scored_supported_count,
             },
         }
 
@@ -1651,13 +1772,33 @@ class BenchmarkRunner(EMTOMBaseRunner):
             'Respond with JSON only: {"answers":[{"probe_id":"k_probe_X","predicate":"<predicate_name>|unknown","holds":true|false|null,"args":["entity_or_target", ...]}, ...]}'
         )
         probe_lines.append("Use predicate \"unknown\" with holds null and empty args if the agent does not know.")
+        probe_lines.append("Allowed benchmark predicates and signatures:")
+        probe_lines.append(get_predicates_for_prompt())
+        probe_lines.append("For every answer, use the exact predicate name and the exact argument order required by that predicate.")
         for probe in probes:
-            probe_lines.append(f"- {probe.question}")
+            probe_lines.append(f"- {self._format_literal_tom_probe_question(probe)}")
         return (
             f"{context}\n\n"
             "The episode is over. Do not propose any more actions.\n"
             "Using only the episode context above, provide the requested structured report.\n"
             f"{chr(10).join(probe_lines)}\n"
+        )
+
+    @staticmethod
+    def _format_literal_tom_probe_question(probe: Any) -> str:
+        """Format a probe using runtime semantics instead of persisted text."""
+        ordered_entities = ", ".join(getattr(probe, "expected_response", {}).get("args", []) or []) or "(none)"
+        fact_text = getattr(probe, "fact_natural_language", "").strip() or getattr(probe, "fact_pddl", "")
+        subject_agents = list(getattr(probe, "subject_agents", ()) or [])
+        if subject_agents:
+            next_agent = subject_agents[0]
+            return (
+                f'{probe.probe_id}: Predict what {next_agent} would report about "{fact_text}". '
+                f"Use ordered entities [{ordered_entities}] and the benchmark predicate vocabulary above."
+            )
+        return (
+            f'{probe.probe_id}: Report whether "{fact_text}" holds for ordered entities [{ordered_entities}]. '
+            "Use the benchmark predicate vocabulary above."
         )
 
     def _append_probe_to_prompt_file(

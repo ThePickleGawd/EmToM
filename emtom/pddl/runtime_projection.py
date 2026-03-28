@@ -291,21 +291,23 @@ def _build_probe(formula: Knows, *, probe_idx: int, owner: Optional[str]) -> Lit
     fact_nl = goal_to_natural_language(fact_formula)
     predicate, args, negated = _fact_formula_to_probe_fields(fact_formula)
     target_entities = ", ".join(args) if args else "(none)"
-    relation_text = (
-        f"{outer_agent} knows that {subject_agents[0]} knows"
-        if len(subject_agents) == 1
-        else f"{outer_agent} knows the nested chain {' -> '.join(subject_agents)} knows"
-        if subject_agents
-        else f"{outer_agent} knows"
-    )
-
-    question = (
-        f"Probe {probe_idx}: {relation_text} a fact about ordered entities [{target_entities}]. "
-        "Report which benchmark predicate applies to those entities and whether it holds. "
-        "The expected argument order is fixed as listed. "
-        'If unknown, return predicate "unknown" and holds null. '
-        'JSON shape: {"probe_id":"k_probe_X","predicate":"<predicate_name>|unknown","holds":true|false|null,"args":["entity_or_target", ...]}'
-    )
+    if subject_agents:
+        next_agent = subject_agents[0]
+        question = (
+            f"Probe {probe_idx}: predict what {next_agent} would report about "
+            f'"{fact_nl}" for ordered entities [{target_entities}]. '
+            "The expected argument order is fixed as listed. "
+            'If unknown, return predicate "unknown" and holds null. '
+            'JSON shape: {"probe_id":"k_probe_X","predicate":"<predicate_name>|unknown","holds":true|false|null,"args":["entity_or_target", ...]}'
+        )
+    else:
+        question = (
+            f'Probe {probe_idx}: report whether "{fact_nl}" holds for ordered entities '
+            f"[{target_entities}]. "
+            "The expected argument order is fixed as listed. "
+            'If unknown, return predicate "unknown" and holds null. '
+            'JSON shape: {"probe_id":"k_probe_X","predicate":"<predicate_name>|unknown","holds":true|false|null,"args":["entity_or_target", ...]}'
+        )
 
     return LiteralToMProbe(
         probe_id=f"k_probe_{probe_idx}",
