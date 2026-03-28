@@ -1,10 +1,14 @@
 from emtom.task_gen.prompts import build_external_taskgen_prompt
 
 
-def test_build_external_taskgen_prompt_inlines_runtime_context():
+def test_build_external_taskgen_prompt_inlines_runtime_context(tmp_path):
+    sampled_dir = tmp_path / "sampled_tasks"
+    sampled_dir.mkdir(parents=True)
+    (sampled_dir / "failed_example.json").write_text("{}", encoding="utf-8")
+
     prompt = build_external_taskgen_prompt(
-        working_dir="/tmp/taskgen",
-        task_file="/tmp/taskgen/working_task.json",
+        working_dir=str(tmp_path),
+        task_file=str(tmp_path / "working_task.json"),
         category="cooperative",
         num_tasks=1,
         agents_min=2,
@@ -95,3 +99,23 @@ def test_build_external_taskgen_prompt_warns_against_hidden_object_id_leaks():
     assert "Do NOT leak hidden target object IDs" in prompt
     assert "NEVER add ignorance lines like 'You do not know where ...'" in prompt
     assert "NEVER add epistemic coaching like 'By the end, you must be confident ...'" in prompt
+
+
+def test_build_external_taskgen_prompt_encourages_full_supported_mechanic_set_for_hard_tasks():
+    prompt = build_external_taskgen_prompt(
+        working_dir="/tmp/taskgen",
+        task_file="/tmp/taskgen/working_task.json",
+        category="cooperative",
+        num_tasks=1,
+        agents_min=2,
+        agents_max=4,
+        subtasks_min=2,
+        subtasks_max=5,
+        difficulty="hard",
+    )
+
+    assert "remote_control" in prompt
+    assert "state_mirroring" in prompt
+    assert "inverse_state" in prompt
+    assert "the affected agent's secret may briefly state that mechanic fact in plain language" in prompt
+    assert "Use the mechanic that creates the cleanest ToM bottleneck for the scene." in prompt

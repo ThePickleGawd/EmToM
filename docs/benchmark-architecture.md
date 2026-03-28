@@ -48,6 +48,8 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - `standard` must run with partial observability and per-agent asymmetric world graphs.
 - `baseline` and `full_info` must run with full observability and shared world-state visibility. Their purpose is to remove information bottlenecks, not preserve them.
 - Under partial observability, each agent's world graph must be private: only that agent's own observations may add or update entities. Communication may inform planning, but it must not directly mutate the recipient's world graph.
+- Under the original PARTNR partial-observability setting, each agent starts with the static house layout only: rooms, floors, furniture, and receptacles are known up front, but movable objects are absent until that agent personally observes them.
+- Prompt rendering should show newly observed movable objects by their exact runtime handles in the agent's private known-world view.
 
 ## Task Generation Gates
 
@@ -75,6 +77,7 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - Prefer direct data flow over hidden coupling.
 - Treat verification as a hard gate, not a warning system.
 - Task authoring currently supports only these mechanics: `room_restriction`, `limited_bandwidth`, `restricted_communication`, `remote_control`, `state_mirroring`, and `inverse_state`.
+- Task-generation prompts should encourage diverse use of all six supported mechanics and should not overfit to the historically dominant room/access stack.
 - Task-added items are temporarily hidden from authoring. Do not rely on `items`, `locked_containers`, or `UseItem` in newly generated benchmark tasks.
 - Keep `problem_pddl` as the single authored source of epistemic structure and goals.
 - Generate `problem_pddl :objects` and `:init` deterministically from the loaded scene snapshot and mechanic bindings instead of hand-authoring scene state.
