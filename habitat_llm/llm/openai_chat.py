@@ -76,13 +76,12 @@ class OpenAIChat(BaseLLM):
         # Fireworks-hosted Kimi K2.5
     }
 
-    # GPT-5.4 should use the Responses API with an explicit reasoning budget.
+    # Models that use the Responses API with explicit reasoning budget.
     REASONING_MODEL_CONFIG: Dict[str, Dict[str, Any]] = {
         "gpt-5.4": {
             "effort": "medium",
-            # Per OpenAI docs, this caps total generated output including reasoning.
             "max_output_tokens": 2048,
-        }
+        },
     }
 
     @classmethod
@@ -93,9 +92,23 @@ class OpenAIChat(BaseLLM):
     @staticmethod
     def _is_fireworks_model(model: str) -> bool:
         normalized = (model or "").strip().lower()
-        return (
-            normalized.startswith("accounts/fireworks/models/")
-        )
+        return normalized.startswith("accounts/fireworks/models/")
+
+    @staticmethod
+    def _get_model_api_style(model: str) -> str:
+        """Determine API parameter style for a model.
+
+        Returns one of:
+            'openai_new' — gpt-5.x: uses max_completion_tokens, no stop
+            'fireworks'  — Fireworks-hosted: skip max_tokens entirely (reasoning models)
+            'openai'     — everything else: standard max_tokens + stop
+        """
+        normalized = (model or "").strip().lower()
+        if normalized.startswith("accounts/fireworks/models/"):
+            return "fireworks"
+        if "gpt-5" in normalized:
+            return "openai_new"
+        return "openai"
 
     @classmethod
     def _get_reasoning_model_config(cls, model: str) -> Optional[Dict[str, Any]]:
@@ -232,18 +245,13 @@ class OpenAIChat(BaseLLM):
             image_detail = "low"  # high/low/auto
             messages.append(generate_message(prompt, image_detail=image_detail))
 
-        # Pass temperature to ensure non-deterministic exploration
-        # Note: Some models (o1, o3, gpt-5) only support temperature=1
-        model_name = params["model"].lower()
         temperature = params.get("temperature", 0.7)
-
-        # Only models with explicit reasoning config (gpt-5.4) use the Responses API
-        # and reject max_tokens/stop/temperature. Other gpt-5.x models (gpt-5.2, gpt-5-mini)
-        # use normal chat completions.
         reasoning_cfg = self._get_reasoning_model_config(params["model"])
-        uses_fixed_temp = reasoning_cfg is not None
+        api_style = self._get_model_api_style(params["model"])
+        token_limit = params.get("max_tokens")
 
         if reasoning_cfg:
+            # Responses API path (gpt-5.4 with reasoning)
             response_kwargs: Dict[str, Any] = {
                 "model": params["model"],
                 "input": self._to_response_input(messages),
@@ -258,27 +266,30 @@ class OpenAIChat(BaseLLM):
             response = self.client.responses.create(**response_kwargs)
             text_response = self._extract_response_text(response)
         else:
+            # Chat Completions API path
             completion_kwargs: Dict[str, Any] = {
                 "model": params["model"],
                 "messages": messages,
                 "timeout": request_timeout,
             }
-            is_fireworks = self._is_fireworks_model(params["model"])
-            is_gpt5_family = "gpt-5" in model_name
-            token_limit = params.get("max_tokens")
-            if is_fireworks:
+
+            # Token limit + stop: depends on provider/model family
+            if api_style == "fireworks":
                 pass  # Fireworks reasoning models need unrestricted output
-            elif is_gpt5_family:
-                # All gpt-5.x models reject max_tokens and stop
+            elif api_style == "openai_new":
+                # gpt-5.x: max_completion_tokens, no stop
                 if token_limit is not None:
                     completion_kwargs["max_completion_tokens"] = token_limit
             else:
+                # Standard OpenAI / other providers
                 if token_limit is not None:
                     completion_kwargs["max_tokens"] = token_limit
-            if stop is not None and not is_fireworks and not is_gpt5_family:
-                completion_kwargs["stop"] = stop
-            if not uses_fixed_temp:
-                completion_kwargs["temperature"] = temperature
+                if stop is not None:
+                    completion_kwargs["stop"] = stop
+
+            # Temperature: all chat-completion models support it
+            completion_kwargs["temperature"] = temperature
+
             response = self.client.chat.completions.create(**completion_kwargs)
             text_response = response.choices[0].message.content
         self.response = text_response

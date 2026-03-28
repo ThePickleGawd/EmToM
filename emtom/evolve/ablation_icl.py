@@ -40,7 +40,7 @@ from emtom.evolve.icl_sampler import (
 
 # ── Config ──────────────────────────────────────────────────────────────────
 SEED_TASKS_DIR = "data/emtom/tasks"
-GENERATOR_MODEL = "gpt-5.2"
+GENERATOR_MODEL = "gpt-5.4"
 TEST_MODEL = "gpt-5.4"
 CALIBRATION_MODEL = "gpt-5.4"  # ICL samples drawn from this model's results
 DIFFICULTY = "hard"
