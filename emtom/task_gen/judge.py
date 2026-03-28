@@ -1094,7 +1094,7 @@ class Judge:
                 generation_params={
                     "model": client_model,
                     "temperature": 0.0,
-                    "max_tokens": 3000,
+                    "max_tokens": 4096,
                 }
             )
 

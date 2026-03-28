@@ -53,6 +53,7 @@ Generate {num_tasks} quality benchmark tasks.
 - NEVER use prescriptive language: 'Tell your partner', 'Ask them', 'Leave it at', 'Coordinate with', 'You should'.
 - NEVER add ignorance lines like 'You do not know where ...', 'You do not know which ...', or 'You do not know whether ...'. If a fact is unknown to the agent, omit it.
 - NEVER add epistemic coaching like 'By the end, you must be confident ...' or 'Epistemic probe: ...' to `agent_secrets`.
+- If a task uses `inverse_state`, `state_mirroring`, or `remote_control`, the affected agent's secret may briefly state that mechanic fact in plain language, but it must NOT tell the agent what message or plan to use.
 - If an agent lacks an object's identity or location, do NOT reveal the exact runtime object ID in that agent's secret or in the public `task`. Prefer role/type language in the public task and keep exact IDs only in the secrets of agents who actually know them.
 - BUG WARNING: writing 'agent_X cannot enter room_Y' in agent_Z's secrets is parsed as agent_Z's own restriction. Use 'agent_X is barred from room_Y' when describing another agent's restriction.
 
@@ -80,19 +81,21 @@ Generate {num_tasks} quality benchmark tasks.
 - Keep the physical execution short and direct. Prefer tasks that baseline/full-info can finish in roughly 6-10 turns.
 - Prefer one clean asymmetry over stacked brittle mechanics. One room/access blocker plus one decisive hidden fact is better than a long chain of dependencies.
 - If you want baseline to pass but standard to fail, first improve the agent secrets and information split. Do not default to piling on extra objects, rooms, or mechanics.
+- For harder tasks, actively consider the full supported mechanic set. `remote_control`, `state_mirroring`, and `inverse_state` are valid choices when they create one decisive hidden semantic twist or confirmation dependency without bloating the physical core.
 - Use exact scene IDs in `problem_pddl` and in the secrets of agents who already know the fact. Do NOT leak hidden target object IDs in the public `task` or in any secret for an agent who does not already know that fact.
 - Avoid relying on vague aliases like 'display table' or hidden trigger objects whose exact runtime ID is hard to recover.
 - NEVER design tasks requiring object handoff through a shared room, agents try Place[obj, on, room_name] and fail at runtime.
 - If a task passes `judge` but fails `test_task`, simplify the physical core first before adding more ToM structure.
 
 ## Empirical Winning Formula (from 46 tasks that passed test_task)
-These patterns reliably pass both judge AND the test gate (baseline=pass, standard=fail). **Start from one of these, then vary.**
+This is the most common solvable pattern in the current pool, not the only acceptable stack. Use it as one reference point, then vary.
 
-**Mechanics (always):** `room_restriction` + `limited_bandwidth` (1 msg per agent). Optionally add `restricted_communication`.
+**Most common mechanics:** `room_restriction` + `limited_bandwidth` (1 msg per agent). Optionally add `restricted_communication`.
 **Physical goals:** 3-5 for cooperative, 6-9 for mixed. Keep physical actions simple (Place, Open, Close).
 **Agents:** 2-3 agents. 3 agents works best for mixed (one per hidden role).
 **Room restrictions:** 2 restrictions (each agent barred from one room). This creates natural information gaps.
 **Key insight:** The decisive physical action must depend on a fact observable ONLY from a restricted room. The agent who CAN observe it must communicate it within the 1-message limit.
+**Hard-task variation:** Also consider `remote_control`, `state_mirroring`, and `inverse_state` when one of them creates a cleaner hidden dependency than another room/access bottleneck.
 
 **Common failure modes to avoid:**
 - Cooperative tasks are "too easy" 67% of the time → the information gap isn't strong enough. Use non-binary choices (which of 3+ objects/surfaces) so the standard agent can't guess.
@@ -103,7 +106,7 @@ Vary at least TWO of these dimensions each task. Check sampled tasks to avoid du
 - Object type: plates, cups, bottles, vases, toys, boxes, laptops, candle holders, or scene-native alternatives.
 - Room pair: kitchen<->bedroom, office<->dining, garage<->living, or other scene-supported topologies.
 - Agent count: 2-3 agents (not 4+ unless the scene has 4+ rooms with distinct objects).
-- Mechanic stack: room_restriction + limited_bandwidth(1); or add restricted_communication for relay chains.
+- Mechanic stack: draw from the full supported set: `room_restriction`, `limited_bandwidth`, `restricted_communication`, `remote_control`, `state_mirroring`, `inverse_state`. Use the mechanic that creates the cleanest ToM bottleneck for the scene.
 - Goal structure: placement + state change + K(); or two placements + K(). 3-5 goals for cooperative, 6-9 for mixed.
 - Knowledge split: A knows object / B knows target; A knows both but cannot reach; B can reach but knows neither; both know partial info.
 - Narrative framing: household chore, museum setup, safety inspection, party prep, moving day, or another concrete scene-grounded story.
@@ -178,6 +181,7 @@ def build_external_taskgen_prompt(
                 "- Prefer tasks that GPT-5.2 fails.\n"
                 "- Force genuine information bottlenecks, relay chains, or room-gated roles.\n"
                 "- Put the difficulty in agent secrets, hidden facts, and communication requirements rather than in extra physical clutter.\n"
+                "- Actively consider `remote_control`, `state_mirroring`, or `inverse_state` when they create a clean hidden dependency.\n"
                 "- Keep mechanics purposeful and avoid prescriptive secrets.\n"
                 "- Keep the physical core compact; strict K() evidence is easier to pass with one strong non-trivial K-chain than many weak ones."
             ),
@@ -242,21 +246,24 @@ def build_external_taskgen_prompt(
 
     sampled_task_block = ""
     sampled_files_block = ""
-    if not skip_evolution and seed_tasks_dir:
+    # Only show sampled task guidance if the sampled_tasks directory has files.
+    sampled_dir = Path(working_dir) / "sampled_tasks"
+    has_sampled_files = sampled_dir.exists() and any(sampled_dir.glob("*.json"))
+    if not skip_evolution and has_sampled_files:
         target_model = (calibration_stats or {}).get("model", "unknown")
         sampled_task_block = (
             "\n\n## Sampled Task Context\n"
-            f"`{seed_tasks_dir}` is used to populate `{Path(seed_tasks_dir).name}` examples for inspiration.\n"
-            f"Target model: {target_model}. Logical sampled-task mix: fail {seed_fail_ratio:.0%}, pass {seed_pass_ratio:.0%}.\n"
-            "You should inspect sampled tasks before authoring. Read ALL 10 `task_*_fields.json` files, not a prose summary.\n"
-            "Each filtered file contains only the fields you should study: `task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents`.\n"
-            "Open the matching raw `task_*.json` only when you want to inspect `calibration` and saved benchmark behavior.\n"
+            f"Target model: {target_model}. Sampled-task mix: fail {seed_fail_ratio:.0%}, pass {seed_pass_ratio:.0%}.\n"
+            "Inspect sampled tasks before authoring. Read all `*.json` files in `sampled_tasks/`.\n"
+            "Files named `failed_*` have a `_benchmark_result` with the agent's trajectory.\n"
+            "Files named `passed_*` show tasks the target model could solve.\n"
+            "Study `task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents`.\n"
             "Borrow only structural patterns that look empirically solvable under test_task, especially short physical cores, strong secrets, and clean mechanic usage.\n"
+            "Do not infer that rare mechanics are forbidden just because the sampled pool underuses them. The supported authoring set is `room_restriction`, `limited_bandwidth`, `restricted_communication`, `remote_control`, `state_mirroring`, and `inverse_state`.\n"
             "Start each task from the scene-grounded template in working_task.json. Do not copy a seed task directly."
         )
         sampled_files_block = (
-            f"- `{working_dir}/sampled_tasks/task_*_fields.json`: filtered sampled-task views. Read all 10 before authoring.\n"
-            f"- `{working_dir}/sampled_tasks/task_*.json`: raw sampled task JSONs. Open these only when you need `calibration` or extra context.\n"
+            f"- `{working_dir}/sampled_tasks/*.json`: sampled tasks with benchmark results. Read all before authoring.\n"
             "- Study `task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents` first.\n"
         )
 

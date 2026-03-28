@@ -237,10 +237,11 @@ class OpenAIChat(BaseLLM):
         model_name = params["model"].lower()
         temperature = params.get("temperature", 0.7)
 
-        # Models that don't support custom temperature
-        fixed_temp_models = ["o1", "o3", "gpt-5"]
-        uses_fixed_temp = any(m in model_name for m in fixed_temp_models)
+        # Only models with explicit reasoning config (gpt-5.4) use the Responses API
+        # and reject max_tokens/stop/temperature. Other gpt-5.x models (gpt-5.2, gpt-5-mini)
+        # use normal chat completions.
         reasoning_cfg = self._get_reasoning_model_config(params["model"])
+        uses_fixed_temp = reasoning_cfg is not None
 
         if reasoning_cfg:
             response_kwargs: Dict[str, Any] = {
@@ -262,11 +263,19 @@ class OpenAIChat(BaseLLM):
                 "messages": messages,
                 "timeout": request_timeout,
             }
-            # Fireworks reasoning models (kimi) need unrestricted output to
-            # fit chain-of-thought + JSON. Only send max_tokens/stop to
-            # non-Fireworks providers where they work as expected.
-            if not self._is_fireworks_model(params["model"]):
-                completion_kwargs["max_tokens"] = params.get("max_tokens")
+            is_fireworks = self._is_fireworks_model(params["model"])
+            is_gpt5_family = "gpt-5" in model_name
+            token_limit = params.get("max_tokens")
+            if is_fireworks:
+                pass  # Fireworks reasoning models need unrestricted output
+            elif is_gpt5_family:
+                # All gpt-5.x models reject max_tokens and stop
+                if token_limit is not None:
+                    completion_kwargs["max_completion_tokens"] = token_limit
+            else:
+                if token_limit is not None:
+                    completion_kwargs["max_tokens"] = token_limit
+            if stop is not None and not is_fireworks and not is_gpt5_family:
                 completion_kwargs["stop"] = stop
             if not uses_fixed_temp:
                 completion_kwargs["temperature"] = temperature
