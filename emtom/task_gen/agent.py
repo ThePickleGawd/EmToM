@@ -615,6 +615,8 @@ class TaskGeneratorAgent:
                 )
             if "test" in self.skip_steps:
                 skip_notice += "- test_task is disabled. You can skip `test_task[]` and go directly to `submit_task[]`.\n"
+            if "baseline" in self.skip_steps:
+                skip_notice += "- Baseline (full-info) run is disabled. `test_task[]` only runs standard mode. The gate passes if standard fails.\n"
             system_prompt += skip_notice
 
         self.messages = [
@@ -1920,8 +1922,11 @@ SUMMARY:"""
 
         self._last_agent_models = self._determine_agent_models(task_data)
 
+        _skip = self.skip_steps or []
+        run_modes = ("standard",) if "baseline" in _skip else ("standard", "baseline")
+
         try:
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with ThreadPoolExecutor(max_workers=len(run_modes)) as executor:
                 futures = {
                     run_mode: executor.submit(
                         self._run_benchmark_mode,
@@ -1930,7 +1935,7 @@ SUMMARY:"""
                         run_mode,
                         run_dir / run_mode,
                     )
-                    for run_mode in ("standard", "baseline")
+                    for run_mode in run_modes
                 }
                 mode_results = {
                     run_mode: future.result()
@@ -1952,21 +1957,45 @@ SUMMARY:"""
             }
 
         category = task_data.get("category", "")
-        comparison = _build_mode_comparison(
-            category,
-            mode_results["standard"],
-            mode_results["baseline"],
-            current_rate=self.calibration_stats.get("rate"),
-            target_rate=self.calibration_stats.get("target_rate", 0.20),
-            current_passed=self.calibration_stats.get("passed"),
-            current_failed=self.calibration_stats.get("failed"),
-        )
-        merged = {
-            "standard": mode_results["standard"],
-            "baseline": mode_results["baseline"],
-            "comparison": comparison,
-            "trajectory_dir": str(run_dir),
-        }
+
+        if "baseline" in _skip:
+            # Baseline skipped: gate based only on standard failing
+            std_eval = mode_results["standard"].get("evaluation", {})
+            standard_passed = _evaluation_passed(category, std_eval)
+            standard_progress = _evaluation_progress(category, std_eval)
+            comparison = {
+                "gate_passed": not standard_passed,
+                "functional_tom_signal": None,
+                "baseline_skipped": True,
+                "standard_passed": standard_passed,
+                "baseline_passed": None,
+                "standard_progress": standard_progress,
+                "baseline_progress": None,
+                "reasons": ["Baseline skipped (--remove baseline). Gate based on standard only."],
+            }
+            merged = {
+                "standard": mode_results["standard"],
+                "baseline": {"skipped": True, "reason": "--remove baseline"},
+                "comparison": comparison,
+                "trajectory_dir": str(run_dir),
+            }
+        else:
+            comparison = _build_mode_comparison(
+                category,
+                mode_results["standard"],
+                mode_results["baseline"],
+                current_rate=self.calibration_stats.get("rate"),
+                target_rate=self.calibration_stats.get("target_rate", 0.20),
+                current_passed=self.calibration_stats.get("passed"),
+                current_failed=self.calibration_stats.get("failed"),
+            )
+            merged = {
+                "standard": mode_results["standard"],
+                "baseline": mode_results["baseline"],
+                "comparison": comparison,
+                "trajectory_dir": str(run_dir),
+            }
+
         self._write_benchmark_comparison(run_dir, merged)
         return merged
 
@@ -2067,6 +2096,17 @@ SUMMARY:"""
     def _write_benchmark_comparison(self, run_dir: Path, results: Dict[str, Any]) -> None:
         """Persist a compact dual-run comparison artifact for judge/debug use."""
         comparison_file = run_dir / "comparison.json"
+        baseline_raw = results.get("baseline", {})
+        if baseline_raw.get("skipped"):
+            baseline_payload = {"skipped": True, "reason": baseline_raw.get("reason", "baseline removed")}
+        else:
+            baseline_payload = {
+                "run_mode": "baseline",
+                "steps": baseline_raw.get("steps", 0),
+                "turns": baseline_raw.get("turns", 0),
+                "evaluation": baseline_raw.get("evaluation", {}),
+                "trajectory_dir": baseline_raw.get("trajectory_dir"),
+            }
         payload = {
             "standard": {
                 "run_mode": "standard",
@@ -2075,13 +2115,7 @@ SUMMARY:"""
                 "evaluation": results["standard"].get("evaluation", {}),
                 "trajectory_dir": results["standard"].get("trajectory_dir"),
             },
-            "baseline": {
-                "run_mode": "baseline",
-                "steps": results["baseline"].get("steps", 0),
-                "turns": results["baseline"].get("turns", 0),
-                "evaluation": results["baseline"].get("evaluation", {}),
-                "trajectory_dir": results["baseline"].get("trajectory_dir"),
-            },
+            "baseline": baseline_payload,
             "comparison": results.get("comparison", {}),
             "agent_models": getattr(self, "_last_agent_models", {}),
         }

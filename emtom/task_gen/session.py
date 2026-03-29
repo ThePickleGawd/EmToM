@@ -958,6 +958,9 @@ class TaskGenSession:
                 json.dump(task_data, f)
 
             self._last_agent_models = self._determine_agent_models(task_data)
+            _skip = set(self.state.get("skip_steps") or [])
+            _skip_baseline = "baseline" in _skip
+
             run_specs: List[Dict[str, Any]] = [
                 {
                     "result_key": "standard",
@@ -965,33 +968,34 @@ class TaskGenSession:
                     "run_dir": run_dir / "standard",
                 }
             ]
-            if task_data.get("category") == "competitive":
-                run_specs.extend(
-                    [
+            if not _skip_baseline:
+                if task_data.get("category") == "competitive":
+                    run_specs.extend(
+                        [
+                            {
+                                "result_key": "baseline_team_0_only",
+                                "run_mode": "baseline",
+                                "run_dir": run_dir / "baseline_team_0_only",
+                                "active_team": "team_0",
+                                "idle_team": "team_1",
+                            },
+                            {
+                                "result_key": "baseline_team_1_only",
+                                "run_mode": "baseline",
+                                "run_dir": run_dir / "baseline_team_1_only",
+                                "active_team": "team_1",
+                                "idle_team": "team_0",
+                            },
+                        ]
+                    )
+                else:
+                    run_specs.append(
                         {
-                            "result_key": "baseline_team_0_only",
+                            "result_key": "baseline",
                             "run_mode": "baseline",
-                            "run_dir": run_dir / "baseline_team_0_only",
-                            "active_team": "team_0",
-                            "idle_team": "team_1",
-                        },
-                        {
-                            "result_key": "baseline_team_1_only",
-                            "run_mode": "baseline",
-                            "run_dir": run_dir / "baseline_team_1_only",
-                            "active_team": "team_1",
-                            "idle_team": "team_0",
-                        },
-                    ]
-                )
-            else:
-                run_specs.append(
-                    {
-                        "result_key": "baseline",
-                        "run_mode": "baseline",
-                        "run_dir": run_dir / "baseline",
-                    }
-                )
+                            "run_dir": run_dir / "baseline",
+                        }
+                    )
 
             with ThreadPoolExecutor(max_workers=len(run_specs)) as executor:
                 futures = {
@@ -1027,54 +1031,77 @@ class TaskGenSession:
                 "trajectory_dir": str(run_dir),
             }
 
-        if task_data.get("category") == "competitive":
-            baseline_dir = run_dir / "baseline"
-            baseline_dir.mkdir(parents=True, exist_ok=True)
-            baseline = _aggregate_competitive_baseline_phase_results(
-                {
-                    "team_0_only": raw_results["baseline_team_0_only"],
-                    "team_1_only": raw_results["baseline_team_1_only"],
-                }
-            )
-            baseline["trajectory_dir"] = str(baseline_dir)
-            mode_results = {
+        category = task_data.get("category", "cooperative")
+
+        if _skip_baseline:
+            # Baseline skipped: gate based only on standard failing
+            std_eval = raw_results["standard"].get("evaluation", {})
+            standard_passed = _evaluation_passed(category, std_eval)
+            standard_progress = _evaluation_progress(category, std_eval)
+            comparison = {
+                "gate_passed": not standard_passed,
+                "functional_tom_signal": None,
+                "baseline_skipped": True,
+                "standard_passed": standard_passed,
+                "baseline_passed": None,
+                "standard_progress": standard_progress,
+                "baseline_progress": None,
+                "reasons": ["Baseline skipped (--remove baseline). Gate based on standard only."],
+            }
+            payload = {
                 "standard": raw_results["standard"],
-                "baseline": baseline,
+                "baseline": {"skipped": True, "reason": "--remove baseline"},
+                "comparison": comparison,
+                "trajectory_dir": str(run_dir),
             }
         else:
-            mode_results = {
-                "standard": raw_results["standard"],
-                "baseline": raw_results["baseline"],
+            if task_data.get("category") == "competitive":
+                baseline_dir = run_dir / "baseline"
+                baseline_dir.mkdir(parents=True, exist_ok=True)
+                baseline = _aggregate_competitive_baseline_phase_results(
+                    {
+                        "team_0_only": raw_results["baseline_team_0_only"],
+                        "team_1_only": raw_results["baseline_team_1_only"],
+                    }
+                )
+                baseline["trajectory_dir"] = str(baseline_dir)
+                mode_results = {
+                    "standard": raw_results["standard"],
+                    "baseline": baseline,
+                }
+            else:
+                mode_results = {
+                    "standard": raw_results["standard"],
+                    "baseline": raw_results["baseline"],
+                }
+
+            self._refresh_calibration_stats()
+            calibration_stats = self.state.get("calibration_stats") or {}
+            cat_stats = calibration_stats.get("by_category", {}).get(category, {})
+            if cat_stats.get("total", 0) > 0:
+                cal_rate = cat_stats.get("rate")
+                cal_passed = cat_stats.get("passed")
+                cal_failed = cat_stats.get("failed")
+            else:
+                cal_rate = calibration_stats.get("rate")
+                cal_passed = calibration_stats.get("passed")
+                cal_failed = calibration_stats.get("failed")
+            comparison = build_mode_comparison(
+                category,
+                mode_results["standard"],
+                mode_results["baseline"],
+                current_rate=cal_rate,
+                target_rate=calibration_stats.get("target_rate", 0.20),
+                current_passed=cal_passed,
+                current_failed=cal_failed,
+            )
+            payload = {
+                "standard": mode_results["standard"],
+                "baseline": mode_results["baseline"],
+                "comparison": comparison,
+                "trajectory_dir": str(run_dir),
             }
 
-        self._refresh_calibration_stats()
-        calibration_stats = self.state.get("calibration_stats") or {}
-        category = task_data.get("category", "cooperative")
-        cat_stats = calibration_stats.get("by_category", {}).get(category, {})
-        # Use per-category rate if available, fall back to global
-        if cat_stats.get("total", 0) > 0:
-            cal_rate = cat_stats.get("rate")
-            cal_passed = cat_stats.get("passed")
-            cal_failed = cat_stats.get("failed")
-        else:
-            cal_rate = calibration_stats.get("rate")
-            cal_passed = calibration_stats.get("passed")
-            cal_failed = calibration_stats.get("failed")
-        comparison = build_mode_comparison(
-            category,
-            mode_results["standard"],
-            mode_results["baseline"],
-            current_rate=cal_rate,
-            target_rate=calibration_stats.get("target_rate", 0.20),
-            current_passed=cal_passed,
-            current_failed=cal_failed,
-        )
-        payload = {
-            "standard": mode_results["standard"],
-            "baseline": mode_results["baseline"],
-            "comparison": comparison,
-            "trajectory_dir": str(run_dir),
-        }
         with open(run_dir / "comparison.json", "w") as f:
             json.dump(payload, f, indent=2)
         return payload

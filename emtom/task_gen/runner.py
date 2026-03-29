@@ -389,7 +389,7 @@ def main() -> None:
         # Canonical names and legacy aliases
         _legacy_map = {"council": "llm-council", "golden": "simulation"}
         skip_steps = [_legacy_map.get(s, s) for s in skip_steps]
-        valid_steps = {"pddl", "llm-council", "simulation", "task-evolution", "tom", "structure", "test"}
+        valid_steps = {"pddl", "llm-council", "simulation", "task-evolution", "tom", "structure", "test", "baseline"}
         invalid = [s for s in skip_steps if s not in valid_steps]
         if invalid:
             raise SystemExit(

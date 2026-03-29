@@ -508,6 +508,33 @@ def run_benchmark_parallel(
         bench_out = str(out_path / stem / "benchmark")
         jobs.append((stem, str(task_input_dir), bench_out))
 
+    # Skip tasks that already have results (resume after partial run)
+    skipped_stems: List[str] = []
+    resumable_jobs = []
+    for stem, task_input, bench_out in jobs:
+        # Check all possible benchmark-Nagents subdirs for a summary
+        bench_path = Path(bench_out)
+        parent = bench_path.parent
+        has_result = False
+        if parent.exists():
+            for d in parent.iterdir():
+                if d.is_dir() and d.name.startswith("benchmark-"):
+                    sf = d / "results" / "benchmark_summary.json"
+                    if sf.exists():
+                        has_result = True
+                        break
+        if has_result:
+            skipped_stems.append(stem)
+        else:
+            resumable_jobs.append((stem, task_input, bench_out))
+
+    if skipped_stems:
+        print(
+            f"{log_prefix} Resuming: skipping {len(skipped_stems)} task(s) with existing results",
+            file=sys.stderr,
+        )
+    jobs = resumable_jobs
+
     total_tasks = len(jobs)
     job_idx = 0
     active: List[tuple] = []  # (stem, bench_out, Popen, log_file_handle)
@@ -637,33 +664,40 @@ def run_benchmark_parallel(
             file=sys.stderr,
         )
 
-    # Merge results from all per-task benchmark outputs
+    # Merge results from all per-task benchmark outputs (new + resumed)
     all_task_results: List[TaskResult] = []
     total_passed = 0
     total_failed = 0
 
-    skipped_stems: List[str] = []
-    for stem, task_input, bench_out in jobs:
+    # Include results from tasks skipped due to resume (already had results)
+    all_jobs_for_results = list(jobs)
+    for stem in skipped_stems:
+        task_input = str(out_path / stem / "task_input")
+        bench_out = str(out_path / stem / "benchmark")
+        all_jobs_for_results.append((stem, task_input, bench_out))
+
+    no_result_stems: List[str] = []
+    for stem, task_input, bench_out in all_jobs_for_results:
         try:
             per_task = parse_benchmark_results(bench_out, model)
         except FileNotFoundError:
             # Task was skipped (e.g. category mismatch) or produced no results
-            skipped_stems.append(stem)
+            no_result_stems.append(stem)
             continue
         except Exception as e:
             print(
                 f"{log_prefix} WARNING: failed parsing results for '{stem}': {e}",
                 file=sys.stderr,
             )
-            skipped_stems.append(stem)
+            no_result_stems.append(stem)
             continue
         all_task_results.extend(per_task.results)
         total_passed += per_task.passed
         total_failed += per_task.failed
 
-    if skipped_stems:
+    if no_result_stems:
         print(
-            f"{log_prefix} {len(skipped_stems)} task(s) produced no results (skipped or failed)"
+            f"{log_prefix} {len(no_result_stems)} task(s) produced no results (skipped or failed)"
         )
 
     total = total_passed + total_failed

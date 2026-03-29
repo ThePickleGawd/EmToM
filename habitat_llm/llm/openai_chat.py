@@ -82,6 +82,10 @@ class OpenAIChat(BaseLLM):
             "effort": "medium",
             "max_output_tokens": 2048,
         },
+        "o3": {
+            "effort": "medium",
+            "max_output_tokens": 2048,
+        },
     }
 
     @classmethod

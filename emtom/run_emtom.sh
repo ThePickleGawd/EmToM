@@ -268,7 +268,7 @@ print_usage() {
     echo "  --seed-fail-ratio R  Logical fraction of selected seeds that should fail the target model (default: $SEED_FAIL_RATIO)"
     echo "  --sampled-tasks-dir DIR  Pre-built sampled_tasks directory (skips random sampling)"
     echo "  --k-level L [L ...]  Allowed ToM k-levels, e.g. --k-level 2 3 (default: random per task)"
-    echo "  --remove STEP [...]  Skip pipeline components: pddl, llm-council, simulation, task-evolution, tom, structure, test"
+    echo "  --remove STEP [...]  Skip pipeline components: pddl, llm-council, simulation, task-evolution, tom, structure, test, baseline"
     echo "  --tom-ratio-tolerance R  ToM ratio tolerance (default: $TOM_RATIO_TOLERANCE)"
     echo "  --output-dir DIR     Override output directory (used by generate and benchmark)"
     echo ""
