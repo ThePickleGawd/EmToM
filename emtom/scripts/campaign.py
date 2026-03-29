@@ -28,11 +28,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
@@ -277,12 +279,38 @@ def _get_task_ids_by_category(tasks_dir: Path, category: str) -> Dict[str, Path]
     return result
 
 
+def _task_ids_for_category(tasks_dir: Path, category: str) -> Set[str]:
+    return set(_get_task_ids_by_category(tasks_dir, category).keys())
+
+
 def _backfill_completed_tasks(run_key: str) -> List[str]:
     """Extract task_ids from an existing benchmark_summary.json for backfill."""
     summary = _read_run_summary(run_key)
     if not summary:
         return []
     return [r["task_id"] for r in summary.get("results", []) if r.get("task_id")]
+
+
+def _filter_summary_results(
+    summary: Dict[str, Any],
+    model: str,
+    include_task_ids: Optional[Set[str]] = None,
+) -> Dict[str, Any]:
+    """Filter a benchmark summary to the current task set and recompute aggregates."""
+    if include_task_ids is None:
+        return summary
+
+    results = [
+        result
+        for result in summary.get("results", [])
+        if result.get("task_id") in include_task_ids
+    ]
+    base = {k: v for k, v in summary.items() if k not in SUMMARY_CORE_KEYS}
+    return _summary_payload(
+        results,
+        model=model or summary.get("model", ""),
+        base_summary=base,
+    )
 
 
 def _merge_results(
@@ -487,15 +515,27 @@ def cmd_add(args: argparse.Namespace) -> None:
 # Run execution
 # ---------------------------------------------------------------------------
 
-def _run_benchmark(
+def _resolve_output_dir(
+    run_key: str,
+    run_def: Dict[str, Any],
+) -> Path:
+    """Resolve the benchmark output directory, reusing an existing resumable run if present."""
+    prev_output = run_def.get("output_dir", "")
+    if prev_output and Path(prev_output).exists():
+        return Path(prev_output)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    return OUTPUTS_DIR / f"{timestamp}-campaign-{run_key}"
+
+
+def _execute_benchmark(
     run_key: str,
     run_def: Dict[str, Any],
     tasks_dir: Path,
+    output_dir: Path,
     max_workers: int,
-) -> Tuple[bool, str]:
-    """Execute a single benchmark run via run_emtom.sh. Returns (success, output_dir)."""
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_dir = OUTPUTS_DIR / f"{timestamp}-campaign-{run_key}"
+) -> bool:
+    """Execute a single benchmark run via run_emtom.sh. Returns success."""
 
     mode = run_def["mode"]
     category = run_def["category"]
@@ -542,10 +582,16 @@ def _run_benchmark(
     tag = "DONE" if success else "FAIL"
     print(f"\n[{tag}] {run_key} ({elapsed:.0f}s)")
 
-    return success, str(output_dir)
+    return success
 
 
-def _collect_results(output_dir: str, run_key: str, model: str = "", append: bool = False) -> None:
+def _collect_results(
+    output_dir: str,
+    run_key: str,
+    model: str = "",
+    append: bool = False,
+    include_task_ids: Optional[Set[str]] = None,
+) -> None:
     """Copy benchmark summary and planner logs into data/emtom/results/runs/.
 
     When append=True, merge new results into existing summary instead of overwriting.
@@ -562,15 +608,22 @@ def _collect_results(output_dir: str, run_key: str, model: str = "", append: boo
     # Check flat layout first: {output_dir}/results/benchmark_summary.json
     flat_summary = out_path / "results" / "benchmark_summary.json"
     if flat_summary.exists():
+        with open(flat_summary) as f:
+            new_data = json.load(f)
+        new_data = _filter_summary_results(new_data, model, include_task_ids)
         if append:
-            with open(flat_summary) as f:
-                new_data = json.load(f)
             _merge_results(summary_dest, new_data, model)
         else:
-            shutil.copy2(str(flat_summary), str(summary_dest))
+            if include_task_ids is None:
+                shutil.copy2(str(flat_summary), str(summary_dest))
+            else:
+                with open(summary_dest, "w") as f:
+                    json.dump(new_data, f, indent=2)
         results_dir = flat_summary.parent
         for task_dir in sorted(results_dir.iterdir()):
             if not task_dir.is_dir() or task_dir.name.startswith("."):
+                continue
+            if include_task_ids is not None and task_dir.name not in include_task_ids:
                 continue
             log_dir = task_dir / "planner-log"
             if not log_dir.exists():
@@ -596,6 +649,8 @@ def _collect_results(output_dir: str, run_key: str, model: str = "", append: boo
             for task_dir in sorted(results_dir.iterdir()):
                 if not task_dir.is_dir():
                     continue
+                if include_task_ids is not None and task_dir.name not in include_task_ids:
+                    continue
                 log_dir = task_dir / "planner-log"
                 if not log_dir.exists():
                     continue
@@ -606,7 +661,7 @@ def _collect_results(output_dir: str, run_key: str, model: str = "", append: boo
                     shutil.copy2(str(log_files[-1]), str(td / "planner-log.json"))
 
     # Aggregate per-task summaries into one benchmark_summary.json
-    agg = _aggregate_parallel_summaries(output_dir, model)
+    agg = _aggregate_parallel_summaries(output_dir, model, include_task_ids=include_task_ids)
     if agg:
         if append:
             _merge_results(summary_dest, agg, model)
@@ -617,7 +672,11 @@ def _collect_results(output_dir: str, run_key: str, model: str = "", append: boo
         print(f"  WARNING: no benchmark results found in {output_dir}")
 
 
-def _aggregate_parallel_summaries(output_dir: str, model: str) -> Optional[Dict[str, Any]]:
+def _aggregate_parallel_summaries(
+    output_dir: str,
+    model: str,
+    include_task_ids: Optional[Set[str]] = None,
+) -> Optional[Dict[str, Any]]:
     """Aggregate per-task benchmark summaries from parallel output layout."""
     out_path = Path(output_dir)
     all_results = []
@@ -633,7 +692,14 @@ def _aggregate_parallel_summaries(output_dir: str, model: str) -> Optional[Dict[
                 try:
                     with open(sf) as f:
                         summary = json.load(f)
-                    all_results.extend(summary.get("results", []))
+                    results = summary.get("results", [])
+                    if include_task_ids is not None:
+                        results = [
+                            result
+                            for result in results
+                            if result.get("task_id") in include_task_ids
+                        ]
+                    all_results.extend(results)
                 except (json.JSONDecodeError, OSError):
                     pass
 
@@ -653,11 +719,10 @@ def _sync_run(
     Also backfills completed_tasks from existing summary if missing.
     """
     category = run_def["category"]
-    current = _get_task_ids_by_category(tasks_dir, category)
-    current_ids = set(current.keys())
+    current_ids = _task_ids_for_category(tasks_dir, category)
 
     completed = set(run_def.get("completed_tasks", []))
-    if not completed and run_def.get("status") == "complete":
+    if not completed and run_def.get("status") in ("complete", "failed"):
         # Backfill from existing benchmark_summary.json
         completed = set(_backfill_completed_tasks(run_key))
         if completed:
@@ -666,6 +731,66 @@ def _sync_run(
     new_ids = current_ids - completed
     stale_ids = completed - current_ids
     return new_ids, stale_ids
+
+
+def _persist_run_output_dir(run_key: str, output_dir: Path) -> None:
+    with open(CAMPAIGN_FILE) as f:
+        campaign = json.load(f)
+
+    campaign["runs"][run_key]["output_dir"] = str(output_dir)
+    campaign["updated_at"] = _now_iso()
+    with open(CAMPAIGN_FILE, "w") as f:
+        json.dump(campaign, f, indent=2)
+
+
+def _sync_output_results(
+    run_key: str,
+    run_def: Dict[str, Any],
+    tasks_dir: Path,
+    *,
+    append: bool,
+) -> List[str]:
+    output_dir = run_def.get("output_dir", "")
+    if not output_dir:
+        return []
+
+    out_path = Path(output_dir)
+    if not out_path.exists():
+        return []
+
+    include_task_ids = _task_ids_for_category(tasks_dir, run_def["category"])
+    model = run_def.get("model", run_def.get("team_0", ""))
+    _collect_results(
+        output_dir,
+        run_key,
+        model=model,
+        append=append,
+        include_task_ids=include_task_ids,
+    )
+
+    summary = _read_run_summary(run_key)
+    if not summary:
+        return []
+
+    return sorted({
+        result["task_id"]
+        for result in summary.get("results", [])
+        if result.get("task_id") in include_task_ids
+    })
+
+
+@contextmanager
+def _interruptible_sigterm():
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def _raise_interrupt(signum: int, frame: Any) -> None:
+        raise KeyboardInterrupt()
+
+    signal.signal(signal.SIGTERM, _raise_interrupt)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -717,9 +842,26 @@ def cmd_run(args: argparse.Namespace) -> None:
         candidates = runs
 
     for key, run_def in candidates.items():
+        if run_def["status"] in ("pending", "failed") and run_def.get("output_dir"):
+            completed_ids = _sync_output_results(key, run_def, tasks_dir, append=False)
+            if completed_ids and run_def.get("completed_tasks") != completed_ids:
+                run_def["completed_tasks"] = completed_ids
+                campaign_dirty = True
         if run_def["status"] == "pending":
             to_run[key] = run_def
-        elif run_def["status"] in ("complete", "failed"):
+        elif run_def["status"] == "failed":
+            new_ids, stale_ids = _sync_run(key, run_def, tasks_dir)
+            if stale_ids:
+                print(f"  Pruning {len(stale_ids)} deleted task(s) from {key}")
+                _prune_results(key, stale_ids)
+                completed = set(run_def.get("completed_tasks", []))
+                run_def["completed_tasks"] = sorted(completed - stale_ids)
+                campaign_dirty = True
+            # Re-queue failed runs for resume (benchmark_wrapper skips completed tasks)
+            run_def["status"] = "pending"
+            to_run[key] = run_def
+            campaign_dirty = True
+        elif run_def["status"] == "complete":
             new_ids, stale_ids = _sync_run(key, run_def, tasks_dir)
             if "completed_tasks" not in run_def:
                 # backfill happened inside _sync_run
@@ -763,6 +905,9 @@ def cmd_run(args: argparse.Namespace) -> None:
         run_def = to_run[key]
         is_incremental = key in incremental_info
         tmp_dir = None
+        interrupted = False
+        output_dir = _resolve_output_dir(key, run_def)
+        _persist_run_output_dir(key, output_dir)
 
         try:
             if is_incremental:
@@ -779,7 +924,18 @@ def cmd_run(args: argparse.Namespace) -> None:
             else:
                 benchmark_dir = tasks_dir
 
-            success, output_dir = _run_benchmark(key, run_def, benchmark_dir, max_workers)
+            with _interruptible_sigterm():
+                success = _execute_benchmark(
+                    key,
+                    run_def,
+                    benchmark_dir,
+                    output_dir,
+                    max_workers,
+                )
+        except KeyboardInterrupt:
+            success = False
+            interrupted = True
+            print(f"\n[INTERRUPTED] {key}")
         finally:
             if tmp_dir:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -789,19 +945,18 @@ def cmd_run(args: argparse.Namespace) -> None:
         with open(CAMPAIGN_FILE) as f:
             campaign = json.load(f)
 
-        campaign["runs"][key]["output_dir"] = output_dir
+        campaign["runs"][key]["output_dir"] = str(output_dir)
+        completed_ids = _sync_output_results(
+            key,
+            campaign["runs"][key],
+            tasks_dir,
+            append=is_incremental,
+        )
+        if completed_ids:
+            campaign["runs"][key]["completed_tasks"] = completed_ids
         if success:
             campaign["runs"][key]["status"] = "complete"
             campaign["runs"][key]["completed_at"] = datetime.now(timezone.utc).isoformat()
-
-            model = run_def.get("model", run_def.get("team_0", ""))
-            _collect_results(output_dir, key, model=model, append=is_incremental)
-
-            # Update completed_tasks from the (merged) summary
-            summary = _read_run_summary(key)
-            if summary:
-                all_ids = [r["task_id"] for r in summary.get("results", []) if r.get("task_id")]
-                campaign["runs"][key]["completed_tasks"] = sorted(set(all_ids))
         else:
             if not is_incremental:
                 campaign["runs"][key]["status"] = "failed"
@@ -814,6 +969,8 @@ def cmd_run(args: argparse.Namespace) -> None:
 
         # Update leaderboard after each run for live visibility
         _generate_report(campaign)
+        if interrupted:
+            raise KeyboardInterrupt()
 
 
 # ---------------------------------------------------------------------------
@@ -941,13 +1098,13 @@ def _category_literal_metrics(
 
 
 def _generate_report(campaign: Dict[str, Any]) -> None:
-    """Generate leaderboard.json from completed runs."""
+    """Generate leaderboard.json from all runs with synced summaries."""
     runs = campaign["runs"]
 
     # Solo results: model × mode × category
     solo_results: Dict[str, Dict[str, Any]] = {}
     for key, run_def in runs.items():
-        if run_def.get("type") != "solo" or run_def.get("status") != "complete":
+        if run_def.get("type") != "solo" or run_def.get("status") not in ("complete", "failed"):
             continue
         summary = _read_run_summary(key)
         if not summary:
@@ -1002,7 +1159,7 @@ def _generate_report(campaign: Dict[str, Any]) -> None:
     # Matchup results
     matchup_results: Dict[str, Dict[str, Any]] = {}
     for key, run_def in runs.items():
-        if run_def.get("type") != "matchup" or run_def.get("status") != "complete":
+        if run_def.get("type") != "matchup" or run_def.get("status") not in ("complete", "failed"):
             continue
         summary = _read_run_summary(key)
         if not summary:
