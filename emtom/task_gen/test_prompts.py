@@ -119,3 +119,22 @@ def test_build_external_taskgen_prompt_encourages_full_supported_mechanic_set_fo
     assert "inverse_state" in prompt
     assert "the affected agent's secret may briefly state that mechanic fact in plain language" in prompt
     assert "Use the mechanic that creates the cleanest ToM bottleneck for the scene." in prompt
+
+
+def test_build_external_taskgen_prompt_removes_secret_strategy_rules_when_requested():
+    prompt = build_external_taskgen_prompt(
+        working_dir="/tmp/taskgen",
+        task_file="/tmp/taskgen/working_task.json",
+        category="cooperative",
+        num_tasks=1,
+        agents_min=2,
+        agents_max=3,
+        subtasks_min=2,
+        subtasks_max=4,
+        skip_steps=["secret-strategy"],
+    )
+
+    assert "NEVER use prescriptive language" not in prompt
+    assert "it must NOT tell the agent what message or plan to use" not in prompt
+    assert "secrets do not explain the coordination plan" not in prompt
+    assert "`secret-strategy`: the prompt omits the rule that forbids strategy instructions in `agent_secrets`." in prompt

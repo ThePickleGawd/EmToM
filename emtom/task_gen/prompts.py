@@ -126,6 +126,16 @@ Vary at least TWO of these dimensions each task. Check sampled tasks to avoid du
 {removed_components_block}"""
 
 
+def _strip_secret_strategy_rules(prompt: str) -> str:
+    lines_to_remove = {
+        "- NEVER use prescriptive language: 'Tell your partner', 'Ask them', 'Leave it at', 'Coordinate with', 'You should'.",
+        "- If a task uses `inverse_state`, `state_mirroring`, or `remote_control`, the affected agent's secret may briefly state that mechanic fact in plain language, but it must NOT tell the agent what message or plan to use.",
+        "- Mechanics and secrets agree about actual constraints, but secrets do not explain the coordination plan.",
+    }
+    filtered_lines = [line for line in prompt.splitlines() if line not in lines_to_remove]
+    return "\n".join(filtered_lines)
+
+
 def build_external_taskgen_prompt(
     *,
     working_dir: str,
@@ -150,6 +160,7 @@ def build_external_taskgen_prompt(
     skip_pddl = "pddl" in skip
     skip_evolution = "task-evolution" in skip
     skip_test = "test" in skip or skip_evolution
+    skip_secret_strategy = "secret-strategy" in skip
 
     query_block = ""
     if query:
@@ -381,9 +392,11 @@ def build_external_taskgen_prompt(
             removed_lines.append("- `task-evolution`: no seed tasks or calibration data are available.")
         if "test" in skip:
             removed_lines.append("- `test`: skip `taskgen test_task` and go directly to submission.")
+        if skip_secret_strategy:
+            removed_lines.append("- `secret-strategy`: the prompt omits the rule that forbids strategy instructions in `agent_secrets`.")
         removed_components_block = "\n" + "\n".join(removed_lines)
 
-    return MINISWEAGENT_TASKGEN_PROMPT.format(
+    prompt = MINISWEAGENT_TASKGEN_PROMPT.format(
         working_dir=working_dir,
         task_file=task_file,
         query_block=query_block,
@@ -407,3 +420,6 @@ def build_external_taskgen_prompt(
         test_checklist=test_checklist,
         removed_components_block=removed_components_block,
     )
+    if skip_secret_strategy:
+        prompt = _strip_secret_strategy_rules(prompt)
+    return prompt
