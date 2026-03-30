@@ -79,7 +79,7 @@ class OpenAIChat(BaseLLM):
     # Models that use the Responses API with explicit reasoning budget.
     REASONING_MODEL_CONFIG: Dict[str, Dict[str, Any]] = {
         "gpt-5.4": {
-            "effort": "medium",
+            "effort": "low",
             "max_output_tokens": 2048,
         },
         "o3": {
@@ -87,6 +87,7 @@ class OpenAIChat(BaseLLM):
             "max_output_tokens": 2048,
         },
     }
+    GEMINI_MIN_CHAT_MAX_TOKENS = 2048
 
     @classmethod
     def resolve_model_alias(cls, model: str) -> str:
@@ -268,6 +269,11 @@ class OpenAIChat(BaseLLM):
         reasoning_cfg = self._get_reasoning_model_config(params["model"])
         api_style = self._get_model_api_style(params["model"])
         token_limit = params.get("max_tokens")
+        if self._is_gemini_model(params["model"]) and token_limit is not None:
+            # Gemini reasoning models often spend a large share of the output budget
+            # before emitting the first visible action line. Keep a higher floor here
+            # so planner prompts can reach `Agent_{id}_Action: ...` reliably.
+            token_limit = max(token_limit, self.GEMINI_MIN_CHAT_MAX_TOKENS)
 
         if reasoning_cfg:
             # Responses API path (gpt-5.4 with reasoning)

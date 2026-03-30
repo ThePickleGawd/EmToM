@@ -6,7 +6,9 @@
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{booktabs}
+\usepackage{enumitem}
 \usepackage{tabularx}
+\usepackage[most]{tcolorbox}
 \usepackage{graphicx}
 \usepackage{xcolor}
 \usepackage{listings}
@@ -31,6 +33,7 @@
 \newcommand{\mechanics}{\mathcal{M}}
 \newcommand{\task}{\mathcal{T}}
 \newcommand{\goal}{\varphi}
+\newcommand{\taskdesc}{\delta}
 \newcommand{\pddl}{\textsc{pddl}}
 \newcommand{\saaket}[1]{\textcolor{blue}{[Saaket: #1]}}
 \newcommand{\dylan}[1]{\textcolor{blue}{[Dylan: #1]}}
@@ -202,36 +205,48 @@ These compose freely. A task may combine room restrictions with limited bandwidt
 
 Evaluating functional Theory of Mind requires tasks where success depends on agents adapting their actions to the private knowledge, access, and intentions of other agents, not merely reporting beliefs when prompted. Hand-crafting such tasks does not scale, and as models improve, fixed benchmarks saturate. We propose an agentic task generation framework that addresses both problems. An autonomous coding agent authors multi-agent ToM tasks inside a sandboxed workspace, invoking verification tools that ensure each task is logically solvable, physically executable, and genuinely requires epistemic reasoning.
 
-The framework provides three verification signals. A symbolic planner compiles epistemic goals into classical \pddl{}, proving solvability and computing the minimum $\K$-nesting depth required (Section~\ref{sec:verification}). The planner's solution, a deterministic golden trajectory, is then replayed in the Habitat simulator to catch physical failures that the abstract model cannot represent, such as unreachable objects or invalid placements (Section~\ref{sec:verification}). An LLM-as-judge scores task quality across eight criteria to filter out under-specified or trivial tasks (Section~\ref{sec:judge}), and an empirical calibration gate benchmarks the task against a target model to confirm that information asymmetry is required for success (Section~\ref{sec:tom_necessity}). The agent iterates on structured feedback from these tools until all gates pass. Accepted tasks re-enter a growing pool whose composition biases future generation toward greater difficulty (Section~\ref{sec:calibration}).
+We first define the task representation (Section~\ref{sec:task_repr}), then describe the generation agent (Section~\ref{sec:gen_agent}) and its verification tools: quality judging (Section~\ref{sec:judge}), structural validation (Section~\ref{sec:verification}), and empirical calibration (Section~\ref{sec:tom_necessity}).
 
-We describe the generation agent and its verification tools, then formalize the task representation.
+\subsection{Task representation}
+\label{sec:task_repr}
+
+Each task $\task$ is a tuple:
+%
+\begin{equation}
+  \task = \bigl(\mathcal{S},\; \agents,\; \goal,\; \taskdesc,\; \mechanics,\; \Sigma,\; \mathcal{C} \bigr)
+  \label{eq:task_tuple}
+\end{equation}
+%
+where $\mathcal{S}$ is an HSSD scene~\citep{szot2021habitat}, $\agents = \{a_1, \ldots, a_n\}$ is a set of agents with spawn positions, $\goal$ is a \pddl{} goal formula combining physical predicates with $\K$-operators (Section~\ref{sec:epistemic_ops}), $\taskdesc$ is a natural-language task description shared with all agents, $\mechanics$ is a set of mechanic bindings drawn from the registry (Section~\ref{sec:mechanics}), $\Sigma$ maps each agent to private secrets, and $\mathcal{C} \in \{\text{cooperative}, \text{competitive}, \text{mixed}\}$ is the task category.
+
+\paragraph{Secrets.} Each agent receives private secrets $\Sigma(a_i)$: natural-language statements of room restrictions, target object identities, and mechanic hints. Secrets state \emph{what} each agent privately knows but never \emph{how} to coordinate. Figuring out who to tell, what to say, and when to act is the epistemic coordination challenge the benchmark measures.
+
+\paragraph{Categories.} \emph{Cooperative} tasks give all agents a shared $\goal$. \emph{Competitive} tasks assign two teams mutually exclusive win conditions over shared state. \emph{Mixed-motive} tasks combine a shared cooperative goal with private per-agent side-objectives that may conflict with the shared goal or with each other.
 
 \subsection{Task generation agent}
 \label{sec:gen_agent}
 
-The generator is an autonomous coding agent that authors tasks through iterative editing, tool invocation, and self-correction within a sandboxed workspace. The agent receives:
-\begin{itemize}
-  \item A sampled HSSD scene $\mathcal{S}$ with its object inventory.
-  \item A registry of available mechanics to select from.
-  \item A set of seed tasks drawn from the existing pool for in-context guidance.
-  \item A target category $\mathcal{C}$ and epistemic depth $d$.
-\end{itemize}
-From these, it produces a complete $\task$ by selecting and configuring mechanics into $\mechanics$, writing the formal goal $\goal$, and distributing private secrets $\Sigma$ across agents. The prompt instructs the agent to write $\goal$ before any natural-language fields, so that the task description and secrets are grounded in the formal specification. Consistency between the two is verified by the judge (Section~\ref{sec:judge}).
+Each task is authored by a \textit{mini-SWE-style} \citep{minisweagent2025} coding agent. The agent operates inside a sandboxed workspace containing a blank task template (JSON file), the loaded scene graph (rooms, furniture, objects, agent spawns), reference files listing available mechanics, predicates, and actions, and a set of seed tasks sampled from the existing pool (see Appendix~\ref{app:workspace} for an example of workspace, the scene graph and prompt given to the coding agent).
+The agent edits the task file using shell commands (\texttt{bash}, \texttt{jq}) and invokes five tool calls: \texttt{new\_scene}, \texttt{bash}, \texttt{judge}, \texttt{test\_task}, and \texttt{submit\_task}.
 
-The agent has access to three verification tools, \emph{quality judging}, \emph{formal verification}, and \emph{empirical calibration}, described in the following sections. It invokes these in any order and iterates freely, editing goals, adjusting mechanics, or loading a fresh scene. Each tool returns structured feedback (per-criterion scores, planner diagnostics, benchmark results) that the agent uses to diagnose failures and revise the task. The only hard constraint is the submission gate, which rejects any task that has not passed all three verification tools. This closed-loop design, where the agent reasons about verification feedback and self-corrects, is what distinguishes our approach from static generation pipelines that apply verification as a post-hoc filter.
+\paragraph{Inputs.} The agent receives four inputs at the start of each generation run: (a)~a sampled HSSD scene $\mathcal{S}$ with rooms, fixed furniture,  articulated furniture (openable/closable), movable objects, and agent spawn positions; (b)~a set of available mechanics (Section~\ref{sec:mechanics}); (c)~a target category $\mathcal{C} \in \{\text{cooperative}, \text{competitive}, \text{mixed}\}$ and target epistemic depth $d \in \{1,2,3\}$; and (d)~a set of seed tasks sampled from the existing pool with an 80/20 fail/pass ratio relative to the set of target models, biasing examples toward tasks that current frontier models cannot solve (Section~\ref{sec:calibration}).
+
+\paragraph{Order of operations.} First, the agent writes the formal \pddl{} goal $\goal$ followed by the task description $\taskdesc$ and per-agent secrets $\Sigma(a_i)$ derived from $\goal$. This provides a formal structure to the task and prevents the narrative from containing requirements inconsistent with the final goal. Agent secrets consist of constraints and targets (room restrictions, object IDs, mechanic hints). We explicitly prompt the coding agent to never include the coordination strategy in secrets. The agents must figure out \emph{how} to communicate on their own. The judge (Section~\ref{sec:judge}) verifies that $\taskdesc$, $\Sigma$, and $\goal$ are consistent.
+
+\paragraph{Iteration loop.} The coding agent invokes \texttt{judge} (Section~\ref{sec:judge}--\ref{sec:verification}) and \texttt{test\_task} (Section~\ref{sec:tom_necessity}) in any order and is free to iterate over the task by editing goals, adjusting mechanics, or calling \texttt{new\_scene} to start over. Each tool returns a structured feedback, the judge returns per-criterion scores and required fixes, the verifier returns planner diagnostics, and the calibrator returns pass/fail results . The agent uses this feedback to revise the task and resubmit. \texttt{submit\_task} requires both \texttt{judge} and \texttt{test\_task} to have passed. \g{ do we really want this line -- This closed-loop design distinguishes our approach from static pipelines that generate tasks first and filter afterward: the agent reasons about feedback and self-corrects before submission.}
 
 \subsection{Quality judging}
 \label{sec:judge}
 
-An LLM-as-judge evaluates task quality by scoring each candidate across eight criteria on a $[0, 1]$ rubric. Seven criteria are shared across all categories:
-\begin{itemize}
-  \item \textbf{Agent necessity} requires that every agent makes a distinct, non-substitutable contribution to the solution.
-  \item \textbf{Secret quality} checks that secrets carry precise target identifiers and constraints without prescribing coordination strategy.
-  \item \textbf{Public/private grounding} ensures the public task description stays high-level while secrets provide actionable specifics.
-  \item \textbf{Narrative consistency} verifies that the natural-language description faithfully reflects the formal \pddl{} goal semantics.
-  \item \textbf{Goal relevance} confirms that every conjunct in $\goal$ materially contributes to the task objective.
-  \item \textbf{Mechanic utilization} checks that every binding in $\mechanics$ creates a distinct coordination challenge.
-  \item \textbf{Formal goal quality} assesses whether the \pddl{} specification is syntactically valid, solvable, and encodes meaningful epistemic structure.
+A council of two LLMs (Kimi-K2.5 and GPT-5.2) independently scores each candidate task on eight criteria using a $[0, 1]$ rubric. \textit{Both models need to agree} for the task to pass. Seven criteria are shared across all categories:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Agent necessity:} every agent is central to the task, removing any one would break a required dependency or access path.
+  \item \textbf{Secret quality:} secrets name exact target IDs and constraints but never prescribe coordination strategy.
+  \item \textbf{Public/private grounding:} the shared task description $\taskdesc$ stays high-level; secrets $\Sigma$ carry the actionable specifics. This prevents broadcasting partial solutions to all agents.
+  \item \textbf{Narrative consistency:} $\taskdesc$ and $\Sigma$ faithfully reflect the formal \pddl{} goal $\goal$.
+  \item \textbf{Goal relevance:} every conjunct in $\goal$ contributes to the task; no filler predicates.
+  \item \textbf{Mechanic utilization:} every binding in $\mechanics$ creates a distinct coordination challenge; no decorative mechanics.
+  \item \textbf{Formal goal quality:} the \pddl{} specification is syntactically valid, solvable, and encodes meaningful epistemic structure.
 \end{itemize}
 An eighth, category-specific criterion is added. For cooperative tasks, \emph{task interdependence} requires that physical goals demand inter-agent information exchange. For competitive tasks, \emph{goal opposition} checks for mutually exclusive win conditions. For mixed tasks, \emph{subgoal tension} evaluates whether private objectives create genuine dilemmas. A task passes when:
 %
@@ -240,60 +255,41 @@ An eighth, category-specific criterion is added. For cooperative tasks, \emph{ta
   \label{eq:judge_pass}
 \end{equation}
 %
-where $\bar{s}$ is the mean score across criteria and $\tau = 0.65$. The per-criterion floor of $0.5$ prevents a single weak dimension from being masked by high scores elsewhere. On failure, the judge returns per-criterion scores and actionable suggestions that the generation agent uses to revise the task.
+where $\bar{s}$ is the mean score across all criteria, $\tau = 0.65$ is the overall threshold, and the per-criterion floor of $0.5$ prevents a single weak dimension from being masked by high scores elsewhere. Both thresholds were tuned on a held-out set of 50 manually rated tasks. On failure, the council returns per-criterion scores and concrete required fixes (e.g., ``add a secret for agent\_1 explaining the limited\_bandwidth mechanic''). The generation agent uses this feedback to revise and resubmit. The full judge prompt and an example of judge feedback are in Appendix~\ref{app:judge_prompt}. The rationale behind each criterion is discussed in Appendix~\ref{app:design_decisions}.
 
-\subsection{Formal verification}
+\g{later somewhere we want to add that what is the optimal strategy for mixed tasks and how it shows ToM
+we also need to add in the paper everyehwere that the examples we show are completely random and not at all cherry picked}
+\g{We need a human study on the outputs of the llm judge and we also need ablation of with and without judge tasks and then an ablation of the components of the judge. But, shd we wite this here on in experiments section? add}
+
+\subsection{Formal verification \g{shd we name it formal verification?}}
 \label{sec:verification}
 
-Formal verification provides two guarantees: that the task is solvable and that its epistemic depth is correctly computed. Using the epistemic compilation described in Section~\ref{sec:epistemic_pddl}, the task's $\K$-goals are reduced to classical \pddl{} and solved by Fast Downward in a single call. A successful plan proves that $\goal$ is achievable under $\mechanics$ and confirms the minimum $\K$-depth $d$.
+The \texttt{`judge'} tool runs two deterministic checks. First, structural validation confirms that the \pddl{} goal is syntactically valid, that all referenced objects and furniture exist in the loaded scene, and that mechanic bindings are well-formed. Second, the $\K$-depth of the goal is computed by analyzing the nesting structure of epistemic operators in $\goal$ (Section~\ref{sec:epistemic_pddl}). If a target depth $d$ was specified for this generation run, the task is rejected if the computed depth does not match.%
+\footnote{We encourage the reader to see Appendix~\ref{app:design_decisions} for why the planner is not given to the evaluated agent as a tool.}
+\g{1. conduct a human study for the epistemic depth validity. 2. ablation of this judge}
+% \g{the reviewer might have a question that why can't we directly use this solver as a tool call to llm, this is because this solver has entire information available whereas the llm needs to reason what is the information that other agent has. if it asks this question, this itself emans that the agent is trying to think about other agent's epistemic state, which means that it is trying to do tom reasoning. And if it does and asks the other agent about it's state then it has tom reasoning. So we just cannot give this solver to the llm as a tool. Don't write this here, write it in the design decision appendix, but put an * here for the reader and prompt them to look at the appendix.}
 
-The planner also produces a deterministic action sequence, the \emph{golden trajectory}, which is replayed step-by-step in the Habitat simulator to confirm that all physical preconditions and effects hold in the actual 3D environment. The planner reasons over an abstract state model, while the simulator catches physical failures such as unreachable objects, navigation collisions, and invalid placements that the abstract model cannot represent.
+These checks are fast and deterministic. They can catch malformed tasks early, before the more expensive LLM evaluation and calibration runs. This verification step removes any task failure due to environmental failures, but physical executability (can agents actually navigate to objects, pick them up, and place them?) is not verified at this stage. That guarantee comes from the baseline calibration run (Section~\ref{sec:tom_necessity}).
+% \g{we don't do this anymore}
 
 \subsection{Empirical calibration}
 \label{sec:tom_necessity}
 
-Formal verification confirms that a task \emph{can} be solved but not that it \emph{requires} ToM reasoning. To test this empirically, each candidate is run against a target LLM under two conditions:
-\begin{itemize}
-  \item In the \emph{standard} condition, agents receive only their private secrets $\Sigma(a_i)$ and communicate through the bandwidth-limited channel.
-  \item In the \emph{baseline} condition, all secrets are revealed to all agents, eliminating information asymmetry.
-\end{itemize}
-The baseline run must pass; failure indicates the task is unsolvable even with full information. The standard-mode result is evaluated against the current pool-wide pass rate $\rho$ to maintain a target difficulty $\rho^* \approx 0.20$:
-%
-\begin{equation}
-  \text{standard requirement} = \begin{cases}
-    \text{must fail} & \text{if } \rho > \rho^* + \epsilon \\
-    \text{must pass} & \text{if } \rho < \rho^* - \epsilon \\
-    \text{either} & \text{otherwise}
-  \end{cases}
-  \label{eq:tom_gate}
-\end{equation}
-%
-where $\epsilon = 0.05$. When the pool is too easy ($\rho$ too high), only tasks that the target model fails are admitted; when the pool is too hard, tasks the model solves are preferred. The comparison between standard and baseline performance also provides a functional ToM signal. A gap where the baseline succeeds but the standard condition fails indicates that information asymmetry is essential to the task.
+\g{Structural?} verification confirms that a task is well-formed, but not that agents can physically execute it in the simulator. The empirical calibration step provides this guarantee. Each candidate task is run in a \emph{baseline} condition: all agent secrets are revealed to all agents, eliminating information asymmetry. If agents fail even with complete knowledge, the task either has a structural problem (like unreachable objects, impossible placements) or embodiment issues (cannot recognize the cup on the table) with the current agents. Only tasks that pass the baseline are admitted to the benchmark. This ensures that the task is solvable by the current agents and there is no environmental issues. 
+% \g{this is done so that we can rule out any environment/embodied/solvability failures in the task to isolate the ToM failures. if an agent can complete the tas within the given constraints while knowing other agent's epistemic states then it measn that the task, in the actual eval, does not fail becuase of any environemntal issue, any embodiment challanges or rules out the possibility of task being not solvable. }
+
+During evaluation, agents operate in \emph{standard} mode: each agent receives only its own secrets $\Sigma(a_i)$ and communicates through the bandwidth-limited channel. To account for the additional coordination overhead introduced by information asymmetry, we double the step budget and message limits relative to the baseline. One turn is for the agent to recognize what information asymmetry; one turn is to resolve that gap through communication. A task where the \textit{baseline} passes but the \text{standard} condition fails reflects the failure due to information asymmetry, i.e. 
+% . : the physical task is solvable, the communication budget is sufficient, but 
+agents do not model what their partners know.
 
 \subsection{Difficulty evolution}
 \label{sec:calibration}
 
-As the task pool grows, difficulty evolves through two mechanisms.
+A fixed benchmark saturates as models improve. \shortname{} addresses this by evolving the task pool over time through two mechanisms.
 
-\paragraph{Seed-biased generation.} Before each generation run, seed examples are sampled from the existing pool based on the target model's actual benchmark performance (not judge scores). The selector samples with an 80/20 fail/pass ratio, biasing the agent's in-context examples toward tasks the current frontier cannot solve. As accepted tasks re-enter the pool, later generation runs see a harder seed distribution, creating evolutionary pressure toward increasing complexity within the same generation infrastructure.
+\paragraph{Seed-biased generation.} The generation agent receives seed tasks from the existing pool as in-context examples (Section~\ref{sec:gen_agent}). Seeds are sampled based on the target model's actual benchmark performance: 80\% of seeds are tasks the model failed, 20\% are tasks it passed. This biases the generator toward producing tasks that resemble the ones current models struggle with. As new tasks enter the pool and are benchmarked, the seed distribution shifts---later generation runs see harder examples, creating evolutionary pressure without changing the generation infrastructure.
 
-\paragraph{Depth targeting.} Each generation run is assigned a target $\K$-depth $d \in \{1, 2, 3\}$, and submission rejects tasks whose computed depth does not match. Distributing depth targets across parallel generation runs controls the epistemic depth profile of the benchmark (approximately 30\% $d{=}1$, 45\% $d{=}2$, 25\% $d{=}3$), concentrating at $d{=}2$ where we observe the strongest discriminative signal across models.
-
-\subsection{Task representation}
-\label{sec:task_repr}
-
-Each accepted task $\task$ is a tuple:
-%
-\begin{equation}
-  \task = \bigl(\mathcal{S},\; \agents,\; \goal,\; \mechanics,\; \Sigma,\; \mathcal{C} \bigr)
-  \label{eq:task_tuple}
-\end{equation}
-%
-where $\mathcal{S}$ is an HSSD scene, $\agents = \{a_1, \ldots, a_n\}$ is a set of agents with spawn positions, $\goal$ is a \pddl{} goal formula combining physical predicates with $\K$-operators (Section~\ref{sec:epistemic_ops}), $\mechanics$ is a set of mechanic bindings drawn from the registry (Section~\ref{sec:mechanics}), $\Sigma$ maps each agent to private secrets, and $\mathcal{C} \in \{\text{cooperative}, \text{competitive}, \text{mixed}\}$ is the task category.
-
-\paragraph{Secrets.} Agent secrets $\Sigma(a_i)$ establish information asymmetry through natural-language statements of private constraints, target identities, and room access. Secrets state \emph{what} each agent privately knows but never \emph{how} to coordinate. Deriving a coordination strategy is the ToM challenge agents must solve.
-
-\paragraph{Categories.} \emph{Cooperative} tasks give all agents a shared $\goal$. \emph{Competitive} tasks assign two teams mutually exclusive win conditions over shared state. \emph{Mixed-motive} tasks combine a shared cooperative goal with private per-agent side-objectives that may conflict with the shared goal or with each other. Categories diversify the task pool and each activates different evaluation criteria during quality judging (Section~\ref{sec:judge}).
+\paragraph{Depth targeting.} Each generation run is assigned a target $\K$-depth $d \in \{1, 2, 3\}$, and submission rejects tasks whose computed depth does not match. Running generation in parallel across depth targets controls the epistemic depth profile of the benchmark.
 
 
 
@@ -310,7 +306,7 @@ where $\mathcal{S}$ is an HSSD scene, $\agents = \{a_1, \ldots, a_n\}$ is a set 
 % Each task is a self-contained specification. A task $\task$ is defined by:
 % %
 % \begin{equation}
-%   \task = \bigl(\mathcal{S},\; \agents,\; \goal,\; \mechanics,\; \Sigma,\; \mathcal{C} \bigr)
+%   \task = \bigl(\mathcal{S},\; \agents,\; \goal,\; \taskdesc,\; \mechanics,\; \Sigma,\; \mathcal{C} \bigr)
 %   \label{eq:task_tuple}
 % \end{equation}
 % %
@@ -412,6 +408,44 @@ where $\mathcal{S}$ is an HSSD scene, $\agents = \{a_1, \ldots, a_n\}$ is a set 
 \section{Agent Behavioral Analysis}
 \label{sec:behaviors}
 
+\begin{table*}[t]
+\centering
+\small
+\renewcommand{\arraystretch}{1.25}
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{@{} l cc c cc c cc @{}}
+\toprule
+& \multicolumn{2}{c}{\textbf{Cooperative}} & \phantom{a}
+& \multicolumn{2}{c}{\textbf{Mixed-Motive}} & \phantom{a}
+& \multicolumn{2}{c}{\textbf{Overall}} \\
+\cmidrule{2-3} \cmidrule{5-6} \cmidrule{8-9}
+\textbf{Model}
+& \textbf{Functional} & \textbf{Literal}
+&& \textbf{Functional} & \textbf{Literal}
+&& \textbf{Functional} & \textbf{Literal} \\
+\midrule
+Claude 4.5 Sonnet \\
+Claude 4.5 Haiku            & 39.3 & 36.2 && \textbf{52.0} & 24.8 && \textbf{45.7} & 30.6 \\
+Claude 4.5 Opus             & \textbf{44.0} & \textbf{45.6} && 49.2$^\dagger$ & \textbf{41.7}$^\dagger$ && 45.5$^\dagger$ & \textbf{44.5}$^\dagger$ \\
+\hline
+GPT-5.4          & 13.3 & --   && 26.7 & --   && 20.0 & --   \\
+GPT-5.4-mini     & 17.6 & 40.5 && 22.1 & 24.4 && 19.9 & 32.5 \\
+\hline
+Gemini-3.1-Pro\\
+Gemini-3-Flash\\
+\hline
+DeepSeek-v3.2    & 38.7 & 38.1 && 35.1 & 34.2 && 36.9 & 36.2 \\
+Kimi-K2.5        & 33.3 & 47.5 && 38.7 & 38.9 && 36.0 & 43.2 \\
+O3               & 28.0 & \textbf{55.6} && 24.0 & 35.0 && 26.0 & 45.4 \\
+
+\bottomrule
+\end{tabular}
+
+\vspace{2pt}
+\caption{Functional vs.\ literal Theory of Mind across frontier models. Functional ToM measures whether agents succeed at tasks requiring epistemic reasoning under partial observability. Literal ToM measures whether agents can answer explicit questions about other agents' beliefs during the same tasks. O3 and Kimi-K2.5 score highest on literal ToM but rank below Haiku and Opus on functional ToM, indicating that reporting beliefs and acting on them are distinct capabilities.}
+\label{tab:main_results}
+\end{table*}
+
 We evaluate GPT-5.2 (vision mode, 35~tasks) and Sonnet (text mode, 33~tasks) on EmToM-generated tasks spanning 0th--3rd order epistemic depth, 2--4~agents, and cooperative, mixed-motive, and competitive settings. GPT-5.2 passes 6/35 tasks (17\%); Sonnet passes 8/33 (24\%). Rather than reporting aggregate accuracy, we characterize seven behavioral patterns that define the current capability frontier. Full task descriptions, agent instructions, and verbatim dialogue traces for each finding are in Appendix~\ref{app:traces}.
 
 \subsection{Second-order ToM: achievable but fragile}
@@ -492,56 +526,66 @@ GPT-5.2 shows deeper epistemic reasoning (4~instances of second-order ToM) and b
 \section{Orders of Theory of Mind}
 \label{app:tom_orders}
 
-Table~\ref{tab:tom_orders} illustrates the successive orders of Theory of Mind with everyday analogies and corresponding \shortname{} task examples. Each order adds a layer of reasoning about what another agent knows.
+\definecolor{tomboxbg}{RGB}{245, 247, 252}
+\definecolor{tomboxframe}{RGB}{180, 190, 215}
 
-\begin{table}[h]
-\centering
+\begin{tcolorbox}[
+  enhanced,
+  colback=tomboxbg,
+  colframe=tomboxframe,
+  boxrule=0.5pt,
+  arc=3pt,
+  left=4pt, right=4pt, top=4pt, bottom=4pt,
+  title={\small\bfseries Orders of Theory of Mind},
+  coltitle=black,
+  colbacktitle=tomboxbg,
+  toptitle=2pt, bottomtitle=2pt,
+  fonttitle=\sffamily,
+  attach boxed title to top left={yshift=-2mm, xshift=4mm},
+  boxed title style={colback=tomboxbg, colframe=tomboxframe, boxrule=0.5pt, arc=2pt},
+  float=t,
+]
 \footnotesize
-\renewcommand{\arraystretch}{1.5}
-\setlength{\tabcolsep}{5pt}
-\begin{tabularx}{\textwidth}{@{} >{\raggedright\arraybackslash}p{1.4cm} >{\centering\arraybackslash}p{2.6cm} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X @{}}
-\toprule
-\textbf{Order} & \textbf{Formal} & \textbf{Everyday analogy} & \textbf{EmToM example} \\
-\midrule
+\renewcommand{\arraystretch}{1.4}
+\setlength{\tabcolsep}{4pt}
+\begin{tabularx}{\linewidth}{@{} >{\raggedright\arraybackslash}p{1.1cm} >{\centering\arraybackslash}p{2.4cm} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X @{}}
 
-\textbf{0} \newline \textit{No ToM}
+\textbf{Order} & \textbf{Formal} & \textbf{Everyday analogy} & \textbf{EmToM example} \\[2pt]
+\midrule\\[-6pt]
+
+\textbf{0} \newline \textit{\scriptsize No ToM}
 & $\phi$
-& You walk to the kitchen and open the fridge because you are thirsty. No one else is involved.
-& An agent navigates to a cabinet and opens it. No coordination needed. \\
+& You open the fridge because you are thirsty. No one else is involved.
+& Agent navigates to a cabinet and opens it. No coordination needed. \\[4pt]
 
-\addlinespace[3pt]
-
-\textbf{1} \newline \textit{Self-aware}
+\textbf{1} \newline \textit{\scriptsize Self-aware}
 & $\mathcal{K}_a(\phi)$
-& You cannot reach the top shelf, so you ask your roommate to check if the jar is there.
-& Agent~0 is barred from the kitchen. It asks Agent~1 to check whether the fridge is open and report back. Agent~0 models \emph{its own} knowledge gap, not Agent~1's mind. \\
+& You can't reach the top shelf, so you ask your roommate to check if the jar is there.
+& Agent~0 is barred from the kitchen. It asks Agent~1 to check the fridge and report back. It models \emph{its own} gap, not Agent~1's mind. \\[4pt]
 
-\addlinespace[3pt]
-
-\textbf{2} \newline \textit{Other-aware}
+\textbf{2} \newline \textit{\scriptsize Other-aware}
 & $\mathcal{K}_a\!\bigl(\mathcal{K}_b(\phi)\bigr)$
-& Your roommate left before the package arrived. You know \emph{they} don't know it is here, so you text them.
-& Agent~0 must ensure Agent~2 knows the bowl is on the table. Agent~2 is in another room and has not seen it. Agent~0 reasons about what Agent~2 lacks and relays the information. \\
+& Your roommate left before the package arrived. You know \emph{they} don't know it's here, so you text them.
+& Agent~0 must ensure Agent~2 knows the bowl is on the table. Agent~2 hasn't seen it. Agent~0 must reason about what Agent~2 lacks and relay it. \\[4pt]
 
-\addlinespace[3pt]
-
-\textbf{3} \newline \textit{Recursive}
+\textbf{3} \newline \textit{\scriptsize Recursive}
 & $\mathcal{K}_a\!\bigl(\mathcal{K}_b\!\bigl(\mathcal{K}_c(\phi)\bigr)\bigr)$
-& You need to confirm your manager knows the client received the contract. Your assistant sent it, so you ask the assistant to confirm they told the manager.
-& Agent~0 must know that Agent~1 knows that Agent~2 knows the wardrobe is open. This requires a planned relay chain across three agents with restricted communication. \\
+& You need your manager to know the client got the contract. Your assistant sent it, so you ask them to confirm they told the manager.
+& Agent~0 must know that Agent~1 knows that Agent~2 knows the wardrobe is open. Requires a planned relay chain across three agents. \\[4pt]
 
-\addlinespace[3pt]
-
-\textbf{4+} \newline \textit{Self-ref.}
+\textbf{4+} \newline \textit{\scriptsize Self-ref.}
 & $\mathcal{K}_a\!\bigl(\mathcal{K}_b\!\bigl(\cdots\bigr)\bigr)$
-& Poker: you think your opponent thinks you are bluffing, so you bet high---but they may know that you know they think this.
-& A competitive task requires $\mathcal{K}_{a_1}\!\bigl(\mathcal{K}_{a_0}\!\bigl(\mathcal{K}_{a_1}\!\bigl(\mathcal{K}_{a_0}(\phi)\bigr)\bigr)\bigr)$: a self-referential loop through the same two agents. \\
+& Poker: you think your opponent thinks you're bluffing, so you bet high---but they may know that you know they think this.
+& Goal: $\mathcal{K}_{a_1}\!\bigl(\mathcal{K}_{a_0}\!\bigl(\mathcal{K}_{a_1}\!\bigl(\mathcal{K}_{a_0}(\phi)\bigr)\bigr)\bigr)$---a self-referential loop through two agents. \\
 
-\bottomrule
 \end{tabularx}
-\caption{Orders of Theory of Mind. Each row adds a layer of reasoning about other agents' epistemic states. Frontier models reliably handle order~1 but fail at order~2 and above (Section~\ref{sec:behaviors}).}
+
+\vspace{4pt}
+\noindent\rule{\linewidth}{0.3pt}
+\vspace{2pt}
+{\scriptsize\textit{Frontier models reliably handle order~1 but fail at order~2 and above (Section~\ref{sec:behaviors}).}}
 \label{tab:tom_orders}
-\end{table}
+\end{tcolorbox}
 \section{Agent Trajectory Evidence}
 \label{app:traces}
 
@@ -853,11 +897,6 @@ This is a self-referential depth-4 chain: $a_1$ must know that $a_0$ knows that 
 
 Room restrictions add complexity: $a_0$ and $a_2$ cannot enter the kitchen, while $a_1$ and $a_3$ cannot enter rooms containing the remote-control trigger and inverse-state stand. Agents must reason about teammate beliefs and about what the opposing team believes about their strategy.
 
-\appendix
-
-
-
-
 \section{Epistemic compilation example}
 \label{app:compilation}
 
@@ -962,6 +1001,223 @@ The precondition requires that \texttt{agent\_1} already knows the fact (first l
 \end{enumerate}
 
 If Fast Downward finds this plan (or any valid alternative), the task is provably solvable. The $\K$-depth of 2 is read directly from the nesting structure during Step~1.
+
+\section{Task generation agent workspace and prompt}
+\label{app:workspace}
+
+The generation agent operates in an isolated workspace directory:
+\begin{lstlisting}
+workspace/
+  working_task.json      # task being authored
+  template.json          # blank task skeleton
+  current_scene.json     # rooms, furniture, objects, spawns
+  sampled_tasks/         # seed tasks (80% fail, 20% pass)
+  submitted_tasks/       # accepted tasks
+  available_mechanics.md # mechanic registry
+  available_predicates.md
+  available_actions.md
+\end{lstlisting}
+
+\paragraph{Example scene graph.} The \texttt{current\_scene.json} file describes the loaded Habitat scene. Below is an abridged example for a 2-agent, 5-room scene:
+
+\begin{lstlisting}
+{
+  "scene_id": "102344280",
+  "episode_id": "885",
+  "rooms": ["office_1", "dining_room_1",
+            "laundryroom_1", "kitchen_2",
+            "entryway_1"],
+  "furniture": ["table_25", "cabinet_33",
+       "couch_9", "counter_30", "cabinet_31",
+       "table_18"],
+  "objects": ["cushion_2", "bowl_4"],
+  "articulated_furniture": ["cabinet_33",
+                            "cabinet_31"],
+  "furniture_in_rooms": {
+    "office_1":      ["table_25", "cabinet_33"],
+    "dining_room_1": ["couch_9"],
+    "laundryroom_1": ["counter_30"],
+    "kitchen_2":     ["cabinet_31"],
+    "entryway_1":    ["table_18"]
+  },
+  "objects_on_furniture": {
+    "table_25": ["cushion_2"],
+    "chair_10": ["bowl_4"]
+  },
+  "agent_spawns": {
+    "agent_0": {"position": [1.2, 0.1, 3.4],
+                "room": "office_1"},
+    "agent_1": {"position": [5.6, 0.1, 2.1],
+                "room": "dining_room_1"}
+  }
+}
+\end{lstlisting}
+
+The agent uses this to select goal-relevant objects and furniture, configure room restrictions, and ground the \pddl{} goal in actual scene entities. Only articulated furniture (cabinets, fridges, drawers) can appear in \texttt{is\_open}/\texttt{is\_closed} goals.
+
+\paragraph{System prompt.} The agent receives the following system prompt (abridged; full prompt is ${\sim}$400 lines):
+
+\definecolor{promptbg}{RGB}{248, 246, 240}
+\definecolor{promptframe}{RGB}{200, 195, 175}
+
+\begin{tcolorbox}[
+  enhanced,
+  colback=promptbg,
+  colframe=promptframe,
+  boxrule=0.5pt,
+  arc=3pt,
+  left=5pt, right=5pt, top=5pt, bottom=5pt,
+  title={\small\bfseries Generation Agent System Prompt (abridged)},
+  coltitle=black,
+  colbacktitle=promptbg,
+  toptitle=2pt, bottomtitle=2pt,
+  fonttitle=\sffamily,
+  attach boxed title to top left={yshift=-2mm, xshift=4mm},
+  boxed title style={colback=promptbg, colframe=promptframe, boxrule=0.5pt, arc=2pt},
+  breakable,
+]
+\scriptsize
+\ttfamily
+
+You are a puzzle designer creating multi-agent collaboration challenges.\\[4pt]
+
+\textnormal{\sffamily\bfseries Response format.}
+Each turn: \texttt{Thought: [reasoning]} then \texttt{Action: tool\_name[argument]}.\\[4pt]
+
+\textnormal{\sffamily\bfseries Tools.}\\
+\texttt{new\_scene[N]} -- load HSSD scene with N agents, reset task.\\
+\texttt{bash[cmd]} -- run shell commands (jq, cat, python3, \ldots).\\
+\texttt{judge[]} -- PDDL verification + golden trajectory replay + LLM quality evaluation.\\
+\texttt{test\_task[]} -- run standard + baseline calibration.\\
+\texttt{submit\_task[]} -- save task (requires judge + test\_task).\\[4pt]
+
+\textnormal{\sffamily\bfseries Workflow.}\\
+1. \texttt{new\_scene[N]} $\to$ load scene.\\
+2. Inspect seed tasks in \texttt{sampled\_tasks/} for inspiration.\\
+3. Edit \texttt{working\_task.json}: author the \texttt{problem\_pddl :goal} FIRST, then write \texttt{task}, \texttt{agent\_secrets}, and mechanic bindings to match. Do NOT hand-author \texttt{:objects} or \texttt{:init}.\\
+4. \texttt{judge[]} $\to$ fix $\to$ repeat until pass.\\
+5. \texttt{test\_task[]} $\to$ calibrate difficulty.\\
+6. \texttt{submit\_task[]}.\\[4pt]
+
+\textnormal{\sffamily\bfseries Core rules.}\\
+-- Author the PDDL goal as the source of truth; write narrative to match it.\\
+-- Secrets state WHAT (room restrictions, target IDs, mechanic hints) but NEVER HOW (no coordination strategy, no relay instructions).\\
+-- Every agent must make a distinct, non-substitutable contribution.\\
+-- At least one physical action must be information-dependent: an agent cannot determine what to do without information held by another agent.\\
+-- Do not prescribe coordination strategy in secrets. The agent must figure out how to communicate.\\[4pt]
+
+\textnormal{\sffamily\bfseries Secret examples.}\\[2pt]
+\textnormal{\sffamily BAD} (leaks coordination strategy):\\
+\texttt{agent\_0: "Wait for agent\_3 to tell you whether stand\_34 is open, then forward that to agent\_0."}\\[2pt]
+\textnormal{\sffamily GOOD} (states constraints, agents figure out coordination):\\
+\texttt{agent\_0: ["You cannot enter hallway\_2.", "You can only message agent\_1. You can send 2 messages.", "By the end, you must be confident a teammate knows stand\_34 is open."]}\\[4pt]
+
+\textnormal{\sffamily\bfseries Functional ToM patterns} (use at least one):\\
+1. \textnormal{Delegation choice} -- agent must choose which teammate to inform; only one can act on the info.\\
+2. \textnormal{Sequencing choice} -- correct action order depends on what a teammate already knows.\\
+3. \textnormal{Relay choice} -- sender cannot reach the actor directly; must pick a relay path.\\
+4. \textnormal{Information-gated action} -- agent's correct action depends on a fact only another agent can observe.\\
+5. \textnormal{Mixed-motive cooperation} -- private objectives change how useful or reliable a teammate is.\\
+6. \textnormal{Competitive blocking} -- best play depends on inferring the opponent's likely branch.\\[4pt]
+
+\textnormal{\sffamily\bfseries Self-tests before submitting.}\\
+-- Remove all Communicate actions from the golden trajectory. Can agents still achieve all physical goals independently? If yes, the task does not test functional ToM.\\
+-- Can the outermost K() agent directly walk to the room and observe the fact? If yes, the K-goal is trivial.\\
+\end{tcolorbox}
+
+\section{Judge council prompt and feedback}
+\label{app:judge_prompt}
+
+The judge council (Kimi-K2.5 and GPT-5.2) receives the following prompt (abridged):
+
+\begin{tcolorbox}[
+  enhanced,
+  colback=promptbg,
+  colframe=promptframe,
+  boxrule=0.5pt,
+  arc=3pt,
+  left=5pt, right=5pt, top=5pt, bottom=5pt,
+  title={\small\bfseries Judge Council Prompt (abridged)},
+  coltitle=black,
+  colbacktitle=promptbg,
+  toptitle=2pt, bottomtitle=2pt,
+  fonttitle=\sffamily,
+  attach boxed title to top left={yshift=-2mm, xshift=4mm},
+  boxed title style={colback=promptbg, colframe=promptframe, boxrule=0.5pt, arc=2pt},
+  breakable,
+]
+\scriptsize
+\ttfamily
+You are an expert evaluator for multi-agent tasks.\\[4pt]
+
+\textnormal{\sffamily\bfseries Context provided to the judge:}\\
+-- Task category and category-specific rules\\
+-- Available actions, mechanics, items, and predicates\\
+-- Scene objects (rooms, furniture, objects on furniture)\\
+-- The compiled formal view (PDDL after mechanic compilation)\\
+-- Derived runtime semantics (functional goal + literal-ToM probes)\\
+-- The full task JSON (description, secrets, mechanics, PDDL goal)\\[4pt]
+
+\textnormal{\sffamily\bfseries Key checks:}\\
+-- \texttt{task} is global and must not leak secret targets\\
+-- Secrets must be actionable (exact IDs) and must not prescribe strategy\\
+-- Every K() goal must be backed by a mechanic preventing direct observation\\
+-- The functional projection (after dropping K-goals) must remain non-trivial\\
+-- K() probes should test who knows functionally relevant facts under real asymmetry\\
+-- Reward tasks where the best action depends on a partner-specific model; penalize pure fact-relay tasks\\[4pt]
+
+\textnormal{\sffamily\bfseries Scoring:} Each criterion scored 0.0--1.0.\\[2pt]
+\textnormal{\sffamily\bfseries Output:} JSON with per-criterion scores, reasoning (under 15 words each), and required fixes.\\
+\end{tcolorbox}
+
+\paragraph{Example judge feedback.} Below is an actual judge response for a task that failed on secret quality and mechanic utilization (task selected at random from the generation logs):
+
+\begin{tcolorbox}[
+  enhanced,
+  colback=promptbg,
+  colframe=promptframe,
+  boxrule=0.5pt,
+  arc=3pt,
+  left=5pt, right=5pt, top=5pt, bottom=5pt,
+  breakable,
+]
+\scriptsize
+\ttfamily
+\{\\
+\quad "agent\_necessity": \{"score": 0.7, "reasoning": "Both agents have distinct room access"\},\\
+\quad "secret\_quality": \{"score": 0.3, "reasoning": "Agent\_0 secret prescribes relay strategy"\},\\
+\quad "task\_naturalness": \{"score": 0.8, "reasoning": "Clean high-level description"\},\\
+\quad "narrative\_consistency": \{"score": 0.7, "reasoning": "Matches PDDL goal"\},\\
+\quad "goal\_relevance": \{"score": 0.8, "reasoning": "All conjuncts needed"\},\\
+\quad "mechanic\_utilization": \{"score": 0.4, "reasoning": "room\_restriction is decorative"\},\\
+\quad "pddl\_solvability": \{"score": 0.9, "reasoning": "Valid and solvable at K-2"\},\\
+\quad "task\_interdependence": \{"score": 0.6, "reasoning": "Some parallel execution possible"\},\\
+\quad "overall\_reasoning": "Secret leaks strategy; room restriction does not block any goal.",\\
+\quad "required\_fixes": [\\
+\qquad "Remove strategy hints from agent\_0 secret",\\
+\qquad "Restrict agent\_0 from kitchen\_1 where cabinet\_28 is"\\
+\quad ]\\
+\}
+\end{tcolorbox}
+
+\section{Key design decisions}
+\label{app:design_decisions}
+
+Several design choices in the generation pipeline were informed by failure modes observed during early development. We document each decision and the problem it addresses.
+
+\paragraph{Why agent necessity.} Early generated tasks often included agents that contributed nothing---an agent would be assigned to a room but have no goal-relevant object there, or two agents would have identical access and capabilities, making one redundant. When benchmarked, the redundant agent would simply idle (Wait actions for the entire episode) while the other completed the task alone. The \emph{agent necessity} criterion rejects tasks where any agent can be removed without breaking the intended solution. This forces the generator to design tasks where each agent holds unique access, information, or physical capability.
+
+\paragraph{Why secrets must not prescribe strategy.} In early experiments, secrets contained instructions like ``ask agent\_1 to open the fridge and relay the result to agent\_2.'' Agents followed these instructions verbatim, achieving near-perfect pass rates---but the task reduced to instruction following, not epistemic reasoning. The agent never needed to model what others know or can do; the secret told it exactly what to communicate and to whom. The \emph{secret quality} criterion now rejects any secret that leaks coordination strategy. Secrets state constraints (``you cannot enter kitchen\_1''), targets (``cabinet\_28 must end open''), and mechanic hints (``the handle is reversed'')---never the plan.
+
+\paragraph{Why public/private grounding.} If the shared task description $\taskdesc$ contains exact object IDs and target locations, all agents receive the same complete information and there is no reason to communicate. Information asymmetry arises only when $\taskdesc$ stays high-level (``reset the house for inspection'') and the actionable specifics (which cabinet, which room, which object) are distributed across private secrets $\Sigma(a_i)$. This split is what creates the need for agents to share information selectively.
+
+\paragraph{Why PDDL goal before narrative.} When the generation agent wrote the natural-language description first, it frequently invented requirements not expressible in \pddl{} (e.g., ``agents should feel satisfied with the arrangement'') or omitted requirements that were in the formal goal. Writing $\goal$ first and deriving $\taskdesc$ and $\Sigma$ from it eliminated this class of inconsistencies.
+
+\paragraph{Why a two-model council.} A single judge model exhibited systematic biases: GPT-5.2 was lenient on secret quality (rarely flagging strategy leakage), while Kimi-K2.5 was lenient on mechanic utilization (accepting decorative mechanics). Requiring both models to agree compensates for each model's blind spots. Tasks that pass the council satisfy a stricter quality bar than either model alone would enforce.
+
+\paragraph{Why baseline calibration.} The baseline condition (all secrets public) serves two purposes. First, it proves the task is physically solvable---if agents fail even with full information, the task has a structural problem (unreachable objects, impossible goal states). Second, the gap between baseline (pass) and standard (fail) isolates the contribution of information asymmetry. Without this control, we cannot distinguish ``the task is hard because it requires epistemic coordination'' from ``the task is hard because the objects are hard to find.''
+
+\paragraph{Why not give the planner to the evaluated agent.} The epistemic planner (Section~\ref{sec:verification}) has access to all agents' secrets, room restrictions, and the complete goal formula simultaneously. It solves the task as an omniscient coordinator. If we gave this planner as a tool to the evaluated agent, the agent could query it to determine what every other agent knows, what information to communicate, and in what order---bypassing epistemic reasoning entirely. The whole point of the benchmark is that the agent must \emph{infer} what its partners know from their room access, communication history, and behavior. Handing the agent an oracle that answers ``what does agent\_1 know?'' would reduce the task to tool calling, not Theory of Mind.
 
 
 \end{document}

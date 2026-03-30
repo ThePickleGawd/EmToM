@@ -57,7 +57,7 @@ def test_gpt_54_uses_responses_api_with_reasoning_budget(monkeypatch):
     assert calls["responses"]["instructions"] == "You are an expert at task planning."
 
 
-def test_non_reasoning_models_keep_250_token_chat_budget(monkeypatch):
+def test_non_reasoning_gpt5_models_keep_250_token_chat_budget(monkeypatch):
     calls = {}
 
     class FakeOpenAI:
@@ -86,5 +86,34 @@ def test_non_reasoning_models_keep_250_token_chat_budget(monkeypatch):
     assert out == "ok"
     assert "responses" not in calls
     assert calls["chat"]["model"] == "gpt-5.2"
-    assert calls["chat"]["max_tokens"] == 250
+    assert calls["chat"]["max_completion_tokens"] == 250
+    assert "max_tokens" not in calls["chat"]
+    assert "stop" not in calls["chat"]
+
+
+def test_gemini_models_raise_chat_budget_floor(monkeypatch):
+    calls = {}
+
+    class FakeOpenAI:
+        def __init__(self, *args, **kwargs):
+            def chat_create(**kw):
+                calls["chat"] = kw
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
+                )
+
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=chat_create)
+            )
+            self.responses = SimpleNamespace(create=lambda **kw: None)
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr("habitat_llm.llm.openai_chat.OpenAI", FakeOpenAI)
+
+    llm = OpenAIChat(_make_conf("gemini-pro"))
+    out = llm.generate("plan this")
+
+    assert out == "ok"
+    assert calls["chat"]["model"] == "gemini-pro"
+    assert calls["chat"]["max_tokens"] == 2048
     assert calls["chat"]["stop"] == "Assigned!"

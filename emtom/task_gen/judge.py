@@ -763,6 +763,10 @@ def _get_criteria_for_category(
     criteria = list(CATEGORY_CRITERIA.get(category, SHARED_CRITERIA))
     if "pddl" in _normalize_skip_steps(skip_steps):
         criteria = [criterion for criterion in criteria if criterion != "pddl_solvability"]
+    # Support ablation: EMTOM_EXCLUDE_CRITERION=X removes criterion X from the council
+    exclude = os.environ.get("EMTOM_EXCLUDE_CRITERION", "").strip()
+    if exclude:
+        criteria = [c for c in criteria if c != exclude]
     if user_query:
         criteria.append("user_requirements_alignment")
     return criteria
