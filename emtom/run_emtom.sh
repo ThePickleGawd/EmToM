@@ -66,9 +66,9 @@ has_anthropic_api_key() {
 detect_llm_provider() {
     local model=$1
     case $model in
-        gpt-4o|gpt-4o-mini|gpt-5|gpt-5-mini|gpt-5.1|gpt-5.2|o3)
+        gpt-4o|gpt-4o-mini|gpt-5|gpt-5-mini|gpt-5.1|gpt-5.2|gpt-5.4|gpt-5.4-mini|o3)
             echo "openai_chat" ;;
-        sonnet|sonnet-4.5|sonnet4.5|haiku|haiku-4.5|haiku4.5|opus|opus-4.5|opus4.5)
+        sonnet|sonnet-4.5|sonnet4.5|sonnet-4.6|sonnet4.6|haiku|haiku-4.5|haiku4.5|opus|opus-4.5|opus4.5|opus-4.6|opus4.6)
             if has_anthropic_api_key; then
                 echo "anthropic_claude"
             else
@@ -76,6 +76,12 @@ detect_llm_provider() {
             fi
             ;;
         kimi-k2.5|accounts/fireworks/models/kimi-k2p5)
+            echo "openai_chat" ;;
+        deepseek-v3.2|accounts/fireworks/models/deepseek-v3p2)
+            echo "openai_chat" ;;
+        llama-4-maverick|accounts/fireworks/models/llama4-maverick-instruct-basic)
+            echo "openai_chat" ;;
+        gemini-pro|gemini-flash|gemini-3.1-pro-preview|gemini-3-flash-preview)
             echo "openai_chat" ;;
         kimi-k2-thinking|moonshot.kimi-k2-thinking)
             echo "bedrock_kimi" ;;
@@ -96,24 +102,26 @@ print_llm_options() {
     echo -e "┌───────────────────────────┬────────────────────┐"
     echo -e "│ ${BOLD}Model Name${NC}                │ ${BOLD}--model${NC}            │"
     echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ GPT-5                     │ ${GREEN}gpt-5${NC}              │"
-    echo -e "│ GPT-5 Mini                │ ${GREEN}gpt-5-mini${NC}         │"
-    echo -e "│ GPT-5.1                   │ ${GREEN}gpt-5.1${NC}            │"
-    echo -e "│ GPT-5.2 (default)         │ ${GREEN}gpt-5.2${NC}            │"
+    echo -e "│ GPT-5.4                   │ ${GREEN}gpt-5.4${NC}            │"
+    echo -e "│ GPT-5.4 Mini              │ ${GREEN}gpt-5.4-mini${NC}       │"
+    echo -e "│ GPT-5.2                   │ ${GREEN}gpt-5.2${NC}            │"
+    echo -e "│ O3                        │ ${GREEN}o3${NC}                 │"
     echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ Claude Sonnet             │ ${GREEN}sonnet${NC}             │"
-    echo -e "│ Claude Haiku              │ ${GREEN}haiku${NC}              │"
-    echo -e "│ Claude Opus               │ ${GREEN}opus${NC}               │"
+    echo -e "│ Claude Sonnet (4.6)       │ ${GREEN}sonnet${NC}             │"
+    echo -e "│ Claude Haiku (4.5)        │ ${GREEN}haiku${NC}              │"
+    echo -e "│ Claude Opus (4.6)         │ ${GREEN}opus${NC}               │"
     echo -e "├───────────────────────────┼────────────────────┤"
     echo -e "│ Kimi K2.5                │ ${GREEN}kimi-k2.5${NC}          │"
-    echo -e "│ Kimi K2 Thinking          │ ${GREEN}kimi-k2-thinking${NC}   │"
-    echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ Ministral 3 8B            │ ${GREEN}ministral-3-8b${NC}     │"
-    echo -e "│ Ministral 3 14B           │ ${GREEN}ministral-3-14b${NC}    │"
-    echo -e "│ Mistral Large 3           │ ${GREEN}mistral-large-3${NC}    │"
-    echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ Qwen3 Next 80B            │ ${GREEN}qwen3-next-80b${NC}     │"
+    echo -e "│ DeepSeek V3.2             │ ${GREEN}deepseek-v3.2${NC}      │"
+    echo -e "│ Llama 4 Maverick          │ ${GREEN}llama-4-maverick${NC}   │"
     echo -e "│ Qwen3 VL 235B             │ ${GREEN}qwen3-vl-235b${NC}      │"
+    echo -e "├───────────────────────────┼────────────────────┤"
+    echo -e "│ Gemini 3.1 Pro            │ ${GREEN}gemini-pro${NC}         │"
+    echo -e "│ Gemini 3 Flash            │ ${GREEN}gemini-flash${NC}       │"
+    echo -e "├───────────────────────────┼────────────────────┤"
+    echo -e "│ Mistral Large 3           │ ${GREEN}mistral-large-3${NC}    │"
+    echo -e "│ Kimi K2 Thinking          │ ${GREEN}kimi-k2-thinking${NC}   │"
+    echo -e "│ Qwen3 Next 80B            │ ${GREEN}qwen3-next-80b${NC}     │"
     echo -e "└───────────────────────────┴────────────────────┘"
     echo ""
     echo -e "${YELLOW}Example usage:${NC}"
@@ -145,6 +153,7 @@ RETRY_VERIFICATION=""  # Path to failed ToM verification file
 NO_AUTO_RETRY=false  # Disable automatic retry on judge failure
 CATEGORY=""  # Task category: cooperative, competitive, or mixed
 SEED_TASKS_DIR=""  # Task pool used by the sampled_tasks selector
+NO_ICL=false  # Disable ICL (calibration-based sampled tasks with trajectories)
 SEED_PASS_RATIO="0.20"  # Logical seed mix for target-model passing tasks
 SEED_FAIL_RATIO="0.80"  # Logical seed mix for target-model failing tasks
 NO_VIDEO=true  # Disable video saving (default: true for speed)
@@ -259,7 +268,7 @@ print_usage() {
     echo "  --seed-fail-ratio R  Logical fraction of selected seeds that should fail the target model (default: $SEED_FAIL_RATIO)"
     echo "  --sampled-tasks-dir DIR  Pre-built sampled_tasks directory (skips random sampling)"
     echo "  --k-level L [L ...]  Allowed ToM k-levels, e.g. --k-level 2 3 (default: random per task)"
-    echo "  --remove STEP [...]  Skip pipeline components: pddl, llm-council, simulation, task-evolution, tom, structure, test"
+    echo "  --remove STEP [...]  Skip pipeline components: pddl, llm-council, simulation, task-evolution, tom, structure, test, baseline"
     echo "  --tom-ratio-tolerance R  ToM ratio tolerance (default: $TOM_RATIO_TOLERANCE)"
     echo "  --output-dir DIR     Override output directory (used by generate and benchmark)"
     echo ""
@@ -280,7 +289,7 @@ print_usage() {
     echo "  --selector-max-candidates N  Vision mode selector candidate pool size (default: $SELECTOR_MAX_CANDIDATES)"
     echo "  --max-workers N      Run benchmark in parallel (N concurrent processes, GPU round-robin)"
     echo "  --num-gpus N         Number of GPUs for round-robin assignment (default: $NUM_GPUS)"
-    echo "  --no-video           Disable video recording (default: on)"
+    echo "  --video              Enable video recording (default: off)"
     echo "  --no-calibration     Don't write results back into source task JSONs"
     echo ""
     echo -e "${BOLD}Test Options:${NC}"
@@ -510,6 +519,9 @@ run_generate() {
     if [ -n "$REMOVE_STEPS" ]; then
         EXTRA_ARGS+=(--remove $REMOVE_STEPS)
     fi
+    if [ "$NO_ICL" = true ]; then
+        EXTRA_ARGS+=(--no-icl)
+    fi
 
     # Use Hydra config system with custom overrides
     # Scene is loaded live from PARTNR dataset - no trajectories needed
@@ -553,6 +565,11 @@ run_benchmark() {
 
     OBSERVATION_MODE_OVERRIDE="++benchmark_observation_mode=$OBSERVATION_MODE"
     RUN_MODE_OVERRIDE="++benchmark_run_mode=$RUN_MODE"
+    if [ "$RUN_MODE" = "standard" ]; then
+        OBSERVABILITY_OVERRIDES="++world_model.partial_obs=true ++agent_asymmetry=true"
+    else
+        OBSERVABILITY_OVERRIDES="++world_model.partial_obs=false ++agent_asymmetry=false"
+    fi
     VISION_SELECTOR_OVERRIDES=""
     if [ "$OBSERVATION_MODE" = "vision" ]; then
         VISION_SELECTOR_OVERRIDES="++benchmark_vision.selector_min_frames=$SELECTOR_MIN_FRAMES ++benchmark_vision.selector_max_frames=$SELECTOR_MAX_FRAMES ++benchmark_vision.selector_max_candidates=$SELECTOR_MAX_CANDIDATES"
@@ -619,6 +636,7 @@ run_benchmark() {
             $SAVE_VIDEO_OVERRIDE \
             $OBSERVATION_MODE_OVERRIDE \
             $RUN_MODE_OVERRIDE \
+            $OBSERVABILITY_OVERRIDES \
             $VISION_SELECTOR_OVERRIDES \
             $CATEGORY_OVERRIDE \
             +task=$TASK_FILE \
@@ -704,8 +722,8 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
             --selector-min-frames $SELECTOR_MIN_FRAMES \
             --selector-max-frames $SELECTOR_MAX_FRAMES \
             --selector-max-candidates $SELECTOR_MAX_CANDIDATES"
-        if [ "$NO_VIDEO" = true ]; then
-            PARALLEL_CMD="$PARALLEL_CMD --no-video"
+        if [ "$NO_VIDEO" != true ]; then
+            PARALLEL_CMD="$PARALLEL_CMD --video"
         fi
         if [ -n "$CATEGORY" ]; then
             PARALLEL_CMD="$PARALLEL_CMD --category $CATEGORY"
@@ -746,6 +764,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
                 $SAVE_VIDEO_OVERRIDE \
                 $OBSERVATION_MODE_OVERRIDE \
                 $RUN_MODE_OVERRIDE \
+                $OBSERVABILITY_OVERRIDES \
                 $VISION_SELECTOR_OVERRIDES \
                 $CATEGORY_OVERRIDE \
                 +num_agents_filter=$NUM_AGENTS \
@@ -1351,16 +1370,16 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
-        --no-video)
-            NO_VIDEO=true
-            shift
-            ;;
         --video)
             NO_VIDEO=false
             shift
             ;;
         --no-calibration)
             NO_CALIBRATION=true
+            shift
+            ;;
+        --no-icl)
+            NO_ICL=true
             shift
             ;;
         --max-workers)

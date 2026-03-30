@@ -7,7 +7,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from omegaconf import DictConfig, OmegaConf
 from openai import OpenAI
@@ -76,6 +76,19 @@ class OpenAIChat(BaseLLM):
         # Fireworks-hosted Kimi K2.5
     }
 
+    # Models that use the Responses API with explicit reasoning budget.
+    REASONING_MODEL_CONFIG: Dict[str, Dict[str, Any]] = {
+        "gpt-5.4": {
+            "effort": "low",
+            "max_output_tokens": 2048,
+        },
+        "o3": {
+            "effort": "medium",
+            "max_output_tokens": 2048,
+        },
+    }
+    GEMINI_MIN_CHAT_MAX_TOKENS = 2048
+
     @classmethod
     def resolve_model_alias(cls, model: str) -> str:
         """Resolve a model alias to the full OpenAI model ID."""
@@ -84,9 +97,83 @@ class OpenAIChat(BaseLLM):
     @staticmethod
     def _is_fireworks_model(model: str) -> bool:
         normalized = (model or "").strip().lower()
-        return (
-            normalized.startswith("accounts/fireworks/models/")
-        )
+        return normalized.startswith("accounts/fireworks/models/")
+
+    @staticmethod
+    def _is_gemini_model(model: str) -> bool:
+        normalized = (model or "").strip().lower()
+        return normalized.startswith("gemini-")
+
+    @staticmethod
+    def _get_model_api_style(model: str) -> str:
+        """Determine API parameter style for a model.
+
+        Returns one of:
+            'openai_new' — gpt-5.x: uses max_completion_tokens, no stop
+            'fireworks'  — Fireworks-hosted: skip max_tokens entirely (reasoning models)
+            'openai'     — everything else: standard max_tokens + stop
+        """
+        normalized = (model or "").strip().lower()
+        if normalized.startswith("accounts/fireworks/models/"):
+            return "fireworks"
+        if normalized.startswith("gemini-"):
+            return "openai"
+        if "gpt-5" in normalized or normalized in ("o3", "o3-mini", "o4-mini"):
+            return "openai_new"
+        return "openai"
+
+    @classmethod
+    def _get_reasoning_model_config(cls, model: str) -> Optional[Dict[str, Any]]:
+        normalized = (model or "").strip().lower()
+        return cls.REASONING_MODEL_CONFIG.get(normalized)
+
+    @staticmethod
+    def _to_response_input(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert chat-style messages to Responses API input items."""
+        input_items: List[Dict[str, Any]] = []
+        for message in messages:
+            role = message.get("role", "user")
+            if role == "system":
+                continue
+
+            raw_content = message.get("content", "")
+            if isinstance(raw_content, list):
+                content: List[Dict[str, Any]] = []
+                for part in raw_content:
+                    if not isinstance(part, dict):
+                        continue
+                    part_type = part.get("type")
+                    if part_type == "text":
+                        content.append({"type": "input_text", "text": part.get("text", "")})
+                    elif part_type == "image_url":
+                        image = part.get("image_url") or {}
+                        content.append(
+                            {
+                                "type": "input_image",
+                                "image_url": image.get("url"),
+                                "detail": image.get("detail", "auto"),
+                            }
+                        )
+            else:
+                content = [{"type": "input_text", "text": str(raw_content)}]
+
+            input_items.append({"role": role, "content": content})
+
+        return input_items
+
+    @staticmethod
+    def _extract_response_text(response: Any) -> str:
+        output_text = getattr(response, "output_text", None)
+        if isinstance(output_text, str):
+            return output_text
+
+        chunks: List[str] = []
+        for item in getattr(response, "output", []) or []:
+            for content in getattr(item, "content", []) or []:
+                text = getattr(content, "text", None)
+                if isinstance(text, str):
+                    chunks.append(text)
+        return "".join(chunks)
 
     def __init__(self, conf: DictConfig):
         """
@@ -104,6 +191,14 @@ class OpenAIChat(BaseLLM):
                 os.getenv("FIREWORKS_BASE_URL")
                 or os.getenv("OPENAI_BASE_URL")
                 or "https://api.fireworks.ai/inference/v1"
+            ).strip()
+        elif self._is_gemini_model(model_name):
+            api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+            if not api_key:
+                raise ValueError("No GEMINI_API_KEY provided")
+            base_url = (
+                os.getenv("GEMINI_BASE_URL")
+                or "https://generativelanguage.googleapis.com/v1beta/openai/"
             ).strip()
         else:
             api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
@@ -170,30 +265,58 @@ class OpenAIChat(BaseLLM):
             image_detail = "low"  # high/low/auto
             messages.append(generate_message(prompt, image_detail=image_detail))
 
-        # Pass temperature to ensure non-deterministic exploration
-        # Note: Some models (o1, o3, gpt-5) only support temperature=1
-        model_name = params["model"].lower()
         temperature = params.get("temperature", 0.7)
+        reasoning_cfg = self._get_reasoning_model_config(params["model"])
+        api_style = self._get_model_api_style(params["model"])
+        token_limit = params.get("max_tokens")
+        if self._is_gemini_model(params["model"]) and token_limit is not None:
+            # Gemini reasoning models often spend a large share of the output budget
+            # before emitting the first visible action line. Keep a higher floor here
+            # so planner prompts can reach `Agent_{id}_Action: ...` reliably.
+            token_limit = max(token_limit, self.GEMINI_MIN_CHAT_MAX_TOKENS)
 
-        # Models that don't support custom temperature
-        fixed_temp_models = ["o1", "o3", "gpt-5"]
-        uses_fixed_temp = any(m in model_name for m in fixed_temp_models)
-
-        if uses_fixed_temp:
-            # These models only support temperature=1, don't pass it
-            text_response = self.client.chat.completions.create(
-                model=params["model"],
-                messages=messages,
-                timeout=request_timeout,
-            )
+        if reasoning_cfg:
+            # Responses API path (gpt-5.4 with reasoning)
+            response_kwargs: Dict[str, Any] = {
+                "model": params["model"],
+                "input": self._to_response_input(messages),
+                "reasoning": {"effort": reasoning_cfg["effort"]},
+                "max_output_tokens": (
+                    max_length if max_length is not None else reasoning_cfg["max_output_tokens"]
+                ),
+                "timeout": request_timeout,
+            }
+            if self.llm_conf.system_message:
+                response_kwargs["instructions"] = self.llm_conf.system_message
+            response = self.client.responses.create(**response_kwargs)
+            text_response = self._extract_response_text(response)
         else:
-            text_response = self.client.chat.completions.create(
-                model=params["model"],
-                messages=messages,
-                temperature=temperature,
-                timeout=request_timeout,
-            )
-        text_response = text_response.choices[0].message.content
+            # Chat Completions API path
+            completion_kwargs: Dict[str, Any] = {
+                "model": params["model"],
+                "messages": messages,
+                "timeout": request_timeout,
+            }
+
+            # Token limit + stop: depends on provider/model family
+            if api_style == "fireworks":
+                pass  # Fireworks reasoning models need unrestricted output
+            elif api_style == "openai_new":
+                # gpt-5.x: max_completion_tokens, no stop
+                if token_limit is not None:
+                    completion_kwargs["max_completion_tokens"] = token_limit
+            else:
+                # Standard OpenAI / other providers
+                if token_limit is not None:
+                    completion_kwargs["max_tokens"] = token_limit
+                if stop is not None:
+                    completion_kwargs["stop"] = stop
+
+            # Temperature: all chat-completion models support it
+            completion_kwargs["temperature"] = temperature
+
+            response = self.client.chat.completions.create(**completion_kwargs)
+            text_response = response.choices[0].message.content
         self.response = text_response
 
         # Update message history

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from emtom.task_gen.external_agent import ExternalAgentLauncher
 from emtom.task_gen.prompts import build_external_taskgen_prompt
-from emtom.task_gen.runner import _copy_sample_with_aliases, build_workspace_id
+from emtom.task_gen.runner import _copy_sample, _write_bootstrap_files, build_workspace_id
 from emtom.task_gen.session import TaskGenSession, default_state
 
 
@@ -92,25 +92,39 @@ def test_build_external_prompt_rewrites_taskgen_commands():
         working_dir="/repo/tmp/task_gen/run",
         task_file="/repo/tmp/task_gen/run/working_task.json",
         category="cooperative",
-        available_items="item_a",
-        available_mechanics="room_restriction",
-        available_predicates="is_open",
-        action_descriptions="Navigate",
-        extra_sections="## Required K-Level: 2",
         num_tasks=1,
         agents_min=2,
         agents_max=3,
         subtasks_min=2,
         subtasks_max=4,
+        current_k_level=2,
     )
 
-    assert "taskgen new_scene N" in prompt
-    assert "taskgen judge" in prompt
-    assert "taskgen submit_task" in prompt
-    assert "taskgen finish" in prompt
+    assert "`taskgen new_scene N`" in prompt
+    assert "`taskgen judge`" in prompt
+    assert "`taskgen submit_task`" in prompt
+    assert "`taskgen finish`" in prompt
     assert "judge[]" not in prompt
     assert "submit_task[]" not in prompt
     assert "sampled_trajectories" not in prompt
+    assert "## Good ToM" in prompt
+    assert "## Required K-Level: 2" in prompt
+
+
+def test_bootstrap_prompt_contains_full_taskgen_prompt(tmp_path):
+    prompt = "full task instructions"
+
+    _write_bootstrap_files(
+        working_dir=tmp_path,
+        prompt_text=prompt,
+        available_items="item_a",
+        available_mechanics="room_restriction",
+        available_predicates="is_open",
+        action_descriptions="Navigate",
+    )
+
+    assert (tmp_path / "bootstrap_prompt.txt").read_text() == prompt
+    assert (tmp_path / "taskgen_prompt.md").read_text() == prompt
 
 
 def test_sampled_task_aliases_preserve_original_text(tmp_path):
@@ -121,12 +135,10 @@ def test_sampled_task_aliases_preserve_original_text(tmp_path):
     }
     source.write_text(json.dumps(original))
 
-    _copy_sample_with_aliases(source, tmp_path, 1)
+    _copy_sample(source, tmp_path, 1)
 
     copied = json.loads((tmp_path / "task_1.json").read_text())
-    padded = json.loads((tmp_path / "task_001.json").read_text())
     assert copied == original
-    assert padded == original
 
 
 def test_build_workspace_id_starts_with_timestamp():
@@ -145,13 +157,14 @@ def test_taskgen_session_finish_and_fail(tmp_path):
         subtasks_min=2,
         subtasks_max=4,
         category=None,
-        seed_task=None,
         seed_tasks_dir=None,
-        random_seed_task=False,
+        seed_pass_ratio=0.2,
+        seed_fail_ratio=0.8,
         judge_threshold=None,
         difficulty=None,
         test_model=None,
         calibration_stats={"model": "gpt-5.2", "target_rate": 0.20},
+        calibration_tasks_dirs=[],
         task_gen_agent="mini",
         allowed_k_levels=[2],
     )

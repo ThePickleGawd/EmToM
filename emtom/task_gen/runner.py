@@ -20,13 +20,17 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional, Union
 
-from emtom.actions import ActionRegistry
-from emtom.mechanics import get_mechanics_for_task_generation
-from emtom.pddl.domain import get_predicates_for_prompt
 from emtom.task_gen.event_log import append_event, maybe_int, write_run_manifest, write_worker_snapshot
 from emtom.task_gen.external_agent import ExternalAgentError, ExternalAgentLauncher
+from emtom.task_gen.authoring_surface import (
+    AUTHORING_ITEMS_NOTICE,
+    get_authoring_action_descriptions,
+    get_authoring_default_actions,
+    get_authoring_mechanics,
+    get_authoring_predicates,
+)
 from emtom.task_gen.prompts import build_external_taskgen_prompt
 from emtom.task_gen.seed_selector import (
     SeedSelectionConfig,
@@ -35,7 +39,6 @@ from emtom.task_gen.seed_selector import (
     select_seed_tasks,
 )
 from emtom.task_gen.session import default_state
-from emtom.state.item_registry import ItemRegistry
 
 
 def parse_extra_args():
@@ -55,6 +58,8 @@ def parse_extra_args():
     parser.add_argument("--seed-pass-ratio", type=float, default=0.20)
     parser.add_argument("--seed-fail-ratio", type=float, default=0.80)
     parser.add_argument("--sampled-tasks-dir", type=str, default=None)
+    parser.add_argument("--no-icl", action="store_true",
+                        help="Disable ICL: do not prepare calibration-based sampled tasks")
     parser.add_argument("--judge-threshold", type=float, default=None)
     parser.add_argument(
         "--difficulty",
@@ -153,6 +158,30 @@ def _copy_sample(src_path: Path, sampled_tasks_dir: Path, index: int) -> None:
     shutil.copy(src_path, sampled_tasks_dir / f"task_{index}.json")
 
 
+def _write_sampled_task_field_views(sampled_tasks_dir: Path) -> None:
+    field_names = [
+        "task",
+        "active_mechanics",
+        "mechanic_bindings",
+        "agent_secrets",
+        "agent_actions",
+        "problem_pddl",
+        "num_agents",
+    ]
+
+    for task_path in sorted(sampled_tasks_dir.glob("task_*.json")):
+        try:
+            with open(task_path) as f:
+                task_data = json.load(f)
+        except Exception:
+            continue
+
+        filtered = {field: task_data.get(field) for field in field_names}
+        view_path = task_path.with_name(f"{task_path.stem}_fields.json")
+        with open(view_path, "w") as f:
+            json.dump(filtered, f, indent=2)
+
+
 def populate_sampled_tasks_dir(
     sampled_tasks_dir: Path,
     selection_config: SeedSelectionConfig,
@@ -161,32 +190,63 @@ def populate_sampled_tasks_dir(
     selected = select_seed_tasks(selection_config, count=sample_count)
     for i, candidate in enumerate(selected, 1):
         _copy_sample(candidate.path, sampled_tasks_dir, i)
+    _write_sampled_task_field_views(sampled_tasks_dir)
     return selection_config.tasks_dir if selected else None, len(selected)
 
 
-def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
+def compute_calibration_stats(tasks_dir: Union[str, Iterable[str]], model: str) -> dict:
     from emtom.evolve.benchmark_wrapper import cal_passed, find_calibration_entry
 
+    _empty_cat = lambda: {"passed": 0, "failed": 0, "total": 0, "rate": None}
     stats = {
         "passed": 0,
         "failed": 0,
         "untested": 0,
+        "excluded_tom_level_zero": 0,
         "model": model,
         "tom_counts": {0: 0, 1: 0, 2: 0, 3: 0},
         "tom_total": 0,
         "tom_unknown": 0,
         "tom_ratios": {0: None, 1: None, 2: None, 3: None},
+        "by_category": {
+            "cooperative": _empty_cat(),
+            "competitive": _empty_cat(),
+            "mixed": _empty_cat(),
+        },
     }
-    tasks_path = Path(tasks_dir)
-    if not tasks_path.exists():
+    task_dirs = [tasks_dir] if isinstance(tasks_dir, str) else list(tasks_dir)
+    task_paths = [Path(path) for path in task_dirs if path]
+    if not task_paths:
         stats["total"] = 0
         stats["rate"] = None
         return stats
 
-    for task_file in tasks_path.glob("*.json"):
+    seen_keys = set()
+    task_files = []
+    for tasks_path in task_paths:
+        if not tasks_path.exists():
+            continue
+        for task_file in tasks_path.glob("*.json"):
+            try:
+                with open(task_file) as f:
+                    task = json.load(f)
+            except Exception:
+                continue
+            if not isinstance(task, dict):
+                continue
+            task_key = task.get("task_id") or str(task_file.resolve())
+            if task_key in seen_keys:
+                continue
+            seen_keys.add(task_key)
+            task_files.append((task_file, task))
+
+    if not task_files:
+        stats["total"] = 0
+        stats["rate"] = None
+        return stats
+
+    for task_file, task in task_files:
         try:
-            with open(task_file) as f:
-                task = json.load(f)
             tom_level = _infer_task_tom_level(task)
             if tom_level in (0, 1, 2, 3):
                 stats["tom_counts"][tom_level] += 1
@@ -194,18 +254,31 @@ def compute_calibration_stats(tasks_dir: str, model: str) -> dict:
             else:
                 stats["tom_unknown"] += 1
 
+            if isinstance(tom_level, int) and tom_level < 1:
+                stats["excluded_tom_level_zero"] += 1
+                continue
+
             cal = find_calibration_entry(task.get("calibration", []), model=model)
+            category = task.get("category", "cooperative")
+            cat_bucket = stats["by_category"].get(category)
             if cal is None:
                 stats["untested"] += 1
             elif cal_passed(cal):
                 stats["passed"] += 1
+                if cat_bucket is not None:
+                    cat_bucket["passed"] += 1
             else:
                 stats["failed"] += 1
+                if cat_bucket is not None:
+                    cat_bucket["failed"] += 1
         except Exception:
             continue
 
     stats["total"] = stats["passed"] + stats["failed"]
     stats["rate"] = stats["passed"] / stats["total"] if stats["total"] > 0 else None
+    for cat_stats in stats["by_category"].values():
+        cat_stats["total"] = cat_stats["passed"] + cat_stats["failed"]
+        cat_stats["rate"] = cat_stats["passed"] / cat_stats["total"] if cat_stats["total"] > 0 else None
     if stats["tom_total"] > 0:
         for level in (0, 1, 2, 3):
             stats["tom_ratios"][level] = stats["tom_counts"][level] / stats["tom_total"]
@@ -232,111 +305,12 @@ def _load_verification_feedback(path_str: Optional[str]) -> Optional[dict]:
     }
 
 
-def _build_extra_sections(
-    *,
-    query: Optional[str],
-    verification_feedback: Optional[dict],
-    calibration_stats: dict,
-    difficulty: Optional[str],
-    current_k_level: int,
-    seed_tasks_dir: Optional[str],
-    seed_pass_ratio: float,
-    seed_fail_ratio: float,
-) -> str:
-    sections: list[str] = []
-
-    if query:
-        sections.append(f"## User Requirements\n{query}")
-
-    if verification_feedback:
-        lines = [
-            "## Previous ToM Verification Failed",
-            verification_feedback.get("overall_reasoning", ""),
-            "",
-            "Required Fixes:",
-        ]
-        for fix in verification_feedback.get("required_fixes", []):
-            lines.append(f"- {fix}")
-        sections.append("\n".join(lines))
-
-    if difficulty:
-        difficulty_guidance = {
-            "easy": (
-                "## Difficulty: EASY\n"
-                "- Prefer 0-1 mechanics.\n"
-                "- Keep tasks simple and directly actionable.\n"
-                "- Use 2-3 subtasks and 2-3 agents.\n"
-                "- Secrets must explain active mechanics plainly.\n"
-            ),
-            "medium": (
-                "## Difficulty: MEDIUM\n"
-                "- Use 3-4 agents with distinct roles.\n"
-                "- Favor restricted communication and room restrictions.\n"
-                "- Keep the physical core small: 2-4 subtasks and usually one non-trivial K() chain.\n"
-                "- Prefer one grounded final-state fact reused by both the physical goal and the K() goal.\n"
-            ),
-            "hard": (
-                "## Difficulty: HARD\n"
-                "- Prefer tasks that GPT-5.2 fails.\n"
-                "- Force relay chains, genuine delegation choices, and room-gated roles.\n"
-                "- Keep mechanics purposeful and avoid prescriptive secrets.\n"
-                "- Keep the physical core compact; strict K() evidence is easier to pass with one strong non-trivial K-chain than many weak ones.\n"
-            ),
-        }
-        sections.append(difficulty_guidance[difficulty])
-    else:
-        model = calibration_stats.get("model", "unknown")
-        target_rate = calibration_stats.get("target_rate", 0.20)
-        current_rate = calibration_stats.get("rate")
-        if current_rate is None:
-            sections.append(
-                f"## Dataset Calibration\nNo calibration data yet for {model}. Generate varied tasks."
-            )
-        elif current_rate > target_rate + 0.05:
-            sections.append(
-                f"## Dataset Calibration\nCurrent {model} pass rate is {current_rate:.1%}, above the {target_rate:.0%} target. Generate harder tasks."
-            )
-        elif current_rate < target_rate - 0.05:
-            sections.append(
-                f"## Dataset Calibration\nCurrent {model} pass rate is {current_rate:.1%}, below the {target_rate:.0%} target. Generate easier tasks."
-            )
-        else:
-            sections.append(
-                f"## Dataset Calibration\nCurrent {model} pass rate is {current_rate:.1%}, near the {target_rate:.0%} target. Keep varied difficulty."
-            )
-
-    sections.append(
-        "\n".join(
-            [
-                f"## Required K-Level: {current_k_level}",
-                f"This task must verify at ToM level {current_k_level}.",
-                "Submissions are rejected if the computed tom_level does not match.",
-            ]
-        )
-    )
-
-    if seed_tasks_dir:
-        target_model = calibration_stats.get("model", "unknown")
-        sections.append(
-            "\n".join(
-                [
-                    "## Sampled Task Context",
-                    f"`{seed_tasks_dir}` is used to populate `{Path(seed_tasks_dir).name}` examples for inspiration.",
-                    f"Target model: {target_model}. Logical sampled-task mix: fail {seed_fail_ratio:.0%}, pass {seed_pass_ratio:.0%}.",
-                    "Start each task from the scene-grounded template in working_task.json. Do not copy a seed task directly.",
-                ]
-            )
-        )
-
-    return "\n\n".join(section for section in sections if section)
-
-
 def _write_template_file(template_file: Path, agents_max: int) -> None:
     source_template = Path(__file__).parent / "template" / "template.json"
     with open(source_template) as f:
         template = json.load(f)
     template["num_agents"] = agents_max
-    default_actions = ["Navigate", "Open", "Close", "Pick", "Place", "UseItem", "Communicate", "Wait"]
+    default_actions = get_authoring_default_actions(include_find_tools=False)
     template["agent_secrets"] = {
         f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"] for i in range(agents_max)
     }
@@ -377,12 +351,7 @@ def _write_bootstrap_files(
     (working_dir / "available_mechanics.md").write_text(available_mechanics)
     (working_dir / "available_predicates.md").write_text(available_predicates)
     (working_dir / "available_actions.md").write_text(action_descriptions)
-    bootstrap_text = (
-        "Read `taskgen_prompt.md` in the current directory and follow it exactly. "
-        "Use the `taskgen` command surface documented there. "
-        "Run `taskgen finish` only after the required number of tasks has been submitted."
-    )
-    (working_dir / "bootstrap_prompt.txt").write_text(bootstrap_text)
+    (working_dir / "bootstrap_prompt.txt").write_text(prompt_text)
 
 
 def main() -> None:
@@ -424,7 +393,7 @@ def main() -> None:
         # Canonical names and legacy aliases
         _legacy_map = {"council": "llm-council", "golden": "simulation"}
         skip_steps = [_legacy_map.get(s, s) for s in skip_steps]
-        valid_steps = {"pddl", "llm-council", "simulation", "task-evolution", "tom", "structure", "test"}
+        valid_steps = {"pddl", "llm-council", "simulation", "task-evolution", "tom", "structure", "test", "baseline"}
         invalid = [s for s in skip_steps if s not in valid_steps]
         if invalid:
             raise SystemExit(
@@ -490,43 +459,82 @@ def main() -> None:
         test_model = target_model
 
     seed_tasks_dir = resolve_seed_tasks_dir(seed_tasks_dir_arg, output_dir)
-    calibration_tasks_dir = str(seed_tasks_dir) if seed_tasks_dir is not None else output_dir
-    calibration_stats = compute_calibration_stats(calibration_tasks_dir, target_model)
+    calibration_task_dirs = []
+    if seed_tasks_dir is not None:
+        calibration_task_dirs.append(str(seed_tasks_dir))
+    calibration_task_dirs.append(output_dir)
+    calibration_stats = compute_calibration_stats(calibration_task_dirs, target_model)
     calibration_stats["target_rate"] = target_pass_rate
 
     # When task-evolution is removed, skip seed task population and calibration guidance
     _skip_evolution = skip_steps and "task-evolution" in skip_steps
+    _no_icl = extra_args.no_icl if extra_args else False
     sampled_tasks_override = extra_args.sampled_tasks_dir if extra_args else None
     if _skip_evolution:
         pass  # No seed tasks — agent generates from scratch
     elif sampled_tasks_override:
+        # Explicit override — copy files as-is
         override_path = Path(sampled_tasks_override)
         override_files = [p for p in override_path.glob("*.json") if is_task_like_json(p)]
         selected = sorted(override_files)[:10]
-        for i, task_path in enumerate(selected, 1):
+        for task_path in selected:
             shutil.copy(task_path, sampled_tasks_dir / task_path.name)
-            _copy_sample(task_path, sampled_tasks_dir, i)
+    elif _no_icl:
+        # --no-icl: use basic seed selection (no calibration trajectories)
+        if seed_tasks_dir is not None:
+            selection_config = SeedSelectionConfig(
+                tasks_dir=seed_tasks_dir,
+                target_model=target_model,
+                target_pass_rate=target_pass_rate,
+                current_pass_rate=calibration_stats["rate"],
+                category=category,
+                tom_level=current_k_level,
+                pass_seed_ratio=seed_pass_ratio,
+                fail_seed_ratio=seed_fail_ratio,
+            )
+            populate_sampled_tasks_dir(
+                sampled_tasks_dir,
+                selection_config,
+                sample_count=10,
+            )
     elif seed_tasks_dir is not None:
-        selection_config = SeedSelectionConfig(
-            tasks_dir=seed_tasks_dir,
-            target_model=target_model,
-            target_pass_rate=target_pass_rate,
-            current_pass_rate=calibration_stats["rate"],
-            category=category,
-            tom_level=current_k_level,
-            pass_seed_ratio=seed_pass_ratio,
-            fail_seed_ratio=seed_fail_ratio,
+        # Default: ICL with calibration trajectories
+        from emtom.evolve.icl_sampler import (
+            prepare_sampled_tasks_dir_from_calibration,
+            compute_pass_rate_from_calibration,
+            build_evolution_query,
         )
-        populate_sampled_tasks_dir(
-            sampled_tasks_dir,
-            selection_config,
-            sample_count=10,
+        prepare_sampled_tasks_dir_from_calibration(
+            tasks_dir=str(seed_tasks_dir),
+            model=target_model,
+            output_dir=str(sampled_tasks_dir),
+            fail_count=8,
+            pass_count=2,
         )
+        # Build and inject evolution query if not already set
+        if not query:
+            stats = compute_pass_rate_from_calibration(str(seed_tasks_dir), target_model)
+            query = build_evolution_query(stats["pass_rate"], target_model, generation_idx=1)
+    else:
+        pass  # No seed tasks dir — generate from scratch
 
     _write_template_file(working_dir / "template.json", agents_max)
     _write_taskgen_shim(working_dir)
 
-    extra_sections = _build_extra_sections(
+    available_items = AUTHORING_ITEMS_NOTICE
+    available_mechanics = get_authoring_mechanics()
+    available_predicates = get_authoring_predicates()
+    action_descriptions = get_authoring_action_descriptions()
+
+    prompt_text = build_external_taskgen_prompt(
+        working_dir=str(working_dir),
+        task_file=str(working_dir / "working_task.json"),
+        category=category or "random",
+        num_tasks=num_tasks,
+        agents_min=agents_min,
+        agents_max=agents_max,
+        subtasks_min=subtasks_min,
+        subtasks_max=subtasks_max,
         query=query,
         verification_feedback=verification_feedback,
         calibration_stats=calibration_stats if not _skip_evolution else {},
@@ -535,27 +543,6 @@ def main() -> None:
         seed_tasks_dir=(str(seed_tasks_dir) if seed_tasks_dir is not None else None) if not _skip_evolution else None,
         seed_pass_ratio=seed_pass_ratio,
         seed_fail_ratio=seed_fail_ratio,
-    )
-
-    available_items = ItemRegistry.get_items_for_task_generation()
-    available_mechanics = get_mechanics_for_task_generation()
-    available_predicates = get_predicates_for_prompt()
-    action_descriptions = ActionRegistry.get_all_action_descriptions()
-
-    prompt_text = build_external_taskgen_prompt(
-        working_dir=str(working_dir),
-        task_file=str(working_dir / "working_task.json"),
-        category=category or "random",
-        available_items=available_items,
-        available_mechanics=available_mechanics,
-        available_predicates=available_predicates,
-        action_descriptions=action_descriptions,
-        extra_sections=extra_sections,
-        num_tasks=num_tasks,
-        agents_min=agents_min,
-        agents_max=agents_max,
-        subtasks_min=subtasks_min,
-        subtasks_max=subtasks_max,
         skip_steps=skip_steps,
     )
     _write_bootstrap_files(
@@ -583,6 +570,7 @@ def main() -> None:
         difficulty=difficulty,
         test_model=test_model,
         calibration_stats=calibration_stats,
+        calibration_tasks_dirs=calibration_task_dirs,
         task_gen_agent=task_gen_agent,
         allowed_k_levels=k_levels,
         skip_steps=skip_steps,
@@ -755,7 +743,11 @@ def main() -> None:
     if final_state.get("failed"):
         raise SystemExit(final_state.get("fail_reason") or "Task generation failed.")
     if not final_state.get("finished"):
-        raise SystemExit("Task generation did not call taskgen finish.")
+        # If tasks were submitted despite not finishing, treat as partial success
+        if final_submitted_tasks:
+            print(f"Warning: Agent exited without calling taskgen finish, but submitted {len(final_submitted_tasks)} task(s).")
+        else:
+            raise SystemExit("Task generation did not call taskgen finish.")
 
 
 if __name__ == "__main__":

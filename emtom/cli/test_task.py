@@ -35,6 +35,8 @@ def main():
     parser.add_argument("--team-model-map", type=str, default=None,
                         help="Team->model mapping for competitive tasks, e.g. team_0=gpt-5.2,team_1=sonnet")
     parser.add_argument("--run-mode", default="standard", choices=["standard", "baseline", "full_info"])
+    parser.add_argument("--idle-team", type=str, default=None,
+                        help="Team to idle (agents do nothing). Used by competitive solo-team baseline runs.")
     args = parser.parse_args()
 
     # Add project root to path
@@ -48,6 +50,9 @@ def main():
         with open(args.task_file) as f:
             task_data = json.load(f)
     except Exception as e:
+        import traceback
+        print(traceback.format_exc(), file=sys.stderr)
+
         print_result(failure(f"Failed to load task: {e}"))
         sys.exit(1)
 
@@ -103,7 +108,7 @@ def main():
         from habitat_llm.utils import fix_config, setup_config
 
         from emtom.runner import BenchmarkRunner
-        from emtom.runner.benchmark import task_to_instruction
+        from emtom.runner.benchmark import BenchmarkExecutionError, task_to_instruction
         from emtom.task_gen import GeneratedTask
         from emtom.task_gen.scene_loader import apply_agent_spawns
     except ImportError as e:
@@ -123,6 +128,10 @@ def main():
             output_dir = f"/tmp/emtom_test_{os.getpid()}"
         with open_dict(config):
             config.benchmark_run_mode = args.run_mode
+            is_standard = str(args.run_mode).strip().lower() == "standard"
+            if "world_model" in config:
+                config.world_model.partial_obs = is_standard
+            config.agent_asymmetry = is_standard
             if "evaluation" in config:
                 config.evaluation.output_dir = output_dir
             if "paths" in config:
@@ -204,22 +213,36 @@ def main():
 
         apply_agent_spawns(env_interface, task_data.get("agent_spawns", {}))
 
+        # Resolve idle agents from --idle-team
+        idle_agents = []
+        if args.idle_team:
+            team_assignment = task_data.get("teams") or task_data.get("team_assignment") or {}
+            idle_agents = list(team_assignment.get(args.idle_team, []))
+
         runner = BenchmarkRunner(config)
         runner.setup(
             env_interface=env_interface,
             output_dir=output_dir,
             task=task,
             save_video=False,
+            idle_agents=idle_agents if idle_agents else None,
         )
 
         instruction = task_to_instruction(task)
 
         max_steps = config.habitat.environment.get("max_episode_steps", 20000)
 
+        # Determine turn budget.
+        #
+        # Older/external task specs may omit golden_trajectory entirely or set it to
+        # a non-list placeholder. In those cases, default to a safe minimum rather
+        # than crashing with IndexError/TypeError inside len().
         if args.max_turns is not None:
             max_turns = args.max_turns
         else:
-            golden_trajectory = task_data.get("golden_trajectory", [])
+            golden_trajectory = task_data.get("golden_trajectory")
+            if not isinstance(golden_trajectory, list):
+                golden_trajectory = []
             max_turns = max(len(golden_trajectory) * 5, 20)
 
         results = runner.run(instruction=instruction, max_steps=max_steps, max_turns=max_turns)
@@ -301,6 +324,10 @@ def main():
         }))
 
     except Exception as e:
+        import traceback
+        print(traceback.format_exc(), file=sys.stderr)
+        is_benchmark_execution_error = isinstance(e, BenchmarkExecutionError)
+        error_type = "benchmark_execution" if is_benchmark_execution_error else "benchmark_error"
         print_result(failure(
             str(e),
             data={
@@ -308,7 +335,9 @@ def main():
                 "turns": 0,
                 "done": False,
                 "run_mode": args.run_mode,
-                "summary": f"Benchmark error: {e}",
+                "summary": f"Benchmark aborted: {e}" if is_benchmark_execution_error else f"Benchmark error: {e}",
+                "fatal_infra": is_benchmark_execution_error,
+                "error_type": error_type,
             },
         ))
         sys.exit(1)

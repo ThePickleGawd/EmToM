@@ -142,7 +142,7 @@ def get_mechanic_info(name: str) -> Dict[str, Any]:
     return MECHANIC_INFO.get(name, {})
 
 
-def get_mechanics_for_task_generation() -> str:
+def get_mechanics_for_task_generation(visible_mechanics: Optional[list[str]] = None) -> str:
     """
     Get comprehensive mechanic descriptions for task generation prompts.
 
@@ -159,7 +159,11 @@ def get_mechanics_for_task_generation() -> str:
     lines = ["Available mechanics for creating puzzle complexity:\n"]
     recommended = []
 
+    allowed = set(visible_mechanics) if visible_mechanics is not None else None
+
     for mech_name, info in MECHANIC_INFO.items():
+        if allowed is not None and mech_name not in allowed:
+            continue
         lines.append(f"## {mech_name}")
         lines.append(f"**Effect**: {info['description']}")
 

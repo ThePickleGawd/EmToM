@@ -480,6 +480,12 @@ def _parse_goal_owners(text: str) -> Dict[str, str]:
           (team_0 (is_inside trophy_1 cabinet_10))
           (team_1 (is_inside trophy_1 cabinet_20)))
 
+    Also accepts wrapper forms used by task generation, such as::
+
+        (:goal-owners
+          (personal agent_0 (is_open cabinet_10))
+          (team team_0 (is_inside trophy_1 cabinet_10)))
+
     Returns mapping from PDDL literal string to owner ID.
     """
     lower = text.lower()
@@ -494,18 +500,32 @@ def _parse_goal_owners(text: str) -> Dict[str, str]:
 
     owners: Dict[str, str] = {}
     for entry in _split_top_level_s_exprs(body):
-        # Each entry is (owner_id formula)
+        # Canonical form is (owner_id formula). Also tolerate wrapper forms
+        # like (personal agent_0 formula) and (team team_0 formula).
         # Strip outer parens
         inner = entry.strip()
         if inner.startswith("(") and inner.endswith(")"):
             inner = inner[1:-1].strip()
 
-        # First token is owner, rest is the PDDL formula
-        parts = inner.split(None, 1)
-        if len(parts) != 2:
+        owner_id = None
+        formula_str = None
+
+        wrapped_parts = inner.split(None, 2)
+        if len(wrapped_parts) >= 3 and wrapped_parts[0] in {"personal", "team"}:
+            owner_id = wrapped_parts[1]
+            formula_str = wrapped_parts[2].strip()
+        elif len(wrapped_parts) >= 2 and wrapped_parts[0] == "shared":
+            # Shared goals belong in :goal, not :goal-owners.
             continue
-        owner_id = parts[0]
-        formula_str = parts[1].strip()
+        else:
+            parts = inner.split(None, 1)
+            if len(parts) == 2:
+                owner_id = parts[0]
+                formula_str = parts[1].strip()
+
+        if not owner_id or not formula_str:
+            continue
+
         # Normalize the formula via parse+serialize for consistent keys.
         # If formula is compound (and A B C), decompose into individual
         # literals so each one maps to the owner separately.
@@ -517,8 +537,9 @@ def _parse_goal_owners(text: str) -> Dict[str, str]:
             else:
                 owners[formula.to_pddl()] = owner_id
         except ValueError:
-            # Best-effort: use raw string
-            owners[formula_str] = owner_id
+            # Ignore malformed owner formulas so later validation can reject
+            # the task without canonicalization crashing first.
+            continue
 
     return owners
 

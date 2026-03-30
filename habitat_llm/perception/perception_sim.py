@@ -621,17 +621,15 @@ class PerceptionSim(Perception):
         handles = {}
 
         for uid in agent_uids:
-            if uid == "0":
-                if "articulated_agent_arm_panoptic" in obs:
+            # Try agent-prefixed arm panoptic first (works for all agents in multi-agent setups)
+            key = f"agent_{uid}_articulated_agent_arm_panoptic"
+            if key not in obs:
+                # Fallback for single-agent setup (agent 0 only, unprefixed key)
+                if uid == "0" and "articulated_agent_arm_panoptic" in obs:
                     key = "articulated_agent_arm_panoptic"
-                elif f"agent_{uid}_articulated_agent_arm_panoptic" in obs:
-                    key = f"agent_{uid}_articulated_agent_arm_panoptic"
                 else:
-                    raise ValueError(
-                        f"Could not find a valid panoptic sensor for agent uid: {uid}"
-                    )
-            elif uid == "1":
-                key = f"agent_{uid}_head_panoptic"
+                    # Last resort: try head panoptic
+                    key = f"agent_{uid}_head_panoptic"
 
             if key in obs:
                 unique_obj_ids = np.unique(obs[key])

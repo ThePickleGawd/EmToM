@@ -5,6 +5,8 @@ EmtomPlanner - EMTOM-specific LLM planner wrapper with optional vision support.
 from __future__ import annotations
 
 import os
+import random
+import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from hydra.utils import instantiate
@@ -19,8 +21,14 @@ from emtom.vision import (
 )
 
 
+class BenchmarkLLMInfrastructureError(RuntimeError):
+    """Raised when benchmark planning cannot recover from LLM/provider failures."""
+
+
 class EmtomPlanner(LLMPlanner):
     """LLMPlanner subclass with ReAct logging and benchmark vision support."""
+
+    LLM_RETRY_ATTEMPTS = 8
 
     AGENT_COLORS = [
         "\033[94m",  # Blue
@@ -84,6 +92,127 @@ class EmtomPlanner(LLMPlanner):
             "provider_target": llm_provider,
             "history": list(self._selector_history),
         }
+
+    def _llm_retry_attempts(self) -> int:
+        raw_value = getattr(self.planner_config, "llm_retry_attempts", self.LLM_RETRY_ATTEMPTS)
+        try:
+            return max(1, int(raw_value))
+        except (TypeError, ValueError):
+            return self.LLM_RETRY_ATTEMPTS
+
+    def _retry_after_seconds(self, exc: Exception) -> Optional[float]:
+        headers = getattr(exc, "headers", None)
+        response = getattr(exc, "response", None)
+        if headers is None and response is not None:
+            headers = getattr(response, "headers", None)
+        if not headers:
+            return None
+        retry_after_ms = headers.get("retry-after-ms")
+        if retry_after_ms:
+            try:
+                return float(retry_after_ms) / 1000.0
+            except (TypeError, ValueError):
+                pass
+        retry_after = headers.get("retry-after")
+        if retry_after:
+            try:
+                return float(retry_after)
+            except (TypeError, ValueError):
+                pass
+        return None
+
+    def _is_retryable_llm_error(self, exc: Exception) -> bool:
+        retryable = getattr(exc, "retryable", None)
+        if retryable is not None:
+            return bool(retryable)
+
+        if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+            return True
+
+        status_code = getattr(exc, "status_code", None)
+        response = getattr(exc, "response", None)
+        if status_code is None and response is not None:
+            status_code = getattr(response, "status_code", None)
+        if status_code in {408, 409, 429, 500, 502, 503, 504}:
+            return True
+
+        exc_text = str(exc).lower()
+        retry_markers = (
+            "429",
+            "408",
+            "409",
+            "500",
+            "502",
+            "503",
+            "504",
+            "rate limit",
+            "ratelimit",
+            "too_many_requests",
+            "throttl",
+            "overloaded",
+            "timeout",
+            "timed out",
+            "temporarily unavailable",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "server disconnected",
+            "network",
+        )
+        return any(marker in exc_text for marker in retry_markers)
+
+    def _compute_llm_backoff_seconds(self, exc: Exception, attempt: int) -> float:
+        retry_after_s = self._retry_after_seconds(exc)
+        if retry_after_s is not None and retry_after_s > 0:
+            return min(120.0, retry_after_s)
+
+        exc_text = str(exc).lower()
+        is_rate_limit = (
+            "429" in exc_text
+            or "rate limit" in exc_text
+            or "ratelimit" in exc_text
+            or "too_many_requests" in exc_text
+            or "throttl" in exc_text
+            or "overloaded" in exc_text
+        )
+        if is_rate_limit:
+            base_backoff = min(120.0, 15.0 * (2 ** (attempt - 1)))
+        else:
+            base_backoff = min(30.0, float(2 ** attempt))
+        return base_backoff * (0.5 + random.random())
+
+    def _generate_with_retry(
+        self,
+        llm: Any,
+        prompt: Any,
+        **generate_kwargs: Any,
+    ) -> Any:
+        max_attempts = self._llm_retry_attempts()
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return llm.generate(prompt, **generate_kwargs)
+            except Exception as exc:
+                retryable = self._is_retryable_llm_error(exc)
+                if retryable and attempt < max_attempts:
+                    backoff_s = self._compute_llm_backoff_seconds(exc, attempt)
+                    print(
+                        f"[EmtomPlanner] Transient LLM failure ({type(exc).__name__}) on "
+                        f"attempt {attempt}/{max_attempts}; retrying in {backoff_s:.1f}s",
+                        flush=True,
+                    )
+                    time.sleep(backoff_s)
+                    continue
+                if retryable:
+                    raise BenchmarkLLMInfrastructureError(
+                        f"LLM call failed after {max_attempts} attempts: "
+                        f"{type(exc).__name__}: {exc}"
+                    ) from exc
+                if isinstance(exc, (ValueError, RuntimeError, OSError, TimeoutError, ConnectionError)):
+                    raise BenchmarkLLMInfrastructureError(
+                        f"Non-retryable benchmark LLM failure: {type(exc).__name__}: {exc}"
+                    ) from exc
+                else:
+                    raise
 
     def _log_high_level_actions(
         self,
@@ -193,7 +322,7 @@ class EmtomPlanner(LLMPlanner):
 
         candidate_handles = build_candidate_frame_set(available_frames, max_candidates=max_candidates)
         prompt_input = self._build_selector_prompt(instruction, candidate_handles)
-        selector_response = self._selector_llm.generate(prompt_input)
+        selector_response = self._generate_with_retry(self._selector_llm, prompt_input)
         selected = parse_selector_response(
             selector_response,
             candidate_handles,
@@ -260,9 +389,10 @@ class EmtomPlanner(LLMPlanner):
         prompt_input = self._build_multimodal_prompt(selected_frames)
 
         if self.planner_config.get("constrained_generation", False):
-            llm_response = self.llm.generate(
+            llm_response = self._generate_with_retry(
+                self.llm,
                 prompt_input,
-                self.stopword,
+                stop=self.stopword,
                 generation_args={
                     "grammar_definition": self.build_response_grammar(
                         world_graph[self._agents[0].uid]
@@ -270,7 +400,11 @@ class EmtomPlanner(LLMPlanner):
                 },
             )
         else:
-            llm_response = self.llm.generate(prompt_input, self.stopword)
+            llm_response = self._generate_with_retry(
+                self.llm,
+                prompt_input,
+                stop=self.stopword,
+            )
 
         llm_response = self.format_response(llm_response, self.end_expression)
 

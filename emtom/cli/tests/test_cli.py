@@ -488,6 +488,57 @@ class TestSubmitTask:
             assert result["success"] is False
             assert "Failed to compute tom_level" in result["error"]
 
+    def test_submit_rejects_tom_level_zero(self):
+        from emtom.cli.submit_task import run
+
+        task = {
+            "task_id": "draft_task",
+            "title": "Submission ToM Zero Test",
+            "category": "cooperative",
+            "task": "This is a sufficiently long task description for submit testing.",
+            "scene_id": "scene_test",
+            "episode_id": "episode_test",
+            "num_agents": 2,
+            "active_mechanics": [],
+            "mechanic_bindings": [],
+            "agent_secrets": {"agent_0": ["s0"], "agent_1": ["s1"]},
+            "agent_actions": {"agent_0": ["Wait"], "agent_1": ["Wait"]},
+            "items": [],
+            "locked_containers": {},
+            "initial_states": {},
+            "message_targets": {},
+            "teams": {},
+            "team_secrets": {},
+            "pddl_domain": "emtom",
+            "problem_pddl": (
+                "(define (problem t_submit)"
+                " (:domain emtom)"
+                " (:objects agent_0 agent_1 - agent kitchen_1 - room cup_1 - object table_1 - furniture)"
+                " (:init (agent_in_room agent_0 kitchen_1) (agent_in_room agent_1 kitchen_1)"
+                "        (is_in_room cup_1 kitchen_1) (is_in_room table_1 kitchen_1)"
+                "        (is_on_top cup_1 table_1))"
+                " (:goal (is_on_top cup_1 table_1)))"
+            ),
+        }
+
+        with tempfile.TemporaryDirectory() as td:
+            task_path = Path(td) / "task.json"
+            out_dir = Path(td) / "out"
+            with open(task_path, "w") as f:
+                json.dump(task, f)
+
+            with patch("emtom.cli.validate_task.run", return_value=success({"valid": True})), \
+                 patch("emtom.cli.submit_task._compute_tom_metadata", return_value={"tom_level": 0}):
+                result = run(
+                    str(task_path),
+                    output_dir=str(out_dir),
+                    subtasks_min=1,
+                    subtasks_max=20,
+                )
+
+            assert result["success"] is False
+            assert "tom_level is 0" in result["error"]
+
 
 # ---------------------------------------------------------------------------
 # judge_task tests
@@ -601,6 +652,52 @@ class TestJudgeTask:
         ):
             with pytest.raises(ValueError, match="Fast Downward strict backend"):
                 compute_strict_tom_metadata(task, scene_data=None)
+
+    def test_judge_prompt_omits_pddl_criterion_when_removed(self):
+        from emtom.task_gen.judge import (
+            _build_compiled_formal_view_block,
+            _build_criteria_section,
+            _build_formal_checks_section,
+            _build_response_format,
+        )
+
+        criteria_section = _build_criteria_section("cooperative", skip_steps=["pddl"])
+        response_format = _build_response_format("cooperative", skip_steps=["pddl"])
+        formal_checks = _build_formal_checks_section(["pddl"])
+        compiled_view = _build_compiled_formal_view_block({}, None, skip_steps=["pddl"])
+
+        assert "Formal Goal Quality & Epistemic Coherence" not in criteria_section
+        assert '"pddl_solvability"' not in response_format
+        assert "Do NOT score or discuss `pddl_solvability`" in formal_checks
+        assert "ignore formal solvability and compiled-plan evidence" in compiled_view
+
+    def test_judge_receives_skip_steps(self):
+        from emtom.cli.judge_task import run
+        from emtom.task_gen.judge import CouncilVerdict
+
+        task = _make_minimal_task()
+
+        with tempfile.TemporaryDirectory() as td:
+            task_path = Path(td) / "task.json"
+            with open(task_path, "w") as f:
+                json.dump(task, f)
+
+            with patch("emtom.task_gen.judge.Judge") as mock_judge_cls:
+                mock_judge = mock_judge_cls.return_value
+                mock_judge.min_criterion_threshold = 0.5
+                mock_judge.overall_threshold = 0.65
+                mock_judge.evaluate.return_value = CouncilVerdict(
+                    judgments={},
+                    passed=True,
+                    overall_score=1.0,
+                    required_fixes=[],
+                    disagreements=[],
+                )
+
+                result = run(str(task_path), skip_steps=["pddl", "tom", "simulation"])
+
+        assert result["success"] is True
+        assert mock_judge_cls.call_args.kwargs["skip_steps"] == ["pddl", "tom", "simulation"]
 
 
 # ---------------------------------------------------------------------------

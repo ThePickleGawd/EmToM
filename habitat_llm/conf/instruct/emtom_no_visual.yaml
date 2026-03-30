@@ -22,6 +22,13 @@ prompt: |-
     - Items (item_*) are abstract - use Open[container] to find them, UseItem to use them
     - Communicate with your teammate to coordinate
     - Wait if you need the other agent to act first
+    - Your known world starts with the static house layout (rooms and furniture); the Objects section below lists only movable objects you have personally discovered or are holding, using exact runtime handles
+    - If a needed object is not in your known world yet, explore likely rooms or navigate to known furniture/rooms first to discover it
+    {eot_tag}
+
+    {user_tag}
+    ## Current Known World (layout + your discovered object handles)
+    {world_description}
     {eot_tag}
 
     {user_tag}

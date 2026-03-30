@@ -228,7 +228,7 @@ export default function CampaignView({ onImageClick }: Props) {
             run.type === "solo" &&
             run.model === model &&
             run.mode === mode &&
-            run.status === "complete",
+            run.status !== "pending",
         )
         .map(([runKey]) => runKey);
       await Promise.all(matchingRunKeys.map((runKey) => loadRunSummary(runKey)));
@@ -289,7 +289,7 @@ export default function CampaignView({ onImageClick }: Props) {
     setDownloadingEverything(true);
     try {
       const completedRuns = Object.entries(campaign.runs).filter(
-        ([, run]) => run.status === "complete",
+        ([, run]) => run.status !== "pending",
       );
       const runs = await Promise.all(
         completedRuns.map(async ([runKey, runDef]) => {
@@ -424,7 +424,7 @@ export default function CampaignView({ onImageClick }: Props) {
             className="download-btn campaign-download-all-btn"
             disabled={downloadingEverything}
             onClick={downloadEverything}
-            title="Download every completed campaign trajectory bundle"
+            title="Download every available campaign trajectory bundle"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             <span>
@@ -921,7 +921,7 @@ function ModelDetailPanel({
   );
   const hasPendingSummaries = relevantRuns.some(
     ([runKey, runDef]) =>
-      runDef.status === "complete" &&
+      runDef.status !== "pending" &&
       summaryCache[`${campaign.campaign_id || "active"}:${runKey}`] === undefined,
   );
 
@@ -1012,7 +1012,7 @@ function ModelDetailPanel({
           ))
       ) : (
         <div className="campaign-pending-msg">
-          No completed tasks are available for this model/mode yet.
+          No task results are available for this model/mode yet.
         </div>
       )}
     </div>

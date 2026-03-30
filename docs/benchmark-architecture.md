@@ -21,7 +21,7 @@ Task generation should optimize for functional ToM, not just literal ToM:
 3. Generate a task grounded in the current scene and mechanics, starting from the blank task template and using the sampled examples only as inspiration.
 4. Verify the task statically and with runtime checks.
 5. Judge whether the task genuinely requires ToM reasoning.
-6. Benchmark agents on the final task in both `standard` and `baseline`, using `standard` for calibration and `baseline` as the full-info solvability check.
+6. Benchmark agents on the final task in both `standard` and `baseline`, using `standard` for calibration and `baseline` as the full-info solvability check. For competitive tasks, `baseline` is a two-phase solo-team check: once with only `team_0` active and once with only `team_1` active.
 
 Task generation runs through an external SWE-agent CLI (`mini`, `claude`, or `codex`) inside a repo-local workspace under `tmp/task_gen/`. The agent executable may come from the operator environment, but each task-generation run gets its own sandbox environment in `tmp/task_gen/<run_id>/.venv` so parallel runs stay isolated. The repo provides the prompt, sampled seed context, and a stable `taskgen` command surface for `new_scene`, `judge`, `verify_golden_trajectory`, `test_task`, `submit_task`, and `finish`.
 
@@ -44,13 +44,21 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - `standard`: task secrets are private and agents only observe normal benchmark channels.
 - `baseline`: all task secrets are shared with all agents, and agents may read other agents' completed Thought+Action trajectories through a runtime benchmark tool.
 - `full_info`: all task secrets are shared with all agents, and agents may read other agents' completed Observation+Thought+Action trajectories through a runtime benchmark tool.
+- For competitive `test_task` runs, `baseline` is evaluated in two full-info phases: `team_0_only` and `team_1_only`. Both phases must succeed for the baseline gate to pass.
+- `standard` must run with partial observability and per-agent asymmetric world graphs.
+- `baseline` and `full_info` must run with full observability and shared world-state visibility. Their purpose is to remove information bottlenecks, not preserve them.
+- Under partial observability, each agent's world graph must be private: only that agent's own observations may add or update entities. Communication may inform planning, but it must not directly mutate the recipient's world graph.
+- Under the original PARTNR partial-observability setting, each agent starts with the static house layout only: rooms, floors, furniture, and receptacles are known up front, but movable objects are absent until that agent personally observes them.
+- Prompt rendering should show newly observed movable objects by their exact runtime handles in the agent's private known-world view.
 
 ## Task Generation Gates
 
 - `verify_golden_trajectory` remains the canonical deterministic solvability gate. It proves the authored task spec is functionally solvable under the planner/runtime semantics.
 - Judge-time ToM evidence must come from the strict Fast Downward proof path. Structural or syntactic fallback metadata is not valid submission evidence.
-- `test_task` now runs both `standard` and `baseline` in parallel.
+- `test_task` now runs `standard` plus a `baseline` solvability check. For competitive tasks, that baseline check consists of two solo-team runs, one for each side.
 - Dataset difficulty calibration uses the `standard` result only, with a target pass rate of 20% by default for the current target model.
+- Calibration and sampled-task selection ignore `tom_level = 0` tasks. New submissions with `tom_level < 1` must be rejected.
+- The `test_task` acceptance gate should use the current calibrated pass/fail counts and accept only the next `standard` outcome that moves the dataset closer to the target pass rate.
 - `baseline` does not replace the planner/golden-trajectory check; it is an additional empirical check that the task becomes solvable when private information is removed.
 - Submitted benchmark tasks must stay grounded in a real dataset `scene_id` and `episode_id`. Synthetic fallback scenes are allowed for lightweight authoring environments, but they must be rejected before submission and benchmark runs.
 
@@ -68,10 +76,15 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - Keep one clear implementation path.
 - Prefer direct data flow over hidden coupling.
 - Treat verification as a hard gate, not a warning system.
+- Task authoring currently supports only these mechanics: `room_restriction`, `limited_bandwidth`, `restricted_communication`, `remote_control`, `state_mirroring`, and `inverse_state`.
+- Task-generation prompts should encourage diverse use of all six supported mechanics and should not overfit to the historically dominant room/access stack.
+- Task-added items are temporarily hidden from authoring. Do not rely on `items`, `locked_containers`, or `UseItem` in newly generated benchmark tasks.
 - Keep `problem_pddl` as the single authored source of epistemic structure and goals.
-- Generate `problem_pddl :objects` and `:init` deterministically from the loaded scene snapshot, task items, and mechanic bindings instead of hand-authoring scene state.
+- Generate `problem_pddl :objects` and `:init` deterministically from the loaded scene snapshot and mechanic bindings instead of hand-authoring scene state.
 - Keep benchmark mechanics authored once in `mechanic_bindings`; derive all planner-only mechanic init facts from those bindings instead of duplicating them in `problem_pddl`.
-- Keep the public `task` high-level and non-leaking; use exact scene IDs in `agent_secrets` and `team_secrets` for goal-critical targets so private grounding remains precise.
+- Keep the public `task` high-level and non-leaking; use exact scene IDs in `agent_secrets` and `team_secrets` only for goal-critical facts that the agent actually knows or observed.
+- `agent_secrets` should contain positive private facts, constraints, and private objectives only. Do not add ignorance lines like 'you do not know ...', self-intro boilerplate, or epistemic coaching like 'By the end, you must be confident ...'.
+- When an object's identity or location is the hidden fact, do not name its exact runtime object ID in the public `task` or in any secret for an agent who does not already know that fact. Reserve exact IDs for the agents who actually know or observed that fact, plus `problem_pddl`.
 - Runtime task success ignores `K()` and uses the projected non-epistemic goal only.
 - `verify-pddl`, deterministic planning, and golden trajectory verification all solve the same projected non-epistemic functional goal.
 - Authored placement goals must use `is_on_top` only with non-articulated support surfaces. For articulated/container furniture such as cabinets, drawers, fridges, safes, and wardrobes, use `is_inside` when containment is intended. Validation rejects articulated `is_on_top` goals because planner translation and runtime success semantics do not agree on them.

@@ -41,6 +41,10 @@ from emtom.task_gen import GeneratedTask
 MODEL_ALIASES = {
     "kimi-k2.5": "accounts/fireworks/models/kimi-k2p5",
     "kimi-k2-thinking": "moonshot.kimi-k2-thinking",
+    "deepseek-v3.2": "accounts/fireworks/models/deepseek-v3p2",
+    "llama-4-maverick": "accounts/fireworks/models/llama4-maverick-instruct-basic",
+    "gemini-pro": "gemini-3.1-pro-preview",
+    "gemini-flash": "gemini-3-flash-preview",
     "ministral-3-8b": "mistral.ministral-3-8b-instruct",
     "ministral-3-14b": "mistral.ministral-3-14b-instruct",
     "mistral-large-3": "mistral.mistral-large-3-675b-instruct",
@@ -55,15 +59,29 @@ MODEL_PROVIDER_MAP = {
     "gpt-5-mini": "openai_chat",
     "gpt-5.1": "openai_chat",
     "gpt-5.2": "openai_chat",
+    "gpt-5.4": "openai_chat",
+    "gpt-5.4-mini": "openai_chat",
     "o3": "openai_chat",
-    "us.anthropic.claude-sonnet-4-5-20250929-v1:0": "bedrock_claude",
+    "us.anthropic.claude-sonnet-4-6-v1:0": "bedrock_claude",
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": "bedrock_claude",
+    "us.anthropic.claude-opus-4-6-v1:0": "bedrock_claude",
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0": "bedrock_claude",
     "us.anthropic.claude-opus-4-5-20251101-v1:0": "bedrock_claude",
-    "claude-sonnet-4-5-20250929": "anthropic_claude",
+    "claude-sonnet-4-6": "anthropic_claude",
+    "claude-opus-4-6": "anthropic_claude",
     "claude-haiku-4-5-20251001": "anthropic_claude",
+    "claude-sonnet-4-5-20250929": "anthropic_claude",
     "claude-opus-4-5-20251101": "anthropic_claude",
     "kimi-k2.5": "openai_chat",
     "accounts/fireworks/models/kimi-k2p5": "openai_chat",
+    "deepseek-v3.2": "openai_chat",
+    "accounts/fireworks/models/deepseek-v3p2": "openai_chat",
+    "llama-4-maverick": "openai_chat",
+    "accounts/fireworks/models/llama4-maverick-instruct-basic": "openai_chat",
+    "gemini-pro": "openai_chat",
+    "gemini-flash": "openai_chat",
+    "gemini-3.1-pro-preview": "openai_chat",
+    "gemini-3-flash-preview": "openai_chat",
     "kimi-k2-thinking": "bedrock_kimi",
     "moonshot.kimi-k2-thinking": "bedrock_kimi",
     "ministral-3-8b": "bedrock_mistral",
@@ -82,12 +100,16 @@ CLAUDE_ALIAS_MODELS = {
     "sonnet",
     "sonnet-4.5",
     "sonnet4.5",
+    "sonnet-4.6",
+    "sonnet4.6",
     "haiku",
     "haiku-4.5",
     "haiku4.5",
     "opus",
     "opus-4.5",
     "opus4.5",
+    "opus-4.6",
+    "opus4.6",
 }
 
 KNOWN_LLM_PROVIDERS = {
@@ -343,12 +365,16 @@ def apply_agent_llm_configs(config: DictConfig, agent_model_mapping: Dict[str, D
 
 
 def ensure_benchmark_observation_config(config: DictConfig) -> None:
-    """Populate benchmark observation defaults."""
+    """Populate benchmark defaults and normalize world-state visibility by run mode."""
     with open_dict(config):
         if not hasattr(config, "benchmark_observation_mode"):
             config.benchmark_observation_mode = "text"
         if not hasattr(config, "benchmark_run_mode"):
             config.benchmark_run_mode = "standard"
+        run_mode = str(config.benchmark_run_mode).strip().lower()
+        if hasattr(config, "world_model"):
+            config.world_model.partial_obs = run_mode == "standard"
+        config.agent_asymmetry = run_mode == "standard"
         if not hasattr(config, "benchmark_vision") or config.benchmark_vision is None:
             config.benchmark_vision = OmegaConf.create(
                 {
@@ -450,7 +476,7 @@ def run_single_task(
         Results dict with success, steps, turns, etc.
     """
     from emtom.runner import BenchmarkRunner
-    from emtom.runner.benchmark import task_to_instruction
+    from emtom.runner.benchmark import BenchmarkExecutionError, task_to_instruction
 
     task_id = task.task_id
     prefix = f"[{task_index + 1}/{total_tasks}]" if total_tasks > 1 else ""
@@ -607,7 +633,9 @@ def run_single_task(
             cprint(f"Error during task execution: {e}", "red")
             import traceback
             traceback.print_exc()
-            results["error"] = str(e)
+            raise BenchmarkExecutionError(
+                f"Benchmark aborted for task '{task_id}': {e}"
+            ) from e
 
     return results
 
@@ -935,18 +963,26 @@ def main(config: DictConfig) -> None:
     # Run all tasks
     all_results = []
     for i, (task, task_raw) in enumerate(zip(tasks, raw_data)):
-        result = run_single_task(
-            config=config,
-            env_interface=env_interface,
-            task=task,
-            task_raw=task_raw,
-            output_dir=output_dir,
-            default_model_spec=default_model_spec,
-            team_model_specs=team_model_specs,
-            team_model_map_requested=team_model_map_requested,
-            task_index=i,
-            total_tasks=len(tasks),
-        )
+        try:
+            result = run_single_task(
+                config=config,
+                env_interface=env_interface,
+                task=task,
+                task_raw=task_raw,
+                output_dir=output_dir,
+                default_model_spec=default_model_spec,
+                team_model_specs=team_model_specs,
+                team_model_map_requested=team_model_map_requested,
+                task_index=i,
+                total_tasks=len(tasks),
+            )
+        except BenchmarkExecutionError as exc:
+            cprint(f"FATAL benchmark error: {exc}", "red")
+            try:
+                env_interface.env.close()
+            except Exception:
+                pass
+            sys.exit(1)
         all_results.append(result)
 
     # Close environment after all tasks are done

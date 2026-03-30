@@ -13,12 +13,16 @@ from emtom.cli import CLIResult, failure, success
 from emtom.cli.judge_task import run as judge_task_run
 from emtom.cli.submit_task import run as submit_task_run
 from emtom.cli.validate_task import validate
+from emtom.task_gen.authoring_surface import get_authoring_default_actions
 from emtom.task_gen.scene_loader import SceneData
 from emtom.task_gen.task_bootstrap import build_scene_bootstrap_problem_pddl
 
 
 def _evaluation_passed(category: str, evaluation: Dict[str, Any]) -> bool:
     if category == "competitive":
+        phase_results = evaluation.get("phase_results")
+        if isinstance(phase_results, dict) and phase_results:
+            return bool(evaluation.get("success", False))
         return evaluation.get("winner") is not None
     if category == "mixed":
         return evaluation.get("main_goal_success", False)
@@ -33,6 +37,23 @@ def _evaluation_progress(category: str, evaluation: Dict[str, Any]) -> float:
 
 def _build_results_block(category: str, evaluation: Dict[str, Any]) -> Dict[str, Any]:
     if category == "competitive":
+        phase_results = evaluation.get("phase_results")
+        if isinstance(phase_results, dict) and phase_results:
+            phases: Dict[str, Any] = {}
+            for phase_id, phase in phase_results.items():
+                phases[phase_id] = {
+                    "active_team": phase.get("active_team"),
+                    "idle_team": phase.get("idle_team"),
+                    "passed": phase.get("passed", False),
+                    "winner": phase.get("winner"),
+                    "progress": phase.get("progress", 0.0),
+                }
+            return {
+                "passed": evaluation.get("success", False),
+                "progress": _evaluation_progress(category, evaluation),
+                "phases": phases,
+            }
+
         teams: Dict[str, Any] = {}
         for team_id, prog in evaluation.get("team_progress", {}).items():
             teams[team_id] = {"progress": prog}
@@ -63,7 +84,20 @@ def _standard_requirement(
     current_rate: Optional[float],
     target_rate: float,
     tolerance: float = 0.05,
+    current_passed: Optional[int] = None,
+    current_failed: Optional[int] = None,
 ) -> str:
+    if current_passed is not None and current_failed is not None:
+        total = current_passed + current_failed
+        next_total = total + 1
+        pass_rate_if_pass = (current_passed + 1) / next_total
+        pass_rate_if_fail = current_passed / next_total
+        pass_delta = abs(pass_rate_if_pass - target_rate)
+        fail_delta = abs(pass_rate_if_fail - target_rate)
+        if abs(pass_delta - fail_delta) <= 1e-9:
+            return "either"
+        return "must_pass" if pass_delta < fail_delta else "must_fail"
+
     if current_rate is None:
         return "either"
     if current_rate > target_rate + tolerance:
@@ -71,6 +105,85 @@ def _standard_requirement(
     if current_rate < target_rate - tolerance:
         return "must_pass"
     return "either"
+
+def _test_timeout_seconds(num_agents: int, category: str) -> int:
+    """Return a conservative timeout for one benchmark run (standard OR baseline).
+
+    The default 1200s can be too small in shared-worker environments,
+    especially for 3+ agents where planning can be slower. A timeout here is not
+    a task-quality signal, so we prefer a more forgiving bound.
+    """
+    base = 1800
+    extra = max(0, num_agents - 2) * 600
+    comp = 300 if category == "competitive" else 0
+    return base + extra + comp
+
+
+def _aggregate_competitive_baseline_phase_results(
+    phase_results: Dict[str, Dict[str, Any]]
+) -> Dict[str, Any]:
+    phase_summaries: Dict[str, Any] = {}
+    team_status: Dict[str, bool] = {}
+    team_progress: Dict[str, float] = {}
+    overall_passed = True
+    min_progress = 1.0
+    total_steps = 0
+    total_turns = 0
+    done = True
+
+    for phase_id, result in phase_results.items():
+        evaluation = result.get("evaluation", {})
+        active_team = result.get("active_team")
+        idle_team = result.get("idle_team")
+        winner = evaluation.get("winner")
+        progress = 0.0
+        if active_team:
+            progress = float(evaluation.get("team_progress", {}).get(active_team, 0.0) or 0.0)
+        passed = bool(active_team) and winner == active_team and bool(
+            evaluation.get("team_status", {}).get(active_team, False)
+        )
+        if result.get("error"):
+            passed = False
+
+        phase_summaries[phase_id] = {
+            "active_team": active_team,
+            "idle_team": idle_team,
+            "winner": winner,
+            "passed": passed,
+            "progress": progress,
+            "steps": result.get("steps", 0),
+            "turns": result.get("turns", 0),
+            "trajectory_dir": result.get("trajectory_dir"),
+        }
+        if active_team:
+            team_status[active_team] = passed
+            team_progress[active_team] = progress
+
+        overall_passed = overall_passed and passed
+        min_progress = min(min_progress, progress)
+        total_steps += int(result.get("steps", 0) or 0)
+        total_turns += int(result.get("turns", 0) or 0)
+        done = done and bool(result.get("done", False))
+
+    if not phase_summaries:
+        overall_passed = False
+        min_progress = 0.0
+        done = False
+
+    return {
+        "run_mode": "baseline",
+        "steps": total_steps,
+        "turns": total_turns,
+        "done": done,
+        "phase_results": phase_summaries,
+        "evaluation": {
+            "success": overall_passed,
+            "percent_complete": min_progress,
+            "team_status": team_status,
+            "team_progress": team_progress,
+            "phase_results": phase_summaries,
+        },
+    }
 
 
 def build_mode_comparison(
@@ -80,31 +193,61 @@ def build_mode_comparison(
     current_rate: Optional[float],
     target_rate: float,
     tolerance: float = 0.05,
+    current_passed: Optional[int] = None,
+    current_failed: Optional[int] = None,
 ) -> Dict[str, Any]:
     std_eval = standard.get("evaluation", {})
     base_eval = baseline.get("evaluation", {})
+    baseline_phase_results = base_eval.get("phase_results", {})
+    if not isinstance(baseline_phase_results, dict):
+        baseline_phase_results = {}
+    failed_baseline_phases = sorted(
+        phase_id
+        for phase_id, phase in baseline_phase_results.items()
+        if not phase.get("passed", False)
+    )
     standard_passed = _evaluation_passed(category, std_eval)
     baseline_passed = _evaluation_passed(category, base_eval)
     standard_progress = _evaluation_progress(category, std_eval)
     baseline_progress = _evaluation_progress(category, base_eval)
-    requirement = _standard_requirement(current_rate, target_rate, tolerance=tolerance)
+    requirement = _standard_requirement(
+        current_rate,
+        target_rate,
+        tolerance=tolerance,
+        current_passed=current_passed,
+        current_failed=current_failed,
+    )
+    next_total = None
+    next_rate_if_pass = None
+    next_rate_if_fail = None
+    if current_passed is not None and current_failed is not None:
+        next_total = current_passed + current_failed + 1
+        next_rate_if_pass = (current_passed + 1) / next_total
+        next_rate_if_fail = current_passed / next_total
 
     gate_passed = baseline_passed
     reasons: List[str] = []
     if not baseline_passed:
         gate_passed = False
-        reasons.append(
-            "Baseline/full-info run must pass so the task is empirically solvable when information asymmetry is removed."
-        )
+        if category == "competitive" and failed_baseline_phases:
+            failed_label = ", ".join(failed_baseline_phases)
+            reasons.append(
+                "Competitive baseline must pass in both solo-team phases "
+                f"(team_0_only and team_1_only). Failed phases: {failed_label}."
+            )
+        else:
+            reasons.append(
+                "Baseline/full-info run must pass so the task is empirically solvable when information asymmetry is removed."
+            )
     if requirement == "must_fail" and standard_passed:
         gate_passed = False
         reasons.append(
-            f"Standard run must fail because current pass rate ({current_rate:.1%}) is above the {target_rate:.0%} target."
+            f"Standard run must fail because another pass would move the dataset away from the {target_rate:.0%} target."
         )
     elif requirement == "must_pass" and not standard_passed:
         gate_passed = False
         reasons.append(
-            f"Standard run must pass because current pass rate ({current_rate:.1%}) is below the {target_rate:.0%} target."
+            f"Standard run must pass because another fail would move the dataset away from the {target_rate:.0%} target."
         )
 
     if not reasons:
@@ -116,8 +259,12 @@ def build_mode_comparison(
         "standard_requirement": requirement,
         "current_standard_pass_rate": current_rate,
         "target_standard_pass_rate": target_rate,
+        "next_standard_pass_rate_if_pass": next_rate_if_pass,
+        "next_standard_pass_rate_if_fail": next_rate_if_fail,
         "standard_passed": standard_passed,
         "baseline_passed": baseline_passed,
+        "baseline_phase_results": baseline_phase_results,
+        "baseline_failed_phases": failed_baseline_phases,
         "standard_progress": standard_progress,
         "baseline_progress": baseline_progress,
         "progress_delta": baseline_progress - standard_progress,
@@ -129,6 +276,52 @@ def build_mode_comparison(
         "step_delta": standard.get("steps", 0) - baseline.get("steps", 0),
         "reasons": reasons,
     }
+
+
+def _build_test_task_retry_guidance(comparison: Dict[str, Any]) -> str:
+    requirement = comparison.get("standard_requirement")
+    standard_passed = bool(comparison.get("standard_passed"))
+    baseline_passed = bool(comparison.get("baseline_passed"))
+    baseline_failed_phases = comparison.get("baseline_failed_phases") or []
+
+    if requirement == "must_fail" and standard_passed and baseline_passed:
+        return (
+            "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
+            "Do not call `taskgen fail`. This was rejected because the task is too easy for standard mode. "
+            "The standard agent solved it, meaning the hidden info was recoverable without communication. "
+            "Make it harder: (1) ensure the decisive fact is only observable from a restricted room, "
+            "(2) make the choice non-binary so guessing fails (e.g. which of 3+ objects, which of 3+ rooms), "
+            "(3) reduce bandwidth to 1 message per agent. Keep the physical core simple."
+        )
+
+    if not baseline_passed:
+        phase_note = ""
+        if baseline_failed_phases:
+            phase_note = (
+                " For competitive tasks, both solo baseline phases must pass "
+                f"(failed: {', '.join(baseline_failed_phases)})."
+            )
+        return (
+            "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
+            "Do not call `taskgen fail`. Baseline also failed, meaning the task is physically broken or too complex even with full info. "
+            f"{phase_note}"
+            "Simplify NOW: (1) reduce to 2-3 goals max, (2) remove unnecessary mechanics, "
+            "(3) ensure all objects/furniture exist in the scene with correct IDs, "
+            "(4) ensure agents can physically reach the objects they need. "
+            "Use `taskgen new_scene N --keep` to reload the current scene and verify IDs."
+        )
+
+    if requirement == "must_pass" and not standard_passed:
+        return (
+            "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
+            "Do not call `taskgen fail`. Standard needs a clearer path to success in this calibration regime. "
+            "Keep the ToM dependency, but make the hidden fact easier to communicate or verify."
+        )
+
+    return (
+        "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
+        "Do not call `taskgen fail` unless the environment itself is broken."
+    )
 
 
 def default_state(
@@ -148,6 +341,7 @@ def default_state(
     difficulty: Optional[str],
     test_model: Optional[str],
     calibration_stats: Dict[str, Any],
+    calibration_tasks_dirs: Optional[List[str]],
     task_gen_agent: str,
     allowed_k_levels: Optional[List[int]],
     generation_run_id: Optional[str] = None,
@@ -189,6 +383,7 @@ def default_state(
         "scene_id": None,
         "episode_id": None,
         "calibration_stats": calibration_stats,
+        "calibration_tasks_dirs": calibration_tasks_dirs or [],
         "generation_run_id": generation_run_id,
         "generation_run_dir": generation_run_dir,
         "generation_worker_id": generation_worker_id,
@@ -283,6 +478,17 @@ class TaskGenSession:
         allowed = self.state.get("allowed_k_levels") or [1, 2, 3]
         return random.choice(allowed)
 
+    def _refresh_calibration_stats(self) -> None:
+        from emtom.task_gen.runner import compute_calibration_stats
+
+        task_dirs = self.state.get("calibration_tasks_dirs") or [self.state.get("output_dir")]
+        current = self.state.get("calibration_stats") or {}
+        model = current.get("model") or self.state.get("test_model") or "gpt-5.2"
+        target_rate = current.get("target_rate", 0.20)
+        stats = compute_calibration_stats(task_dirs, model)
+        stats["target_rate"] = target_rate
+        self.state["calibration_stats"] = stats
+
     def _reset_gate_state(self) -> None:
         self.state["last_judge_passed"] = False
         self.state["last_verify_passed"] = False
@@ -343,6 +549,19 @@ class TaskGenSession:
         )
 
     def fail(self, reason: str) -> CLIResult:
+        # Soft guard: if the agent hasn't tried enough judge iterations, push back.
+        judge_failures = self.state.get("consecutive_judge_failures", 0)
+        submitted = len(self.state.get("submitted_tasks", []))
+        if submitted == 0 and judge_failures < 10:
+            return success({
+                "message": (
+                    f"Cannot abort yet — only {judge_failures} consecutive judge failures. "
+                    "Keep trying: run `taskgen new_scene N` for a fresh scene, "
+                    "simplify the task design, or try a different approach. "
+                    f"Your reason was: {reason}"
+                ),
+                "blocked": True,
+            })
         self.state["failed"] = True
         self.state["fail_reason"] = reason
         self._write_state()
@@ -351,19 +570,7 @@ class TaskGenSession:
     def _create_working_task_from_template(self, num_agents: int) -> None:
         with open(self.template_file) as f:
             task = json.load(f)
-        default_actions = [
-            "Navigate",
-            "Open",
-            "Close",
-            "Pick",
-            "Place",
-            "UseItem",
-            "FindObjectTool",
-            "FindReceptacleTool",
-            "FindRoomTool",
-            "Communicate",
-            "Wait",
-        ]
+        default_actions = get_authoring_default_actions(include_find_tools=True)
         task["agent_secrets"] = {
             f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"] for i in range(num_agents)
         }
@@ -608,7 +815,7 @@ class TaskGenSession:
         if task_data.get("category") == "competitive":
             base_model = self.state.get("test_model") or "gpt-5.2"
             opponent = "sonnet" if base_model != "sonnet" else "gpt-5.2"
-            team_assignment = task_data.get("team_assignment", {})
+            team_assignment = task_data.get("teams") or task_data.get("team_assignment") or {}
             agent_models: Dict[str, str] = {}
             for team_id, agents in team_assignment.items():
                 model = base_model if team_id == "team_0" else opponent
@@ -622,19 +829,34 @@ class TaskGenSession:
     def _parse_benchmark_subprocess(
         self, proc: subprocess.CompletedProcess[str], run_dir: Path
     ) -> Dict[str, Any]:
+        """Parse JSON result from a benchmark subprocess.
+
+        Some simulator dependencies emit noisy logs to stdout (and/or stderr)
+        before printing the CLIResult JSON payload. We therefore scan stdout for
+        the first JSON object and attempt to decode from there.
+        """
+
+        stdout = proc.stdout or ""
+        json_start = stdout.find("{")
+        if json_start >= 0:
+            stdout = stdout[json_start:]
+
         try:
-            stdout = proc.stdout
-            json_start = stdout.find("{")
-            if json_start >= 0:
-                stdout = stdout[json_start:]
             result_data = json.loads(stdout)
         except (json.JSONDecodeError, ValueError):
-            return {
-                "steps": 0,
-                "done": False,
-                "error": f"Failed to parse output: {proc.stderr[:500]}",
-                "trajectory_dir": str(run_dir),
-            }
+            # Fall back: sometimes warnings/logs appear after the JSON payload.
+            # Decode only the first complete JSON object.
+            try:
+                decoder = json.JSONDecoder()
+                result_data, _ = decoder.raw_decode(stdout)
+            except Exception:
+                noisy = (proc.stdout or proc.stderr or "")[:500]
+                return {
+                    "steps": 0,
+                    "done": False,
+                    "error": f"Failed to parse output: {noisy}",
+                    "trajectory_dir": str(run_dir),
+                }
 
         if not isinstance(result_data, dict):
             return {
@@ -652,6 +874,8 @@ class TaskGenSession:
                 "done": False,
                 "error": result_data.get("error", "Unknown error"),
             }
+            if isinstance(result_data.get("data"), dict):
+                result.update(result_data["data"])
 
         result["trajectory_dir"] = str(run_dir)
         result.pop("planner_traces", None)
@@ -663,6 +887,8 @@ class TaskGenSession:
         temp_task_file: str,
         run_mode: str,
         run_dir: Path,
+        idle_team: Optional[str] = None,
+        active_team: Optional[str] = None,
     ) -> Dict[str, Any]:
         run_dir.mkdir(parents=True, exist_ok=True)
         num_agents = task_data.get("num_agents", 2)
@@ -686,6 +912,8 @@ class TaskGenSession:
             base_model = self.state.get("test_model") or "gpt-5.2"
             opponent = "sonnet" if base_model != "sonnet" else "gpt-5.2"
             cmd.extend(["--team-model-map", f"team_0={base_model},team_1={opponent}"])
+            if idle_team:
+                cmd.extend(["--idle-team", idle_team])
 
         env = os.environ.copy()
         env = self._with_project_root_assets(env)
@@ -694,7 +922,7 @@ class TaskGenSession:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=1200,
+                timeout=_test_timeout_seconds(num_agents, task_data.get("category", "cooperative")),
                 cwd=str(self.project_root),
                 env=env,
             )
@@ -708,6 +936,10 @@ class TaskGenSession:
             }
         result = self._parse_benchmark_subprocess(proc, run_dir)
         result["run_mode"] = run_mode
+        if idle_team:
+            result["idle_team"] = idle_team
+        if active_team:
+            result["active_team"] = active_team
         return result
 
     def _run_benchmark(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -726,19 +958,60 @@ class TaskGenSession:
                 json.dump(task_data, f)
 
             self._last_agent_models = self._determine_agent_models(task_data)
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            _skip = set(self.state.get("skip_steps") or [])
+            _skip_baseline = "baseline" in _skip
+
+            run_specs: List[Dict[str, Any]] = [
+                {
+                    "result_key": "standard",
+                    "run_mode": "standard",
+                    "run_dir": run_dir / "standard",
+                }
+            ]
+            if not _skip_baseline:
+                if task_data.get("category") == "competitive":
+                    run_specs.extend(
+                        [
+                            {
+                                "result_key": "baseline_team_0_only",
+                                "run_mode": "baseline",
+                                "run_dir": run_dir / "baseline_team_0_only",
+                                "active_team": "team_0",
+                                "idle_team": "team_1",
+                            },
+                            {
+                                "result_key": "baseline_team_1_only",
+                                "run_mode": "baseline",
+                                "run_dir": run_dir / "baseline_team_1_only",
+                                "active_team": "team_1",
+                                "idle_team": "team_0",
+                            },
+                        ]
+                    )
+                else:
+                    run_specs.append(
+                        {
+                            "result_key": "baseline",
+                            "run_mode": "baseline",
+                            "run_dir": run_dir / "baseline",
+                        }
+                    )
+
+            with ThreadPoolExecutor(max_workers=len(run_specs)) as executor:
                 futures = {
-                    run_mode: executor.submit(
+                    spec["result_key"]: executor.submit(
                         self._run_benchmark_mode,
                         task_data,
                         temp_task_file,
-                        run_mode,
-                        run_dir / run_mode,
+                        spec["run_mode"],
+                        spec["run_dir"],
+                        idle_team=spec.get("idle_team"),
+                        active_team=spec.get("active_team"),
                     )
-                    for run_mode in ("standard", "baseline")
+                    for spec in run_specs
                 }
-                mode_results = {
-                    run_mode: future.result() for run_mode, future in futures.items()
+                raw_results = {
+                    result_key: future.result() for result_key, future in futures.items()
                 }
         finally:
             try:
@@ -748,7 +1021,7 @@ class TaskGenSession:
 
         mode_errors = {
             run_mode: result["error"]
-            for run_mode, result in mode_results.items()
+            for run_mode, result in raw_results.items()
             if result.get("error")
         }
         if mode_errors:
@@ -758,20 +1031,77 @@ class TaskGenSession:
                 "trajectory_dir": str(run_dir),
             }
 
-        calibration_stats = self.state.get("calibration_stats") or {}
-        comparison = build_mode_comparison(
-            task_data.get("category", ""),
-            mode_results["standard"],
-            mode_results["baseline"],
-            current_rate=calibration_stats.get("rate"),
-            target_rate=calibration_stats.get("target_rate", 0.20),
-        )
-        payload = {
-            "standard": mode_results["standard"],
-            "baseline": mode_results["baseline"],
-            "comparison": comparison,
-            "trajectory_dir": str(run_dir),
-        }
+        category = task_data.get("category", "cooperative")
+
+        if _skip_baseline:
+            # Baseline skipped: gate based only on standard failing
+            std_eval = raw_results["standard"].get("evaluation", {})
+            standard_passed = _evaluation_passed(category, std_eval)
+            standard_progress = _evaluation_progress(category, std_eval)
+            comparison = {
+                "gate_passed": not standard_passed,
+                "functional_tom_signal": None,
+                "baseline_skipped": True,
+                "standard_passed": standard_passed,
+                "baseline_passed": None,
+                "standard_progress": standard_progress,
+                "baseline_progress": None,
+                "reasons": ["Baseline skipped (--remove baseline). Gate based on standard only."],
+            }
+            payload = {
+                "standard": raw_results["standard"],
+                "baseline": {"skipped": True, "reason": "--remove baseline"},
+                "comparison": comparison,
+                "trajectory_dir": str(run_dir),
+            }
+        else:
+            if task_data.get("category") == "competitive":
+                baseline_dir = run_dir / "baseline"
+                baseline_dir.mkdir(parents=True, exist_ok=True)
+                baseline = _aggregate_competitive_baseline_phase_results(
+                    {
+                        "team_0_only": raw_results["baseline_team_0_only"],
+                        "team_1_only": raw_results["baseline_team_1_only"],
+                    }
+                )
+                baseline["trajectory_dir"] = str(baseline_dir)
+                mode_results = {
+                    "standard": raw_results["standard"],
+                    "baseline": baseline,
+                }
+            else:
+                mode_results = {
+                    "standard": raw_results["standard"],
+                    "baseline": raw_results["baseline"],
+                }
+
+            self._refresh_calibration_stats()
+            calibration_stats = self.state.get("calibration_stats") or {}
+            cat_stats = calibration_stats.get("by_category", {}).get(category, {})
+            if cat_stats.get("total", 0) > 0:
+                cal_rate = cat_stats.get("rate")
+                cal_passed = cat_stats.get("passed")
+                cal_failed = cat_stats.get("failed")
+            else:
+                cal_rate = calibration_stats.get("rate")
+                cal_passed = calibration_stats.get("passed")
+                cal_failed = calibration_stats.get("failed")
+            comparison = build_mode_comparison(
+                category,
+                mode_results["standard"],
+                mode_results["baseline"],
+                current_rate=cal_rate,
+                target_rate=calibration_stats.get("target_rate", 0.20),
+                current_passed=cal_passed,
+                current_failed=cal_failed,
+            )
+            payload = {
+                "standard": mode_results["standard"],
+                "baseline": mode_results["baseline"],
+                "comparison": comparison,
+                "trajectory_dir": str(run_dir),
+            }
+
         with open(run_dir / "comparison.json", "w") as f:
             json.dump(payload, f, indent=2)
         return payload
@@ -819,10 +1149,19 @@ class TaskGenSession:
         try:
             results = self._run_benchmark(task_data)
         except Exception as e:
+            self.state["failed"] = True
+            self.state["fail_reason"] = f"Benchmark execution failed: {e}"
+            self._write_state()
             return failure(str(e), data=validation_result["data"])
 
         if results.get("error"):
-            return failure(results["error"], data=results)
+            self.state["failed"] = True
+            self.state["fail_reason"] = f"Benchmark execution failed: {results['error']}"
+            self._write_state()
+            failure_data = dict(validation_result["data"])
+            failure_data.update(results)
+            failure_data["fatal_infra"] = True
+            return failure(results["error"], data=failure_data)
 
         self._save_calibration_result(task_data, results)
         self.state["last_test_passed"] = results["comparison"]["gate_passed"]
@@ -831,6 +1170,11 @@ class TaskGenSession:
         payload.update(results)
         payload["gate"] = "PASSED" if self.state["last_test_passed"] else "REJECTED"
         payload["gate_reason"] = " ".join(results["comparison"].get("reasons", []))
+        if self.state["last_test_passed"]:
+            payload["next_step"] = "Test passed. Submit the task without changing the spec."
+        else:
+            payload["action_required"] = _build_test_task_retry_guidance(results["comparison"])
+            payload["next_step"] = payload["action_required"]
         return success(payload)
 
     def verify_golden_trajectory(self) -> CLIResult:
@@ -886,6 +1230,9 @@ class TaskGenSession:
         self.state["last_judge_passed"] = bool(data.get("passed"))
         if self.state["last_judge_passed"]:
             self.state["consecutive_judge_failures"] = 0
+            # Strip required_fixes on pass — the LLM judge sometimes returns
+            # suggestions even for passing tasks, which misleads the agent.
+            data.pop("required_fixes", None)
             data["next_step"] = (
                 "Task passed judge. Do not change the task spec. "
                 "Run taskgen test_task, then taskgen submit_task."
@@ -939,6 +1286,7 @@ class TaskGenSession:
 
         data = result["data"]
         self.state.setdefault("submitted_tasks", []).append(data["output_path"])
+        self._refresh_calibration_stats()
         self._reset_gate_state()
         self.state["_test_run_count"] = 0
         if len(self.state["submitted_tasks"]) < self.state["num_tasks_target"]:

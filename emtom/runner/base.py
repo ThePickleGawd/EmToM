@@ -53,6 +53,7 @@ class EMTOMBaseRunner(ABC):
 
         # Video recording
         self._dvu = None
+        self._per_agent_recorder = None
         self._fpv_recorder = None
         self._save_video_override: Optional[bool] = None
 
@@ -472,7 +473,7 @@ class EMTOMBaseRunner(ABC):
             return
 
         try:
-            from habitat_llm.examples.example_utils import DebugVideoUtil
+            from habitat_llm.examples.example_utils import DebugVideoUtil, PerAgentThirdPersonRecorder
 
             video_dir = os.path.join(self.output_dir, "videos")
             os.makedirs(video_dir, exist_ok=True)
@@ -482,6 +483,14 @@ class EMTOMBaseRunner(ABC):
                 video_dir,
                 unique_postfix=True,
             )
+
+            # Per-agent third-person videos (separate file per agent)
+            agent_ids = [f"agent_{uid}" for uid in sorted(self.agents.keys())]
+            self._per_agent_recorder = PerAgentThirdPersonRecorder(
+                output_dir=self.output_dir,
+                agent_ids=agent_ids,
+            )
+
             print(f"[EMTOMBaseRunner] Video recording enabled: {video_dir}")
         except Exception as e:
             print(f"[EMTOMBaseRunner] Video setup failed: {e}")
@@ -504,6 +513,18 @@ class EMTOMBaseRunner(ABC):
                 self._dvu._store_for_video(observations, actions or {}, popup_images={}, turn=turn)
             except Exception:
                 pass
+
+        if self._per_agent_recorder:
+            actions_dict = actions or {}
+            for agent_id in self._per_agent_recorder.agent_ids:
+                uid = int(agent_id.split("_")[-1])
+                action_tuple = actions_dict.get(uid)
+                try:
+                    self._per_agent_recorder.record_frame(
+                        agent_id, observations, action=action_tuple,
+                    )
+                except Exception:
+                    pass
 
     def _sync_remote_effects_to_simulator(self, effects: List[str]) -> None:
         """
@@ -1266,15 +1287,23 @@ class EMTOMBaseRunner(ABC):
 
     def save_video(self, suffix: str) -> Optional[str]:
         """Save recorded video with given suffix."""
-        if not self._dvu or not self._dvu.frames:
-            return None
+        video_dir = os.path.join(self.output_dir, "videos")
 
-        try:
-            self._dvu._make_video(play=False, postfix=suffix)
-            return os.path.join(self.output_dir, "videos")
-        except Exception as e:
-            print(f"[EMTOMBaseRunner] Failed to save video: {e}")
-            return None
+        if self._dvu and self._dvu.frames:
+            try:
+                self._dvu._make_video(play=False, postfix=suffix)
+            except Exception as e:
+                print(f"[EMTOMBaseRunner] Failed to save combined video: {e}")
+
+        if self._per_agent_recorder:
+            try:
+                self._per_agent_recorder.save_individual_videos(postfix=suffix)
+            except Exception as e:
+                print(f"[EMTOMBaseRunner] Failed to save per-agent videos: {e}")
+
+        if (self._dvu and self._dvu.frames) or self._per_agent_recorder:
+            return video_dir
+        return None
 
     def save_planner_log(self, data: Dict[str, Any]) -> str:
         """Save planner log JSON."""

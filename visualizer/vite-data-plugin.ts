@@ -715,12 +715,22 @@ function processTaskFile(taskFile: string): Record<string, any> | null {
   const calibration = data.calibration || [];
   const goldenHistory = flattenGolden(data.golden_trajectory || []);
   const calibrationByMode: Record<string, any> = {};
+  // Prefer gpt-5.2 calibration entries as the canonical reference.
+  // When multiple entries exist for the same run_mode, gpt-5.2 wins.
+  const isGpt52 = (models: Record<string, string>) =>
+    Object.values(models).some((m) => String(m).includes("gpt-5"));
   for (const cal of calibration) {
     const runMode = String(cal.run_mode || "standard");
+    const models = cal.agent_models || {};
+    const existing = calibrationByMode[runMode];
+    // Skip non-gpt-5.2 entries if we already have a gpt-5.2 entry for this mode
+    if (existing && isGpt52(existing.agent_models) && !isGpt52(models)) {
+      continue;
+    }
     calibrationByMode[runMode] = {
       run_mode: runMode,
       tested_at: cal.tested_at || "",
-      agent_models: cal.agent_models || {},
+      agent_models: models,
       passed: calibrationPassed(cal),
       progress: calibrationProgress(cal),
       steps: cal.steps || 0,
@@ -932,18 +942,18 @@ function buildRunsIndex(): Record<string, any> {
  * Find a library task file by task_id, handling timestamp-prefixed filenames.
  * Scans files in TASKS_DIR and reads each to match the task_id field.
  */
-function findLibraryFile(taskId: string): string | null {
-  if (!fs.existsSync(TASKS_DIR)) return null;
+function findTaskFileInDir(tasksDir: string, taskId: string): string | null {
+  if (!fs.existsSync(tasksDir)) return null;
   // Fast path: check if any filename ends with the task_id
-  const files = fs.readdirSync(TASKS_DIR).filter((f) => f.endsWith(".json"));
+  const files = fs.readdirSync(tasksDir).filter((f) => f.endsWith(".json"));
   for (const f of files) {
     if (f === `${taskId}.json` || f.endsWith(`_${taskId}.json`)) {
-      return path.join(TASKS_DIR, f);
+      return path.join(tasksDir, f);
     }
   }
   // Slow path: read each file and check task_id field
   for (const f of files) {
-    const filePath = path.join(TASKS_DIR, f);
+    const filePath = path.join(tasksDir, f);
     try {
       const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
       if (data.task_id === taskId) return filePath;
@@ -952,6 +962,17 @@ function findLibraryFile(taskId: string): string | null {
     }
   }
   return null;
+}
+
+function findLibraryFile(taskId: string): string | null {
+  return findTaskFileInDir(TASKS_DIR, taskId);
+}
+
+function findCalibrationTaskFile(outputDir: string, taskId: string): string | null {
+  if (!outputDir.startsWith("calibration:")) return null;
+  const rawTasksDir = outputDir.slice("calibration:".length);
+  const tasksDir = resolveRepoPath(rawTasksDir);
+  return findTaskFileInDir(tasksDir, taskId);
 }
 
 export default function dynamicDataPlugin(): Plugin {
@@ -1164,6 +1185,17 @@ export default function dynamicDataPlugin(): Plugin {
             const campaign = readJsonIfExists(path.join(campaignRoot, "campaign.json"));
             const runDef = campaign?.runs?.[runKey];
             if (runDef?.output_dir) {
+              if (String(runDef.output_dir).startsWith("calibration:")) {
+                const taskFile = findCalibrationTaskFile(String(runDef.output_dir), taskId);
+                if (taskFile) {
+                  const taskData = processTaskFile(taskFile);
+                  if (taskData) {
+                    res.setHeader("Content-Type", "application/json");
+                    res.end(JSON.stringify(taskData));
+                    return;
+                  }
+                }
+              }
               const outputRunDir = path.join(PROJECT_ROOT, runDef.output_dir);
               const resultsDirs = findResultsDirs(outputRunDir);
               for (const { resultsDir } of resultsDirs) {
@@ -1212,6 +1244,17 @@ export default function dynamicDataPlugin(): Plugin {
                 );
                 const runDef = campaign.runs?.[runKey];
                 if (runDef?.output_dir) {
+                  if (String(runDef.output_dir).startsWith("calibration:")) {
+                    const taskFile = findCalibrationTaskFile(String(runDef.output_dir), taskId);
+                    if (taskFile) {
+                      const taskData = processTaskFile(taskFile);
+                      if (taskData) {
+                        res.setHeader("Content-Type", "application/json");
+                        res.end(JSON.stringify(taskData));
+                        return;
+                      }
+                    }
+                  }
                   const outputRunDir = path.join(
                     PROJECT_ROOT,
                     runDef.output_dir,

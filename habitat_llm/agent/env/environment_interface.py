@@ -6,7 +6,7 @@ import glob
 import json
 import os
 from collections import OrderedDict, defaultdict
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import cv2
 import gym
@@ -188,6 +188,17 @@ class EnvironmentInterface:
             "agent_uids not configured. Please ensure evaluation.agents is set in your config "
             "with entries like: agents: { agent_0: { uid: 0 }, agent_1: { uid: 1 }, ... }"
         )
+
+    def get_agent_world_graph_observation_sources(self, agent_uid: int) -> List[str]:
+        """
+        Return the observation sources that may update an agent's world graph.
+
+        Under partial observability we keep each agent's graph private by
+        construction: only that agent's own camera observations may add or
+        update nodes. Communication stays in text context and does not mutate
+        the recipient's graph.
+        """
+        return [str(agent_uid)]
 
     def initialize_perception_and_world_graph(self):
         """
@@ -616,38 +627,18 @@ class EnvironmentInterface:
                 self.world_graph[agent_uid] = self.full_world_graph
 
         # Case 2: PARTIAL OBSERVABILITY
-        # Update both graphs using both human and robot observations
+        # Update each graph from that agent's own observations only.
         else:
-            # Get robots subgraph using both human and robot observations
-            most_recent_robot_subgraph = self.perception.get_recent_subgraph(
-                [str(self.robot_agent_uid), str(self.human_agent_uid)], obs
-            )
-
-            # Get human subgraph using only human observations
-            observation_sources = []
-            if self.conf.agent_asymmetry:
-                # under asymmetry condition human's world-graph only uses human's own observations
-                observation_sources = [str(self.human_agent_uid)]
-            else:
-                # under symmetry condition the human's world-graph uses both human's and Spot's observations
-                observation_sources = [
-                    str(self.robot_agent_uid),
-                    str(self.human_agent_uid),
-                ]
-            most_recent_human_subgraph = self.perception.get_recent_subgraph(
-                observation_sources,
-                obs,
-            )
-
-            # Update robot graph
-            self.world_graph[self.robot_agent_uid].update(
-                most_recent_robot_subgraph, self.partial_obs, self.wm_update_mode
-            )
-
-            # Update human graph
-            self.world_graph[self.human_agent_uid].update(
-                most_recent_human_subgraph, self.partial_obs, self.wm_update_mode
-            )
+            for agent_uid in self.get_all_agent_uids():
+                most_recent_subgraph = self.perception.get_recent_subgraph(
+                    self.get_agent_world_graph_observation_sources(agent_uid),
+                    obs,
+                )
+                self.world_graph[agent_uid].update(
+                    most_recent_subgraph,
+                    self.partial_obs,
+                    self.wm_update_mode,
+                )
 
         return
 
@@ -684,17 +675,13 @@ class EnvironmentInterface:
             )
         else:
             raise ValueError("Frame description is None")
-        # update the world-graph for the human agent
-        if self.conf.agent_asymmetry:
-            most_recent_human_subgraph = self.perception.get_recent_subgraph(
-                self.sim, [str(self.human_agent_uid)], obs
-            )
-        else:
-            most_recent_human_subgraph = self.perception.get_recent_subgraph(
-                self.sim,
-                [str(self.robot_agent_uid), str(self.human_agent_uid)],
-                obs,
-            )
+        # Update the human agent from only its own observations so the GT side
+        # stays private as well.
+        most_recent_human_subgraph = self.perception.get_recent_subgraph(
+            self.sim,
+            self.get_agent_world_graph_observation_sources(self.human_agent_uid),
+            obs,
+        )
         self.world_graph[self.conf.human_agent_uid].update(
             most_recent_human_subgraph,
             self.partial_obs,

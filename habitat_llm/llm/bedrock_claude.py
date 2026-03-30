@@ -13,7 +13,7 @@ import boto3
 from botocore.exceptions import ClientError
 from omegaconf import DictConfig
 
-from habitat_llm.llm.base_llm import BaseLLM, Prompt
+from habitat_llm.llm.base_llm import BaseLLM, LLMRequestError, Prompt
 
 # Load .env file if it exists (for AWS credentials)
 _env_file = Path(__file__).resolve().parent.parent.parent / ".env"
@@ -39,9 +39,11 @@ class BedrockClaude(BaseLLM):
     Supports model aliases for convenience:
 
     Claude (Anthropic):
-        sonnet, sonnet-4.5       -> us.anthropic.claude-sonnet-4-5-20250929-v1:0
+        sonnet, sonnet-4.6       -> us.anthropic.claude-sonnet-4-6-v1:0
         haiku, haiku-4.5         -> us.anthropic.claude-haiku-4-5-20251001-v1:0
-        opus, opus-4.5           -> us.anthropic.claude-opus-4-5-20251101-v1:0
+        opus, opus-4.6           -> us.anthropic.claude-opus-4-6-v1:0
+        sonnet-4.5               -> us.anthropic.claude-sonnet-4-5-20250929-v1:0
+        opus-4.5                 -> us.anthropic.claude-opus-4-5-20251101-v1:0
 
     Qwen (Alibaba):
         qwen3-80b, qwen3-next    -> qwen.qwen3-next-80b-a3b
@@ -59,16 +61,22 @@ class BedrockClaude(BaseLLM):
     # Model aliases mapping short names to full Bedrock model IDs
     MODEL_ALIASES: Dict[str, str] = {
         # ============ Claude (Anthropic) ============
+        # Claude Sonnet 4.6 (latest)
+        "sonnet": "us.anthropic.claude-sonnet-4-6-v1:0",
+        "sonnet-4.6": "us.anthropic.claude-sonnet-4-6-v1:0",
+        "sonnet4.6": "us.anthropic.claude-sonnet-4-6-v1:0",
         # Claude Sonnet 4.5
-        "sonnet": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "sonnet-4.5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "sonnet4.5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         # Claude Haiku 4.5
         "haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "haiku-4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "haiku4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        # Claude Opus 4.6 (latest)
+        "opus": "us.anthropic.claude-opus-4-6-v1:0",
+        "opus-4.6": "us.anthropic.claude-opus-4-6-v1:0",
+        "opus4.6": "us.anthropic.claude-opus-4-6-v1:0",
         # Claude Opus 4.5
-        "opus": "us.anthropic.claude-opus-4-5-20251101-v1:0",
         "opus-4.5": "us.anthropic.claude-opus-4-5-20251101-v1:0",
         "opus4.5": "us.anthropic.claude-opus-4-5-20251101-v1:0",
 
@@ -130,6 +138,28 @@ class BedrockClaude(BaseLLM):
         self.message_history: List[Dict] = []
         self.keep_message_history = getattr(self.llm_conf, "keep_message_history", False)
         self.system_message = getattr(self.llm_conf, "system_message", "You are an expert at task planning.")
+
+    def _raise_client_error(self, exc: ClientError) -> None:
+        err = exc.response.get("Error", {})
+        metadata = exc.response.get("ResponseMetadata", {})
+        code = err.get("Code", "")
+        message = err.get("Message", str(exc))
+        status_code = metadata.get("HTTPStatusCode")
+        headers = metadata.get("HTTPHeaders") or {}
+        retryable_codes = {
+            "ThrottlingException",
+            "TooManyRequestsException",
+            "RequestTimeout",
+            "ServiceUnavailableException",
+            "InternalServerException",
+        }
+        retryable = status_code in {408, 409, 429, 500, 502, 503, 504} or code in retryable_codes
+        raise LLMRequestError(
+            f"Bedrock {code or 'ClientError'}: {message}",
+            status_code=status_code,
+            headers=headers,
+            retryable=retryable,
+        ) from exc
 
     def generate(
         self,
@@ -222,12 +252,15 @@ class BedrockClaude(BaseLLM):
             request_body["stop_sequences"] = [stop] if isinstance(stop, str) else stop
 
         # Call Bedrock
-        response = self.client.invoke_model(
-            modelId=model_id,
-            body=json.dumps(request_body),
-            contentType="application/json",
-            accept="application/json",
-        )
+        try:
+            response = self.client.invoke_model(
+                modelId=model_id,
+                body=json.dumps(request_body),
+                contentType="application/json",
+                accept="application/json",
+            )
+        except ClientError as exc:
+            self._raise_client_error(exc)
 
         # Parse response
         response_body = json.loads(response["body"].read())
@@ -353,10 +386,13 @@ class BedrockClaude(BaseLLM):
                 and "stopsequences" in normalized_message
             )
             if not should_retry_without_stop:
-                raise
+                self._raise_client_error(e)
 
             inference_config.pop("stopSequences", None)
-            response = self.client.converse(**request_kwargs)
+            try:
+                response = self.client.converse(**request_kwargs)
+            except ClientError as exc:
+                self._raise_client_error(exc)
 
         # Parse response
         text_response = response["output"]["message"]["content"][0]["text"]

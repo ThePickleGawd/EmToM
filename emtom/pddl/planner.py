@@ -219,7 +219,7 @@ def _solve_task_for_trajectory(
         problem,
         observability,
         max_belief_depth=3,
-        strict=True,
+        strict=False,
     )
     if not result.solvable:
         raise RuntimeError(

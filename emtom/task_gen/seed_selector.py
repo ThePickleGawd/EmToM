@@ -90,6 +90,9 @@ def build_seed_candidates(config: SeedSelectionConfig) -> list[SeedTaskCandidate
             continue
         if not all(k in task_data for k in ("title", "task", "agent_actions")):
             continue
+        stored_level = task_data.get("tom_level")
+        if isinstance(stored_level, int) and stored_level < 1:
+            continue
 
         weight = _candidate_weight(task_data, config)
         if weight <= 0:

@@ -24,8 +24,10 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from omegaconf import DictConfig
 
-from .prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, _strip_pddl_from_guidance, _strip_simulation_from_guidance
 from .judge import Judge, Judgment, CouncilVerdict, Colors
+from .authoring_surface import (
+    get_authoring_default_actions,
+)
 from .diversity import DiversityTracker
 from .seed_sanitizer import sanitize_task_for_seeding
 from .seed_selector import SeedSelectionConfig, build_seed_candidates, select_seed_tasks
@@ -34,7 +36,6 @@ from .spec_validator import (
     validate_room_restriction_trajectory,
 )
 from .task_bootstrap import build_scene_bootstrap_problem_pddl
-from emtom.actions import ActionRegistry
 
 if TYPE_CHECKING:
     from habitat_llm.llm.base_llm import BaseLLM
@@ -44,6 +45,109 @@ if TYPE_CHECKING:
 _DIVERSITY_START_MARKER = "<!-- DIVERSITY_SECTION_START -->"
 _DIVERSITY_END_MARKER = "<!-- DIVERSITY_SECTION_END -->"
 _CALIBRATION_TOLERANCE = 0.05
+
+_SYSTEM_PROMPT = """You are a puzzle designer creating multi-agent collaboration benchmark tasks.
+
+## Response Format
+Respond in this format:
+Thought: [brief reasoning]
+Action: tool_name[args]
+
+Exactly one action per turn.
+
+## Tools
+- `new_scene[N]`: load a fresh scene with N agents. `N` must be within the run's allowed agent range and never below 2.
+- `new_scene[N, keep]`: keep the current scene but change the agent count. `N` must be within the run's allowed agent range and never below 2.
+- `bash[cmd]`: inspect files and edit the working task.
+- `judge[]`: run validation, planner checks, simulation checks when enabled, and quality checks.
+- `test_task[]`: run benchmark calibration when enabled.
+- `submit_task[]`: save a passing task.
+- `fail[reason]`: stop only for unrecoverable infrastructure issues.
+
+## Workflow
+1. If `sampled_tasks/` contains files, read ALL of them and analyze the `_benchmark_result` trajectories before authoring.
+2. Call `new_scene[N]`.
+3. Inspect the scene.
+4. Edit `{task_file}`.
+5. Run `judge[]`, fix issues, and repeat until it passes.
+6. Run `test_task[]` when required.
+7. Run `submit_task[]`.
+
+## Hard Rules
+- Every command already starts inside `{working_dir}`. Do not prefix every command with `cd {working_dir} &&`.
+- Use only valid agent IDs and scene IDs.
+- Remove placeholder text. No `TODO`, `TBD`, or generic filler.
+- Every essential agent must contribute distinct knowledge, access, or incentive.
+- The physical goal must require communication or partner modeling, not just parallel independent work.
+- `message_targets` already defines communication restrictions. Do not duplicate it unless you intentionally need an explicit `restricted_communication` mechanic binding.
+- Use canonical mechanic schema only:
+  `room_restriction` -> `restricted_rooms` + `for_agents`
+  `limited_bandwidth` -> `message_limits`
+  `restricted_communication` -> `allowed_targets`
+- Treat `problem_pddl` as machine-owned except for `:goal` and optional `:goal-owners`.
+- Do not hand-edit `:objects`, `:init`, or `golden_trajectory`.
+
+## Secret Formatting Rules (judge hard-blocks on violations)
+- Secrets must state ONLY positive private facts or constraints: room bans, communication limits/targets, private observations, exact IDs for facts the agent already knows, goal states, and private objectives.
+- NEVER use prescriptive language: 'Tell your partner', 'Ask them', 'Leave it at', 'Coordinate with', 'You should'.
+- NEVER add ignorance lines like 'You do not know where ...', 'You do not know which ...', or 'You do not know whether ...'. If a fact is unknown to the agent, omit it.
+- NEVER add epistemic coaching like 'By the end, you must be confident ...' or 'Epistemic probe: ...' to `agent_secrets`.
+- If an agent lacks an object's identity or location, do NOT reveal the exact runtime object ID in that agent's secret or in the public `task`. Prefer role/type language in the public task and keep exact IDs only in the secrets of agents who actually know them.
+- BUG WARNING: 'agent_X cannot enter room_Y' in agent_Z's secrets is parsed as agent_Z's restriction. Use 'agent_X is barred from room_Y' for other agents' restrictions.
+
+## Category Rules
+- Cooperative: shared goals only; no `teams`; no `team_secrets`; no `:goal-owners`.
+- Competitive: exactly two teams; public task stays neutral; use incompatible team outcomes.
+- Mixed: public task covers the shared objective only; each relevant agent has a hidden personal objective.
+
+## Good ToM
+- Good ToM means an agent's correct action depends on another agent's private knowledge, access, or likely behavior.
+- Good pattern: agent A cannot determine the right object, room, or target state until agent B observes or communicates it.
+- Bad pattern: agents can finish the physical goal independently and communication only reports progress.
+- Use `K()` only for facts that matter for planning or coordination.
+- The outermost `K()` agent should not be able to directly observe the fact with no blocker.
+
+## References
+- Working task: `{task_file}`
+- Current scene: `{working_dir}/current_scene.json`
+- Sampled tasks: `{working_dir}/sampled_tasks/` (failed_*.json + passed_*.json with `_benchmark_result` trajectories)
+- Template: `{working_dir}/template.json`
+
+## Structural Diversity
+{diversity_section}
+"""
+
+_USER_PROMPT_TEMPLATE = """Generate {num_tasks} quality benchmark tasks.
+{extra_sections}
+## Constraints
+- Agents: {agents_min}-{agents_max}
+- Goal conjuncts: {subtasks_min}-{subtasks_max}
+
+Start with `new_scene[N]`, where `N` must be between {agents_min} and {agents_max} inclusive.
+"""
+
+
+def _strip_pddl_from_guidance(guidance: str) -> str:
+    guidance = guidance.replace(
+        "- `judge[]`: run validation, planner checks, simulation checks when enabled, and quality checks.\n",
+        "- `judge[]`: run non-PDDL validation and quality checks.\n",
+    )
+    guidance = guidance.replace(
+        "- Treat `problem_pddl` as machine-owned except for `:goal` and optional `:goal-owners`.\n",
+        "- PDDL solvability verification is disabled, but you MUST still write `problem_pddl` as the canonical goal format. Author `:goal` and optional `:goal-owners` normally.\n",
+    )
+    guidance = guidance.replace(
+        "- Do not hand-edit `:objects`, `:init`, or `golden_trajectory`.\n",
+        "- Do not hand-author `golden_trajectory`.\n",
+    )
+    return guidance
+
+
+def _strip_simulation_from_guidance(guidance: str) -> str:
+    return guidance.replace(
+        "- `judge[]`: run validation, planner checks, simulation checks when enabled, and quality checks.\n",
+        "- `judge[]`: run validation, planner checks when enabled, and quality checks.\n",
+    )
 
 
 def _evaluation_passed(category: str, evaluation: Dict[str, Any]) -> bool:
@@ -95,8 +199,21 @@ def _standard_requirement(
     current_rate: Optional[float],
     target_rate: float,
     tolerance: float = _CALIBRATION_TOLERANCE,
+    current_passed: Optional[int] = None,
+    current_failed: Optional[int] = None,
 ) -> str:
     """Return how the next standard run should calibrate the dataset."""
+    if current_passed is not None and current_failed is not None:
+        total = current_passed + current_failed
+        next_total = total + 1
+        pass_rate_if_pass = (current_passed + 1) / next_total
+        pass_rate_if_fail = current_passed / next_total
+        pass_delta = abs(pass_rate_if_pass - target_rate)
+        fail_delta = abs(pass_rate_if_fail - target_rate)
+        if abs(pass_delta - fail_delta) <= 1e-9:
+            return "either"
+        return "must_pass" if pass_delta < fail_delta else "must_fail"
+
     if current_rate is None:
         return "either"
     if current_rate > target_rate + tolerance:
@@ -113,6 +230,8 @@ def _build_mode_comparison(
     current_rate: Optional[float],
     target_rate: float,
     tolerance: float = _CALIBRATION_TOLERANCE,
+    current_passed: Optional[int] = None,
+    current_failed: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Summarize the dual benchmark run and acceptance gates."""
     std_eval = standard.get("evaluation", {})
@@ -121,7 +240,19 @@ def _build_mode_comparison(
     baseline_passed = _evaluation_passed(category, base_eval)
     standard_progress = _evaluation_progress(category, std_eval)
     baseline_progress = _evaluation_progress(category, base_eval)
-    requirement = _standard_requirement(current_rate, target_rate, tolerance=tolerance)
+    requirement = _standard_requirement(
+        current_rate,
+        target_rate,
+        tolerance=tolerance,
+        current_passed=current_passed,
+        current_failed=current_failed,
+    )
+    next_rate_if_pass = None
+    next_rate_if_fail = None
+    if current_passed is not None and current_failed is not None:
+        next_total = current_passed + current_failed + 1
+        next_rate_if_pass = (current_passed + 1) / next_total
+        next_rate_if_fail = current_passed / next_total
 
     gate_passed = baseline_passed
     reasons: List[str] = []
@@ -133,12 +264,12 @@ def _build_mode_comparison(
     if requirement == "must_fail" and standard_passed:
         gate_passed = False
         reasons.append(
-            f"Standard run must fail because current pass rate ({current_rate:.1%}) is above the {target_rate:.0%} target."
+            f"Standard run must fail because another pass would move the dataset away from the {target_rate:.0%} target."
         )
     elif requirement == "must_pass" and not standard_passed:
         gate_passed = False
         reasons.append(
-            f"Standard run must pass because current pass rate ({current_rate:.1%}) is below the {target_rate:.0%} target."
+            f"Standard run must pass because another fail would move the dataset away from the {target_rate:.0%} target."
         )
 
     if not reasons:
@@ -150,6 +281,8 @@ def _build_mode_comparison(
         "standard_requirement": requirement,
         "current_standard_pass_rate": current_rate,
         "target_standard_pass_rate": target_rate,
+        "next_standard_pass_rate_if_pass": next_rate_if_pass,
+        "next_standard_pass_rate_if_fail": next_rate_if_fail,
         "standard_passed": standard_passed,
         "baseline_passed": baseline_passed,
         "standard_progress": standard_progress,
@@ -280,7 +413,7 @@ class TaskGeneratorAgent:
                 template = json.load(f)
             # Set num_agents to max (LLM will choose within range)
             template["num_agents"] = self.agents_max
-            default_actions = ["Navigate", "Open", "Close", "Pick", "Place", "UseItem", "Communicate", "Wait"]
+            default_actions = get_authoring_default_actions(include_find_tools=False)
             template["agent_secrets"] = {
                 f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
                 for i in range(self.agents_max)
@@ -304,6 +437,7 @@ class TaskGeneratorAgent:
         self.last_judgment: Optional[CouncilVerdict] = None  # Last judgment result
         self.failed = False  # Track if agent called fail[]
         self.fail_reason = ""  # Reason for failure
+        self._last_test_comparison: Optional[Dict[str, Any]] = None
         self.task_memories: List[str] = []  # Learnings from completed tasks
         self.consecutive_tom_failures = 0  # Track failures to suggest new_scene
         self.diversity_tracker = DiversityTracker(llm=self.llm)  # Track task patterns for diversity
@@ -315,6 +449,7 @@ class TaskGeneratorAgent:
             user_query=judge_query,
             diversity_tracker=self.diversity_tracker,
             difficulty=difficulty,
+            skip_steps=self.skip_steps or None,
         )
         if judge_threshold is not None:
             judge_kwargs["overall_threshold"] = judge_threshold
@@ -430,14 +565,6 @@ class TaskGeneratorAgent:
         # Don't create working_task.json yet - agent must call new_scene first
         # self._create_working_task_from_template() is called in _new_scene()
 
-        # Get available items from registry
-        from emtom.state.item_registry import ItemRegistry
-        available_items = ItemRegistry.get_items_for_task_generation()
-
-        # Get available mechanics
-        from emtom.mechanics import get_mechanics_for_task_generation
-        available_mechanics = get_mechanics_for_task_generation()
-
         # Select category (random if not specified)
         task_category = self.category or random.choice(["cooperative", "competitive", "mixed"])
 
@@ -448,22 +575,14 @@ class TaskGeneratorAgent:
             # Default: random from 1, 2, 3
             self._current_k_level = random.choice([1, 2, 3])
 
-        # Get available predicates from domain
-        from emtom.pddl.domain import get_predicates_for_prompt
-        available_predicates = get_predicates_for_prompt()
-
         # Initialize conversation with action descriptions and paths injected
         replacements = {
-            "{action_descriptions}": ActionRegistry.get_all_action_descriptions(),
             "{task_file}": str(self.task_file),
             "{working_dir}": str(self.working_dir),
-            "{available_items}": available_items,
-            "{available_mechanics}": available_mechanics,
-            "{available_predicates}": available_predicates,
             "{category}": task_category.upper(),
             "{diversity_section}": self._wrap_diversity_section(self._build_diversity_section()),
         }
-        system_prompt = SYSTEM_PROMPT
+        system_prompt = _SYSTEM_PROMPT
 
         # Strip sections for removed pipeline components before replacements
         if "pddl" in (self.skip_steps or []):
@@ -482,7 +601,7 @@ class TaskGeneratorAgent:
                 "Do NOT attempt to run or rely on these components. They will be automatically skipped.\n"
             )
             if "pddl" in self.skip_steps:
-                skip_notice += "- PDDL verification is disabled. Do NOT write or reference `problem_pddl`. Do NOT call any PDDL-related tool.\n"
+                skip_notice += "- PDDL verification is disabled. You still MUST write `problem_pddl` as the canonical goal format — only the automated PDDL solvability check is skipped.\n"
             if "tom" in self.skip_steps:
                 skip_notice += "- ToM level verification is disabled. Do NOT worry about tom_level computation.\n"
             if "simulation" in self.skip_steps:
@@ -496,6 +615,8 @@ class TaskGeneratorAgent:
                 )
             if "test" in self.skip_steps:
                 skip_notice += "- test_task is disabled. You can skip `test_task[]` and go directly to `submit_task[]`.\n"
+            if "baseline" in self.skip_steps:
+                skip_notice += "- Baseline (full-info) run is disabled. `test_task[]` only runs standard mode. The gate passes if standard fails.\n"
             system_prompt += skip_notice
 
         self.messages = [
@@ -548,12 +669,11 @@ Your previous task did not pass the ToM verification. You MUST address these iss
                     "## Difficulty: EASY\n"
                     "Generate SIMPLE tasks that weaker models can solve:\n"
                     "- Use 0-1 mechanics (prefer limited_bandwidth or room_restriction)\n"
-                    "- Avoid inverse_state and chained conditional_unlock — models cannot discover these\n"
                     "- 2-3 agents with clear roles\n"
                     "- 2-3 subtasks maximum\n"
                     "- Secrets MUST explain any active mechanic in plain language\n"
                     "- All effects should be observable (no remote effects in unseen rooms)\n"
-                    "- tom_level 0-1 only\n"
+                    "- tom_level 1 only; K=0 tasks are invalid\n"
                     "- limited_bandwidth with generous limits (4-5 messages) works well at this level\n"
                 ),
                 "medium": (
@@ -569,16 +689,17 @@ Your previous task did not pass the ToM verification. You MUST address these iss
                     "- tom_level 2-3 (required K-level is set separately)\n"
                 ),
                 "hard": (
-                    "## Difficulty: HARD — Target: GPT-5.2 FAILS this task\n"
-                    "Generate tasks that top-tier models CANNOT solve. "
-                    "test_task[] will REJECT any task GPT-5.2 can solve.\n\n"
-                    "### Required properties:\n"
-                    "- 3-4 agents, each with a UNIQUE physical role + information\n"
-                    "- Use restricted_communication to force RELAY chains (A→B→C, not A→C)\n"
-                    "- Use room_restriction to make each agent physically necessary\n"
-                    "- limited_bandwidth: 2 messages per agent for K=2, 3 for K=3\n"
-                    "- Keep the physical core compact: 2-4 physical conjuncts plus one strict non-trivial K() chain\n"
-                    "- Keep mechanics to room_restriction + restricted_communication, and add limited_bandwidth only if the relay still works\n\n"
+                "## Difficulty: HARD — Target: GPT-5.2 FAILS this task\n"
+                "Generate tasks that top-tier models CANNOT solve. "
+                "test_task[] will REJECT any task GPT-5.2 can solve.\n\n"
+                "### Required properties:\n"
+                "- 3-4 agents, each with a UNIQUE physical role + information\n"
+                "- Use restricted_communication when the task needs relay chains (A→B→C, not A→C)\n"
+                "- Use room_restriction or mechanic-local asymmetry to make each agent physically or informationally necessary\n"
+                "- limited_bandwidth: 2 messages per agent for K=2, 3 for K=3\n"
+                "- Keep the physical core compact: 2-4 physical conjuncts plus one strict non-trivial K() chain\n"
+                "- Consider `remote_control`, `state_mirroring`, and `inverse_state` when one of them creates a single decisive hidden dependency\n"
+                "- Keep mechanics purposeful; use the supported mechanic that gives the cleanest ToM bottleneck for the scene\n\n"
                     "### How to create K=2/3 tasks that GPT-5.2 CANNOT solve:\n"
                     "- K=2 pattern: Agent A observes fact X. A can only message B.\n"
                     "  B can relay to C, and C cannot directly observe X. Goal: one physical conjunct over X plus (K C (K B X)).\n"
@@ -634,6 +755,7 @@ Target: {target_rate:.0%} of tasks should be passable by {model}
             tom_calibration_section = (
                 f"\n## Required K-Level: {target_k}\n"
                 f"This task MUST be Theory-of-Mind level {target_k}.\n"
+                "K=0 tasks are invalid and will be rejected.\n"
                 f"Design epistemic goals so that `judge[]`'s strict PDDL verification computes tom_level = {target_k}.\n"
                 f"submit_task[] will REJECT the task if the computed tom_level is not {target_k}.\n"
             )
@@ -667,7 +789,7 @@ Always rewrite `title`, `task`, `agent_secrets`, and `team_secrets` from scratch
         self._extra_sections = extra_sections
 
         # Initial user message - use template from prompts.py
-        user_msg = USER_PROMPT_TEMPLATE.format(
+        user_msg = _USER_PROMPT_TEMPLATE.format(
             num_tasks=num_tasks_target,
             extra_sections=extra_sections,
             agents_min=self.agents_min,
@@ -885,7 +1007,7 @@ Always rewrite `title`, `task`, `agent_secrets`, and `team_secrets` from scratch
         # Only generate placeholder agent fields when not using a seed task
         if seed_path is None:
             # Include Find* tools so agents can discover objects at runtime instead of hardcoded IDs
-            default_actions = ["Navigate", "Open", "Close", "Pick", "Place", "UseItem", "FindObjectTool", "FindReceptacleTool", "FindRoomTool", "Communicate", "Wait"]
+            default_actions = get_authoring_default_actions(include_find_tools=True)
             task["agent_secrets"] = {
                 f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"]
                 for i in range(num_agents)
@@ -999,7 +1121,7 @@ Always rewrite `title`, `task`, `agent_secrets`, and `team_secrets` from scratch
         """Get response from LLM."""
         prompt = self._format_messages_for_llm()
         # Stop on "Assigned!" - LLM outputs this after each action
-        response = self.llm.generate(prompt, stop="Assigned!")
+        response = self.llm.generate(prompt, stop=None)
         self._log(f"Agent: {response}", truncate_terminal=300)
         return response
 
@@ -1410,6 +1532,7 @@ SUMMARY:"""
                 self.last_verified_spec_hash = None
                 self.last_verified_trajectory_hash = None
                 self.last_test_passed = False
+                self._last_test_comparison = None
             return self._bash(args)
         elif tool == "test_task":
             return self._test_task()
@@ -1617,9 +1740,14 @@ SUMMARY:"""
             results = self._run_benchmark(task_data)
             # Check if benchmark returned an error (import error, etc.)
             if results.get("error"):
-                # Merge validation result with benchmark error
+                self.failed = True
+                self.fail_reason = f"Benchmark execution failed: {results['error']}"
+                self._log(f"FAIL: {self.fail_reason}")
                 validation_result["benchmark_error"] = results["error"]
-                validation_result["summary"] = f"Task structure valid. Benchmark skipped: {results['error']}"
+                validation_result["fatal_infra"] = True
+                validation_result["summary"] = (
+                    f"Task structure valid, but benchmark aborted: {results['error']}"
+                )
                 return json.dumps(validation_result, indent=2)
 
             # Save calibration results to task JSON for dataset tracking (needs action_history)
@@ -1640,16 +1768,19 @@ SUMMARY:"""
             # Benchmark ran successfully - merge results with validation
             validation_result.update(results)
             comparison = results.get("comparison", {})
+            self._last_test_comparison = comparison
             self.last_test_passed = comparison.get("gate_passed", False)
             validation_result["gate"] = "PASSED" if self.last_test_passed else "REJECTED"
             validation_result["gate_reason"] = " ".join(comparison.get("reasons", []))
 
             return json.dumps(validation_result, indent=2)
         except Exception as e:
-            # If benchmark fails due to environment issues, return validation result
-            # with a note that benchmark couldn't run
+            self.failed = True
+            self.fail_reason = f"Benchmark execution failed: {e}"
+            self._log(f"FAIL: {self.fail_reason}")
             validation_result["benchmark_error"] = str(e)
-            validation_result["summary"] = f"Task structure valid. Benchmark skipped: {e}"
+            validation_result["fatal_infra"] = True
+            validation_result["summary"] = f"Task structure valid, but benchmark aborted: {e}"
             return json.dumps(validation_result, indent=2)
 
     def _build_trajectory(self, action_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1791,8 +1922,11 @@ SUMMARY:"""
 
         self._last_agent_models = self._determine_agent_models(task_data)
 
+        _skip = self.skip_steps or []
+        run_modes = ("standard",) if "baseline" in _skip else ("standard", "baseline")
+
         try:
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with ThreadPoolExecutor(max_workers=len(run_modes)) as executor:
                 futures = {
                     run_mode: executor.submit(
                         self._run_benchmark_mode,
@@ -1801,7 +1935,7 @@ SUMMARY:"""
                         run_mode,
                         run_dir / run_mode,
                     )
-                    for run_mode in ("standard", "baseline")
+                    for run_mode in run_modes
                 }
                 mode_results = {
                     run_mode: future.result()
@@ -1823,19 +1957,45 @@ SUMMARY:"""
             }
 
         category = task_data.get("category", "")
-        comparison = _build_mode_comparison(
-            category,
-            mode_results["standard"],
-            mode_results["baseline"],
-            current_rate=self.calibration_stats.get("rate"),
-            target_rate=self.calibration_stats.get("target_rate", 0.20),
-        )
-        merged = {
-            "standard": mode_results["standard"],
-            "baseline": mode_results["baseline"],
-            "comparison": comparison,
-            "trajectory_dir": str(run_dir),
-        }
+
+        if "baseline" in _skip:
+            # Baseline skipped: gate based only on standard failing
+            std_eval = mode_results["standard"].get("evaluation", {})
+            standard_passed = _evaluation_passed(category, std_eval)
+            standard_progress = _evaluation_progress(category, std_eval)
+            comparison = {
+                "gate_passed": not standard_passed,
+                "functional_tom_signal": None,
+                "baseline_skipped": True,
+                "standard_passed": standard_passed,
+                "baseline_passed": None,
+                "standard_progress": standard_progress,
+                "baseline_progress": None,
+                "reasons": ["Baseline skipped (--remove baseline). Gate based on standard only."],
+            }
+            merged = {
+                "standard": mode_results["standard"],
+                "baseline": {"skipped": True, "reason": "--remove baseline"},
+                "comparison": comparison,
+                "trajectory_dir": str(run_dir),
+            }
+        else:
+            comparison = _build_mode_comparison(
+                category,
+                mode_results["standard"],
+                mode_results["baseline"],
+                current_rate=self.calibration_stats.get("rate"),
+                target_rate=self.calibration_stats.get("target_rate", 0.20),
+                current_passed=self.calibration_stats.get("passed"),
+                current_failed=self.calibration_stats.get("failed"),
+            )
+            merged = {
+                "standard": mode_results["standard"],
+                "baseline": mode_results["baseline"],
+                "comparison": comparison,
+                "trajectory_dir": str(run_dir),
+            }
+
         self._write_benchmark_comparison(run_dir, merged)
         return merged
 
@@ -1903,13 +2063,14 @@ SUMMARY:"""
     def _parse_benchmark_subprocess(self, proc: subprocess.CompletedProcess[str], run_dir: Path) -> Dict[str, Any]:
         """Parse the JSON payload emitted by emtom.cli.test_task."""
         try:
-            stdout = proc.stdout
+            stdout = (proc.stdout or "")
             json_start = stdout.find("{")
             if json_start >= 0:
                 stdout = stdout[json_start:]
             result_data = json.loads(stdout)
         except (json.JSONDecodeError, ValueError):
-            return {"steps": 0, "done": False, "error": f"Failed to parse output: {proc.stderr[:500]}", "trajectory_dir": str(run_dir)}
+            noisy = ((proc.stdout or "") + "\n" + (proc.stderr or ""))[:500]
+            return {"steps": 0, "done": False, "error": f"Failed to parse output: {noisy}", "trajectory_dir": str(run_dir)}
 
         if not isinstance(result_data, dict):
             return {"steps": 0, "done": False, "error": f"Unexpected output type ({type(result_data).__name__})", "trajectory_dir": str(run_dir)}
@@ -1918,6 +2079,8 @@ SUMMARY:"""
             result = result_data.get("data", {})
         else:
             result = {"steps": 0, "done": False, "error": result_data.get("error", "Unknown error")}
+            if isinstance(result_data.get("data"), dict):
+                result.update(result_data["data"])
 
         result["trajectory_dir"] = str(run_dir)
         result_txt_path = run_dir / "result.txt"
@@ -1933,6 +2096,17 @@ SUMMARY:"""
     def _write_benchmark_comparison(self, run_dir: Path, results: Dict[str, Any]) -> None:
         """Persist a compact dual-run comparison artifact for judge/debug use."""
         comparison_file = run_dir / "comparison.json"
+        baseline_raw = results.get("baseline", {})
+        if baseline_raw.get("skipped"):
+            baseline_payload = {"skipped": True, "reason": baseline_raw.get("reason", "baseline removed")}
+        else:
+            baseline_payload = {
+                "run_mode": "baseline",
+                "steps": baseline_raw.get("steps", 0),
+                "turns": baseline_raw.get("turns", 0),
+                "evaluation": baseline_raw.get("evaluation", {}),
+                "trajectory_dir": baseline_raw.get("trajectory_dir"),
+            }
         payload = {
             "standard": {
                 "run_mode": "standard",
@@ -1941,13 +2115,7 @@ SUMMARY:"""
                 "evaluation": results["standard"].get("evaluation", {}),
                 "trajectory_dir": results["standard"].get("trajectory_dir"),
             },
-            "baseline": {
-                "run_mode": "baseline",
-                "steps": results["baseline"].get("steps", 0),
-                "turns": results["baseline"].get("turns", 0),
-                "evaluation": results["baseline"].get("evaluation", {}),
-                "trajectory_dir": results["baseline"].get("trajectory_dir"),
-            },
+            "baseline": baseline_payload,
             "comparison": results.get("comparison", {}),
             "agent_models": getattr(self, "_last_agent_models", {}),
         }
@@ -2023,15 +2191,19 @@ SUMMARY:"""
         # Reconstruct CouncilVerdict for state tracking
         if data["passed"]:
             self.consecutive_tom_failures = 0
+            # Strip required_fixes on pass — the LLM judge sometimes returns
+            # suggestions even for passing tasks, which misleads the agent into
+            # editing instead of progressing to test_task/submit.
+            data.pop("required_fixes", None)
             data["next_step"] = (
                 "Task passed judge. Do NOT change the task design. "
-                "Run test_task[] -> submit_task[]."
+                "Run test_task[] -> submit_task[] immediately."
             )
         else:
             self.consecutive_tom_failures += 1
             data["action_required"] = "Modify the task using required_fixes and run judge[] again."
             data["failure_count"] = self.consecutive_tom_failures
-            if self.consecutive_tom_failures >= 3:
+            if self.consecutive_tom_failures >= 5:
                 data["recommendation"] = (
                     f"You've failed judge {self.consecutive_tom_failures} times. "
                     "Consider new_scene[] for a fresh start."
@@ -2093,12 +2265,14 @@ SUMMARY:"""
 
         data = result["data"]
         self.submitted_tasks.append(data["output_path"])
+        self._advance_calibration_stats(self._last_test_comparison)
 
         # Reset verification state for next task
         self.last_verify_passed = False
         self.last_judge_passed = False
         self.last_test_passed = False
         self.last_judgment = None
+        self._last_test_comparison = None
         self.consecutive_tom_failures = 0
 
         # Extract memory and track diversity
@@ -2127,6 +2301,24 @@ SUMMARY:"""
             f"  - {data.get('submitted_path', 'N/A')} (session)\n"
             f"Total submitted: {len(self.submitted_tasks)}\n\n"
             "[Context reset for next task.]"
+        )
+
+    def _advance_calibration_stats(self, comparison: Optional[Dict[str, Any]]) -> None:
+        if not comparison or "standard_passed" not in comparison:
+            return
+
+        passed = int(self.calibration_stats.get("passed", 0))
+        failed = int(self.calibration_stats.get("failed", 0))
+        if comparison.get("standard_passed"):
+            passed += 1
+        else:
+            failed += 1
+
+        self.calibration_stats["passed"] = passed
+        self.calibration_stats["failed"] = failed
+        self.calibration_stats["total"] = passed + failed
+        self.calibration_stats["rate"] = (
+            passed / (passed + failed) if (passed + failed) > 0 else None
         )
 
     def _extract_task_memory(self, task_title: str) -> str:
@@ -2223,6 +2415,7 @@ Use these learnings to improve your next task. Avoid repeating mistakes."""
             k_section = (
                 f"\n## Required K-Level: {self._current_k_level}\n"
                 f"This task MUST be Theory-of-Mind level {self._current_k_level}.\n"
+                "K=0 tasks are invalid and will be rejected.\n"
                 f"Design epistemic goals so that `judge[]`'s strict PDDL verification computes tom_level = {self._current_k_level}.\n"
                 f"submit_task[] will REJECT the task if the computed tom_level is not {self._current_k_level}.\n"
             )
@@ -2290,7 +2483,7 @@ Use new_scene[] if you want a different scene, or start creating your next task.
 
                 try:
                     # Extract JSON from stdout (Hydra may prepend non-JSON lines)
-                    stdout = proc.stdout
+                    stdout = (proc.stdout or "")
                     json_start = stdout.find("{")
                     if json_start >= 0:
                         stdout = stdout[json_start:]
@@ -2436,13 +2629,14 @@ working_task.json reset."""
 
         This should only be used for truly unrecoverable errors.
         """
-        # Prevent premature give-up: require at least 25% of iteration budget
-        min_iterations = max(30, self.iterations_per_task // 4)
+        # Prevent premature give-up: require at least 40% of iteration budget
+        min_iterations = max(60, int(self.iterations_per_task * 0.4))
         if self.iteration_count < min_iterations:
             return (
                 f"Cannot abort yet — only {self.iteration_count}/{min_iterations} "
                 f"minimum iterations used. Keep trying: load a new_scene[], "
                 f"simplify the task design, or try a different approach. "
+                f"Do NOT call fail[] again until you have used at least {min_iterations} iterations. "
                 f"Your reason was: {reason}"
             )
         self.failed = True
@@ -2459,9 +2653,9 @@ working_task.json reset."""
 
         # Guidance about IDs vs natural language
         lines.append("**ID Usage Rules:**")
-        lines.append("- `problem_pddl`, `mechanic_bindings`, `locked_containers`: Use EXACT object IDs from this list")
-        lines.append("- `task` description: Keep it high-level and non-leaking; natural language is preferred and exact IDs are optional")
-        lines.append("- `agent_secrets`: Use EXACT scene IDs for goal-critical objects, furniture, and rooms whenever the agent needs precise grounding\n")
+        lines.append("- `problem_pddl` and `mechanic_bindings`: Use EXACT object IDs from this list")
+        lines.append("- `task` description: Keep it high-level and non-leaking; avoid exact target object IDs when that identity/location is meant to stay private")
+        lines.append("- `agent_secrets`: Use EXACT scene IDs only for agents who already know/observed the fact. Do not write ignorance lines or epistemic coaching; if a fact is unknown, omit it.\n")
 
         # Build reverse mappings
         obj_locations = {}

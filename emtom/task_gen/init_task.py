@@ -25,6 +25,7 @@ from typing import Optional
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
+from emtom.task_gen.authoring_surface import get_authoring_default_actions
 from emtom.task_gen.task_bootstrap import build_scene_bootstrap_problem_pddl
 
 
@@ -97,11 +98,7 @@ def create_working_task(scene_data: dict, num_agents: int) -> dict:
     )
 
     # Generate agent skeletons for the requested agent count
-    default_actions = [
-        "Navigate", "Open", "Pick", "Place", "UseItem",
-        "FindObjectTool", "FindReceptacleTool", "FindRoomTool",
-        "Communicate", "Wait",
-    ]
+    default_actions = get_authoring_default_actions(include_find_tools=True)
     task["agent_secrets"] = {
         f"agent_{i}": ["REPLACE_WITH_SECRET_INFO"] for i in range(num_agents)
     }

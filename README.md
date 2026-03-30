@@ -31,7 +31,7 @@ Task generation uses one loop:
    by default `80% fail / 20% pass` on `--target-model`.
 4. `taskgen new_scene N` creates a fresh `working_task.json` from the blank template and fills in the exact requested number of agents.
 5. The external agent inspects `sampled_tasks/` for inspiration, then edits `working_task.json` and iterates through `taskgen judge`, `taskgen verify_golden_trajectory`, and `taskgen test_task`.
-6. `taskgen test_task` runs `standard` and `baseline`, then writes calibration back into the task JSON.
+6. `taskgen test_task` runs `standard` and `baseline`, then writes calibration back into the task JSON. For competitive tasks, baseline is a two-phase solo-team check: one run with only `team_0` active and one with only `team_1` active.
 7. `taskgen submit_task` saves the task, then advances the loop by picking the next K-level. Sampled-task selection is inspiration only; the authored task itself always starts blank.
 8. After the requested number of tasks have been submitted, the agent runs `taskgen finish`.
 

@@ -115,6 +115,18 @@ class Planner:
                 return agent
         raise ValueError(f'Agent with uid "{agent_uid}" not found')
 
+    def _should_update_other_agent_world_graphs(self) -> bool:
+        """
+        Return whether planner-side action execution may mutate teammates'
+        world graphs.
+
+        In partial-observability runs each agent should maintain a private
+        graph derived from its own observations. Visible consequences of a
+        teammate's action should be learned through later perception, not by
+        directly writing the action result into another agent's graph.
+        """
+        return not getattr(self.env_interface, "partial_obs", False)
+
     def filter_obs_space(self, batch: Dict[str, Any], agent_uid: int) -> Dict[str, Any]:
         """
         Filter observations to return only those belonging to the specified agent.
@@ -246,14 +258,17 @@ class Planner:
                         action_results,
                     )
 
-                # update other agent's graph with current agent's actions
-                # NOTE: this is a separate function since two agents may refer to the
-                # same entity using different descriptions. This function call handles
-                # that ambiguity
-                if (
-                    self.env_interface.conf.agent_asymmetry
-                    and int_agent_uid == self.env_interface.human_agent_uid
-                ) or (not self.env_interface.conf.agent_asymmetry):
+                # In full-observability settings we may mirror successful actions
+                # into the teammate graph. Under partial observability this is
+                # disabled so each agent learns state changes only through its own
+                # later observations.
+                if self._should_update_other_agent_world_graphs() and (
+                    (
+                        self.env_interface.conf.agent_asymmetry
+                        and int_agent_uid == self.env_interface.human_agent_uid
+                    )
+                    or (not self.env_interface.conf.agent_asymmetry)
+                ):
                     # only update robot's WG with other agent's actions
                     # OR
                     # add action based updates irrespective of agent types

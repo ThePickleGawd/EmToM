@@ -36,7 +36,15 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
+
+from .authoring_surface import (
+    AUTHORING_ITEMS_NOTICE,
+    format_supported_mechanics,
+    get_authoring_action_descriptions,
+    get_authoring_mechanics,
+    get_authoring_predicates,
+)
 
 if TYPE_CHECKING:
     from habitat_llm.llm.base_llm import BaseLLM
@@ -245,21 +253,21 @@ CRITERIA_DESCRIPTIONS = {
     },
     "secret_quality": {
         "name": "Secret Quality",
-        "description": "Secrets must state constraints and goals with exact IDs, but NEVER prescribe communication strategy, relay chains, or coordination method. Agents must figure out HOW to coordinate themselves — that IS the ToM challenge.",
-        "rubric": """0.0: Secrets prescribe the full relay chain or tell agents exactly what to communicate and to whom
-0.3: Secrets hint at the coordination strategy (e.g., parenthetical suggestions, 'forward to agent_X', 'wait for agent_Y to tell you')
-0.5: Secrets state goals and constraints but include some strategy leakage (e.g., 'you may need a relay', 'coordinate with agent_X about Y')
-0.7: Secrets state only constraints (room/comm restrictions), physical roles (object IDs, locations), and end-state goals. No strategy hints remain.
-1.0: Secrets are minimal and precise — only constraints, roles with exact IDs, and abstract epistemic goals. Zero communication strategy leaked.""",
+        "description": "Secrets must state only positive private facts, constraints, and private objectives. They must NEVER prescribe communication strategy, encode missing knowledge as 'you do not know ...', or coach the agent with epistemic directives like 'By the end, you must be confident ...'. Exact IDs are appropriate only for agents who already know or observed that fact.",
+        "rubric": """0.0: Secrets prescribe the relay chain, include ignorance lines like 'you do not know ...', or include epistemic coaching like 'By the end, you must be confident ...'
+0.3: Secrets hint at coordination strategy, contain boilerplate/self-intro text, or include other non-actionable task coaching
+0.5: Secrets state mostly useful facts and constraints, but still include some leakage, redundancy, or overly directive phrasing
+0.7: Secrets are mostly clean and actionable, with only minor redundancy or wording issues
+1.0: Secrets are minimal and precise — only positive private facts, constraints, and private objectives, with exact IDs reserved for agents who genuinely know those facts.""",
     },
     "task_naturalness": {
         "name": "Public/Secret Grounding Split",
-        "description": "Does the public `task` stay high-level while `agent_secrets` provide exact actionable grounding? The public task may be vague and should not read like a machine spec. Secrets should name exact IDs/states for goal-critical targets, especially when an agent cannot directly observe them.",
-        "rubric": """0.0: Public task leaks exact machine-style targets and secrets are still vague or generic
-0.3: Either the public task is overly specific, or the secrets still fail to identify exact target IDs/states
-0.5: Split is partly right, but public task still over-specifies some targets or secrets are inconsistent in explicitness
+        "description": "Does the public `task` stay high-level while `agent_secrets` provide the precise private grounding? The public task should not read like a machine spec, reveal hidden target object IDs, or expose epistemic K() goals (e.g. 'must know', 'knows that'). K() requirements belong only in `problem_pddl`. Secrets should carry exact IDs/states only for the agents who genuinely know those facts.",
+        "rubric": """0.0: Public task leaks exact hidden target IDs or other machine-style targets, and secrets are still vague or generic
+0.3: Either the public task is overly specific, or the secrets leak hidden object IDs to agents who are supposed to lack that information
+0.5: Split is partly right, but public task still over-specifies some targets or secrets are inconsistent in how they reveal private grounding
 0.7: Public task is mostly high-level and secrets are usually explicit, with only minor leakage or ambiguity
-1.0: Public task is clean, high-level, and non-leaking; secrets carry the exact actionable IDs/states agents need""",
+1.0: Public task is clean, high-level, and non-leaking; secrets carry the precise actionable grounding only where that private knowledge belongs""",
     },
     # Task quality criteria
     "narrative_consistency": {
@@ -434,7 +442,7 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 {available_actions}
 ### Available Mechanics
 {available_mechanics}
-### Available Items
+### Item Status
 {available_items}
 ### Available Predicates (for success_condition)
 {available_predicates}
@@ -443,34 +451,27 @@ EVALUATION_PROMPT = """You are an expert evaluator for multi-agent tasks.
 
 ## Checks
 - `task` is GLOBAL; for competitive/mixed it must not leak secret targets or team-specific objectives
-- Secrets must be actionable (room/furniture/key/constraint) and required
-- Secrets must be explicit and actionable, ideally naming exact target IDs/states, and not step-by-step
+- Secrets must be actionable positive facts or constraints, not missing-knowledge reminders or epistemic coaching
+- Secrets must be explicit and actionable, naming exact IDs/states only for agents who already know those facts, and not step-by-step
+- Penalize exact-ID leakage: if the public `task` or a secret for an uninformed agent names the exact hidden object ID, the task is too revealing
+- Penalize banned secret styles: 'you do not know ...', 'By the end, you must be confident ...', 'Epistemic probe: ...', or self-intro boilerplate
 - Single-format goal source is `problem_pddl`
 - Runtime semantics are split:
   - functional benchmark success uses the non-epistemic projection only
   - `K()` goals are design-time / probe-time only and become end-of-episode literal-ToM probes
 - Category intent must be reflected in `problem_pddl` objective structure
-- Raw `problem_pddl` should be self-contained for scene/world facts: required symbols belong in `:objects`, relevant room grounding belongs in `:init`, while mechanic-derived init facts like room restrictions should come from `mechanic_bindings`
-- For solvability and mechanic-awareness, treat the Compiled Formal View below as authoritative. Do NOT penalize raw `problem_pddl` for omitting mechanic-derived init facts such as `is_restricted` or `can_communicate`; those are expected to be compiled from `mechanic_bindings`.
 - **Mechanic consistency**: Every mechanic referenced in `task` or `agent_secrets` (e.g., "the handle is reversed", "you have limited messages") MUST have a corresponding entry in `mechanic_bindings`. `message_targets` is a valid standalone way to encode communication restrictions and does not require a duplicate `restricted_communication` binding.
-- **K() goal backing**: Every `K()` goal in `problem_pddl` (or legacy goal field) must be backed by a mechanic that prevents the agent from directly observing the fact (e.g., `room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). If the agent could just walk there and see, the K() goal is fake.
-- **Functional projection quality**: Penalize tasks whose non-epistemic projection becomes vacuous, trivial, effectively single-agent, or no longer reflects the intended coordination challenge.
-- **Probe quality**: Reward K() goals when they probe who knows functionally relevant facts under real asymmetry. Do NOT require K() to be part of runtime pass/fail.
-- **Functional ToM quality**: Reward tasks where the best action depends on a partner-specific model (who can act, who will relay, who may prioritize a private goal, who has the last message). Penalize tasks that reduce to "agent A sees a hidden fact and tells agent B."
-- Distinguish **formal validity** from **design quality**:
-  - If the formal task is invalid, contradictory, or not self-contained, score `Formal Goal Quality & Epistemic Coherence` near 0.
-  - If the formal task is valid, judge whether both the functional projection and the literal-ToM probe structure are meaningful for the benchmark rather than merely technically valid.
+{formal_checks_section}
 
 ## Derived Runtime View
 Use this derived runtime view when judging split-semantics quality.
 {runtime_semantics_section}
 
-## Compiled Formal View
-Use this normalized formal problem when checking mechanic-aware solvability claims.
-It reflects the authored `problem_pddl` after mechanic-derived and planner-required
-init facts are compiled in. This is the authoritative formal view for
-`pddl_solvability`; raw `problem_pddl` may omit mechanic-derived init facts.
-{compiled_formal_view_section}
+## Secret Text Heuristics
+Use these concrete leakage and secret-style checks as hard evidence for `secret_quality` and `task_naturalness`.
+{id_leakage_section}
+
+{compiled_formal_view_block}
 
 ## Benchmark Comparison
 Use this when calibration data exists.
@@ -532,7 +533,7 @@ DIFFICULTY_DESCRIPTIONS = {
 This task is designed for WEAKER models. Calibrate your evaluation accordingly:
 - **Agent necessity**: 2-3 agents with clear, distinct roles is sufficient. Simple role division (e.g., one agent fetches, another places) counts as high agent necessity.
 - **Task interdependence / goal opposition / subgoal tension**: Simple dependencies are fine. One clear handoff or information exchange between agents is enough.
-- **Secret quality**: Secrets should state constraints, roles, and goals with exact IDs. Mechanic hints (e.g., "the handle is reversed" for inverse_state) are required. But secrets must NEVER prescribe coordination strategy — no "tell agent_1 about X", "forward to agent_0", or parenthetical suggestions. Score LOW if secrets tell agents HOW to coordinate.
+- **Secret quality**: Secrets should state constraints, roles, and goals precisely. Mechanic hints (e.g., "the handle is reversed" for inverse_state) are required. But secrets must NEVER prescribe coordination strategy or leak hidden object IDs to agents who lack that information. Score LOW if secrets tell agents HOW to coordinate.
 - **Mechanic utilization**: Using 0-1 mechanics is sufficient. Prefer simple, observable mechanics. Avoid stacking multiple mechanics.
 - **Overall**: A well-structured simple task with clear agent roles, mechanic hints in secrets, and basic ToM should score HIGH. Do NOT penalize simplicity.""",
     "medium": """## Intended Difficulty: MEDIUM
@@ -545,23 +546,239 @@ This task targets mid-tier models. Standard evaluation applies:
 This task must be difficult enough that GPT-5.2 CANNOT solve it. Apply strict standards:
 - **Agent necessity**: Each agent MUST hold unique information. Score LOW if any agent is removable.
 - **Task interdependence / goal opposition / subgoal tension**: Require information relay chains. Score LOW unless at least one goal depends on relayed (not directly observed) information.
-- **Secret quality**: Secrets must state only constraints (room/comm restrictions), physical roles (exact object IDs), and abstract epistemic goals. NEVER prescribe relay chains, communication strategy, or what to tell other agents. Score 0 if any secret says "tell agent_X", "forward to agent_X", or includes parenthetical strategy hints.
+- **Secret quality**: Secrets must state only constraints, private facts, and abstract epistemic goals. NEVER prescribe relay chains, communication strategy, or what to tell other agents. Score 0 if any secret says "tell agent_X", "forward to agent_X", includes parenthetical strategy hints, or leaks the hidden object ID to an agent who is explicitly missing that information.
 - **Mechanic utilization**: limited_bandwidth MUST be present with 1 message per agent. 1-2 mechanics total is fine — complexity should come from ToM reasoning, not mechanic stacking. Score LOW if bandwidth > 1 per agent.
 - **Overall**: The task should require genuine Theory of Mind reasoning. Reward tasks where agents must infer what others know. Do NOT require complex mechanics — difficulty from information asymmetry is preferred.""",
 }
 
 
-def _get_criteria_for_category(category: str, user_query: Optional[str] = None) -> List[str]:
-    """Get the list of criteria for a category, optionally including user_requirements_alignment."""
+def _extract_typed_problem_objects(task_dict: Dict[str, Any], target_type: str) -> Set[str]:
+    """Extract typed names from the `:objects` section of problem_pddl."""
+    problem_pddl = str(task_dict.get("problem_pddl", "") or "")
+    match = re.search(r"\(:objects(?P<body>[\s\S]*?)\)\s*\(:init", problem_pddl, re.IGNORECASE)
+    if not match:
+        return set()
+
+    tokens = match.group("body").split()
+    names: Set[str] = set()
+    pending: List[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-" and index + 1 < len(tokens):
+            if tokens[index + 1] == target_type:
+                names.update(pending)
+            pending = []
+            index += 2
+            continue
+        pending.append(token)
+        index += 1
+    return names
+
+
+def _analyze_id_leakage(task_dict: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Find exact-ID leakage and banned secret text patterns."""
+    object_ids = _extract_typed_problem_objects(task_dict, "object")
+    if not object_ids:
+        object_ids = set()
+
+    task_text = str(task_dict.get("task", "") or "")
+    public_task_object_ids = sorted(obj_id for obj_id in object_ids if obj_id in task_text)
+
+    ignorance_secret_ids: Set[str] = set()
+    ignorance_secret_lines: List[str] = []
+    epistemic_prompt_lines: List[str] = []
+    boilerplate_secret_lines: List[str] = []
+    for secrets in (task_dict.get("agent_secrets") or {}).values():
+        if not isinstance(secrets, list):
+            continue
+        for secret in secrets:
+            if not isinstance(secret, str):
+                continue
+            secret_lower = secret.lower()
+            if (
+                "do not know" in secret_lower
+                or "don't know" in secret_lower
+            ):
+                ignorance_secret_lines.append(secret)
+                for obj_id in object_ids:
+                    if obj_id in secret:
+                        ignorance_secret_ids.add(obj_id)
+            if (
+                "by the end, you must be confident" in secret_lower
+                or "by the end, you should be confident" in secret_lower
+                or secret_lower.startswith("epistemic probe:")
+                or secret_lower.startswith("one success condition is:")
+            ):
+                epistemic_prompt_lines.append(secret)
+            if re.fullmatch(
+                r"\s*you are agent_\d+\. shared objective is the public task\.?\s*",
+                secret_lower,
+            ):
+                boilerplate_secret_lines.append(secret)
+
+    return {
+        "public_task_object_ids": public_task_object_ids,
+        "ignorance_secret_ids": sorted(ignorance_secret_ids),
+        "ignorance_secret_lines": ignorance_secret_lines,
+        "epistemic_prompt_lines": epistemic_prompt_lines,
+        "boilerplate_secret_lines": boilerplate_secret_lines,
+    }
+
+
+def _build_id_leakage_section(task_dict: Dict[str, Any]) -> str:
+    """Format exact-ID leakage heuristics for the judge prompt."""
+    leakage = _analyze_id_leakage(task_dict)
+    lines: List[str] = []
+
+    public_task_ids = leakage["public_task_object_ids"]
+    if public_task_ids:
+        lines.append(
+            "- Public task names exact object IDs: "
+            + ", ".join(public_task_ids)
+        )
+
+    ignorance_secret_ids = leakage["ignorance_secret_ids"]
+    if ignorance_secret_ids:
+        lines.append(
+            "- Ignorance secrets still reveal exact object IDs: "
+            + ", ".join(ignorance_secret_ids)
+        )
+
+    ignorance_secret_lines = leakage["ignorance_secret_lines"]
+    if ignorance_secret_lines:
+        lines.append(
+            f"- Secrets still contain ignorance text ({len(ignorance_secret_lines)} line(s))"
+        )
+
+    epistemic_prompt_lines = leakage["epistemic_prompt_lines"]
+    if epistemic_prompt_lines:
+        lines.append(
+            f"- Secrets still contain epistemic coaching ({len(epistemic_prompt_lines)} line(s))"
+        )
+
+    boilerplate_secret_lines = leakage["boilerplate_secret_lines"]
+    if boilerplate_secret_lines:
+        lines.append(
+            f"- Secrets still contain boilerplate/self-intro text ({len(boilerplate_secret_lines)} line(s))"
+        )
+
+    if not lines:
+        return "- No obvious secret leakage or banned secret-text patterns detected by heuristic checks."
+    return "\n".join(lines)
+
+
+def _apply_id_leakage_penalties(
+    judgment: Judgment,
+    task_dict: Dict[str, Any],
+    overall_threshold: float,
+    min_criterion_threshold: float,
+) -> Judgment:
+    """Downgrade judge scores when hidden-information text leaks exact object IDs."""
+    leakage = _analyze_id_leakage(task_dict)
+    public_task_ids = leakage["public_task_object_ids"]
+    ignorance_secret_ids = leakage["ignorance_secret_ids"]
+    ignorance_secret_lines = leakage["ignorance_secret_lines"]
+    epistemic_prompt_lines = leakage["epistemic_prompt_lines"]
+    boilerplate_secret_lines = leakage["boilerplate_secret_lines"]
+    if (
+        not public_task_ids
+        and not ignorance_secret_ids
+        and not ignorance_secret_lines
+        and not epistemic_prompt_lines
+        and not boilerplate_secret_lines
+    ):
+        return judgment
+
+    if public_task_ids and "task_naturalness" in judgment.criteria_scores:
+        current = judgment.criteria_scores["task_naturalness"]
+        judgment.criteria_scores["task_naturalness"] = CriterionScore(
+            score=min(current.score, 0.3),
+            reasoning=(
+                f"{current.reasoning} Public task leaks exact object IDs: "
+                + ", ".join(public_task_ids)
+            ).strip(),
+        )
+
+    if (
+        ignorance_secret_ids
+        or ignorance_secret_lines
+        or epistemic_prompt_lines
+        or boilerplate_secret_lines
+    ) and "secret_quality" in judgment.criteria_scores:
+        current = judgment.criteria_scores["secret_quality"]
+        reasons: List[str] = []
+        if ignorance_secret_ids:
+            reasons.append(
+                "Ignorance secrets leak exact object IDs: "
+                + ", ".join(ignorance_secret_ids)
+            )
+        if ignorance_secret_lines:
+            reasons.append("Secrets contain 'you do not know ...' style lines.")
+        if epistemic_prompt_lines:
+            reasons.append("Secrets contain epistemic coaching lines.")
+        if boilerplate_secret_lines:
+            reasons.append("Secrets contain boilerplate self-intro text.")
+        judgment.criteria_scores["secret_quality"] = CriterionScore(
+            score=min(current.score, 0.3),
+            reasoning=(f"{current.reasoning} " + " ".join(reasons)).strip(),
+        )
+
+    fixes: List[str] = []
+    if public_task_ids or ignorance_secret_ids:
+        fixes.append(
+            "Remove exact hidden object IDs from the public task and from secrets for agents who do not already know that fact; keep exact IDs only in the knowing agent's secret and in problem_pddl."
+        )
+    if ignorance_secret_lines or epistemic_prompt_lines or boilerplate_secret_lines:
+        fixes.append(
+            "Delete non-knowledge secret lines such as 'you do not know ...', 'By the end, you must be confident ...', 'Epistemic probe: ...', and self-intro boilerplate."
+        )
+    for fix in reversed(fixes):
+        if fix not in judgment.required_fixes:
+            judgment.required_fixes.insert(0, fix)
+
+    all_scores = [criterion.score for criterion in judgment.criteria_scores.values()]
+    judgment.overall_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
+    judgment.is_valid = (
+        judgment.overall_score >= overall_threshold
+        and all(
+            score.score >= min_criterion_threshold
+            for score in judgment.criteria_scores.values()
+        )
+    )
+    return judgment
+
+
+def _normalize_skip_steps(skip_steps: Optional[List[str]]) -> Set[str]:
+    """Normalize skip-step names for prompt and parser logic."""
+    return {str(step).strip().lower() for step in (skip_steps or []) if str(step).strip()}
+
+
+def _get_criteria_for_category(
+    category: str,
+    user_query: Optional[str] = None,
+    skip_steps: Optional[List[str]] = None,
+) -> List[str]:
+    """Get the active criteria for a category under the current pipeline config."""
     criteria = list(CATEGORY_CRITERIA.get(category, SHARED_CRITERIA))
+    if "pddl" in _normalize_skip_steps(skip_steps):
+        criteria = [criterion for criterion in criteria if criterion != "pddl_solvability"]
+    # Support ablation: EMTOM_EXCLUDE_CRITERION=X removes criterion X from the council
+    exclude = os.environ.get("EMTOM_EXCLUDE_CRITERION", "").strip()
+    if exclude:
+        criteria = [c for c in criteria if c != exclude]
     if user_query:
         criteria.append("user_requirements_alignment")
     return criteria
 
 
-def _build_criteria_section(category: str, user_query: Optional[str] = None) -> str:
+def _build_criteria_section(
+    category: str,
+    user_query: Optional[str] = None,
+    skip_steps: Optional[List[str]] = None,
+) -> str:
     """Build the criteria section for a given category."""
-    criteria = _get_criteria_for_category(category, user_query)
+    criteria = _get_criteria_for_category(category, user_query, skip_steps=skip_steps)
     lines = []
     for i, criterion in enumerate(criteria, 1):
         info = CRITERIA_DESCRIPTIONS.get(criterion, {})
@@ -572,13 +789,56 @@ def _build_criteria_section(category: str, user_query: Optional[str] = None) -> 
     return "\n".join(lines)
 
 
-def _build_response_format(category: str, user_query: Optional[str] = None) -> str:
+def _build_response_format(
+    category: str,
+    user_query: Optional[str] = None,
+    skip_steps: Optional[List[str]] = None,
+) -> str:
     """Build the JSON response format for a given category."""
-    criteria = _get_criteria_for_category(category, user_query)
+    criteria = _get_criteria_for_category(category, user_query, skip_steps=skip_steps)
     lines = []
     for criterion in criteria:
         lines.append(f'  "{criterion}": {{"score": <0.0-1.0>, "reasoning": "<brief>"}},')
     return "\n".join(lines)
+
+
+def _build_formal_checks_section(skip_steps: Optional[List[str]] = None) -> str:
+    """Build the formal-solvability instructions for the council prompt."""
+    if "pddl" in _normalize_skip_steps(skip_steps):
+        return (
+            "- PDDL solvability verification is disabled for this run. Do NOT score or discuss "
+            "`pddl_solvability`, formal proof quality, or compiled solvability evidence.\n"
+            "- You may still use `problem_pddl` to understand authored goals, but judge only task "
+            "design quality, runtime functional pressure, mechanic coherence, and split-semantics "
+            "meaningfulness."
+        )
+
+    return (
+        "- Raw `problem_pddl` should be self-contained for scene/world facts: required symbols belong "
+        "in `:objects`, relevant room grounding belongs in `:init`, while mechanic-derived init facts "
+        "like room restrictions should come from `mechanic_bindings`\n"
+        "- For solvability and mechanic-awareness, treat the Compiled Formal View below as authoritative. "
+        "Do NOT penalize raw `problem_pddl` for omitting mechanic-derived init facts such as "
+        "`is_restricted` or `can_communicate`; those are expected to be compiled from "
+        "`mechanic_bindings`.\n"
+        "- **K() goal backing**: Every `K()` goal in `problem_pddl` (or legacy goal field) must be "
+        "backed by a mechanic that prevents the agent from directly observing the fact (e.g., "
+        "`room_restriction` blocks navigation, `restricted_communication` blocks direct messaging). "
+        "If the agent could just walk there and see, the K() goal is fake.\n"
+        "- **Functional projection quality**: Penalize tasks whose non-epistemic projection becomes "
+        "vacuous, trivial, effectively single-agent, or no longer reflects the intended coordination "
+        "challenge.\n"
+        "- **Probe quality**: Reward K() goals when they probe who knows functionally relevant facts "
+        "under real asymmetry. Do NOT require K() to be part of runtime pass/fail.\n"
+        "- **Functional ToM quality**: Reward tasks where the best action depends on a partner-specific "
+        "model (who can act, who will relay, who may prioritize a private goal, who has the last "
+        "message). Penalize tasks that reduce to \"agent A sees a hidden fact and tells agent B.\"\n"
+        "- Distinguish **formal validity** from **design quality**:\n"
+        "  - If the formal task is invalid, contradictory, or not self-contained, score `Formal Goal "
+        "Quality & Epistemic Coherence` near 0.\n"
+        "  - If the formal task is valid, judge whether both the functional projection and the "
+        "literal-ToM probe structure are meaningful for the benchmark rather than merely technically valid."
+    )
 
 
 def _build_runtime_semantics_section(task_dict: Dict[str, Any]) -> str:
@@ -652,6 +912,28 @@ def _build_compiled_formal_view_section(
         return f"Compiled formal view unavailable: {exc}"
 
 
+def _build_compiled_formal_view_block(
+    task_dict: Dict[str, Any],
+    scene_data: Optional["SceneData"],
+    skip_steps: Optional[List[str]] = None,
+) -> str:
+    """Build the compiled-formal-view block, or omit it when PDDL judging is disabled."""
+    if "pddl" in _normalize_skip_steps(skip_steps):
+        return (
+            "## Compiled Formal View\n"
+            "PDDL verification is disabled for this run, so ignore formal solvability and compiled-plan evidence."
+        )
+
+    return (
+        "## Compiled Formal View\n"
+        "Use this normalized formal problem when checking mechanic-aware solvability claims.\n"
+        "It reflects the authored `problem_pddl` after mechanic-derived and planner-required\n"
+        "init facts are compiled in. This is the authoritative formal view for\n"
+        "`pddl_solvability`; raw `problem_pddl` may omit mechanic-derived init facts.\n"
+        f"{_build_compiled_formal_view_section(task_dict, scene_data)}"
+    )
+
+
 def _build_benchmark_comparison_section(task_dict: Dict[str, Any]) -> str:
     """Summarize the latest standard vs baseline calibration pair when present."""
     from emtom.evolve.benchmark_wrapper import _migrate_legacy_calibration
@@ -683,6 +965,16 @@ def _build_benchmark_comparison_section(task_dict: Dict[str, Any]) -> str:
             return (
                 f"passed={results['main_goal'].get('passed', False)}, "
                 f"progress={results['main_goal'].get('progress', 0.0):.0%}"
+            )
+        if "phases" in results:
+            phase_bits = []
+            for phase_id, phase in sorted(results.get("phases", {}).items()):
+                status = "pass" if phase.get("passed", False) else "fail"
+                phase_bits.append(f"{phase_id}={status}")
+            return (
+                f"passed={results.get('passed', False)}, "
+                f"progress={results.get('progress', 0.0):.0%}, "
+                + ", ".join(phase_bits)
             )
         if "winner" in results:
             teams = results.get("teams", {})
@@ -740,6 +1032,7 @@ class Judge:
         user_query: Optional[str] = None,
         diversity_tracker: Optional["DiversityTracker"] = None,
         difficulty: Optional[str] = None,
+        skip_steps: Optional[List[str]] = None,
     ):
         """
         Initialize the judge.
@@ -752,6 +1045,7 @@ class Judge:
             user_query: Optional user query that the task should align with
             diversity_tracker: Optional tracker to check task novelty against existing tasks
             difficulty: Intended difficulty level ("easy", "medium", "hard") for calibrated evaluation
+            skip_steps: Optional pipeline steps removed for this run (e.g. ["pddl"])
         """
         self.models = models or self.DEFAULT_MODELS
         self.overall_threshold = overall_threshold
@@ -760,6 +1054,7 @@ class Judge:
         self.user_query = user_query
         self.diversity_tracker = diversity_tracker
         self.difficulty = difficulty
+        self.skip_steps = sorted(_normalize_skip_steps(skip_steps))
 
         # LLM clients (created lazily)
         self._llm_clients: Dict[str, "BaseLLM"] = {}
@@ -803,7 +1098,7 @@ class Judge:
                 generation_params={
                     "model": client_model,
                     "temperature": 0.0,
-                    "max_tokens": 3000,
+                    "max_tokens": 4096,
                 }
             )
 
@@ -813,34 +1108,24 @@ class Judge:
         """Get cached grounding information about system capabilities."""
         if self._available_actions is None:
             try:
-                from emtom.actions import ActionRegistry
-                self._available_actions = ActionRegistry.get_all_action_descriptions()
+                self._available_actions = get_authoring_action_descriptions()
             except Exception:
-                self._available_actions = "Navigate, Open, Close, Pick, Place, UseItem, Communicate, Wait"
+                self._available_actions = "Navigate, Open, Close, Pick, Place, Communicate, Wait"
 
         if self._available_mechanics is None:
             try:
-                from emtom.mechanics import get_mechanics_for_task_generation
-                self._available_mechanics = get_mechanics_for_task_generation()
+                self._available_mechanics = get_authoring_mechanics()
             except Exception:
-                self._available_mechanics = "inverse_state, remote_control, state_mirroring, conditional_unlock"
+                self._available_mechanics = format_supported_mechanics()
 
         if self._available_items is None:
-            try:
-                from emtom.state.item_registry import ItemRegistry
-                self._available_items = ItemRegistry.get_items_for_task_generation()
-            except Exception:
-                self._available_items = "item_small_key_1, item_radio_1, item_oracle_crystal_1"
+            self._available_items = AUTHORING_ITEMS_NOTICE
 
         if self._available_predicates is None:
             try:
-                from emtom.evaluation import PARTNR_PREDICATES, EMTOM_PREDICATES
-                all_predicates = PARTNR_PREDICATES | EMTOM_PREDICATES
-                all_predicates.add("has_item")
-                all_predicates.add("is_unlocked")
-                self._available_predicates = ", ".join(sorted(all_predicates))
+                self._available_predicates = get_authoring_predicates()
             except Exception:
-                self._available_predicates = "is_on_top, is_inside, is_in_room, is_on_floor, is_next_to, is_open, is_closed, is_clean, is_dirty, is_filled, is_empty, is_powered_on, is_held_by, has_item, is_unlocked"
+                self._available_predicates = "is_on_top, is_inside, is_in_room, is_on_floor, is_next_to, is_open, is_closed, is_clean, is_dirty, is_filled, is_empty, is_powered_on, is_unlocked, is_locked, is_held_by, agent_in_room"
 
         return {
             "available_actions": self._available_actions,
@@ -1112,11 +1397,25 @@ The user specifically requested:
             category_description=CATEGORY_PROMPT_DESCRIPTIONS.get(category, ""),
             difficulty_section=difficulty_section,
             user_requirements_section=user_requirements_section,
+            formal_checks_section=_build_formal_checks_section(self.skip_steps),
             runtime_semantics_section=_build_runtime_semantics_section(task_dict),
-            compiled_formal_view_section=_build_compiled_formal_view_section(task_dict, scene_data),
+            id_leakage_section=_build_id_leakage_section(task_dict),
+            compiled_formal_view_block=_build_compiled_formal_view_block(
+                task_dict,
+                scene_data,
+                skip_steps=self.skip_steps,
+            ),
             benchmark_comparison_section=_build_benchmark_comparison_section(task_dict),
-            criteria_section=_build_criteria_section(category, self.user_query),
-            response_format=_build_response_format(category, self.user_query),
+            criteria_section=_build_criteria_section(
+                category,
+                self.user_query,
+                skip_steps=self.skip_steps,
+            ),
+            response_format=_build_response_format(
+                category,
+                self.user_query,
+                skip_steps=self.skip_steps,
+            ),
             task_json=task_json,
             available_actions=grounding["available_actions"],
             available_mechanics=grounding["available_mechanics"],
@@ -1168,9 +1467,28 @@ The user specifically requested:
             print(f"[Judge/{model}] Received response ({len(response or '')} chars)")
 
         # Parse response (pass user_query so it knows which criteria to expect)
-        return self._parse_response(response or "", model, category, self.user_query)
+        judgment = self._parse_response(
+            response or "",
+            model,
+            category,
+            self.user_query,
+            skip_steps=self.skip_steps,
+        )
+        return _apply_id_leakage_penalties(
+            judgment,
+            task_dict,
+            self.overall_threshold,
+            self.min_criterion_threshold,
+        )
 
-    def _parse_response(self, response: str, model: str, category: str = "cooperative", user_query: Optional[str] = None) -> Judgment:
+    def _parse_response(
+        self,
+        response: str,
+        model: str,
+        category: str = "cooperative",
+        user_query: Optional[str] = None,
+        skip_steps: Optional[List[str]] = None,
+    ) -> Judgment:
         """Parse LLM response into Judgment."""
         # Extract JSON
         json_match = re.search(r"\{[\s\S]*\}", response)
@@ -1183,7 +1501,7 @@ The user specifically requested:
             return self._failed_judgment(f"[{model}] JSON parse error: {e}", category)
 
         # Get criteria for this category (includes user_requirements_alignment if query provided)
-        criteria_names = _get_criteria_for_category(category, user_query)
+        criteria_names = _get_criteria_for_category(category, user_query, skip_steps=skip_steps)
 
         criteria_scores = {}
         scores = []
@@ -1252,7 +1570,11 @@ The user specifically requested:
 
     def _failed_judgment(self, reason: str, category: str = "cooperative") -> Judgment:
         """Create a failed judgment for parse errors."""
-        criteria_names = CATEGORY_CRITERIA.get(category, SHARED_CRITERIA)
+        criteria_names = _get_criteria_for_category(
+            category,
+            self.user_query,
+            skip_steps=self.skip_steps,
+        )
         failed_scores = {
             name: CriterionScore(score=0.0, reasoning=reason)
             for name in criteria_names

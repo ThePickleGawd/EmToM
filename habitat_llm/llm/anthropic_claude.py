@@ -12,7 +12,7 @@ from urllib import error, request
 
 from omegaconf import DictConfig
 
-from habitat_llm.llm.base_llm import BaseLLM, Prompt
+from habitat_llm.llm.base_llm import BaseLLM, LLMRequestError, Prompt
 
 # Load .env file if it exists (for API keys)
 _env_file = Path(__file__).resolve().parent.parent.parent / ".env"
@@ -39,25 +39,33 @@ class AnthropicClaude(BaseLLM):
     Uses environment variable: ANTHROPIC_API_KEY
 
     Supports model aliases:
-        sonnet, sonnet-4.5, sonnet4.5 -> claude-sonnet-4-5-20250929
-        haiku, haiku-4.5, haiku4.5    -> claude-haiku-4-5-20251001
-        opus, opus-4.5, opus4.5       -> claude-opus-4-5-20251101
+        sonnet, sonnet-4.6            -> claude-sonnet-4-6
+        haiku, haiku-4.5              -> claude-haiku-4-5-20251001
+        opus, opus-4.6                -> claude-opus-4-6
+        sonnet-4.5                    -> claude-sonnet-4-5-20250929
+        opus-4.5                      -> claude-opus-4-5-20251101
     """
 
     MODEL_ALIASES: Dict[str, str] = {
-        # Anthropic native model names
-        "sonnet": "claude-sonnet-4-5-20250929",
+        # Anthropic native model names — default aliases point to latest
+        "sonnet": "claude-sonnet-4-6",
+        "sonnet-4.6": "claude-sonnet-4-6",
+        "sonnet4.6": "claude-sonnet-4-6",
         "sonnet-4.5": "claude-sonnet-4-5-20250929",
         "sonnet4.5": "claude-sonnet-4-5-20250929",
         "haiku": "claude-haiku-4-5-20251001",
         "haiku-4.5": "claude-haiku-4-5-20251001",
         "haiku4.5": "claude-haiku-4-5-20251001",
-        "opus": "claude-opus-4-5-20251101",
+        "opus": "claude-opus-4-6",
+        "opus-4.6": "claude-opus-4-6",
+        "opus4.6": "claude-opus-4-6",
         "opus-4.5": "claude-opus-4-5-20251101",
         "opus4.5": "claude-opus-4-5-20251101",
         # Bedrock IDs mapped for convenience if reused with this provider.
+        "us.anthropic.claude-sonnet-4-6-v1:0": "claude-sonnet-4-6",
         "us.anthropic.claude-sonnet-4-5-20250929-v1:0": "claude-sonnet-4-5-20250929",
         "us.anthropic.claude-haiku-4-5-20251001-v1:0": "claude-haiku-4-5-20251001",
+        "us.anthropic.claude-opus-4-6-v1:0": "claude-opus-4-6",
         "us.anthropic.claude-opus-4-5-20251101-v1:0": "claude-opus-4-5-20251101",
     }
 
@@ -201,9 +209,17 @@ class AnthropicClaude(BaseLLM):
                 details = e.read().decode("utf-8")
             except Exception:
                 details = str(e)
-            raise RuntimeError(f"Anthropic API HTTP {e.code}: {details}") from e
+            raise LLMRequestError(
+                f"Anthropic API HTTP {e.code}: {details}",
+                status_code=e.code,
+                headers=dict(e.headers.items()) if e.headers else None,
+                retryable=e.code in {408, 409, 429, 500, 502, 503, 504},
+            ) from e
         except Exception as e:
-            raise RuntimeError(f"Anthropic API request failed: {e}") from e
+            raise LLMRequestError(
+                f"Anthropic API request failed: {e}",
+                retryable=isinstance(e, (TimeoutError, error.URLError, ConnectionError, OSError)),
+            ) from e
 
         content_blocks = response_body.get("content", [])
         text_response = "".join(

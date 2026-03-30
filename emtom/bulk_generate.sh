@@ -1,8 +1,9 @@
 #!/bin/bash
 # Bulk EMTOM Task Generation
-# Runs task generation across all GPUs with configurable concurrency
-# by launching a fixed set of workers once and dividing the requested
-# total across them up front.
+# Runs task generation across all GPUs with configurable concurrency.
+# Each worker generates exactly 1 task then exits. On success, the slot
+# respawns a fresh worker (clean context). On failure, the slot stops.
+# Continues until the target number of new tasks is reached.
 #
 # Usage: ./emtom/bulk_generate.sh [options] [-- <run_emtom.sh args>]
 #
@@ -240,7 +241,7 @@ print_usage() {
     echo "  --num-tasks N       Total tasks for the whole bulk run (default: one full saturated run)"
     echo "                      The launcher divides N across fixed workers and starts them once"
     echo "  --task-gen-agent A  External generator agent: mini|claude|codex (default: mini)"
-    echo "  --category CAT      Only generate this category (cooperative, competitive, mixed)"
+    echo "  --category C [C ..] Categories to generate (cooperative, competitive, mixed). Default: all 3."
     echo "  --difficulty LEVEL  Difficulty for generation (easy, medium, hard)"
     echo "  --k-level L [L ...] Allowed k-levels, e.g. --k-level 2 3 (default: random per task)"
     echo "  --k-distribution D  Slots per k-level, e.g. 1:2,2:3,3:3 = 2 slots K=1, 3 K=2, 3 K=3"
@@ -292,8 +293,17 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --category)
-            CATEGORY_FILTER=$2
-            shift 2
+            shift
+            CATEGORY_FILTER=""
+            while [[ $# -gt 0 && "$1" != -* ]]; do
+                CATEGORY_FILTER="$CATEGORY_FILTER $1"
+                shift
+            done
+            CATEGORY_FILTER="${CATEGORY_FILTER# }"
+            if [ -z "$CATEGORY_FILTER" ]; then
+                echo "Error: --category requires at least one of: cooperative, competitive, mixed"
+                exit 1
+            fi
             ;;
         --difficulty)
             DIFFICULTY=$2
@@ -427,7 +437,8 @@ fi
 
 # Build category list
 if [ -n "$CATEGORY_FILTER" ]; then
-    CATEGORIES=("$CATEGORY_FILTER")
+    # shellcheck disable=SC2206
+    CATEGORIES=($CATEGORY_FILTER)
 else
     CATEGORIES=("cooperative" "competitive" "mixed")
 fi
@@ -491,7 +502,7 @@ else
     echo -e "K-level:            ${GREEN}random per task${NC}"
 fi
 echo -e "Total tasks:        ${GREEN}$NUM_TASKS${NC}"
-echo -e "Worker launch mode: ${GREEN}fixed${NC}"
+echo -e "Worker launch mode: ${GREEN}1-task-per-worker (respawn on success, stop on fail)${NC}"
 if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
     echo -e "Extra args:         ${GREEN}${EXTRA_ARGS[*]}${NC}"
 fi
@@ -521,7 +532,7 @@ build_worker_command() {
         ./emtom/run_emtom.sh generate
         --task-gen-agent "$TASK_GEN_AGENT"
         --model "$MODEL"
-        --num-tasks "$process_num_tasks"
+        --num-tasks 1
         --category "$category"
         --output-dir "$TASK_DIR"
     )
@@ -545,7 +556,7 @@ build_worker_command() {
 
     if [ "$DRY_RUN" = true ]; then
         printf '  EMTOM_GENERATION_RUN_ID=%q EMTOM_GENERATION_RUN_DIR=%q EMTOM_GENERATION_WORKER_ID=%q EMTOM_GENERATION_WORKER_DIR=%q EMTOM_GENERATION_TOTAL_WORKERS=%q EMTOM_GENERATION_REQUESTED_TASKS=%q EMTOM_GENERATION_MODE=%q EMTOM_GENERATION_GPU=%q EMTOM_GENERATION_SLOT=%q EMTOM_GENERATION_STDOUT_LOG=%q CUDA_VISIBLE_DEVICES=%q' \
-            "$GENERATION_RUN_ID" "$GENERATION_DIR" "$worker_id" "$worker_dir" "$ACTIVE_WORKERS" "$REQUESTED_TASKS_TOTAL" "bulk" "$gpu" "$slot" "$log_file" "$gpu"
+            "$GENERATION_RUN_ID" "$GENERATION_DIR" "$worker_id" "$worker_dir" "$ACTIVE_WORKERS" "1" "bulk" "$gpu" "$slot" "$log_file" "$gpu"
         printf ' %q' "${cmd[@]}"
         printf '\n'
         return
@@ -557,7 +568,7 @@ build_worker_command() {
         EMTOM_GENERATION_WORKER_ID="$worker_id" \
         EMTOM_GENERATION_WORKER_DIR="$worker_dir" \
         EMTOM_GENERATION_TOTAL_WORKERS="$ACTIVE_WORKERS" \
-        EMTOM_GENERATION_REQUESTED_TASKS="$REQUESTED_TASKS_TOTAL" \
+        EMTOM_GENERATION_REQUESTED_TASKS="1" \
         EMTOM_GENERATION_MODE="bulk" \
         EMTOM_GENERATION_GPU="$gpu" \
         EMTOM_GENERATION_SLOT="$slot" \
@@ -573,20 +584,50 @@ build_worker_command() {
     fi
 }
 
-build_worker_task_counts() {
-    local total_tasks="$1"
-    local worker_count="$2"
+launch_single_worker() {
+    # Launch one worker that generates exactly 1 task, then exits.
+    local slot_idx="$1"
+    local attempt="$2"
 
-    TASKS_PER_WORKER=()
-    local base_count=$((total_tasks / worker_count))
-    local remainder=$((total_tasks % worker_count))
-    for ((worker_idx=0; worker_idx<worker_count; worker_idx++)); do
-        local assigned="$base_count"
-        if [ "$worker_idx" -lt "$remainder" ]; then
-            assigned=$((assigned + 1))
-        fi
-        TASKS_PER_WORKER+=("$assigned")
+    local gpu=$((slot_idx % NUM_GPUS))
+    local slot=$((slot_idx / NUM_GPUS))
+    local category_idx=$((slot_idx % NUM_CATEGORIES))
+    local category=${CATEGORIES[$category_idx]}
+    local worker_tag
+    worker_tag=$(printf '%04d_%03d' "$slot_idx" "$attempt")
+    local worker_id="gpu${gpu}-slot${slot}-${category}-worker${worker_tag}"
+    local worker_dir="${WORKERS_DIR}/${worker_id}"
+    mkdir -p "$worker_dir"
+
+    local log_file
+    if [ "${#SLOT_K_LEVELS[@]}" -gt 0 ]; then
+        local slot_k="${SLOT_K_LEVELS[$slot]}"
+        log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}_k${slot_k}_worker${worker_tag}.log"
+    else
+        log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}_worker${worker_tag}.log"
+    fi
+
+    local slot_label="GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}, Tasks=1, Worker=${worker_tag}"
+    if [ "${#SLOT_K_LEVELS[@]}" -gt 0 ]; then
+        slot_label="GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}, K=${SLOT_K_LEVELS[$slot]}, Tasks=1, Worker=${worker_tag}"
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        echo -e "${YELLOW}[DRY-RUN]${NC} $slot_label"
+        return
+    fi
+    echo -e "${GREEN}Starting${NC} $slot_label -> $log_file"
+    build_worker_command "$gpu" "$slot" "$category" "1" "$worker_id" "$worker_dir" "$log_file"
+    # PIDS[-1] now holds the new PID (appended by build_worker_command)
+}
+
+count_output_tasks() {
+    local count=0
+    for jf in "$TASK_DIR"/*.json; do
+        [ -f "$jf" ] || continue
+        python3 -c "import json; json.load(open('$jf'))" 2>/dev/null && count=$((count + 1))
     done
+    echo "$count"
 }
 
 launch_workers() {
@@ -595,61 +636,30 @@ launch_workers() {
     PROCESS_TASK_COUNTS=()
     PROCESS_GROUPS=()
 
-    build_worker_task_counts "$NUM_TASKS" "$ACTIVE_WORKERS"
-
-    for ((worker_idx=0; worker_idx<ACTIVE_WORKERS; worker_idx++)); do
-        local gpu=$((worker_idx % NUM_GPUS))
-        local slot=$((worker_idx / NUM_GPUS))
-        local category_idx=$((worker_idx % NUM_CATEGORIES))
-        local category=${CATEGORIES[$category_idx]}
-        local process_num_tasks=${TASKS_PER_WORKER[$worker_idx]}
-        local worker_tag
-        worker_tag=$(printf '%04d' $((worker_idx + 1)))
-        local worker_id="gpu${gpu}-slot${slot}-${category}-worker${worker_tag}"
-        local worker_dir="${WORKERS_DIR}/${worker_id}"
-        mkdir -p "$worker_dir"
-
-        local log_file
-        if [ "${#SLOT_K_LEVELS[@]}" -gt 0 ]; then
-            local slot_k="${SLOT_K_LEVELS[$slot]}"
-            log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}_k${slot_k}_worker${worker_tag}.log"
-        else
-            log_file="$LOG_DIR/gpu${gpu}_slot${slot}_${category}_worker${worker_tag}.log"
-        fi
-
-        local slot_label="GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}, Tasks=${process_num_tasks}, Worker=${worker_tag}"
-        if [ "${#SLOT_K_LEVELS[@]}" -gt 0 ]; then
-            slot_label="GPU $gpu, Slot $slot, Category: ${CYAN}$category${NC}, K=${SLOT_K_LEVELS[$slot]}, Tasks=${process_num_tasks}, Worker=${worker_tag}"
-        fi
-
-        if [ "$DRY_RUN" = true ]; then
-            echo -e "${YELLOW}[DRY-RUN]${NC} $slot_label"
-        else
-            echo -e "${GREEN}Starting${NC} $slot_label -> $log_file"
-        fi
-        build_worker_command "$gpu" "$slot" "$category" "$process_num_tasks" "$worker_id" "$worker_dir" "$log_file"
-        PROCESS_TASK_COUNTS+=("$process_num_tasks")
+    for ((slot_idx=0; slot_idx<ACTIVE_WORKERS; slot_idx++)); do
+        launch_single_worker "$slot_idx" 1
     done
 }
 
 BULK_START_EPOCH=$(date +%s)
+BASELINE_TASK_COUNT=$(count_output_tasks)
 
 launch_workers
 if [ "$DRY_RUN" = true ]; then
     echo ""
-    echo -e "${YELLOW}Dry run complete. In live mode the launcher starts ${ACTIVE_WORKERS} fixed workers whose assigned task counts sum to ${NUM_TASKS}.${NC}"
+    echo -e "${YELLOW}Dry run complete. In live mode the launcher keeps ${ACTIVE_WORKERS} slots busy, 1 task per worker, respawning on success until ${NUM_TASKS} tasks are produced.${NC}"
     exit 0
 fi
 
 echo ""
 echo "=============================================="
-echo -e "${BOLD}Workers started${NC} (${ACTIVE_WORKERS} fixed workers, target ${NUM_TASKS} tasks)"
+echo -e "${BOLD}Workers started${NC} (${ACTIVE_WORKERS} slots, 1 task each, target ${NUM_TASKS} new tasks)"
 echo "=============================================="
 echo ""
 echo -e "${CYAN}Monitoring:${NC}"
 echo "  watch -n 1 nvidia-smi          # GPU usage"
 echo "  tail -f $LOG_DIR/*.log         # Worker stdout logs"
-echo "  pkill -9 -f 'emtom/task_gen/runner.py'  # Kill all"
+echo "  pkill -9 -u \$(whoami) -f 'mini.*task_gen|emtom/task_gen/runner.py'  # Kill all your workers"
 echo ""
 
 echo -e "${BOLD}Waiting for completion...${NC}"
@@ -658,43 +668,112 @@ echo ""
 failed=0
 succeeded=0
 submitted_total=0
-failed_task_budget=0
 stop_reason=""
 
-wait_for_workers() {
-    for i in "${!PIDS[@]}"; do
-        local pid=${PIDS[$i]}
-        local info=${PROCESS_INFO[$i]}
-        local assigned_tasks=${PROCESS_TASK_COUNTS[$i]}
+# Track per-slot attempt counters and active PIDs
+declare -a SLOT_PIDS       # Current PID for each slot (-1 = stopped)
+declare -a SLOT_ATTEMPTS   # Number of attempts for each slot
+declare -a SLOT_INFO       # Last info string for each slot
 
-        if wait "$pid"; then
-            echo -e "${GREEN}[DONE]${NC} $info"
-            succeeded=$((succeeded + 1))
-            submitted_total=$((submitted_total + assigned_tasks))
-        else
-            echo -e "${RED}[FAIL]${NC} $info"
-            failed=$((failed + 1))
-            failed_task_budget=$((failed_task_budget + assigned_tasks))
+for ((i=0; i<ACTIVE_WORKERS; i++)); do
+    SLOT_PIDS[$i]=${PIDS[$i]}
+    SLOT_ATTEMPTS[$i]=1
+    SLOT_INFO[$i]=${PROCESS_INFO[$i]}
+done
+
+MAX_ATTEMPTS_PER_SLOT=20  # Stop a slot after this many consecutive failures
+
+# ── Main respawn loop: poll workers, respawn on success, stop on fail ──
+while true; do
+    current_task_count=$(count_output_tasks)
+    new_tasks=$((current_task_count - BASELINE_TASK_COUNT))
+
+    # Check if we've reached the target
+    if [ "$new_tasks" -ge "$NUM_TASKS" ]; then
+        stop_reason="target reached ($new_tasks/$NUM_TASKS new tasks)"
+        break
+    fi
+
+    # Check if all slots are stopped
+    all_stopped=true
+    for ((i=0; i<ACTIVE_WORKERS; i++)); do
+        if [ "${SLOT_PIDS[$i]}" != "-1" ]; then
+            all_stopped=false
+            break
         fi
     done
-}
+    if [ "$all_stopped" = true ]; then
+        stop_reason="all slots stopped (failures or max attempts)"
+        break
+    fi
 
-wait_for_workers
-if [ "$failed" -eq 0 ]; then
-    stop_reason="all workers completed"
-else
-    stop_reason="one or more workers failed before completing their assigned tasks"
-fi
+    # Poll each slot
+    for ((i=0; i<ACTIVE_WORKERS; i++)); do
+        local_pid=${SLOT_PIDS[$i]}
+        [ "$local_pid" = "-1" ] && continue  # Slot already stopped
+
+        # Check if process is still running
+        if kill -0 "$local_pid" 2>/dev/null; then
+            continue  # Still running
+        fi
+
+        # Process finished — check exit status
+        if wait "$local_pid" 2>/dev/null; then
+            # SUCCESS: worker submitted 1 task
+            succeeded=$((succeeded + 1))
+            submitted_total=$((submitted_total + 1))
+            SLOT_ATTEMPTS[$i]=1  # Reset attempt counter on success
+
+            new_tasks=$(($(count_output_tasks) - BASELINE_TASK_COUNT))
+            echo -e "${GREEN}[DONE]${NC} ${SLOT_INFO[$i]}  (${new_tasks}/${NUM_TASKS} new tasks so far)"
+
+            if [ "$new_tasks" -ge "$NUM_TASKS" ]; then
+                SLOT_PIDS[$i]=-1
+                continue
+            fi
+
+            # Respawn this slot with a fresh worker
+            next_attempt=$((SLOT_ATTEMPTS[$i] + 1))
+            SLOT_ATTEMPTS[$i]=$next_attempt
+            launch_single_worker "$i" "$next_attempt"
+            SLOT_PIDS[$i]=${PIDS[-1]}
+            SLOT_INFO[$i]=${PROCESS_INFO[-1]}
+        else
+            # FAIL: worker exited non-zero — stop this slot
+            failed=$((failed + 1))
+            attempt_num=${SLOT_ATTEMPTS[$i]}
+
+            if [ "$attempt_num" -ge "$MAX_ATTEMPTS_PER_SLOT" ]; then
+                echo -e "${RED}[FAIL]${NC} ${SLOT_INFO[$i]}  (${attempt_num}/${MAX_ATTEMPTS_PER_SLOT} attempts, slot stopped)"
+                SLOT_PIDS[$i]=-1
+            else
+                echo -e "${YELLOW}[FAIL]${NC} ${SLOT_INFO[$i]}  (attempt ${attempt_num}/${MAX_ATTEMPTS_PER_SLOT}, respawning)"
+                next_attempt=$((attempt_num + 1))
+                SLOT_ATTEMPTS[$i]=$next_attempt
+                launch_single_worker "$i" "$next_attempt"
+                SLOT_PIDS[$i]=${PIDS[-1]}
+                SLOT_INFO[$i]=${PROCESS_INFO[-1]}
+            fi
+        fi
+    done
+
+    sleep 5
+done
+
+# Kill any still-running workers (target reached)
+for ((i=0; i<ACTIVE_WORKERS; i++)); do
+    local_pid=${SLOT_PIDS[$i]}
+    if [ "$local_pid" != "-1" ] && kill -0 "$local_pid" 2>/dev/null; then
+        kill "$local_pid" 2>/dev/null || true
+    fi
+done
 
 BULK_END_EPOCH=$(date +%s)
 WALL_CLOCK=$((BULK_END_EPOCH - BULK_START_EPOCH))
 
 echo ""
 echo "=============================================="
-echo -e "${BOLD}Bulk generation complete${NC} (${submitted_total}/${NUM_TASKS} tasks, ${succeeded} successful attempts, ${failed} failed attempts)"
-if [ "$failed_task_budget" -gt 0 ]; then
-    echo -e "Unfinished task budget: ${YELLOW}${failed_task_budget}${NC}"
-fi
+echo -e "${BOLD}Bulk generation complete${NC} (${submitted_total}/${NUM_TASKS} new tasks, ${succeeded} worker successes, ${failed} worker failures)"
 echo -e "Stop reason: ${CYAN}${stop_reason}${NC}"
 echo "=============================================="
 echo ""

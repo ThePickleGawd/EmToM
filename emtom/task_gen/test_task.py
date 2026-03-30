@@ -59,7 +59,7 @@ def main():
         from habitat_llm.utils import fix_config, setup_config
 
         from emtom.runner import BenchmarkRunner
-        from emtom.runner.benchmark import task_to_instruction
+        from emtom.runner.benchmark import BenchmarkExecutionError, task_to_instruction
         from emtom.task_gen import GeneratedTask
         from emtom.task_gen.scene_loader import apply_agent_spawns
     except ImportError as e:
@@ -223,13 +223,20 @@ def main():
         })
 
     except Exception as e:
+        is_benchmark_execution_error = isinstance(e, BenchmarkExecutionError)
         write_result({
             "success": False,
             "steps": 0,
             "turns": 0,
             "done": False,
             "error": str(e),
-            "summary": f"Benchmark error: {e}"
+            "summary": (
+                f"Benchmark aborted: {e}"
+                if is_benchmark_execution_error
+                else f"Benchmark error: {e}"
+            ),
+            "fatal_infra": is_benchmark_execution_error,
+            "error_type": "benchmark_execution" if is_benchmark_execution_error else "benchmark_error",
         })
         sys.exit(1)
 

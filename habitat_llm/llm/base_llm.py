@@ -2,11 +2,28 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree
 
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from omegaconf import DictConfig
 
 Prompt = Union[str, List[Tuple[str, str]]]
+
+
+class LLMRequestError(RuntimeError):
+    """Normalized provider error with retry metadata preserved."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        headers: Optional[Dict[str, str]] = None,
+        retryable: Optional[bool] = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.headers = dict(headers or {})
+        self.retryable = retryable
 
 
 class BaseLLM:
