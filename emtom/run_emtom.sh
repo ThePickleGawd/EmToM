@@ -345,6 +345,26 @@ print_usage() {
     echo "  ./emtom/run_emtom.sh evolve --target-model sonnet --seed-tasks-dir data/emtom/tasks"
 }
 
+print_benchmark_usage_short() {
+    echo -e "${BOLD}Benchmark Usage${NC}"
+    echo ""
+    echo "Usage: ./emtom/run_emtom.sh benchmark [options]"
+    echo ""
+    echo "Common options:"
+    echo "  --tasks-dir DIR      Directory of task JSONs (default: data/emtom/tasks)"
+    echo "  --task FILE          Run a single task file"
+    echo "  --model MODEL        Model name, e.g. gpt-5.4"
+    echo "  --max-workers N      Parallel benchmark workers"
+    echo "  --category TYPE      cooperative|competitive|mixed"
+    echo "  --run-mode MODE      standard|baseline|full_info"
+    echo "  --observation-mode MODE  text|vision"
+    echo ""
+    echo "Example:"
+    echo "  ./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/tasks_20260330_batch23 --model gpt-5.4 --max-workers 8"
+    echo ""
+    echo "Tip: use --model, not model."
+}
+
 # Get config name based on number of agents and type
 get_agent_config() {
     local num_agents=$1
@@ -1445,7 +1465,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            print_usage
+            if [ "$COMMAND" = "benchmark" ]; then
+                echo ""
+                print_benchmark_usage_short
+            else
+                print_usage
+            fi
             exit 1
             ;;
     esac
