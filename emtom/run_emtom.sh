@@ -197,6 +197,7 @@ print_usage() {
     echo "  explore        Run LLM-guided exploration in Habitat"
     echo "  generate       Generate tasks iteratively with testing loop"
     echo "  benchmark      Run benchmark with generated tasks"
+    echo "  benchmark-suite Benchmark one task set across multiple models"
     echo "  campaign       Manage benchmark campaigns (create, run, status, report)"
     echo "  test           Human-in-the-loop testing mode (manual command input)"
     echo "  judge          Evaluate task quality + ToM with multi-model council"
@@ -1160,6 +1161,12 @@ while [[ $# -gt 0 ]]; do
             shift
             # Pass all remaining args to the Python campaign script
             python -m emtom.scripts.campaign "$@"
+            exit $?
+            ;;
+        benchmark-suite)
+            COMMAND=benchmark-suite
+            shift
+            python -m emtom.scripts.benchmark_suite "$@"
             exit $?
             ;;
         explore|generate|benchmark|test|judge|verify|verify-static|verify-pddl|validate-task|test-task|new-scene|submit-task|migrate-room-restrictions|migrate-canonical-mechanics|migrate-literal-tom|salvage-literal-tom|evolve|all)
