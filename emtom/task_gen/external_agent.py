@@ -16,6 +16,7 @@ class ExternalAgentLauncher:
     def __init__(self, project_root: Path):
         self.project_root = project_root
         self.base_tmp_dir = project_root / "tmp" / "task_gen"
+        self.bootstrap_cache_dir = project_root / "tmp" / "uv-cache"
 
     def agent_env_dir(self, workspace_dir: Path) -> Path:
         return workspace_dir / ".venv"
@@ -39,8 +40,12 @@ class ExternalAgentLauncher:
         return env_dir
 
     def _run_bootstrap(self, cmd: List[str], description: str) -> None:
+        env = dict(os.environ)
+        self.bootstrap_cache_dir.mkdir(parents=True, exist_ok=True)
+        env.setdefault("UV_CACHE_DIR", str(self.bootstrap_cache_dir))
+        env.setdefault("XDG_CACHE_HOME", str(self.project_root / "tmp" / "xdg-cache"))
         try:
-            subprocess.run(cmd, cwd=str(self.project_root), check=True)
+            subprocess.run(cmd, cwd=str(self.project_root), check=True, env=env)
         except subprocess.CalledProcessError as exc:
             raise ExternalAgentError(f"Failed to {description}: {exc}") from exc
 
@@ -83,7 +88,24 @@ class ExternalAgentLauncher:
             return model
         if model.startswith("gpt-") or model.startswith("o"):
             return f"openai/{model}"
-        if model in {"sonnet", "opus", "haiku"} or model.startswith(("claude", "sonnet-", "opus-", "haiku-")):
+        anthropic_aliases = {
+            "sonnet": "claude-sonnet-4-6",
+            "sonnet-4.6": "claude-sonnet-4-6",
+            "sonnet4.6": "claude-sonnet-4-6",
+            "sonnet-4.5": "claude-sonnet-4-5-20250929",
+            "sonnet4.5": "claude-sonnet-4-5-20250929",
+            "haiku": "claude-haiku-4-5-20251001",
+            "haiku-4.5": "claude-haiku-4-5-20251001",
+            "haiku4.5": "claude-haiku-4-5-20251001",
+            "opus": "claude-opus-4-6",
+            "opus-4.6": "claude-opus-4-6",
+            "opus4.6": "claude-opus-4-6",
+            "opus-4.5": "claude-opus-4-5-20251101",
+            "opus4.5": "claude-opus-4-5-20251101",
+        }
+        if model in anthropic_aliases:
+            return f"anthropic/{anthropic_aliases[model]}"
+        if model.startswith("claude-"):
             return f"anthropic/{model}"
         return model
 
