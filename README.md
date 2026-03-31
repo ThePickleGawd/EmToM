@@ -1,37 +1,36 @@
 # EMTOM
 
-EMTOM is an embodied Theory of Mind benchmark built on top of Habitat and the PARTNR environment stack. It evaluates whether multi-agent systems can solve tasks that require asymmetric information, communication, and reasoning about what other agents know.
+[![Benchmark](https://img.shields.io/badge/Benchmark-Embodied%20Theory%20of%20Mind-0f766e)](#overview)
+[![Runtime](https://img.shields.io/badge/Runtime-Habitat%20%2B%20PARTNR-1d4ed8)](#setup)
+[![Tasks](https://img.shields.io/badge/Tasks-PDDL%20%2B%20Epistemic%20Goals-7c3aed)](/data4/parth/Partnr-EmToM/docs/benchmark-architecture.md)
+[![Entry Point](https://img.shields.io/badge/CLI-run__emtom.sh-b91c1c)](/data4/parth/Partnr-EmToM/emtom/run_emtom.sh)
 
-The benchmark follows a simple research pipeline:
+EMTOM is a research benchmark for **functional Theory of Mind** in embodied multi-agent environments. Agents act in Habitat scenes under **asymmetric information**, must **communicate**, and succeed only when they reason correctly about **what other agents know**.
 
-1. Explore scenes and discover useful mechanics.
-2. Generate candidate tasks from a blank template using scene-grounded context.
-3. Verify solvability with static checks, PDDL checks, and golden-trajectory execution.
-4. Judge whether the task genuinely requires Theory of Mind reasoning.
-5. Benchmark agent models on the finalized task set.
+The conceptual source of truth is [docs/benchmark-architecture.md](/data4/parth/Partnr-EmToM/docs/benchmark-architecture.md). The main operator entrypoint is [emtom/run_emtom.sh](/data4/parth/Partnr-EmToM/emtom/run_emtom.sh).
 
-The architecture and benchmark semantics are defined in [docs/benchmark-architecture.md](/data4/parth/Partnr-EmToM/docs/benchmark-architecture.md). The main operator entrypoint is [`./emtom/run_emtom.sh`](/data4/parth/Partnr-EmToM/emtom/run_emtom.sh).
+## Overview
 
-## Repository Structure
+```mermaid
+flowchart LR
+    A[Explore Scene] --> B[Author Task]
+    B --> C[Verify Static + PDDL]
+    C --> D[Replay Golden Trajectory]
+    D --> E[Judge ToM Requirement]
+    E --> F[Benchmark Models]
+```
 
-- [`emtom/pddl`](/data4/parth/Partnr-EmToM/emtom/pddl) contains goal syntax, epistemic compilation, and solvability checks.
-- [`emtom/task_gen`](/data4/parth/Partnr-EmToM/emtom/task_gen) contains task authoring, validation, calibration, and submission logic.
-- [`emtom/runner`](/data4/parth/Partnr-EmToM/emtom/runner) contains runtime execution in Habitat.
-- [`emtom/cli`](/data4/parth/Partnr-EmToM/emtom/cli) contains the user-facing command surface.
-- [`docs`](/data4/parth/Partnr-EmToM/docs) contains the conceptual source of truth for benchmark behavior.
+| Layer | Owns |
+| --- | --- |
+| [emtom/pddl](/data4/parth/Partnr-EmToM/emtom/pddl) | Goal syntax, epistemic compilation, solvability checks |
+| [emtom/task_gen](/data4/parth/Partnr-EmToM/emtom/task_gen) | Task authoring, validation, calibration, submission |
+| [emtom/runner](/data4/parth/Partnr-EmToM/emtom/runner) | Habitat execution runtime |
+| [emtom/cli](/data4/parth/Partnr-EmToM/emtom/cli) | User-facing command surface |
+| [docs](/data4/parth/Partnr-EmToM/docs) | Benchmark semantics and architecture |
 
-## Requirements and Setup
+## Setup
 
-### System Requirements
-
-- Linux environment with `conda` or `mamba`
-- Python 3.9 environment for the main Habitat stack
-- CUDA-capable GPU for Habitat-backed exploration, generation, `test-task`, and benchmarking
-- Git LFS for large dataset assets
-
-### Core Environment
-
-Create the main environment expected by the repo:
+### 1. Create the environment
 
 ```bash
 conda create -n habitat-llm python=3.9.2 cmake=3.14.0 -y
@@ -39,8 +38,6 @@ conda activate habitat-llm
 git submodule sync
 git submodule update --init --recursive
 ```
-
-Install the core dependencies:
 
 ```bash
 conda install pytorch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 pytorch-cuda=12.4 -c pytorch -c nvidia -y
@@ -52,11 +49,7 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-If your system has library-linking issues, make sure the Conda environment libraries are on `LD_LIBRARY_PATH`.
-
-### Data Dependencies
-
-Download the simulator assets, HSSD scenes, PARTNR episodes, and checkpoints used by the benchmark:
+### 2. Download benchmark assets
 
 ```bash
 python -m habitat_sim.utils.datasets_download --uids rearrange_task_assets hab_spot_arm hab3-episodes habitat_humanoids --data-path data/ --no-replace --no-prune
@@ -73,162 +66,127 @@ ln -s ../versioned_data/partnr_episodes data/datasets/partnr_episodes
 ln -s versioned_data/partnr_episodes/checkpoints data/models
 ```
 
-### API Keys and External Tools
+For the full PARTNR environment and dataset setup, use [docs/partnr/partnr.md](/data4/parth/Partnr-EmToM/docs/partnr/partnr.md).
 
-Create a repo-root `.env` file or export credentials in your shell for the providers you use:
+### 3. Configure credentials
+
+Create a repo-root `.env` or export the keys you need:
 
 ```bash
 OPENAI_API_KEY=...
 ANTHROPIC_API_KEY=...
+GEMINI_API_KEY=...
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 AWS_DEFAULT_REGION=...
 ```
 
-Task generation can launch an external SWE-agent CLI:
+### 4. Know what needs a GPU
 
-- `mini`: requires `mini-swe-agent` installed in the operator environment and `mini` on `PATH`
-- `claude`: requires the relevant Claude CLI setup
-- `codex`: requires the Codex CLI setup
+| GPU required | Lightweight |
+| --- | --- |
+| `explore` | `validate-task` |
+| `generate` | `verify-static` |
+| `new-scene` | `verify-pddl` |
+| `test-task` | `judge` |
+| `verify` |  |
+| `benchmark` |  |
+| `benchmark-suite` |  |
 
-Each task-generation run creates its own isolated workspace under `tmp/task_gen/<run_id>/.venv`, but the external agent executable itself must already be available in the main operator environment.
+## Instructions
 
-### What Requires a GPU
+### How to get set up
 
-These commands require Habitat plus a GPU-backed environment:
+1. Create and activate the `habitat-llm` Conda environment.
+2. Install the repo dependencies.
+3. Download the Habitat, HSSD, and PARTNR assets.
+4. Add the API keys for the model providers you want to benchmark.
+5. Use the full PARTNR setup guide here: [docs/partnr/partnr.md](/data4/parth/Partnr-EmToM/docs/partnr/partnr.md).
 
-- `explore`
-- `generate`
-- `new-scene`
-- `test-task`
-- `verify`
-- `benchmark`
-- `benchmark-suite`
+### How to use the benchmark commands
 
-These commands can be used for lightweight validation without Habitat-backed execution:
+| Command | What it does | Typical use |
+| --- | --- | --- |
+| `explore` | Explore a scene with an LLM agent | Inspect mechanics and scene affordances |
+| `generate` | Author new EMTOM tasks | Create tasks targeted to a benchmark model |
+| `validate-task` | Validate task JSON structure | Fast pre-check before deeper verification |
+| `verify-static` | Run static task checks | Catch schema and structural issues |
+| `verify-pddl` | Check goal and solvability logic | Validate PDDL and epistemic structure |
+| `verify` | Replay the golden trajectory in Habitat | Confirm the task is executable |
+| `judge` | Score whether the task requires ToM | Filter weak or non-ToM tasks |
+| `benchmark` | Run one model on one task set | Main evaluation command |
+| `benchmark-suite` | Run many models on one task set | Multi-model comparison in one tmux run |
+| `campaign` | Manage the active benchmark campaign | Track a canonical benchmark set |
+| `bulk_generate` | Generate tasks across GPUs in parallel | Larger task-authoring batches |
 
-- `validate-task`
-- `verify-static`
-- `verify-pddl`
-- `judge`
+### Recommended workflow
 
-Synthetic fallback scenes may be used during lightweight authoring, but submitted benchmark tasks must still reference real dataset `scene_id` and `episode_id`.
+1. `explore` a scene if you are authoring new tasks.
+2. `generate` a batch of candidate tasks.
+3. `validate-task`, `verify-static`, `verify-pddl`, `verify`, and `judge` before submission.
+4. `benchmark` a single model when testing locally.
+5. `benchmark-suite` when comparing several models on the same task directory.
 
-## Running the Benchmark
-
-All major operations go through [`./emtom/run_emtom.sh`](/data4/parth/Partnr-EmToM/emtom/run_emtom.sh).
+## Quick Start
 
 ### Explore
-
-Run LLM-guided scene exploration:
 
 ```bash
 ./emtom/run_emtom.sh explore --steps 30 --model gpt-5.4
 ```
 
-### Generate Tasks
-
-Generate tasks with the external task-generation loop:
+### Generate
 
 ```bash
-./emtom/run_emtom.sh generate \
-  --task-gen-agent mini \
-  --model gpt-5.2 \
-  --target-model gpt-5.2 \
-  --seed-tasks-dir data/emtom/tasks \
-  --num-tasks 4
+./emtom/run_emtom.sh generate --task-gen-agent mini --model gpt-5.2 --target-model gpt-5.2 --seed-tasks-dir data/emtom/tasks --num-tasks 4
 ```
 
-Current generation behavior:
-
-- generation starts from a blank task template, not from a copied seed task
-- sampled tasks are used only as inspiration
-- calibration is tied to a `--target-model` and desired `--target-pass-rate`
-- `test_task` evaluates both `standard` and `baseline`
-- for competitive tasks, `baseline` runs as a two-phase solo-team check
-
-Important generation flags:
-
-- `--task-gen-agent`: external authoring agent, one of `mini`, `claude`, or `codex`
-- `--target-model`: model whose calibration defines pass/fail seed buckets
-- `--target-pass-rate`: desired pass rate for the target model
-- `--seed-tasks-dir`: existing task pool used to construct `sampled_tasks/`
-- `--seed-pass-ratio` and `--seed-fail-ratio`: logical pass/fail seed mixture
-- `--k-level`: allowed ToM depth levels for generated tasks
-
-### Verify and Judge Tasks
-
-Static validation:
+### Verify and judge
 
 ```bash
 ./emtom/run_emtom.sh validate-task --task data/emtom/tasks/my_task.json
 ./emtom/run_emtom.sh verify-static --task data/emtom/tasks/my_task.json
 ./emtom/run_emtom.sh verify-pddl --task data/emtom/tasks/my_task.json
-```
-
-Golden-trajectory execution and ToM judging:
-
-```bash
 ./emtom/run_emtom.sh verify --task data/emtom/tasks/my_task.json
 ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json --model gpt-5.4
 ```
 
-### Benchmark Models
-
-Run the active benchmark over a task set:
+### Benchmark
 
 ```bash
-./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/tasks --model gpt-5.4
+./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/tasks_claude --model gpt-5.4 --max-workers 8
 ```
-
-Useful benchmark variants:
 
 ```bash
-./emtom/run_emtom.sh benchmark --task data/emtom/tasks/my_task.json --model gpt-5.4
-./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/tasks --model gpt-5.4 --run-mode baseline
-./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/tasks --model gpt-5.4 --observation-mode vision
-./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/tasks --model gpt-5.4 --max-workers 8
+./emtom/run_emtom.sh benchmark-suite --tasks-dir data/emtom/tasks_claude --models opus haiku gpt-5.4 gpt-5.4-mini --max-workers 8
 ```
 
-The benchmark distinguishes:
-
-- `functional_success`: whether agents complete the task under the benchmark runtime
-- `literal_tom_probe`: end-of-episode probe performance derived from `K()` goals
-
-These metrics should be reported separately.
-
-### Benchmark Suites and Campaigns
-
-The shell entrypoint also exposes:
-
-- `benchmark-suite`: benchmark one task set across multiple models
-- `campaign`: manage the active benchmark campaign in `data/emtom/results/`
-
-`benchmark-suite` now writes live progress to `suite_summary.json` and `suite_summary.txt`
-inside the suite output directory at startup and after each model completes, so tmux runs
-can be monitored before the full suite finishes.
-
-Use `./emtom/run_emtom.sh` with no arguments to see the full command surface and current flags.
-
-### Bulk Generation
-
-For parallel task generation across GPUs, use [`./emtom/bulk_generate.sh`](/data4/parth/Partnr-EmToM/emtom/bulk_generate.sh):
+### Bulk generation
 
 ```bash
 ./emtom/bulk_generate.sh --num-tasks 8 --task-gen-agent mini --model gpt-5.2
 ```
 
-Useful variants:
+## What The Benchmark Measures
 
-```bash
-./emtom/bulk_generate.sh --dry-run --num-tasks 8 --task-gen-agent mini --model gpt-5.2
-./emtom/bulk_generate.sh --per-gpu 1 --num-tasks 8 --task-gen-agent mini --model gpt-5.2
+```text
+Functional success   = agents actually complete the task
+Literal ToM probe    = agents answer explicit belief questions at the end
 ```
 
-Bulk generation writes run manifests, worker status, traces, and logs under `outputs/generations/<run_id>/`.
+These should be reported separately.
 
-## Notes for Researchers
+## Operator Notes
 
-- Use [`docs/benchmark-architecture.md`](/data4/parth/Partnr-EmToM/docs/benchmark-architecture.md) as the authoritative description of benchmark semantics.
-- Keep exactly one active benchmark campaign in `data/emtom/results/`; archive incompatible campaigns before starting a new one.
-- When benchmark architecture changes, update the docs in the same change.
+- Use [docs/benchmark-architecture.md](/data4/parth/Partnr-EmToM/docs/benchmark-architecture.md) as the authoritative benchmark description.
+- Use [emtom/run_emtom.sh](/data4/parth/Partnr-EmToM/emtom/run_emtom.sh) as the main entrypoint.
+- Keep exactly one active campaign in `data/emtom/results/`.
+- Submitted benchmark tasks must stay grounded in real dataset `scene_id` and `episode_id`.
+- When benchmark architecture changes, update `docs/*.md` in the same change.
+
+## Pointers
+
+- Architecture: [docs/benchmark-architecture.md](/data4/parth/Partnr-EmToM/docs/benchmark-architecture.md)
+- Main CLI: [emtom/run_emtom.sh](/data4/parth/Partnr-EmToM/emtom/run_emtom.sh)
+- Bulk generation: [emtom/bulk_generate.sh](/data4/parth/Partnr-EmToM/emtom/bulk_generate.sh)
+- PARTNR background: [docs/partnr/partnr.md](/data4/parth/Partnr-EmToM/docs/partnr/partnr.md)
