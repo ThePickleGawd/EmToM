@@ -2,6 +2,7 @@ reports/
 
 .env*
 .DS_Store
+colm2026_conference.tex
 
 .vscode/**
 **.ipynb
