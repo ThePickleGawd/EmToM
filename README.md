@@ -204,6 +204,10 @@ The shell entrypoint also exposes:
 - `benchmark-suite`: benchmark one task set across multiple models
 - `campaign`: manage the active benchmark campaign in `data/emtom/results/`
 
+`benchmark-suite` now writes live progress to `suite_summary.json` and `suite_summary.txt`
+inside the suite output directory at startup and after each model completes, so tmux runs
+can be monitored before the full suite finishes.
+
 Use `./emtom/run_emtom.sh` with no arguments to see the full command surface and current flags.
 
 ### Bulk Generation

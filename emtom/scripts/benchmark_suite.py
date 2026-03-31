@@ -72,6 +72,41 @@ def render_suite_summary(results: List[SuiteResult], tasks_dir: Path) -> str:
     return "\n".join(lines)
 
 
+def _write_suite_summary(
+    suite_dir: Path,
+    tasks_dir: Path,
+    args: argparse.Namespace,
+    results: List[SuiteResult],
+) -> None:
+    """Persist the current suite state for live monitoring."""
+    summary_text = render_suite_summary(results, tasks_dir)
+    print(summary_text)
+
+    completed = sum(1 for result in results if result.status in {"complete", "failed"})
+    pending = max(len(results) - completed, 0)
+
+    summary_path = suite_dir / "suite_summary.json"
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "tasks_dir": str(tasks_dir),
+                "models": args.models,
+                "observation_mode": args.observation_mode,
+                "run_mode": args.run_mode,
+                "category": args.category,
+                "completed_models": completed,
+                "pending_models": pending,
+                "results": [asdict(result) for result in results],
+            },
+            f,
+            indent=2,
+        )
+
+    live_text_path = suite_dir / "suite_summary.txt"
+    live_text_path.write_text(summary_text + "\n", encoding="utf-8")
+    print(f"\nSaved suite summary to: {summary_path}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Benchmark one task folder across multiple models."
@@ -121,10 +156,25 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
-    results: List[SuiteResult] = []
+    results: List[SuiteResult] = [
+        SuiteResult(
+            model=model,
+            status="pending",
+            total=0,
+            passed=0,
+            failed=0,
+            pass_rate=None,
+            output_dir=str(suite_dir / model.replace("/", "_")),
+            return_code=-1,
+        )
+        for model in args.models
+    ]
+    _write_suite_summary(suite_dir, tasks_dir, args, results)
     try:
-        for model in args.models:
+        for idx, model in enumerate(args.models):
             model_output_dir = suite_dir / model.replace("/", "_")
+            results[idx].status = "running"
+            _write_suite_summary(suite_dir, tasks_dir, args, results)
             cmd = [
                 str(RUN_EMTOM),
                 "benchmark",
@@ -161,57 +211,37 @@ def main() -> int:
 
             if parsed is not None:
                 status = "complete" if return_code == 0 else "failed"
-                results.append(
-                    SuiteResult(
-                        model=model,
-                        status=status,
-                        total=parsed.total,
-                        passed=parsed.passed,
-                        failed=parsed.failed,
-                        pass_rate=parsed.pass_rate,
-                        output_dir=str(model_output_dir),
-                        return_code=return_code,
-                        error=parse_error,
-                    )
+                results[idx] = SuiteResult(
+                    model=model,
+                    status=status,
+                    total=parsed.total,
+                    passed=parsed.passed,
+                    failed=parsed.failed,
+                    pass_rate=parsed.pass_rate,
+                    output_dir=str(model_output_dir),
+                    return_code=return_code,
+                    error=parse_error,
                 )
             else:
-                results.append(
-                    SuiteResult(
-                        model=model,
-                        status="failed",
-                        total=0,
-                        passed=0,
-                        failed=0,
-                        pass_rate=None,
-                        output_dir=str(model_output_dir),
-                        return_code=return_code,
-                        error=parse_error or f"benchmark exited with code {return_code}",
-                    )
+                results[idx] = SuiteResult(
+                    model=model,
+                    status="failed",
+                    total=0,
+                    passed=0,
+                    failed=0,
+                    pass_rate=None,
+                    output_dir=str(model_output_dir),
+                    return_code=return_code,
+                    error=parse_error or f"benchmark exited with code {return_code}",
                 )
+            _write_suite_summary(suite_dir, tasks_dir, args, results)
     finally:
         if prepared_task_dir is not None and prepared_task_dir.exists():
             for child in prepared_task_dir.iterdir():
                 child.unlink(missing_ok=True)
             prepared_task_dir.rmdir()
 
-    summary_text = render_suite_summary(results, tasks_dir)
-    print(summary_text)
-
-    summary_path = suite_dir / "suite_summary.json"
-    with open(summary_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "tasks_dir": str(tasks_dir),
-                "models": args.models,
-                "observation_mode": args.observation_mode,
-                "run_mode": args.run_mode,
-                "category": args.category,
-                "results": [asdict(result) for result in results],
-            },
-            f,
-            indent=2,
-        )
-    print(f"\nSaved suite summary to: {summary_path}")
+    _write_suite_summary(suite_dir, tasks_dir, args, results)
 
     return 0 if all(result.return_code == 0 for result in results) else 1
 
