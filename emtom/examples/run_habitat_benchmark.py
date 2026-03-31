@@ -861,7 +861,7 @@ def main(config: DictConfig) -> None:
     cprint("=" * 60, "blue")
     cprint(f"LLM: {llm_provider} ({model})", "blue")
     cprint(f"Observation mode: {config.benchmark_observation_mode}", "blue")
-    cprint(f"Run mode: {config.benchmark_run_mode}", "blue")
+    cprint(f"Benchmark mode: {config.benchmark_run_mode}", "blue")
     if team_model_specs:
         cprint(f"Team model mapping requested: {team_model_map_requested}", "blue")
         for team_id, spec in sorted(team_model_specs.items()):

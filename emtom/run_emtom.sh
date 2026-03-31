@@ -623,7 +623,7 @@ run_benchmark() {
         echo "Agents: $TASK_NUM_AGENTS (from task)"
         echo "Max simulation steps: $MAX_SIM_STEPS"
         echo "Observation mode: $OBSERVATION_MODE"
-        echo "Run mode: $RUN_MODE"
+        echo "Benchmark mode: $RUN_MODE"
         if [ -n "$CATEGORY" ]; then
             echo "Category filter: $CATEGORY"
         fi
@@ -711,7 +711,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
     echo "Task source: $TASK_DIR ($TASK_COUNT tasks)"
     echo "Agent counts: $AGENT_COUNTS"
     echo "Observation mode: $OBSERVATION_MODE"
-    echo "Run mode: $RUN_MODE"
+    echo "Benchmark mode: $RUN_MODE"
     if [ -n "$CATEGORY" ]; then
         echo "Category: $CATEGORY"
     fi

@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,18 @@ from emtom.evolve.benchmark_wrapper import parse_benchmark_results
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 RUN_EMTOM = PROJECT_ROOT / "emtom" / "run_emtom.sh"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs" / "emtom"
+USE_COLOR = sys.stdout.isatty()
+SUMMARY_REFRESH_SECONDS = 600
+
+RESET = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+MAGENTA = "\033[35m"
+CYAN = "\033[36m"
+WHITE = "\033[37m"
 
 
 @dataclass
@@ -32,6 +45,15 @@ class SuiteResult:
     output_dir: str
     return_code: int
     error: str = ""
+
+
+def _style(text: str, *codes: str) -> str:
+    if not USE_COLOR:
+        return text
+    active_codes = [code for code in codes if code]
+    if not active_codes:
+        return text
+    return "".join(active_codes) + text + RESET
 
 
 def _resolve_tasks_dir(raw_path: str) -> Path:
@@ -52,22 +74,62 @@ def _format_rate(value: Optional[float]) -> str:
     return f"{value:.1f}%" if value is not None else "--"
 
 
-def render_suite_summary(results: List[SuiteResult], tasks_dir: Path) -> str:
+def _status_style(status: str) -> tuple[str, ...]:
+    if status == "complete":
+        return (GREEN, BOLD)
+    if status == "failed":
+        return (RED, BOLD)
+    if status == "running":
+        return (CYAN, BOLD)
+    return (DIM,)
+
+
+def _rate_style(value: Optional[float], status: str) -> tuple[str, ...]:
+    if value is None:
+        return (DIM,)
+    if status == "failed":
+        return (RED, BOLD)
+    if value >= 50:
+        return (GREEN, BOLD)
+    if value >= 25:
+        return (YELLOW, BOLD)
+    return (RED, BOLD)
+
+
+def render_suite_summary(
+    results: List[SuiteResult],
+    tasks_dir: Path,
+    current_model: Optional[str] = None,
+) -> str:
+    width = 88
     lines = [
         "",
-        "=" * 72,
-        "BENCHMARK SUITE SUMMARY",
-        "=" * 72,
-        f"Tasks dir: {tasks_dir}",
-        "",
-        f"{'Model':<18} {'Status':<10} {'Passed':>8} {'Total':>8} {'Pass rate':>10}",
-        "-" * 72,
+        _style("=" * width, BOLD, CYAN),
+        _style("BENCHMARK SUITE SUMMARY", BOLD, WHITE),
+        _style("=" * width, BOLD, CYAN),
+        f"Tasks dir: {_style(str(tasks_dir), WHITE)}",
     ]
+    if current_model:
+        lines.append(f"Current model: {_style(current_model, BOLD, MAGENTA)}")
+    lines.extend([
+        "",
+        _style(f"{'Model':<24} {'Status':<10} {'Passed':>8} {'Total':>8} {'Pass rate':>10}", BOLD),
+        _style("-" * width, DIM),
+    ])
     for result in results:
         passed = str(result.passed) if result.total > 0 else "-"
         total = str(result.total) if result.total > 0 else "-"
+        model_label = _style(result.model, BOLD, MAGENTA) if result.model == current_model else _style(result.model, WHITE)
+        status_label = _style(f"{result.status:<10}", *_status_style(result.status))
+        passed_label = _style(
+            f"{passed:>8}",
+            GREEN if result.passed > 0 else DIM,
+            BOLD if result.passed > 0 else "",
+        )
+        total_label = _style(f"{total:>8}", CYAN if result.total > 0 else DIM)
+        rate_label = _style(f"{_format_rate(result.pass_rate):>10}", *_rate_style(result.pass_rate, result.status))
         lines.append(
-            f"{result.model:<18} {result.status:<10} {passed:>8} {total:>8} {_format_rate(result.pass_rate):>10}"
+            f"{model_label:<24} {status_label} {passed_label} {total_label} {rate_label}"
         )
     return "\n".join(lines)
 
@@ -77,9 +139,10 @@ def _write_suite_summary(
     tasks_dir: Path,
     args: argparse.Namespace,
     results: List[SuiteResult],
+    current_model: Optional[str] = None,
 ) -> None:
     """Persist the current suite state for live monitoring."""
-    summary_text = render_suite_summary(results, tasks_dir)
+    summary_text = render_suite_summary(results, tasks_dir, current_model=current_model)
     print(summary_text)
 
     completed = sum(1 for result in results if result.status in {"complete", "failed"})
@@ -105,6 +168,24 @@ def _write_suite_summary(
     live_text_path = suite_dir / "suite_summary.txt"
     live_text_path.write_text(summary_text + "\n", encoding="utf-8")
     print(f"\nSaved suite summary to: {summary_path}")
+
+
+def _refresh_running_result(result: SuiteResult) -> SuiteResult:
+    try:
+        parsed = parse_benchmark_results(result.output_dir, model=result.model)
+    except Exception:
+        return result
+    return SuiteResult(
+        model=result.model,
+        status=result.status,
+        total=parsed.total,
+        passed=parsed.passed,
+        failed=parsed.failed,
+        pass_rate=parsed.pass_rate,
+        output_dir=result.output_dir,
+        return_code=result.return_code,
+        error=result.error,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -174,7 +255,7 @@ def main() -> int:
         for idx, model in enumerate(args.models):
             model_output_dir = suite_dir / model.replace("/", "_")
             results[idx].status = "running"
-            _write_suite_summary(suite_dir, tasks_dir, args, results)
+            _write_suite_summary(suite_dir, tasks_dir, args, results, current_model=model)
             cmd = [
                 str(RUN_EMTOM),
                 "benchmark",
@@ -197,10 +278,21 @@ def main() -> int:
                 cmd.append("--no-calibration")
 
             print()
-            print("=" * 72)
-            print(f"Running benchmark for {model}")
-            print("=" * 72)
-            return_code = subprocess.run(cmd, cwd=PROJECT_ROOT).returncode
+            print(_style("=" * 72, BOLD, MAGENTA))
+            print(f"Running benchmark for {_style(model, BOLD, MAGENTA)}")
+            print(_style("=" * 72, BOLD, MAGENTA))
+            proc = subprocess.Popen(cmd, cwd=PROJECT_ROOT)
+            last_refresh = time.monotonic()
+            return_code = proc.poll()
+            while return_code is None:
+                time.sleep(5)
+                now = time.monotonic()
+                if now - last_refresh >= SUMMARY_REFRESH_SECONDS:
+                    results[idx] = _refresh_running_result(results[idx])
+                    _write_suite_summary(suite_dir, tasks_dir, args, results, current_model=model)
+                    last_refresh = now
+                return_code = proc.poll()
+            results[idx] = _refresh_running_result(results[idx])
 
             parsed = None
             parse_error = ""
@@ -234,7 +326,7 @@ def main() -> int:
                     return_code=return_code,
                     error=parse_error or f"benchmark exited with code {return_code}",
                 )
-            _write_suite_summary(suite_dir, tasks_dir, args, results)
+            _write_suite_summary(suite_dir, tasks_dir, args, results, current_model=model)
     finally:
         if prepared_task_dir is not None and prepared_task_dir.exists():
             for child in prepared_task_dir.iterdir():
