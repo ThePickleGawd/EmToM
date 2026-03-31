@@ -21,7 +21,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 
 # ── ANSI colors ──
@@ -204,6 +204,8 @@ class RunReport:
     log_dirs: List[str]
     results: List[ProcessResult] = field(default_factory=list)
     wall_clock_seconds: float = 0.0
+    requested_tasks_total: int = 0
+    models_used: List[str] = field(default_factory=list)
 
     @property
     def total_processes(self) -> int:
@@ -226,6 +228,12 @@ class RunReport:
         if not self.results:
             return 0.0
         return self.processes_with_tasks / self.total_processes * 100
+
+    @property
+    def task_pass_rate(self) -> float:
+        if self.requested_tasks_total <= 0:
+            return 0.0
+        return self.total_tasks / self.requested_tasks_total * 100
 
     def tasks_by_category(self) -> Dict[str, int]:
         counts: Dict[str, int] = {}
@@ -299,17 +307,32 @@ def print_report(report: RunReport) -> None:
     print()
 
     # ── Overview ──
-    pct = report.process_success_rate
+    task_pct = report.task_pass_rate
+    process_pct = report.process_success_rate
     print(f"  {BOLD}Runs parsed{RESET}       : {len(report.log_dirs)}")
+    if report.models_used:
+        print(f"  {BOLD}Model used{RESET}        : {', '.join(report.models_used)}")
+    if report.requested_tasks_total > 0:
+        print(f"  {BOLD}Requested tasks{RESET}   : {report.requested_tasks_total}")
     print(f"  {BOLD}Total processes{RESET}   : {report.total_processes}")
     if report.wall_clock_seconds > 0:
         print(f"  {BOLD}Wall-clock time{RESET}   : {_fmt_duration(report.wall_clock_seconds)}")
     print(f"  {BOLD}Avg iterations{RESET}    : {report.avg_iterations():.0f}")
     print()
 
-    # ── Pass/fail bar ──
+    # ── Task pass rate ──
+    print(f"  {BOLD}Task pass rate:{RESET}")
+    print(f"    {_bar(task_pct)} {task_pct:.1f}%")
+    if report.requested_tasks_total > 0:
+        print(
+            f"    {GREEN}generated: {report.total_tasks}{RESET}  "
+            f"{DIM}requested: {report.requested_tasks_total}{RESET}"
+        )
+    print()
+
+    # ── Process outcomes ──
     print(f"  {BOLD}Process outcomes:{RESET}")
-    print(f"    {_bar(pct)} {pct:.1f}%")
+    print(f"    {_bar(process_pct)} {process_pct:.1f}%")
     print(
         f"    {GREEN}produced tasks: {report.processes_with_tasks}{RESET}  "
         f"{RED}failed: {report.processes_failed}{RESET}  "
@@ -463,12 +486,49 @@ def parse_args() -> argparse.Namespace:
 def build_report(log_dirs: List[str], wall_clock: float = 0.0) -> RunReport:
     """Build a report from one or more log directories."""
     report = RunReport(log_dirs=log_dirs, wall_clock_seconds=wall_clock)
+    seen_models: Set[str] = set()
 
     for log_dir in log_dirs:
         log_path = Path(log_dir)
         if not log_path.exists():
             print(f"{YELLOW}Warning: log dir not found: {log_dir}{RESET}", file=sys.stderr)
             continue
+
+        manifest_path = log_path.parent / "manifest.json"
+        launcher_log_path = log_path.parent / "launcher.log"
+
+        requested_tasks = 0
+        model: Optional[str] = None
+
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                manifest = {}
+            requested_tasks = int(manifest.get("requested_tasks") or 0)
+            raw_model = manifest.get("model")
+            if isinstance(raw_model, str) and raw_model.strip():
+                model = raw_model.strip()
+
+        if (requested_tasks <= 0 or not model) and launcher_log_path.exists():
+            try:
+                launcher_text = strip_ansi(launcher_log_path.read_text(errors="replace"))
+            except Exception:
+                launcher_text = ""
+            if requested_tasks <= 0:
+                requested_match = re.search(r"^\s*Total tasks:\s+(\d+)\s*$", launcher_text, re.MULTILINE)
+                if requested_match:
+                    requested_tasks = int(requested_match.group(1))
+            if not model:
+                model_match = re.search(r"^\s*Model:\s+(.+?)\s*$", launcher_text, re.MULTILINE)
+                if model_match:
+                    model = model_match.group(1).strip()
+
+        report.requested_tasks_total += requested_tasks
+        if model and model not in seen_models:
+            seen_models.add(model)
+            report.models_used.append(model)
+
         for log_file in sorted(log_path.glob("*.log")):
             result = parse_log(log_file)
             report.results.append(result)
