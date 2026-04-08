@@ -6,6 +6,7 @@ Usage:
     python -m emtom.cli.taskgen --working-dir DIR new_scene 3 [--keep]
     python -m emtom.cli.taskgen --working-dir DIR judge
     python -m emtom.cli.taskgen --working-dir DIR test_task
+    python -m emtom.cli.taskgen --working-dir DIR verify_task
     python -m emtom.cli.taskgen --working-dir DIR submit_task
     python -m emtom.cli.taskgen --working-dir DIR finish
     python -m emtom.cli.taskgen --working-dir DIR fail "reason"
@@ -32,6 +33,7 @@ def main() -> None:
 
     subparsers.add_parser("judge", help="Judge the current task")
     subparsers.add_parser("test_task", help="Run standard and baseline calibration runs")
+    subparsers.add_parser("verify_task", help="Run the pre-submit three-model verification gate")
     subparsers.add_parser("submit_task", help="Submit the current task")
     subparsers.add_parser("status", help="Show current task-generation state")
     subparsers.add_parser("finish", help="Mark the run complete")
@@ -56,6 +58,8 @@ def main() -> None:
         result = session.judge()
     elif args.command == "test_task":
         result = session.test_task()
+    elif args.command == "verify_task":
+        result = session.verify_task()
     elif args.command == "submit_task":
         result = session.submit_task()
     elif args.command == "status":

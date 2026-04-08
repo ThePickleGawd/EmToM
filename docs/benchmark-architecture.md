@@ -21,7 +21,8 @@ Task generation should optimize for functional ToM, not just literal ToM:
 3. Generate a task grounded in the current scene and mechanics, starting from the blank task template and using the sampled examples only as inspiration.
 4. Verify the task statically and with runtime checks.
 5. Judge whether the task genuinely requires ToM reasoning.
-6. Benchmark agents on the final task in both `standard` and `baseline`, using `standard` for calibration and `baseline` as the full-info solvability check. For competitive tasks, `baseline` is a two-phase solo-team check: once with only `team_0` active and once with only `team_1` active.
+6. Benchmark agents on the candidate task in both `standard` and `baseline`, using `standard` for calibration and `baseline` as the full-info solvability check. For competitive tasks, `baseline` is a two-phase solo-team check: once with only `team_0` active and once with only `team_1` active.
+7. Run the submission verification layer in `standard` mode with `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash`. The task is submission-eligible only if at least two of those three models fail.
 
 Task generation runs through an external SWE-agent CLI (`mini`, `claude`, or `codex`) inside a repo-local workspace under `tmp/task_gen/`. The agent executable may come from the operator environment, but each task-generation run gets its own sandbox environment in `tmp/task_gen/<run_id>/.venv` so parallel runs stay isolated. The repo provides the prompt, sampled seed context, and a stable `taskgen` command surface for `new_scene`, `judge`, `verify_golden_trajectory`, `test_task`, `submit_task`, and `finish`.
 
@@ -56,6 +57,7 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - `verify_golden_trajectory` remains the canonical deterministic solvability gate. It proves the authored task spec is functionally solvable under the planner/runtime semantics.
 - Judge-time ToM evidence must come from the strict Fast Downward proof path. Structural or syntactic fallback metadata is not valid submission evidence.
 - `test_task` now runs `standard` plus a `baseline` solvability check. For competitive tasks, that baseline check consists of two solo-team runs, one for each side.
+- `verify_task` is a separate pre-submit gate. It runs `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` in `standard` mode and requires at least two failures before submission.
 - Dataset difficulty calibration uses the `standard` result only, with a target pass rate of 10% by default for the current target model. Hard generation uses a stricter 3% target.
 - Calibration and sampled-task selection ignore `tom_level = 0` tasks. New submissions with `tom_level < 1` must be rejected.
 - The `test_task` acceptance gate should use the current calibrated pass/fail counts and accept only the next `standard` outcome that moves the dataset closer to the target pass rate.

@@ -216,6 +216,7 @@ acquire_lock_or_queue() {
 PER_GPU=3
 MODEL="gpt-5.2"
 NUM_TASKS=""
+RUN_UNTIL=""
 DRY_RUN=false
 CATEGORY_FILTER=""  # Empty = all 3 categories (round-robin)
 OUTPUT_DIR="data/emtom/tasks"
@@ -239,8 +240,9 @@ print_usage() {
     echo "Options:"
     echo "  --per-gpu N         Concurrent processes per GPU (default: 3, one per category)"
     echo "  --model MODEL       LLM model (default: gpt-5.2)"
-    echo "  --num-tasks N       Total tasks for the whole bulk run (default: one full saturated run)"
+    echo "  --num-tasks N       Target new tasks for this bulk run (default: one full saturated run)"
     echo "                      The launcher divides N across fixed workers and starts them once"
+    echo "  --run-until N       Keep recycling workers until at least N new tasks are submitted"
     echo "  --task-gen-agent A  External generator agent: mini|claude|codex (default: mini)"
     echo "  --category C [C ..] Categories to generate (cooperative, competitive, mixed). Default: all 3."
     echo "  --difficulty LEVEL  Difficulty for generation (easy, medium, hard)"
@@ -284,6 +286,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --num-tasks)
             NUM_TASKS=$2
+            shift 2
+            ;;
+        --run-until)
+            RUN_UNTIL=$2
             shift 2
             ;;
         --task-gen-agent)
@@ -464,17 +470,27 @@ NUM_CATEGORIES=${#CATEGORIES[@]}
 MAX_PROCESSES=$((NUM_GPUS * PER_GPU))
 TOTAL_PROCESSES=$MAX_PROCESSES
 
-if [ -z "$NUM_TASKS" ]; then
-    NUM_TASKS="$TOTAL_PROCESSES"
+if [ -n "$RUN_UNTIL" ] && { ! [[ "$RUN_UNTIL" =~ ^[0-9]+$ ]] || [ "$RUN_UNTIL" -le 0 ]; }; then
+    echo -e "${RED}Error: --run-until must be a positive integer${NC}"
+    exit 1
 fi
 
-if ! [[ "$NUM_TASKS" =~ ^[0-9]+$ ]] || [ "$NUM_TASKS" -le 0 ]; then
+if [ -n "$NUM_TASKS" ] && { ! [[ "$NUM_TASKS" =~ ^[0-9]+$ ]] || [ "$NUM_TASKS" -le 0 ]; }; then
     echo -e "${RED}Error: --num-tasks must be a positive integer${NC}"
     exit 1
 fi
 
-if [ "$NUM_TASKS" -lt "$TOTAL_PROCESSES" ]; then
-    ACTIVE_WORKERS="$NUM_TASKS"
+if [ -z "$NUM_TASKS" ]; then
+    NUM_TASKS="$TOTAL_PROCESSES"
+fi
+
+TARGET_NEW_TASKS="$NUM_TASKS"
+if [ -n "$RUN_UNTIL" ] && [ "$RUN_UNTIL" -gt "$TARGET_NEW_TASKS" ]; then
+    TARGET_NEW_TASKS="$RUN_UNTIL"
+fi
+
+if [ "$TARGET_NEW_TASKS" -lt "$TOTAL_PROCESSES" ]; then
+    ACTIVE_WORKERS="$TARGET_NEW_TASKS"
 else
     ACTIVE_WORKERS="$TOTAL_PROCESSES"
 fi
@@ -512,8 +528,9 @@ elif [ -n "$K_LEVEL" ]; then
 else
     echo -e "K-level:            ${GREEN}random per task${NC}"
 fi
-echo -e "Total tasks:        ${GREEN}$NUM_TASKS${NC}"
-echo -e "Worker launch mode: ${GREEN}1-task-per-worker (respawn on success, stop on fail)${NC}"
+echo -e "Target new tasks:   ${GREEN}$TARGET_NEW_TASKS${NC}"
+[ -n "$RUN_UNTIL" ] && echo -e "Run until floor:    ${GREEN}$RUN_UNTIL${NC}"
+echo -e "Worker launch mode: ${GREEN}1-task-per-worker${NC}"
 if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
     echo -e "Extra args:         ${GREEN}${EXTRA_ARGS[*]}${NC}"
 fi
@@ -528,7 +545,7 @@ declare -a PIDS
 declare -a PROCESS_INFO
 declare -a PROCESS_TASK_COUNTS
 declare -a PROCESS_GROUPS
-REQUESTED_TASKS_TOTAL="$NUM_TASKS"
+REQUESTED_TASKS_TOTAL="$TARGET_NEW_TASKS"
 
 build_worker_command() {
     local gpu="$1"
@@ -659,13 +676,13 @@ BASELINE_TASK_COUNT=$(count_output_tasks)
 launch_workers
 if [ "$DRY_RUN" = true ]; then
     echo ""
-    echo -e "${YELLOW}Dry run complete. In live mode the launcher keeps ${ACTIVE_WORKERS} slots busy, 1 task per worker, respawning on success until ${NUM_TASKS} tasks are produced.${NC}"
+    echo -e "${YELLOW}Dry run complete. In live mode the launcher keeps ${ACTIVE_WORKERS} slots busy, 1 task per worker, respawning on success until ${TARGET_NEW_TASKS} new tasks are produced.${NC}"
     exit 0
 fi
 
 echo ""
 echo "=============================================="
-echo -e "${BOLD}Workers started${NC} (${ACTIVE_WORKERS} slots, 1 task each, target ${NUM_TASKS} new tasks)"
+echo -e "${BOLD}Workers started${NC} (${ACTIVE_WORKERS} slots, 1 task each, target ${TARGET_NEW_TASKS} new tasks)"
 echo "=============================================="
 echo ""
 echo -e "${CYAN}Monitoring:${NC}"
@@ -693,7 +710,7 @@ for ((i=0; i<ACTIVE_WORKERS; i++)); do
     SLOT_INFO[$i]=${PROCESS_INFO[$i]}
 done
 
-MAX_ATTEMPTS_PER_SLOT=20  # Stop a slot after this many consecutive failures
+MAX_ATTEMPTS_PER_SLOT=20  # Reset a slot after this many consecutive failures when --run-until is active
 
 # ── Main respawn loop: poll workers, respawn on success, stop on fail ──
 while true; do
@@ -701,8 +718,8 @@ while true; do
     new_tasks=$((current_task_count - BASELINE_TASK_COUNT))
 
     # Check if we've reached the target
-    if [ "$new_tasks" -ge "$NUM_TASKS" ]; then
-        stop_reason="target reached ($new_tasks/$NUM_TASKS new tasks)"
+    if [ "$new_tasks" -ge "$TARGET_NEW_TASKS" ]; then
+        stop_reason="target reached ($new_tasks/$TARGET_NEW_TASKS new tasks)"
         break
     fi
 
@@ -715,6 +732,17 @@ while true; do
         fi
     done
     if [ "$all_stopped" = true ]; then
+        if [ -n "$RUN_UNTIL" ] && [ "$new_tasks" -lt "$TARGET_NEW_TASKS" ]; then
+            echo -e "${YELLOW}[RESTART]${NC} All slots stopped before reaching ${TARGET_NEW_TASKS} new tasks. Relaunching a fresh wave."
+            for ((i=0; i<ACTIVE_WORKERS; i++)); do
+                SLOT_ATTEMPTS[$i]=1
+                launch_single_worker "$i" 1
+                SLOT_PIDS[$i]=${PIDS[-1]}
+                SLOT_INFO[$i]=${PROCESS_INFO[-1]}
+            done
+            sleep 2
+            continue
+        fi
         stop_reason="all slots stopped (failures or max attempts)"
         break
     fi
@@ -737,9 +765,9 @@ while true; do
             SLOT_ATTEMPTS[$i]=1  # Reset attempt counter on success
 
             new_tasks=$(($(count_output_tasks) - BASELINE_TASK_COUNT))
-            echo -e "${GREEN}[DONE]${NC} ${SLOT_INFO[$i]}  (${new_tasks}/${NUM_TASKS} new tasks so far)"
+            echo -e "${GREEN}[DONE]${NC} ${SLOT_INFO[$i]}  (${new_tasks}/${TARGET_NEW_TASKS} new tasks so far)"
 
-            if [ "$new_tasks" -ge "$NUM_TASKS" ]; then
+            if [ "$new_tasks" -ge "$TARGET_NEW_TASKS" ]; then
                 SLOT_PIDS[$i]=-1
                 continue
             fi
@@ -756,8 +784,16 @@ while true; do
             attempt_num=${SLOT_ATTEMPTS[$i]}
 
             if [ "$attempt_num" -ge "$MAX_ATTEMPTS_PER_SLOT" ]; then
-                echo -e "${RED}[FAIL]${NC} ${SLOT_INFO[$i]}  (${attempt_num}/${MAX_ATTEMPTS_PER_SLOT} attempts, slot stopped)"
-                SLOT_PIDS[$i]=-1
+                if [ -n "$RUN_UNTIL" ]; then
+                    echo -e "${YELLOW}[RETRY]${NC} ${SLOT_INFO[$i]}  (${attempt_num}/${MAX_ATTEMPTS_PER_SLOT} failed attempts, resetting slot because --run-until is active)"
+                    SLOT_ATTEMPTS[$i]=1
+                    launch_single_worker "$i" 1
+                    SLOT_PIDS[$i]=${PIDS[-1]}
+                    SLOT_INFO[$i]=${PROCESS_INFO[-1]}
+                else
+                    echo -e "${RED}[FAIL]${NC} ${SLOT_INFO[$i]}  (${attempt_num}/${MAX_ATTEMPTS_PER_SLOT} attempts, slot stopped)"
+                    SLOT_PIDS[$i]=-1
+                fi
             else
                 echo -e "${YELLOW}[FAIL]${NC} ${SLOT_INFO[$i]}  (attempt ${attempt_num}/${MAX_ATTEMPTS_PER_SLOT}, respawning)"
                 next_attempt=$((attempt_num + 1))
@@ -785,7 +821,7 @@ WALL_CLOCK=$((BULK_END_EPOCH - BULK_START_EPOCH))
 
 echo ""
 echo "=============================================="
-echo -e "${BOLD}Bulk generation complete${NC} (${submitted_total}/${NUM_TASKS} new tasks, ${succeeded} worker successes, ${failed} worker failures)"
+echo -e "${BOLD}Bulk generation complete${NC} (${submitted_total}/${TARGET_NEW_TASKS} new tasks, ${succeeded} worker successes, ${failed} worker failures)"
 echo -e "Stop reason: ${CYAN}${stop_reason}${NC}"
 echo "=============================================="
 echo ""

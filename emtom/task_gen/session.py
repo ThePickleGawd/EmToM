@@ -17,6 +17,12 @@ from emtom.task_gen.authoring_surface import get_authoring_default_actions
 from emtom.task_gen.scene_loader import SceneData
 from emtom.task_gen.task_bootstrap import build_scene_bootstrap_problem_pddl
 
+SUBMISSION_VERIFICATION_MODELS = [
+    "gpt-5.4",
+    "claude-sonnet-4-6",
+    "gemini-flash",
+]
+
 
 def _evaluation_passed(category: str, evaluation: Dict[str, Any]) -> bool:
     if category == "competitive":
@@ -374,6 +380,8 @@ def default_state(
         "last_judge_passed": False,
         "last_verify_passed": False,
         "last_test_passed": False,
+        "last_submission_verification_passed": False,
+        "last_submission_verification_results": {},
         "last_verified_spec_hash": None,
         "last_verified_trajectory_hash": None,
         "consecutive_judge_failures": 0,
@@ -493,6 +501,8 @@ class TaskGenSession:
         self.state["last_judge_passed"] = False
         self.state["last_verify_passed"] = False
         self.state["last_test_passed"] = False
+        self.state["last_submission_verification_passed"] = False
+        self.state["last_submission_verification_results"] = {}
         self.state["last_verified_spec_hash"] = None
         self.state["last_verified_trajectory_hash"] = None
         self.state["consecutive_judge_failures"] = 0
@@ -515,6 +525,8 @@ class TaskGenSession:
             "last_judge_passed": self.state.get("last_judge_passed", False),
             "last_verify_passed": self.state.get("last_verify_passed", False),
             "last_test_passed": self.state.get("last_test_passed", False),
+            "last_submission_verification_passed": self.state.get("last_submission_verification_passed", False),
+            "last_submission_verification_results": self.state.get("last_submission_verification_results", {}),
             "last_verified_spec_hash": self.state.get("last_verified_spec_hash"),
             "last_verified_trajectory_hash": self.state.get("last_verified_trajectory_hash"),
             "scene_loaded": scene_data is not None,
@@ -889,6 +901,8 @@ class TaskGenSession:
         run_dir: Path,
         idle_team: Optional[str] = None,
         active_team: Optional[str] = None,
+        test_model_override: Optional[str] = None,
+        team_model_map_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         run_dir.mkdir(parents=True, exist_ok=True)
         num_agents = task_data.get("num_agents", 2)
@@ -906,14 +920,19 @@ class TaskGenSession:
             "--run-mode",
             run_mode,
         ]
-        if self.state.get("test_model"):
-            cmd.extend(["--test-model", self.state["test_model"]])
-        if task_data.get("category") == "competitive":
+        effective_test_model = test_model_override or self.state.get("test_model")
+        if effective_test_model:
+            cmd.extend(["--test-model", effective_test_model])
+        if team_model_map_override:
+            cmd.extend(["--team-model-map", team_model_map_override])
+        elif task_data.get("category") == "competitive":
             base_model = self.state.get("test_model") or "gpt-5.2"
             opponent = "sonnet" if base_model != "sonnet" else "gpt-5.2"
             cmd.extend(["--team-model-map", f"team_0={base_model},team_1={opponent}"])
             if idle_team:
                 cmd.extend(["--idle-team", idle_team])
+        elif idle_team:
+            cmd.extend(["--idle-team", idle_team])
 
         env = os.environ.copy()
         env = self._with_project_root_assets(env)
@@ -1106,6 +1125,145 @@ class TaskGenSession:
             json.dump(payload, f, indent=2)
         return payload
 
+    def verify_task(self) -> CLIResult:
+        if not self.task_file.exists():
+            return failure("working_task.json does not exist.")
+
+        try:
+            with open(self.task_file) as f:
+                task_data = json.load(f)
+        except json.JSONDecodeError as e:
+            return failure(f"Invalid JSON in working_task.json: {e}")
+
+        validation_result = self._validate_task_structure(task_data)
+        if not validation_result["success"]:
+            return validation_result
+
+        try:
+            import hydra  # type: ignore
+            import habitat  # type: ignore
+            _deps_ok = True
+        except Exception as e:
+            _deps_ok = False
+            _deps_err = str(e)
+
+        if not _deps_ok:
+            self.state["last_submission_verification_passed"] = True
+            self.state["last_submission_verification_results"] = {
+                "skipped": True,
+                "reason": f"Skipped simulator verification due to missing deps: {_deps_err}",
+                "required_failures": 2,
+                "models": SUBMISSION_VERIFICATION_MODELS,
+            }
+            self._write_state()
+            payload = dict(validation_result["data"])
+            payload.update(self.state["last_submission_verification_results"])
+            payload["gate"] = "PASSED"
+            return success(payload)
+
+        import tempfile
+
+        current_task_num = len(self.state.get("submitted_tasks", [])) + 1
+        run_count = self.state.get("_verification_run_count", 0) + 1
+        self.state["_verification_run_count"] = run_count
+        self.state["last_submission_verification_passed"] = False
+        self.state["last_submission_verification_results"] = {}
+        self._write_state()
+        run_dir = self.trajectories_dir / f"task_{current_task_num}" / f"verification_{run_count}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        fd, temp_task_file = tempfile.mkstemp(suffix=".json")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(task_data, f)
+
+            with ThreadPoolExecutor(max_workers=len(SUBMISSION_VERIFICATION_MODELS)) as executor:
+                futures = {
+                    model: executor.submit(
+                        self._run_benchmark_mode,
+                        task_data,
+                        temp_task_file,
+                        "standard",
+                        run_dir / model.replace("/", "_"),
+                        test_model_override=model,
+                    )
+                    for model in SUBMISSION_VERIFICATION_MODELS
+                }
+                model_results = {model: future.result() for model, future in futures.items()}
+        finally:
+            try:
+                os.unlink(temp_task_file)
+            except Exception:
+                pass
+
+        errors = {
+            model: result.get("error")
+            for model, result in model_results.items()
+            if result.get("error")
+        }
+        if errors:
+            joined = "; ".join(f"{model}: {err}" for model, err in sorted(errors.items()))
+            return failure(
+                f"Submission verification failed to run: {joined}",
+                data={"model_results": model_results, "trajectory_dir": str(run_dir)},
+            )
+
+        category = task_data.get("category", "cooperative")
+        summaries: Dict[str, Any] = {}
+        failed_models: List[str] = []
+        passed_models: List[str] = []
+        for model, result in model_results.items():
+            evaluation = result.get("evaluation", {})
+            passed = _evaluation_passed(category, evaluation)
+            progress = _evaluation_progress(category, evaluation)
+            summaries[model] = {
+                "passed": passed,
+                "failed": not passed,
+                "progress": progress,
+                "steps": result.get("steps", 0),
+                "turns": result.get("turns", 0),
+                "trajectory_dir": result.get("trajectory_dir"),
+            }
+            if passed:
+                passed_models.append(model)
+            else:
+                failed_models.append(model)
+
+        gate_passed = len(failed_models) >= 2
+        verification_payload = {
+            "required_failures": 2,
+            "gate_passed": gate_passed,
+            "models": summaries,
+            "failed_models": failed_models,
+            "passed_models": passed_models,
+            "trajectory_dir": str(run_dir),
+            "message": (
+                "Submission verification passed. At least two verification models failed."
+                if gate_passed
+                else "Submission verification failed. Fewer than two verification models failed."
+            ),
+        }
+        with open(run_dir / "verification_summary.json", "w") as f:
+            json.dump(verification_payload, f, indent=2)
+
+        self.state["last_submission_verification_passed"] = gate_passed
+        self.state["last_submission_verification_results"] = verification_payload
+        self._write_state()
+
+        payload = dict(validation_result["data"])
+        payload.update(verification_payload)
+        payload["gate"] = "PASSED" if gate_passed else "REJECTED"
+        if gate_passed:
+            payload["next_step"] = "Verification passed. Submit the task without changing the spec."
+            return success(payload)
+
+        payload["action_required"] = (
+            "At least two of gpt-5.4, claude-sonnet-4-6, and gemini-flash must fail. "
+            "Revise the task, then run taskgen judge -> taskgen test_task -> taskgen verify_task again."
+        )
+        payload["next_step"] = payload["action_required"]
+        return failure("Submission verification rejected the task.", data=payload)
+
     def test_task(self) -> CLIResult:
         _skip_test = self.state.get("skip_steps") or []
         if "test" in _skip_test or "task-evolution" in _skip_test:
@@ -1165,13 +1323,15 @@ class TaskGenSession:
 
         self._save_calibration_result(task_data, results)
         self.state["last_test_passed"] = results["comparison"]["gate_passed"]
+        self.state["last_submission_verification_passed"] = False
+        self.state["last_submission_verification_results"] = {}
         self._write_state()
         payload = dict(validation_result["data"])
         payload.update(results)
         payload["gate"] = "PASSED" if self.state["last_test_passed"] else "REJECTED"
         payload["gate_reason"] = " ".join(results["comparison"].get("reasons", []))
         if self.state["last_test_passed"]:
-            payload["next_step"] = "Test passed. Submit the task without changing the spec."
+            payload["next_step"] = "Test passed. Run taskgen verify_task, then submit the task without changing the spec."
         else:
             payload["action_required"] = _build_test_task_retry_guidance(results["comparison"])
             payload["next_step"] = payload["action_required"]
@@ -1228,6 +1388,8 @@ class TaskGenSession:
             return result
 
         self.state["last_judge_passed"] = bool(data.get("passed"))
+        self.state["last_submission_verification_passed"] = False
+        self.state["last_submission_verification_results"] = {}
         if self.state["last_judge_passed"]:
             self.state["consecutive_judge_failures"] = 0
             # Strip required_fixes on pass — the LLM judge sometimes returns
@@ -1235,7 +1397,7 @@ class TaskGenSession:
             data.pop("required_fixes", None)
             data["next_step"] = (
                 "Task passed judge. Do not change the task spec. "
-                "Run taskgen test_task, then taskgen submit_task."
+                "Run taskgen test_task, then taskgen verify_task, then taskgen submit_task."
             )
         else:
             self.state["consecutive_judge_failures"] = (
@@ -1266,6 +1428,11 @@ class TaskGenSession:
             )
         if not self.state.get("last_test_passed") and "test" not in _skip and "task-evolution" not in _skip:
             return failure("Must run test_task successfully before submitting.")
+        if not self.state.get("last_submission_verification_passed"):
+            return failure(
+                "Must run verify_task successfully before submitting. "
+                "Submission requires at least two of gpt-5.4, claude-sonnet-4-6, and gemini-flash to fail."
+            )
 
         allowed_tom_levels = (
             [self.state["current_k_level"]] if self.state.get("current_k_level") else None
@@ -1289,6 +1456,7 @@ class TaskGenSession:
         self._refresh_calibration_stats()
         self._reset_gate_state()
         self.state["_test_run_count"] = 0
+        self.state["_verification_run_count"] = 0
         if len(self.state["submitted_tasks"]) < self.state["num_tasks_target"]:
             self.state["current_k_level"] = self._pick_k_level()
         self._write_state()
