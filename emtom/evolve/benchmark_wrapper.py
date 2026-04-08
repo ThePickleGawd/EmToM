@@ -713,6 +713,44 @@ def run_benchmark_parallel(
     )
 
 
+def parse_parallel_benchmark_results(output_dir: str, model: str) -> BenchmarkResults:
+    """Parse a parallel benchmark output directory without rerunning anything."""
+    out_path = Path(output_dir)
+    if not out_path.exists():
+        raise FileNotFoundError(f"Parallel benchmark output dir not found: {output_dir}")
+
+    all_task_results: List[TaskResult] = []
+    total_passed = 0
+    total_failed = 0
+
+    no_result_stems: List[str] = []
+    for task_dir in sorted(path for path in out_path.iterdir() if path.is_dir() and path.name != "logs"):
+        bench_out = str(task_dir / "benchmark")
+        try:
+            per_task = parse_benchmark_results(bench_out, model)
+        except FileNotFoundError:
+            no_result_stems.append(task_dir.name)
+            continue
+        except Exception:
+            no_result_stems.append(task_dir.name)
+            continue
+        all_task_results.extend(per_task.results)
+        total_passed += per_task.passed
+        total_failed += per_task.failed
+
+    total = total_passed + total_failed
+    pass_rate = (total_passed / total * 100) if total > 0 else 0.0
+
+    return BenchmarkResults(
+        model=model,
+        total=total,
+        passed=total_passed,
+        failed=total_failed,
+        pass_rate=pass_rate,
+        results=all_task_results,
+    )
+
+
 def _build_agent_models_from_result(
     result: TaskResult,
     model: str,

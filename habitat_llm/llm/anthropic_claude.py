@@ -12,6 +12,7 @@ from urllib import error, request
 
 from omegaconf import DictConfig
 
+from emtom.api_costs import maybe_append_usage_event
 from habitat_llm.llm.base_llm import BaseLLM, LLMRequestError, Prompt
 
 # Load .env file if it exists (for API keys)
@@ -227,6 +228,17 @@ class AnthropicClaude(BaseLLM):
             for block in content_blocks
             if block.get("type") == "text"
         ).strip()
+        usage = response_body.get("usage") or {}
+        maybe_append_usage_event(
+            provider="anthropic",
+            model=model,
+            usage={
+                "input_tokens": usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "cached_input_tokens": usage.get("cache_read_input_tokens", 0),
+            },
+            source="habitat_llm.anthropic_claude.messages",
+        )
         self.response = text_response
 
         if self.keep_message_history:

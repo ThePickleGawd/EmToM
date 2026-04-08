@@ -129,8 +129,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target-pass-rate",
         type=float,
-        default=20.0,
-        help="Target pass rate percent — generate until pass rate drops to this (default: 20.0)",
+        default=10.0,
+        help="Target pass rate percent — generate until pass rate drops to this (default: 10.0)",
     )
     parser.add_argument(
         "--output-dir",

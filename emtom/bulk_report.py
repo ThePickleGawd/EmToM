@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from emtom.api_costs import summarize_run_costs
 
 # ── ANSI colors ──
 
@@ -206,6 +207,7 @@ class RunReport:
     wall_clock_seconds: float = 0.0
     requested_tasks_total: int = 0
     models_used: List[str] = field(default_factory=list)
+    api_cost_summary: Dict[str, object] = field(default_factory=dict)
 
     @property
     def total_processes(self) -> int:
@@ -318,6 +320,14 @@ def print_report(report: RunReport) -> None:
     if report.wall_clock_seconds > 0:
         print(f"  {BOLD}Wall-clock time{RESET}   : {_fmt_duration(report.wall_clock_seconds)}")
     print(f"  {BOLD}Avg iterations{RESET}    : {report.avg_iterations():.0f}")
+    cost_summary = report.api_cost_summary or {}
+    if cost_summary.get("models"):
+        print(f"  {BOLD}Net API calls{RESET}    : {cost_summary.get('total_api_calls', 0)}")
+        if cost_summary.get("has_any_cost"):
+            partial = " (partial)" if cost_summary.get("has_incomplete_costs") else ""
+            print(f"  {BOLD}Net API cost{RESET}     : ${cost_summary.get('total_cost', 0.0):.6f}{partial}")
+        else:
+            print(f"  {BOLD}Net API cost{RESET}     : unavailable")
     print()
 
     # ── Task pass rate ──
@@ -382,6 +392,18 @@ def print_report(report: RunReport) -> None:
             f"  {BOLD}{'│'} {'Total':^8} {'│'} {k_total:^8} {'│'} {'100.0%':^10} {'│'}{RESET}"
         )
         print(f"  {BOLD}{'└'}{'─' * 10}{'┴'}{'─' * 10}{'┴'}{'─' * 12}{'┘'}{RESET}")
+        print()
+
+    if cost_summary.get("models"):
+        print(f"  {BOLD}API cost by model:{RESET}")
+        header = f"  {BOLD}{'Model':<34} {'Calls':>8} {'Cost':>14}{RESET}"
+        print(header)
+        print(f"  {DIM}{'─' * 60}{RESET}")
+        models = cost_summary.get("models", {})
+        for model in sorted(models.keys()):
+            bucket = models[model]
+            cost_text = f"${bucket['cost']:.6f}" if bucket.get("has_cost") else "unavailable"
+            print(f"  {CYAN}{model:<34}{RESET} {bucket['api_calls']:>8} {cost_text:>14}")
         print()
 
     # ── Error breakdown ──
@@ -487,6 +509,7 @@ def build_report(log_dirs: List[str], wall_clock: float = 0.0) -> RunReport:
     """Build a report from one or more log directories."""
     report = RunReport(log_dirs=log_dirs, wall_clock_seconds=wall_clock)
     seen_models: Set[str] = set()
+    seen_run_dirs: Set[Path] = set()
 
     for log_dir in log_dirs:
         log_path = Path(log_dir)
@@ -496,6 +519,7 @@ def build_report(log_dirs: List[str], wall_clock: float = 0.0) -> RunReport:
 
         manifest_path = log_path.parent / "manifest.json"
         launcher_log_path = log_path.parent / "launcher.log"
+        seen_run_dirs.add(log_path.parent)
 
         requested_tasks = 0
         model: Optional[str] = None
@@ -532,6 +556,44 @@ def build_report(log_dirs: List[str], wall_clock: float = 0.0) -> RunReport:
         for log_file in sorted(log_path.glob("*.log")):
             result = parse_log(log_file)
             report.results.append(result)
+
+    cost_summary = {}
+    for run_dir in sorted(seen_run_dirs):
+        run_summary = summarize_run_costs(run_dir)
+        if not cost_summary:
+            cost_summary = run_summary
+            continue
+        merged_models = dict(cost_summary.get("models", {}))
+        for model, bucket in run_summary.get("models", {}).items():
+            current = merged_models.setdefault(
+                model,
+                {
+                    "api_calls": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cached_input_tokens": 0,
+                    "cost": 0.0,
+                    "has_cost": False,
+                    "sources": [],
+                },
+            )
+            current["api_calls"] += bucket.get("api_calls", 0)
+            current["input_tokens"] += bucket.get("input_tokens", 0)
+            current["output_tokens"] += bucket.get("output_tokens", 0)
+            current["cached_input_tokens"] += bucket.get("cached_input_tokens", 0)
+            current["cost"] += bucket.get("cost", 0.0)
+            current["has_cost"] = current["has_cost"] or bucket.get("has_cost", False)
+            for source in bucket.get("sources", []):
+                if source not in current["sources"]:
+                    current["sources"].append(source)
+        cost_summary = {
+            "models": merged_models,
+            "total_api_calls": sum(v.get("api_calls", 0) for v in merged_models.values()),
+            "total_cost": sum(v.get("cost", 0.0) for v in merged_models.values() if v.get("has_cost")),
+            "has_any_cost": any(v.get("has_cost") for v in merged_models.values()),
+            "has_incomplete_costs": any(not v.get("has_cost") for v in merged_models.values()),
+        }
+    report.api_cost_summary = cost_summary
 
     return report
 

@@ -17,7 +17,7 @@ class SeedSelectionConfig:
 
     tasks_dir: Path
     target_model: str
-    target_pass_rate: float = 0.20
+    target_pass_rate: float = 0.10
     current_pass_rate: Optional[float] = None
     category: Optional[str] = None
     tom_level: Optional[int] = None

@@ -1048,7 +1048,7 @@ Always rewrite `title`, `task`, `agent_secrets`, and `team_secrets` from scratch
         selection_config = SeedSelectionConfig(
             tasks_dir=self.seed_tasks_dir,
             target_model=target_model,
-            target_pass_rate=self.calibration_stats.get("target_rate", 0.20),
+            target_pass_rate=self.calibration_stats.get("target_rate", 0.10),
             current_pass_rate=self.calibration_stats.get("rate"),
             category=self.category,
             tom_level=self._current_k_level,
@@ -1985,7 +1985,7 @@ SUMMARY:"""
                 mode_results["standard"],
                 mode_results["baseline"],
                 current_rate=self.calibration_stats.get("rate"),
-                target_rate=self.calibration_stats.get("target_rate", 0.20),
+                target_rate=self.calibration_stats.get("target_rate", 0.10),
                 current_passed=self.calibration_stats.get("passed"),
                 current_failed=self.calibration_stats.get("failed"),
             )

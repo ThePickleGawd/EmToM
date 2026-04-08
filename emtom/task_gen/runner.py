@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Union
 
 from emtom.task_gen.event_log import append_event, maybe_int, write_run_manifest, write_worker_snapshot
+from emtom.api_costs import format_cost_summary, summarize_worker_costs
 from emtom.task_gen.external_agent import ExternalAgentError, ExternalAgentLauncher
 from emtom.task_gen.authoring_surface import (
     AUTHORING_ITEMS_NOTICE,
@@ -47,7 +48,7 @@ def parse_extra_args():
     parser.add_argument("--retry-verification", type=str, default=None)
     parser.add_argument("--target-model", type=str, default=None)
     parser.add_argument("--calibration-model", type=str, default="gpt-5.2")
-    parser.add_argument("--target-pass-rate", type=float, default=0.20)
+    parser.add_argument("--target-pass-rate", type=float, default=0.10)
     parser.add_argument(
         "--category",
         type=str,
@@ -57,6 +58,7 @@ def parse_extra_args():
     parser.add_argument("--seed-tasks-dir", type=str, default=None)
     parser.add_argument("--seed-pass-ratio", type=float, default=0.20)
     parser.add_argument("--seed-fail-ratio", type=float, default=0.80)
+    parser.add_argument("--mode", type=str, default="standard", choices=["standard", "hard"])
     parser.add_argument("--sampled-tasks-dir", type=str, default=None)
     parser.add_argument("--no-icl", action="store_true",
                         help="Disable ICL: do not prepare calibration-based sampled tasks")
@@ -378,7 +380,7 @@ def main() -> None:
         target_model = extra_args.target_model or extra_args.calibration_model
     if not target_model:
         target_model = "gpt-5.2"
-    target_pass_rate = extra_args.target_pass_rate if extra_args else 0.20
+    target_pass_rate = extra_args.target_pass_rate if extra_args else 0.10
     category = extra_args.category if extra_args else None
     seed_tasks_dir_arg = extra_args.seed_tasks_dir if extra_args else None
     seed_pass_ratio = extra_args.seed_pass_ratio if extra_args else 0.20
@@ -455,6 +457,7 @@ def main() -> None:
         generation_stdout_log = str(_resolve_generation_path(generation_stdout_log))
     generation_run_dir.mkdir(parents=True, exist_ok=True)
     generation_worker_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["EMTOM_API_USAGE_LOG"] = str(generation_worker_dir / "api_usage.jsonl")
 
     sampled_tasks_dir = working_dir / "sampled_tasks"
     sampled_tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -629,6 +632,7 @@ def main() -> None:
         fail_reason="",
         status="running",
         agent_trace_path=str(generation_worker_dir / "agent_trace.json"),
+        api_usage_log_path=str(generation_worker_dir / "api_usage.jsonl"),
         stdout_log_path=generation_stdout_log,
     )
     if generation_stdout_log:
@@ -724,6 +728,11 @@ def main() -> None:
         submitted_tasks=final_submitted_tasks,
         workspace_path=str(working_dir),
     )
+    cost_summary = summarize_worker_costs(generation_worker_dir)
+    write_worker_snapshot(
+        generation_worker_dir,
+        api_cost_summary=cost_summary,
+    )
     append_event(
         generation_worker_dir,
         "generation_finished",
@@ -737,6 +746,7 @@ def main() -> None:
         fail_reason=final_state.get("fail_reason", ""),
         submitted_tasks=final_state.get("submitted_tasks", []),
         submitted_count=len(final_state.get("submitted_tasks", [])),
+        api_cost_summary=cost_summary,
     )
 
     print()
@@ -749,6 +759,9 @@ def main() -> None:
     print(f"Workspace retained at: {working_dir}")
     for task_path in final_state.get("submitted_tasks", []):
         print(f"  - {task_path}")
+    print()
+    for line in format_cost_summary(cost_summary):
+        print(line)
 
     if final_state.get("failed"):
         raise SystemExit(final_state.get("fail_reason") or "Task generation failed.")

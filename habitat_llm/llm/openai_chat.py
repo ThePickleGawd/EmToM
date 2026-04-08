@@ -15,6 +15,7 @@ from openai import OpenAI
 # Suppress verbose httpx logs from OpenAI client
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
+from emtom.api_costs import maybe_append_usage_event
 from habitat_llm.llm.base_llm import BaseLLM, Prompt
 
 # Load .env file if it exists (for API keys)
@@ -175,6 +176,26 @@ class OpenAIChat(BaseLLM):
                     chunks.append(text)
         return "".join(chunks)
 
+    @staticmethod
+    def _extract_usage(response: Any) -> Dict[str, int]:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return {}
+        if hasattr(usage, "model_dump"):
+            usage = usage.model_dump()
+        elif hasattr(usage, "dict"):
+            usage = usage.dict()
+        if not isinstance(usage, dict):
+            return {}
+
+        prompt_details = usage.get("prompt_tokens_details") or {}
+        input_details = usage.get("input_tokens_details") or {}
+        return {
+            "input_tokens": usage.get("prompt_tokens", usage.get("input_tokens", 0)),
+            "output_tokens": usage.get("completion_tokens", usage.get("output_tokens", 0)),
+            "cached_input_tokens": prompt_details.get("cached_tokens", input_details.get("cached_tokens", 0)),
+        }
+
     def __init__(self, conf: DictConfig):
         """
         Initialize the chat model.
@@ -290,6 +311,12 @@ class OpenAIChat(BaseLLM):
                 response_kwargs["instructions"] = self.llm_conf.system_message
             response = self.client.responses.create(**response_kwargs)
             text_response = self._extract_response_text(response)
+            maybe_append_usage_event(
+                provider="openai",
+                model=params["model"],
+                usage=self._extract_usage(response),
+                source="habitat_llm.openai_chat.responses",
+            )
         else:
             # Chat Completions API path
             completion_kwargs: Dict[str, Any] = {
@@ -317,6 +344,12 @@ class OpenAIChat(BaseLLM):
 
             response = self.client.chat.completions.create(**completion_kwargs)
             text_response = response.choices[0].message.content
+            maybe_append_usage_event(
+                provider="openai",
+                model=params["model"],
+                usage=self._extract_usage(response),
+                source="habitat_llm.openai_chat.chat_completions",
+            )
         self.response = text_response
 
         # Update message history

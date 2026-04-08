@@ -22,7 +22,7 @@ def test_build_external_taskgen_prompt_inlines_runtime_context(tmp_path):
         },
         calibration_stats={
             "model": "gpt-5.2",
-            "target_rate": 0.20,
+            "target_rate": 0.10,
             "rate": 0.45,
         },
         current_k_level=2,

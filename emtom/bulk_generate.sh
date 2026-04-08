@@ -222,6 +222,7 @@ OUTPUT_DIR="data/emtom/tasks"
 TASK_GEN_AGENT="mini"
 EXTRA_ARGS=()  # Extra args forwarded verbatim to run_emtom.sh generate
 DIFFICULTY=""
+MODE="standard"
 K_LEVEL=""  # Allowed k-levels (e.g. "2 3"). Empty = random per task.
 K_DISTRIBUTION=""  # Slot distribution (e.g. "1:2,2:3,3:3"). Overrides --k-level.
 REMOVE_STEPS=""  # Skip pipeline components (e.g. "pddl llm-council simulation task-evolution")
@@ -243,6 +244,7 @@ print_usage() {
     echo "  --task-gen-agent A  External generator agent: mini|claude|codex (default: mini)"
     echo "  --category C [C ..] Categories to generate (cooperative, competitive, mixed). Default: all 3."
     echo "  --difficulty LEVEL  Difficulty for generation (easy, medium, hard)"
+    echo "  --mode MODE         Generation mode preset: standard|hard (default: $MODE)"
     echo "  --k-level L [L ...] Allowed k-levels, e.g. --k-level 2 3 (default: random per task)"
     echo "  --k-distribution D  Slots per k-level, e.g. 1:2,2:3,3:3 = 2 slots K=1, 3 K=2, 3 K=3"
     echo "                      Slot counts must sum to --per-gpu. Overrides --k-level."
@@ -309,6 +311,14 @@ while [[ $# -gt 0 ]]; do
             DIFFICULTY=$2
             if [[ "$DIFFICULTY" != "easy" && "$DIFFICULTY" != "medium" && "$DIFFICULTY" != "hard" ]]; then
                 echo "Error: --difficulty must be 'easy', 'medium', or 'hard'"
+                exit 1
+            fi
+            shift 2
+            ;;
+        --mode)
+            MODE=$2
+            if [[ "$MODE" != "standard" && "$MODE" != "hard" ]]; then
+                echo "Error: --mode must be 'standard' or 'hard'"
                 exit 1
             fi
             shift 2
@@ -395,8 +405,8 @@ if [ "$SHOW_QUEUE_STATUS" = true ]; then
 fi
 
 for extra_arg in "${EXTRA_ARGS[@]}"; do
-    if [[ "$extra_arg" == "--num-tasks" || "$extra_arg" == "--tasks" ]]; then
-        echo -e "${RED}Error: bulk_generate.sh owns task count. Use top-level --num-tasks instead of forwarding ${extra_arg}.${NC}"
+    if [[ "$extra_arg" == "--num-tasks" || "$extra_arg" == "--tasks" || "$extra_arg" == "--mode" ]]; then
+        echo -e "${RED}Error: bulk_generate.sh owns task count and mode. Use top-level --num-tasks/--mode instead of forwarding ${extra_arg}.${NC}"
         exit 1
     fi
 done
@@ -493,6 +503,7 @@ echo -e "Categories:         ${GREEN}${CATEGORIES[*]}${NC}"
 echo -e "Model:              ${GREEN}$MODEL${NC}"
 echo -e "Task-gen agent:     ${GREEN}$TASK_GEN_AGENT${NC}"
 [ -n "$DIFFICULTY" ] && echo -e "Difficulty:         ${GREEN}$DIFFICULTY${NC}"
+echo -e "Mode:              ${GREEN}$MODE${NC}"
 [ -n "$REMOVE_STEPS" ] && echo -e "Skipping steps:     ${GREEN}$REMOVE_STEPS${NC}"
 if [ -n "$K_DISTRIBUTION" ]; then
     echo -e "K-distribution:     ${GREEN}${K_DISTRIBUTION}${NC} (per GPU: ${SLOT_K_LEVELS[*]})"
@@ -532,6 +543,7 @@ build_worker_command() {
         ./emtom/run_emtom.sh generate
         --task-gen-agent "$TASK_GEN_AGENT"
         --model "$MODEL"
+        --mode "$MODE"
         --num-tasks 1
         --category "$category"
         --output-dir "$TASK_DIR"

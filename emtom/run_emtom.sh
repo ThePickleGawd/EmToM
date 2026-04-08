@@ -165,8 +165,9 @@ SAMPLED_TASKS_DIR=""  # Pre-built sampled_tasks directory (skips random sampling
 OUTPUT_DIR=""  # Override output directory for generate/benchmark
 SCENE_DATA_FILE=""  # Optional scene data JSON for static verification
 DIFFICULTY=""  # Difficulty level for judge context: easy, medium, hard
+MODE="standard"  # Generation mode preset: standard (80/20, <=10%) or hard (90/10, <=3%)
 TARGET_MODEL="gpt-5.2"  # Model that generation is targeting for seed selection + calibration
-TARGET_PASS_RATE="0.20"  # Desired pass rate for TARGET_MODEL
+TARGET_PASS_RATE="0.10"  # Desired pass rate for TARGET_MODEL
 TEST_MODEL=""  # Override model used for test_task calibration
 K_LEVEL=""  # Allowed k-levels (e.g. "2 3"). Empty = random per task.
 STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
@@ -187,6 +188,9 @@ TOM_L2_EXPLICIT=false
 TOM_L3_EXPLICIT=false
 SUBTASKS_MIN_EXPLICIT=false
 SUBTASKS_MAX_EXPLICIT=false
+TARGET_PASS_RATE_EXPLICIT=false
+SEED_PASS_RATIO_EXPLICIT=false
+SEED_FAIL_RATIO_EXPLICIT=false
 
 print_usage() {
     echo -e "${BOLD}EMTOM Benchmark Pipeline${NC}"
@@ -259,12 +263,13 @@ print_usage() {
     echo "  --subtasks-max N     Maximum subtasks per task (default: $SUBTASKS_MAX)"
     echo "  --iterations-per-task N   Max iterations per task (default: 100)"
     echo "  --task-gen-agent NAME External generator agent: mini|claude|codex (default: $TASK_GEN_AGENT)"
+    echo "  --mode MODE          Generation mode: standard|hard (default: $MODE)"
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
     echo "  --retry-verification FILE  Retry generation using required fixes from failed ToM verification"
     echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
     echo "  --seed-tasks-dir DIR Task pool for sampled_tasks selection (default: output dir, then data/emtom/tasks)"
     echo "  --target-model MODEL Model the generator is targeting for calibration + seed selection (default: $TARGET_MODEL)"
-    echo "  --target-pass-rate R Desired pass rate for --target-model (default: $TARGET_PASS_RATE = 20%)"
+    echo "  --target-pass-rate R Desired pass rate for --target-model (mode default: standard=10%, hard=3%)"
     echo "  --seed-pass-ratio R  Logical fraction of selected seeds that should pass the target model (default: $SEED_PASS_RATIO)"
     echo "  --seed-fail-ratio R  Logical fraction of selected seeds that should fail the target model (default: $SEED_FAIL_RATIO)"
     echo "  --sampled-tasks-dir DIR  Pre-built sampled_tasks directory (skips random sampling)"
@@ -313,7 +318,7 @@ print_usage() {
     echo ""
     echo -e "${BOLD}Seed Loop:${NC}"
     echo "  Evolution is now the normal generate loop."
-    echo "  Use --target-model, --target-pass-rate, --seed-tasks-dir, and optional seed pass/fail ratios with generate."
+    echo "  Use --mode standard for the 80/20 sampled-task mix or --mode hard for the 90/10 mix. You can still override --target-pass-rate and seed pass/fail ratios directly."
     echo "  Seed selection populates sampled_tasks/ for inspiration only; working_task.json starts from the blank template."
     echo "  ./emtom/run_emtom.sh evolve ... still works as a deprecated alias for generate."
     echo ""
@@ -471,6 +476,7 @@ run_generate() {
     echo "Iterations per task: $ITERATIONS_PER_TASK"
     echo "K-level: ${K_LEVEL:-random per task}"
     echo "Target model: $TARGET_MODEL"
+    echo "Mode: $MODE"
     echo "Target pass rate: $TARGET_PASS_RATE"
     echo "Seed pass ratio: $SEED_PASS_RATIO"
     echo "Seed fail ratio: $SEED_FAIL_RATIO"
@@ -509,6 +515,9 @@ run_generate() {
     fi
     if [ -n "$TARGET_MODEL" ]; then
         EXTRA_ARGS+=(--target-model "$TARGET_MODEL")
+    fi
+    if [ -n "$MODE" ]; then
+        EXTRA_ARGS+=(--mode "$MODE")
     fi
     if [ -n "$TARGET_PASS_RATE" ]; then
         EXTRA_ARGS+=(--target-pass-rate "$TARGET_PASS_RATE")
@@ -756,7 +765,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
             PARALLEL_CMD="$PARALLEL_CMD --no-calibration"
         fi
         eval $PARALLEL_CMD
-        python -m emtom.utils.task_summary --stats "$TASK_DIR"
+        python -m emtom.scripts.print_benchmark_summary --output-dir "$OUTPUT_BASE" --model "$MODEL_SHORT" --parallel
     else
         # ── Sequential mode: one run_habitat_benchmark.py per agent-count group ──
         for NUM_AGENTS in $AGENT_COUNTS; do
@@ -814,7 +823,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
             fi
             eval $CALIBRATION_CMD
         fi
-        python -m emtom.utils.task_summary --stats "$TASK_DIR"
+        python -m emtom.scripts.print_benchmark_summary --output-dir "$OUTPUT_BASE" --model "$MODEL_SHORT"
     fi
 }
 
@@ -1330,6 +1339,14 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2
             ;;
+        --mode)
+            MODE=$2
+            if [[ "$MODE" != "standard" && "$MODE" != "hard" ]]; then
+                echo "Error: --mode must be 'standard' or 'hard'"
+                exit 1
+            fi
+            shift 2
+            ;;
         --test-model)
             TEST_MODEL=$2
             shift 2
@@ -1340,14 +1357,17 @@ while [[ $# -gt 0 ]]; do
             ;;
         --target-pass-rate)
             TARGET_PASS_RATE=$2
+            TARGET_PASS_RATE_EXPLICIT=true
             shift 2
             ;;
         --seed-pass-ratio)
             SEED_PASS_RATIO=$2
+            SEED_PASS_RATIO_EXPLICIT=true
             shift 2
             ;;
         --seed-fail-ratio)
             SEED_FAIL_RATIO=$2
+            SEED_FAIL_RATIO_EXPLICIT=true
             shift 2
             ;;
         --tom-target-l1)
@@ -1509,6 +1529,20 @@ if [ -n "$DIFFICULTY" ]; then
             ;;
     esac
 fi
+
+# Apply generation mode presets for flags not explicitly set
+case $MODE in
+    standard)
+        [ "$TARGET_PASS_RATE_EXPLICIT" = false ] && TARGET_PASS_RATE="0.10"
+        [ "$SEED_PASS_RATIO_EXPLICIT" = false ] && SEED_PASS_RATIO="0.20"
+        [ "$SEED_FAIL_RATIO_EXPLICIT" = false ] && SEED_FAIL_RATIO="0.80"
+        ;;
+    hard)
+        [ "$TARGET_PASS_RATE_EXPLICIT" = false ] && TARGET_PASS_RATE="0.03"
+        [ "$SEED_PASS_RATIO_EXPLICIT" = false ] && SEED_PASS_RATIO="0.10"
+        [ "$SEED_FAIL_RATIO_EXPLICIT" = false ] && SEED_FAIL_RATIO="0.90"
+        ;;
+esac
 
 if [ -z "$COMMAND" ]; then
     print_usage

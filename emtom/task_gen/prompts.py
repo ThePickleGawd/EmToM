@@ -221,7 +221,7 @@ def build_external_taskgen_prompt(
     else:
         calibration_stats = calibration_stats or {}
         model = calibration_stats.get("model", "unknown")
-        target_rate = calibration_stats.get("target_rate", 0.20)
+        target_rate = calibration_stats.get("target_rate", 0.10)
         current_rate = calibration_stats.get("rate")
         if current_rate is None:
             calibration_text = (
@@ -256,7 +256,7 @@ def build_external_taskgen_prompt(
             if cs.get("total", 0) > 0:
                 cat_lines.append(f"  {cat_name}: {cs['rate']:.0%} pass ({cs['passed']}/{cs['total']})")
         if cat_lines:
-            calibration_text += "\n\nPer-category standard pass rates (each targeting 20%):\n" + "\n".join(cat_lines)
+            calibration_text += f"\n\nPer-category standard pass rates (each targeting {target_rate:.0%}):\n" + "\n".join(cat_lines)
 
         calibration_block = f"\n\n## Dataset Calibration\n{calibration_text}"
 

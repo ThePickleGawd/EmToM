@@ -484,7 +484,7 @@ class TaskGenSession:
         task_dirs = self.state.get("calibration_tasks_dirs") or [self.state.get("output_dir")]
         current = self.state.get("calibration_stats") or {}
         model = current.get("model") or self.state.get("test_model") or "gpt-5.2"
-        target_rate = current.get("target_rate", 0.20)
+        target_rate = current.get("target_rate", 0.10)
         stats = compute_calibration_stats(task_dirs, model)
         stats["target_rate"] = target_rate
         self.state["calibration_stats"] = stats
@@ -1091,7 +1091,7 @@ class TaskGenSession:
                 mode_results["standard"],
                 mode_results["baseline"],
                 current_rate=cal_rate,
-                target_rate=calibration_stats.get("target_rate", 0.20),
+                target_rate=calibration_stats.get("target_rate", 0.10),
                 current_passed=cal_passed,
                 current_failed=cal_failed,
             )

@@ -25,10 +25,10 @@ Task generation should optimize for functional ToM, not just literal ToM:
 
 Task generation runs through an external SWE-agent CLI (`mini`, `claude`, or `codex`) inside a repo-local workspace under `tmp/task_gen/`. The agent executable may come from the operator environment, but each task-generation run gets its own sandbox environment in `tmp/task_gen/<run_id>/.venv` so parallel runs stay isolated. The repo provides the prompt, sampled seed context, and a stable `taskgen` command surface for `new_scene`, `judge`, `verify_golden_trajectory`, `test_task`, `submit_task`, and `finish`.
 
-`tmp/task_gen/` is workspace-only. All generation logs and visualizer-facing artifacts live under `outputs/generations/<run_id>/`, including the run manifest, per-worker status snapshots, normalized EMTOM event logs, backend-native agent traces such as `agent_trace.json`, and any bulk-launcher stdout logs. The visualizer reads those files live in dev through filesystem-backed endpoints; it does not rely on a generated generation-data snapshot.
+`tmp/task_gen/` is workspace-only. All generation logs and visualizer-facing artifacts live under `outputs/generations/<run_id>/`, including the run manifest, per-worker status snapshots, normalized EMTOM event logs, backend-native agent traces such as `agent_trace.json`, internal API-usage ledgers such as `api_usage.jsonl`, and any bulk-launcher stdout logs. The visualizer and post-run summaries should treat those artifacts as the source of truth for per-model API call counts and generation cost accounting; they do not rely on a generated generation-data snapshot.
 
 There is no separate evolution pipeline. Difficulty shaping happens inside normal task generation:
-- the sampled-task selector uses target-model calibration data and an explicit pass/fail mix, defaulting to 80% failed examples and 20% passed examples
+- the sampled-task selector uses target-model calibration data and an explicit pass/fail mix, defaulting to 80% failed examples and 20% passed examples in standard generation, and 90% failed examples plus 10% passed examples in hard generation
 - `new_scene` always creates `working_task.json` from the blank template with the requested number of agents
 - sampled examples are inspiration only; they are not loaded directly into the authored task
 
@@ -56,7 +56,7 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - `verify_golden_trajectory` remains the canonical deterministic solvability gate. It proves the authored task spec is functionally solvable under the planner/runtime semantics.
 - Judge-time ToM evidence must come from the strict Fast Downward proof path. Structural or syntactic fallback metadata is not valid submission evidence.
 - `test_task` now runs `standard` plus a `baseline` solvability check. For competitive tasks, that baseline check consists of two solo-team runs, one for each side.
-- Dataset difficulty calibration uses the `standard` result only, with a target pass rate of 20% by default for the current target model.
+- Dataset difficulty calibration uses the `standard` result only, with a target pass rate of 10% by default for the current target model. Hard generation uses a stricter 3% target.
 - Calibration and sampled-task selection ignore `tom_level = 0` tasks. New submissions with `tom_level < 1` must be rejected.
 - The `test_task` acceptance gate should use the current calibrated pass/fail counts and accept only the next `standard` outcome that moves the dataset closer to the target pass rate.
 - `baseline` does not replace the planner/golden-trajectory check; it is an additional empirical check that the task becomes solvable when private information is removed.
