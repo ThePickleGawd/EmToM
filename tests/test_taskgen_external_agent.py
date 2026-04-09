@@ -4,7 +4,12 @@ from pathlib import Path
 
 from emtom.task_gen.external_agent import ExternalAgentLauncher
 from emtom.task_gen.prompts import build_external_taskgen_prompt
-from emtom.task_gen.runner import _copy_sample, _write_bootstrap_files, build_workspace_id
+from emtom.task_gen.runner import (
+    _build_run_manifest_update,
+    _copy_sample,
+    _write_bootstrap_files,
+    build_workspace_id,
+)
 from emtom.task_gen.session import TaskGenSession, default_state
 
 
@@ -145,6 +150,32 @@ def test_build_workspace_id_starts_with_timestamp():
     workspace_id = build_workspace_id("mini", now=datetime(2026, 3, 20, 16, 30, 45))
 
     assert workspace_id.startswith("2026-03-20_16-30-45-mini-")
+
+
+def test_build_run_manifest_update_preserves_launcher_owned_fields():
+    existing = {
+        "run_id": "2026-04-08_08-23-16-generation",
+        "started_at": "2026-04-08T08:23:16",
+        "mode": "bulk",
+        "total_workers": 24,
+        "requested_tasks": 50,
+        "output_dir": "data/emtom/tasks",
+        "task_gen_agent": "mini",
+        "model": "gpt-5.2",
+    }
+
+    updated = _build_run_manifest_update(
+        existing,
+        run_id="wrong-run-id",
+        generation_mode="worker-local-mode",
+        generation_total_workers=1,
+        generation_requested_tasks=1,
+        output_dir="wrong/output",
+        task_gen_agent="codex",
+        model="wrong-model",
+    )
+
+    assert updated == existing
 
 
 def test_taskgen_session_finish_and_fail(tmp_path):

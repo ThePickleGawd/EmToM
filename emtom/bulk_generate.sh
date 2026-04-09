@@ -548,6 +548,10 @@ declare -a PROCESS_INFO
 declare -a PROCESS_TASK_COUNTS
 declare -a PROCESS_GROUPS
 REQUESTED_TASKS_TOTAL="$TARGET_NEW_TASKS"
+RUN_UNTIL_ACTIVE=false
+if [ -n "$RUN_UNTIL" ]; then
+    RUN_UNTIL_ACTIVE=true
+fi
 
 build_worker_command() {
     local gpu="$1"
@@ -587,7 +591,7 @@ build_worker_command() {
 
     if [ "$DRY_RUN" = true ]; then
         printf '  EMTOM_GENERATION_RUN_ID=%q EMTOM_GENERATION_RUN_DIR=%q EMTOM_GENERATION_WORKER_ID=%q EMTOM_GENERATION_WORKER_DIR=%q EMTOM_GENERATION_TOTAL_WORKERS=%q EMTOM_GENERATION_REQUESTED_TASKS=%q EMTOM_GENERATION_MODE=%q EMTOM_GENERATION_GPU=%q EMTOM_GENERATION_SLOT=%q EMTOM_GENERATION_STDOUT_LOG=%q CUDA_VISIBLE_DEVICES=%q' \
-            "$GENERATION_RUN_ID" "$GENERATION_DIR" "$worker_id" "$worker_dir" "$ACTIVE_WORKERS" "1" "bulk" "$gpu" "$slot" "$log_file" "$gpu"
+            "$GENERATION_RUN_ID" "$GENERATION_DIR" "$worker_id" "$worker_dir" "$ACTIVE_WORKERS" "$REQUESTED_TASKS_TOTAL" "bulk" "$gpu" "$slot" "$log_file" "$gpu"
         printf ' %q' "${cmd[@]}"
         printf '\n'
         return
@@ -599,7 +603,7 @@ build_worker_command() {
         EMTOM_GENERATION_WORKER_ID="$worker_id" \
         EMTOM_GENERATION_WORKER_DIR="$worker_dir" \
         EMTOM_GENERATION_TOTAL_WORKERS="$ACTIVE_WORKERS" \
-        EMTOM_GENERATION_REQUESTED_TASKS="1" \
+        EMTOM_GENERATION_REQUESTED_TASKS="$REQUESTED_TASKS_TOTAL" \
         EMTOM_GENERATION_MODE="bulk" \
         EMTOM_GENERATION_GPU="$gpu" \
         EMTOM_GENERATION_SLOT="$slot" \
@@ -701,18 +705,20 @@ succeeded=0
 submitted_total=0
 stop_reason=""
 
-# Track per-slot attempt counters and active PIDs
-declare -a SLOT_PIDS       # Current PID for each slot (-1 = stopped)
-declare -a SLOT_ATTEMPTS   # Number of attempts for each slot
-declare -a SLOT_INFO       # Last info string for each slot
+# Track per-slot worker sequence, failure streak, and active PIDs
+declare -a SLOT_PIDS            # Current PID for each slot (-1 = stopped)
+declare -a SLOT_WORKER_SEQ      # Monotonic worker launch number per slot
+declare -a SLOT_FAILURE_STREAK  # Consecutive failures for the current slot
+declare -a SLOT_INFO            # Last info string for each slot
 
 for ((i=0; i<ACTIVE_WORKERS; i++)); do
     SLOT_PIDS[$i]=${PIDS[$i]}
-    SLOT_ATTEMPTS[$i]=1
+    SLOT_WORKER_SEQ[$i]=1
+    SLOT_FAILURE_STREAK[$i]=0
     SLOT_INFO[$i]=${PROCESS_INFO[$i]}
 done
 
-MAX_ATTEMPTS_PER_SLOT=20  # Reset a slot after this many consecutive failures when --run-until is active
+MAX_FAILURES_PER_SLOT=20  # Reset a slot after this many consecutive failures when --run-until is active
 
 # ── Main respawn loop: poll workers, respawn on success, stop on fail ──
 while true; do
@@ -734,11 +740,13 @@ while true; do
         fi
     done
     if [ "$all_stopped" = true ]; then
-        if [ -n "$RUN_UNTIL" ] && [ "$new_tasks" -lt "$TARGET_NEW_TASKS" ]; then
+        if [ "$RUN_UNTIL_ACTIVE" = true ] && [ "$new_tasks" -lt "$TARGET_NEW_TASKS" ]; then
             echo -e "${YELLOW}[RESTART]${NC} All slots stopped before reaching ${TARGET_NEW_TASKS} new tasks. Relaunching a fresh wave."
             for ((i=0; i<ACTIVE_WORKERS; i++)); do
-                SLOT_ATTEMPTS[$i]=1
-                launch_single_worker "$i" 1
+                SLOT_FAILURE_STREAK[$i]=0
+                next_seq=$((SLOT_WORKER_SEQ[$i] + 1))
+                SLOT_WORKER_SEQ[$i]=$next_seq
+                launch_single_worker "$i" "$next_seq"
                 SLOT_PIDS[$i]=${PIDS[-1]}
                 SLOT_INFO[$i]=${PROCESS_INFO[-1]}
             done
@@ -764,7 +772,7 @@ while true; do
             # SUCCESS: worker submitted 1 task
             succeeded=$((succeeded + 1))
             submitted_total=$((submitted_total + 1))
-            SLOT_ATTEMPTS[$i]=1  # Reset attempt counter on success
+            SLOT_FAILURE_STREAK[$i]=0
 
             new_tasks=$(($(count_output_tasks) - BASELINE_TASK_COUNT))
             echo -e "${GREEN}[DONE]${NC} ${SLOT_INFO[$i]}  (${new_tasks}/${TARGET_NEW_TASKS} new tasks so far)"
@@ -775,32 +783,36 @@ while true; do
             fi
 
             # Respawn this slot with a fresh worker
-            next_attempt=$((SLOT_ATTEMPTS[$i] + 1))
-            SLOT_ATTEMPTS[$i]=$next_attempt
-            launch_single_worker "$i" "$next_attempt"
+            next_seq=$((SLOT_WORKER_SEQ[$i] + 1))
+            SLOT_WORKER_SEQ[$i]=$next_seq
+            launch_single_worker "$i" "$next_seq"
             SLOT_PIDS[$i]=${PIDS[-1]}
             SLOT_INFO[$i]=${PROCESS_INFO[-1]}
         else
-            # FAIL: worker exited non-zero — stop this slot
+            # FAIL: worker exited non-zero
             failed=$((failed + 1))
-            attempt_num=${SLOT_ATTEMPTS[$i]}
+            streak=$((SLOT_FAILURE_STREAK[$i] + 1))
+            SLOT_FAILURE_STREAK[$i]=$streak
 
-            if [ "$attempt_num" -ge "$MAX_ATTEMPTS_PER_SLOT" ]; then
-                if [ -n "$RUN_UNTIL" ]; then
-                    echo -e "${YELLOW}[RETRY]${NC} ${SLOT_INFO[$i]}  (${attempt_num}/${MAX_ATTEMPTS_PER_SLOT} failed attempts, resetting slot because --run-until is active)"
-                    SLOT_ATTEMPTS[$i]=1
-                    launch_single_worker "$i" 1
+            if [ "$RUN_UNTIL_ACTIVE" != true ]; then
+                echo -e "${RED}[FAIL]${NC} ${SLOT_INFO[$i]}  (slot stopped)"
+                SLOT_PIDS[$i]=-1
+                continue
+            fi
+
+            if [ "$streak" -ge "$MAX_FAILURES_PER_SLOT" ]; then
+                    echo -e "${YELLOW}[RETRY]${NC} ${SLOT_INFO[$i]}  (${streak}/${MAX_FAILURES_PER_SLOT} failed attempts, resetting slot because --run-until is active)"
+                    SLOT_FAILURE_STREAK[$i]=0
+                    next_seq=$((SLOT_WORKER_SEQ[$i] + 1))
+                    SLOT_WORKER_SEQ[$i]=$next_seq
+                    launch_single_worker "$i" "$next_seq"
                     SLOT_PIDS[$i]=${PIDS[-1]}
                     SLOT_INFO[$i]=${PROCESS_INFO[-1]}
-                else
-                    echo -e "${RED}[FAIL]${NC} ${SLOT_INFO[$i]}  (${attempt_num}/${MAX_ATTEMPTS_PER_SLOT} attempts, slot stopped)"
-                    SLOT_PIDS[$i]=-1
-                fi
             else
-                echo -e "${YELLOW}[FAIL]${NC} ${SLOT_INFO[$i]}  (attempt ${attempt_num}/${MAX_ATTEMPTS_PER_SLOT}, respawning)"
-                next_attempt=$((attempt_num + 1))
-                SLOT_ATTEMPTS[$i]=$next_attempt
-                launch_single_worker "$i" "$next_attempt"
+                echo -e "${YELLOW}[FAIL]${NC} ${SLOT_INFO[$i]}  (attempt ${streak}/${MAX_FAILURES_PER_SLOT}, respawning)"
+                next_seq=$((SLOT_WORKER_SEQ[$i] + 1))
+                SLOT_WORKER_SEQ[$i]=$next_seq
+                launch_single_worker "$i" "$next_seq"
                 SLOT_PIDS[$i]=${PIDS[-1]}
                 SLOT_INFO[$i]=${PROCESS_INFO[-1]}
             fi

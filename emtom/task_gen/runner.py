@@ -22,7 +22,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Union
 
-from emtom.task_gen.event_log import append_event, maybe_int, write_run_manifest, write_worker_snapshot
+from emtom.task_gen.event_log import (
+    append_event,
+    load_run_manifest,
+    maybe_int,
+    write_run_manifest,
+    write_worker_snapshot,
+)
 from emtom.api_costs import format_cost_summary, summarize_worker_costs
 from emtom.task_gen.external_agent import ExternalAgentError, ExternalAgentLauncher
 from emtom.task_gen.authoring_surface import (
@@ -89,6 +95,29 @@ def parse_extra_args():
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
     return args
+
+
+def _build_run_manifest_update(
+    existing_manifest: Dict[str, Any],
+    *,
+    run_id: str,
+    generation_mode: str,
+    generation_total_workers: Optional[int],
+    generation_requested_tasks: Optional[int],
+    output_dir: str,
+    task_gen_agent: str,
+    model: str,
+) -> Dict[str, Any]:
+    return {
+        "run_id": existing_manifest.get("run_id") or run_id,
+        "started_at": existing_manifest.get("started_at") or datetime.now().isoformat(),
+        "mode": existing_manifest.get("mode") or generation_mode,
+        "total_workers": existing_manifest.get("total_workers") or generation_total_workers,
+        "requested_tasks": existing_manifest.get("requested_tasks") or generation_requested_tasks,
+        "output_dir": existing_manifest.get("output_dir") or output_dir,
+        "task_gen_agent": existing_manifest.get("task_gen_agent") or task_gen_agent,
+        "model": existing_manifest.get("model") or model,
+    }
 
 
 def parse_runner_args(argv: list[str]) -> Dict[str, Any]:
@@ -597,16 +626,19 @@ def main() -> None:
     state["task_gen_llm_provider"] = llm_provider
     with open(working_dir / "taskgen_state.json", "w") as f:
         json.dump(state, f, indent=2)
+    existing_manifest = load_run_manifest(str(generation_run_dir))
     write_run_manifest(
         generation_run_dir,
-        run_id=generation_run_id,
-        started_at=datetime.now().isoformat(),
-        mode=generation_mode,
-        total_workers=generation_total_workers,
-        requested_tasks=generation_requested_tasks,
-        output_dir=output_dir,
-        task_gen_agent=task_gen_agent,
-        model=model,
+        **_build_run_manifest_update(
+            existing_manifest,
+            run_id=generation_run_id,
+            generation_mode=generation_mode,
+            generation_total_workers=generation_total_workers,
+            generation_requested_tasks=generation_requested_tasks,
+            output_dir=output_dir,
+            task_gen_agent=task_gen_agent,
+            model=model,
+        ),
     )
     write_worker_snapshot(
         generation_worker_dir,
