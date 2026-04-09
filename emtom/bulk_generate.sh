@@ -219,7 +219,7 @@ NUM_TASKS=""
 RUN_UNTIL=""
 DRY_RUN=false
 CATEGORY_FILTER=""  # Empty = all 3 categories (round-robin)
-DEFAULT_OUTPUT_ROOT="emtom/tasks"
+DEFAULT_OUTPUT_ROOT="data/emtom/tasks"
 OUTPUT_DIR=""
 OUTPUT_DIR_EXPLICIT=false
 TASK_GEN_AGENT="mini"
@@ -278,7 +278,7 @@ print_usage() {
     echo "  --remove STEP [...] Skip pipeline components: pddl, llm-council, simulation, task-evolution, tom, structure, test"
     echo "                      Default for bulk runs: $DEFAULT_REMOVE_STEPS"
     echo "  --output-dir DIR    Output directory for submitted tasks"
-    echo "                      Default: emtom/tasks/YYYYMMDD/generation_N"
+    echo "                      Default: data/emtom/tasks/YYYYMMDD/generation_N"
     echo "  --dry-run           Show commands without executing"
     echo "  --queue-status      Show current queue status and exit"
     echo ""
