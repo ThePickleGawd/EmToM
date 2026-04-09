@@ -382,6 +382,7 @@ def default_state(
         "last_test_passed": False,
         "last_submission_verification_passed": False,
         "last_submission_verification_results": {},
+        "last_submission_verification_spec_hash": None,
         "last_verified_spec_hash": None,
         "last_verified_trajectory_hash": None,
         "consecutive_judge_failures": 0,
@@ -503,6 +504,7 @@ class TaskGenSession:
         self.state["last_test_passed"] = False
         self.state["last_submission_verification_passed"] = False
         self.state["last_submission_verification_results"] = {}
+        self.state["last_submission_verification_spec_hash"] = None
         self.state["last_verified_spec_hash"] = None
         self.state["last_verified_trajectory_hash"] = None
         self.state["consecutive_judge_failures"] = 0
@@ -527,6 +529,7 @@ class TaskGenSession:
             "last_test_passed": self.state.get("last_test_passed", False),
             "last_submission_verification_passed": self.state.get("last_submission_verification_passed", False),
             "last_submission_verification_results": self.state.get("last_submission_verification_results", {}),
+            "last_submission_verification_spec_hash": self.state.get("last_submission_verification_spec_hash"),
             "last_verified_spec_hash": self.state.get("last_verified_spec_hash"),
             "last_verified_trajectory_hash": self.state.get("last_verified_trajectory_hash"),
             "scene_loaded": scene_data is not None,
@@ -1148,12 +1151,17 @@ class TaskGenSession:
             _deps_err = str(e)
 
         if not _deps_ok:
+            from emtom.pddl.planner import compute_task_spec_hash
+
+            spec_hash = compute_task_spec_hash(task_data)
             self.state["last_submission_verification_passed"] = True
+            self.state["last_submission_verification_spec_hash"] = spec_hash
             self.state["last_submission_verification_results"] = {
                 "skipped": True,
                 "reason": f"Skipped simulator verification due to missing deps: {_deps_err}",
-                "required_failures": 2,
+                "required_failures": len(SUBMISSION_VERIFICATION_MODELS),
                 "models": SUBMISSION_VERIFICATION_MODELS,
+                "spec_hash": spec_hash,
             }
             self._write_state()
             payload = dict(validation_result["data"])
@@ -1168,6 +1176,7 @@ class TaskGenSession:
         self.state["_verification_run_count"] = run_count
         self.state["last_submission_verification_passed"] = False
         self.state["last_submission_verification_results"] = {}
+        self.state["last_submission_verification_spec_hash"] = None
         self._write_state()
         run_dir = self.trajectories_dir / f"task_{current_task_num}" / f"verification_{run_count}"
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -1229,7 +1238,10 @@ class TaskGenSession:
             else:
                 failed_models.append(model)
 
+        from emtom.pddl.planner import compute_task_spec_hash
+
         required_failures = len(SUBMISSION_VERIFICATION_MODELS)
+        spec_hash = compute_task_spec_hash(task_data)
         gate_passed = len(failed_models) == required_failures
         verification_payload = {
             "required_failures": required_failures,
@@ -1238,6 +1250,7 @@ class TaskGenSession:
             "failed_models": failed_models,
             "passed_models": passed_models,
             "trajectory_dir": str(run_dir),
+            "spec_hash": spec_hash,
             "message": (
                 "Submission verification passed. All verification models failed."
                 if gate_passed
@@ -1249,6 +1262,7 @@ class TaskGenSession:
 
         self.state["last_submission_verification_passed"] = gate_passed
         self.state["last_submission_verification_results"] = verification_payload
+        self.state["last_submission_verification_spec_hash"] = spec_hash if gate_passed else None
         self._write_state()
 
         payload = dict(validation_result["data"])

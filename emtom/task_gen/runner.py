@@ -25,6 +25,7 @@ from typing import Any, Dict, Iterable, Optional, Union
 from emtom.task_gen.event_log import (
     append_event,
     load_run_manifest,
+    load_worker_snapshot,
     maybe_int,
     write_run_manifest,
     write_worker_snapshot,
@@ -45,7 +46,7 @@ from emtom.task_gen.seed_selector import (
     resolve_seed_tasks_dir,
     select_seed_tasks,
 )
-from emtom.task_gen.session import default_state
+from emtom.task_gen.session import TaskGenSession, default_state
 
 
 def parse_extra_args():
@@ -183,6 +184,124 @@ def build_workspace_id(task_gen_agent: str, now: Optional[datetime] = None) -> s
 def build_generation_run_id(now: Optional[datetime] = None) -> str:
     timestamp = (now or datetime.now()).strftime("%Y-%m-%d_%H-%M-%S")
     return f"{timestamp}-generation-{uuid.uuid4().hex[:8]}"
+
+
+def _build_incomplete_exit_reason(
+    final_state: Dict[str, Any],
+    worker_snapshot: Dict[str, Any],
+    return_code: int,
+) -> str:
+    last_command = worker_snapshot.get("last_command")
+    last_command_success = worker_snapshot.get("last_command_success")
+    last_command_error = worker_snapshot.get("last_command_error")
+
+    if last_command:
+        if last_command_success is False:
+            detail = f" after `{last_command}` failed"
+            if last_command_error:
+                detail += f": {last_command_error}"
+            return (
+                f"Agent exited without calling taskgen finish or taskgen fail{detail}. "
+                f"Agent exit code: {return_code}."
+            )
+        if last_command_success is True:
+            return (
+                "Agent exited without calling taskgen finish or taskgen fail "
+                f"after `{last_command}` succeeded. Agent exit code: {return_code}."
+            )
+        return (
+            "Agent exited without calling taskgen finish or taskgen fail "
+            f"after last observed command `{last_command}`. Agent exit code: {return_code}."
+        )
+
+    if final_state.get("submitted_tasks"):
+        return (
+            "Agent exited without calling taskgen finish or taskgen fail, "
+            "but tasks were submitted."
+        )
+
+    return (
+        "Agent exited without calling taskgen finish or taskgen fail and without "
+        "submitting any tasks."
+    )
+
+
+def _attempt_verified_task_submit(
+    *,
+    working_dir: Path,
+    generation_worker_dir: Path,
+    generation_run_id: str,
+    generation_worker_id: str,
+) -> Optional[str]:
+    session = TaskGenSession(str(working_dir))
+    state = session.state
+
+    if state.get("submitted_tasks"):
+        return None
+    if not state.get("last_submission_verification_passed"):
+        return None
+
+    verification_spec_hash = state.get("last_submission_verification_spec_hash")
+    if not verification_spec_hash:
+        return "verify_task passed but did not record a verified spec hash; refusing auto-submit."
+
+    try:
+        with open(working_dir / "working_task.json") as f:
+            task_data = json.load(f)
+    except Exception as exc:
+        return f"verify_task passed but working_task.json could not be reloaded for submit: {exc}"
+
+    from emtom.pddl.planner import compute_task_spec_hash
+
+    current_spec_hash = compute_task_spec_hash(task_data)
+    if current_spec_hash != verification_spec_hash:
+        return (
+            "verify_task passed, but working_task.json changed afterward; "
+            "refusing auto-submit because the verified spec is no longer current."
+        )
+
+    append_event(
+        str(generation_worker_dir),
+        "auto_submit_started",
+        run_id=generation_run_id,
+        worker_id=generation_worker_id,
+        reason="verified_task_unsubmitted",
+        spec_hash=current_spec_hash,
+    )
+    submit_result = session.submit_task()
+    append_event(
+        str(generation_worker_dir),
+        "auto_submit_finished",
+        run_id=generation_run_id,
+        worker_id=generation_worker_id,
+        success=submit_result["success"],
+        error=submit_result.get("error"),
+        data=submit_result.get("data"),
+    )
+    if not submit_result["success"]:
+        return (
+            "verify_task passed, but automatic submit_task failed: "
+            f"{submit_result.get('error') or 'unknown error'}"
+        )
+
+    if len(session.state.get("submitted_tasks", [])) >= session.state.get("num_tasks_target", 0):
+        finish_result = session.finish()
+        append_event(
+            str(generation_worker_dir),
+            "auto_finish_finished",
+            run_id=generation_run_id,
+            worker_id=generation_worker_id,
+            success=finish_result["success"],
+            error=finish_result.get("error"),
+            data=finish_result.get("data"),
+        )
+        if not finish_result["success"]:
+            return (
+                "submit_task succeeded after verify_task passed, "
+                f"but automatic finish failed: {finish_result.get('error') or 'unknown error'}"
+            )
+
+    return None
 
 
 def _copy_sample(src_path: Path, sampled_tasks_dir: Path, index: int) -> None:
@@ -743,10 +862,38 @@ def main() -> None:
         )
         raise SystemExit(str(exc)) from exc
 
+    auto_submit_error = _attempt_verified_task_submit(
+        working_dir=working_dir,
+        generation_worker_dir=generation_worker_dir,
+        generation_run_id=generation_run_id,
+        generation_worker_id=generation_worker_id,
+    )
+
     with open(working_dir / "taskgen_state.json") as f:
         final_state = json.load(f)
+    worker_snapshot = load_worker_snapshot(str(generation_worker_dir))
     final_submitted_tasks = final_state.get("submitted_tasks", [])
-    final_status = "failed" if final_state.get("failed", False) else "finished" if final_state.get("finished", False) else "stopped"
+    incomplete_exit_reason = ""
+    incomplete_exit = not final_state.get("failed", False) and not final_state.get("finished", False)
+    if incomplete_exit:
+        incomplete_exit_reason = _build_incomplete_exit_reason(
+            final_state,
+            worker_snapshot,
+            return_code,
+        )
+    if auto_submit_error:
+        incomplete_exit_reason = (
+            f"{auto_submit_error} "
+            + (incomplete_exit_reason or "")
+        ).strip()
+    effective_failed = bool(final_state.get("failed", False) or incomplete_exit)
+    final_status = (
+        "failed"
+        if effective_failed
+        else "finished"
+        if final_state.get("finished", False)
+        else "stopped"
+    )
     write_worker_snapshot(
         generation_worker_dir,
         status=final_status,
@@ -756,8 +903,8 @@ def main() -> None:
         scene_id=final_state.get("scene_id"),
         episode_id=final_state.get("episode_id"),
         finished=final_state.get("finished", False),
-        failed=final_state.get("failed", False),
-        fail_reason=final_state.get("fail_reason", ""),
+        failed=effective_failed,
+        fail_reason=final_state.get("fail_reason", "") or incomplete_exit_reason,
         submitted_tasks=final_submitted_tasks,
         workspace_path=str(working_dir),
     )
@@ -775,8 +922,8 @@ def main() -> None:
         model=model,
         return_code=return_code,
         finished=final_state.get("finished", False),
-        failed=final_state.get("failed", False),
-        fail_reason=final_state.get("fail_reason", ""),
+        failed=effective_failed,
+        fail_reason=final_state.get("fail_reason", "") or incomplete_exit_reason,
         submitted_tasks=final_state.get("submitted_tasks", []),
         submitted_count=len(final_state.get("submitted_tasks", [])),
         api_cost_summary=cost_summary,
@@ -788,7 +935,9 @@ def main() -> None:
     print("=" * 60)
     print(f"Agent exit code: {return_code}")
     print(f"Finished: {final_state.get('finished', False)}")
-    print(f"Failed: {final_state.get('failed', False)}")
+    print(f"Failed: {effective_failed}")
+    if incomplete_exit_reason:
+        print(f"Stop reason: {incomplete_exit_reason}")
     print(f"Workspace retained at: {working_dir}")
     for task_path in final_state.get("submitted_tasks", []):
         print(f"  - {task_path}")
@@ -796,14 +945,24 @@ def main() -> None:
     for line in format_cost_summary(cost_summary):
         print(line)
 
-    if final_state.get("failed"):
-        raise SystemExit(final_state.get("fail_reason") or "Task generation failed.")
+    if effective_failed:
+        raise SystemExit(
+            final_state.get("fail_reason")
+            or incomplete_exit_reason
+            or "Task generation failed."
+        )
     if not final_state.get("finished"):
         # If tasks were submitted despite not finishing, treat as partial success
         if final_submitted_tasks:
-            print(f"Warning: Agent exited without calling taskgen finish, but submitted {len(final_submitted_tasks)} task(s).")
+            print(
+                "Warning: "
+                + (
+                    incomplete_exit_reason
+                    or f"Agent exited without calling taskgen finish, but submitted {len(final_submitted_tasks)} task(s)."
+                )
+            )
         else:
-            raise SystemExit("Task generation did not call taskgen finish.")
+            raise SystemExit(incomplete_exit_reason or "Task generation did not call taskgen finish.")
 
 
 if __name__ == "__main__":

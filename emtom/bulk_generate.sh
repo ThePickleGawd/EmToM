@@ -219,7 +219,9 @@ NUM_TASKS=""
 RUN_UNTIL=""
 DRY_RUN=false
 CATEGORY_FILTER=""  # Empty = all 3 categories (round-robin)
-OUTPUT_DIR="data/emtom/tasks"
+DEFAULT_OUTPUT_ROOT="emtom/tasks"
+OUTPUT_DIR=""
+OUTPUT_DIR_EXPLICIT=false
 TASK_GEN_AGENT="mini"
 EXTRA_ARGS=()  # Extra args forwarded verbatim to run_emtom.sh generate
 MODE="standard"
@@ -228,6 +230,29 @@ K_DISTRIBUTION=""  # Slot distribution (e.g. "1:2,2:3,3:3"). Overrides --k-level
 DEFAULT_REMOVE_STEPS="tom pddl simulation"
 REMOVE_STEPS="$DEFAULT_REMOVE_STEPS"  # Bulk generation defaults to a lighter pipeline.
 SHOW_QUEUE_STATUS=false
+
+allocate_default_output_dir() {
+    local run_date day_dir max_generation next_generation existing_dir generation_name generation_num
+    run_date="$(date +%Y%m%d)"
+    day_dir="${DEFAULT_OUTPUT_ROOT}/${run_date}"
+
+    max_generation=0
+    if [ -d "$day_dir" ]; then
+        shopt -s nullglob
+        for existing_dir in "$day_dir"/generation_*; do
+            [ -d "$existing_dir" ] || continue
+            generation_name="$(basename "$existing_dir")"
+            generation_num="${generation_name#generation_}"
+            if [[ "$generation_num" =~ ^[0-9]+$ ]] && [ "$generation_num" -gt "$max_generation" ]; then
+                max_generation="$generation_num"
+            fi
+        done
+        shopt -u nullglob
+    fi
+
+    next_generation=$((max_generation + 1))
+    OUTPUT_DIR="${day_dir}/generation_${next_generation}"
+}
 
 print_usage() {
     echo -e "${BOLD}Bulk EMTOM Task Generation${NC}"
@@ -252,7 +277,8 @@ print_usage() {
     echo "                      Slot counts must sum to --per-gpu. Overrides --k-level."
     echo "  --remove STEP [...] Skip pipeline components: pddl, llm-council, simulation, task-evolution, tom, structure, test"
     echo "                      Default for bulk runs: $DEFAULT_REMOVE_STEPS"
-    echo "  --output-dir DIR    Output directory for submitted tasks (default: data/emtom/tasks)"
+    echo "  --output-dir DIR    Output directory for submitted tasks"
+    echo "                      Default: emtom/tasks/YYYYMMDD/generation_N"
     echo "  --dry-run           Show commands without executing"
     echo "  --queue-status      Show current queue status and exit"
     echo ""
@@ -363,6 +389,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --output-dir)
             OUTPUT_DIR=$2
+            OUTPUT_DIR_EXPLICIT=true
             shift 2
             ;;
         --dry-run)
@@ -498,6 +525,9 @@ else
 fi
 
 # Create generation/task directories
+if [ "$OUTPUT_DIR_EXPLICIT" != true ]; then
+    allocate_default_output_dir
+fi
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
 GENERATION_RUN_ID="${TIMESTAMP}-generation"
 GENERATION_DIR="outputs/generations/${GENERATION_RUN_ID}"
@@ -520,7 +550,6 @@ echo -e "Active workers:     ${GREEN}$ACTIVE_WORKERS${NC}"
 echo -e "Categories:         ${GREEN}${CATEGORIES[*]}${NC}"
 echo -e "Model:              ${GREEN}$MODEL${NC}"
 echo -e "Task-gen agent:     ${GREEN}$TASK_GEN_AGENT${NC}"
-[ -n "$DIFFICULTY" ] && echo -e "Difficulty:         ${GREEN}$DIFFICULTY${NC}"
 echo -e "Mode:              ${GREEN}$MODE${NC}"
 [ -n "$REMOVE_STEPS" ] && echo -e "Skipping steps:     ${GREEN}$REMOVE_STEPS${NC}"
 if [ -n "$K_DISTRIBUTION" ]; then
