@@ -709,6 +709,7 @@ launch_workers
 if [ "$DRY_RUN" = true ]; then
     echo ""
     echo -e "${YELLOW}Dry run complete. In live mode the launcher keeps ${ACTIVE_WORKERS} slots busy, 1 task per worker, respawning on success until ${TARGET_NEW_TASKS} new tasks are produced.${NC}"
+    echo -e "${YELLOW}Task output directory: ${CYAN}${TASK_DIR}${NC}"
     exit 0
 fi
 
@@ -863,6 +864,7 @@ echo ""
 echo "=============================================="
 echo -e "${BOLD}Bulk generation complete${NC} (${submitted_total}/${TARGET_NEW_TASKS} new tasks, ${succeeded} worker successes, ${failed} worker failures)"
 echo -e "Stop reason: ${CYAN}${stop_reason}${NC}"
+echo -e "Task directory: ${CYAN}${TASK_DIR}${NC}"
 echo "=============================================="
 echo ""
 
