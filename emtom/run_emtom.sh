@@ -164,8 +164,8 @@ TEAM_MODEL_MAP=""  # Optional team -> model mapping for benchmark competitive ta
 SAMPLED_TASKS_DIR=""  # Pre-built sampled_tasks directory (skips random sampling)
 OUTPUT_DIR=""  # Override output directory for generate/benchmark
 SCENE_DATA_FILE=""  # Optional scene data JSON for static verification
-DIFFICULTY=""  # Difficulty level for judge context: easy, medium, hard
-MODE="standard"  # Generation mode preset: standard (80/20, <=10%) or hard (90/10, <=3%)
+JUDGE_DIFFICULTY=""  # Difficulty level for judge context: easy, medium, hard
+GENERATION_DIFFICULTY="standard"  # Generation preset: standard (80/20, <=10%) or hard (90/10, <=3%)
 TARGET_MODEL="gpt-5.2"  # Model that generation is targeting for seed selection + calibration
 TARGET_PASS_RATE="0.10"  # Desired pass rate for TARGET_MODEL
 TEST_MODEL=""  # Override model used for test_task calibration
@@ -174,7 +174,7 @@ STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
 REPORT_FILE=""  # Optional JSON report output path for static verification
 NO_CALIBRATION=false  # Don't write benchmark results back into source task JSONs
 OBSERVATION_MODE="text"  # Benchmark observation mode: text or vision
-RUN_MODE="standard"  # Benchmark run mode: standard, baseline, or full_info
+BENCHMARK_RUN_MODE="standard"  # Benchmark run mode: standard, baseline, or full_info
 LIMIT=0  # Optional task limit for salvage-style commands
 SKIP_BACKUP=false  # Skip backup creation for salvage flow
 REMOVE_STEPS=""  # Skip pipeline components (e.g. "pddl llm-council simulation task-evolution")
@@ -263,7 +263,7 @@ print_usage() {
     echo "  --subtasks-max N     Maximum subtasks per task (default: $SUBTASKS_MAX)"
     echo "  --iterations-per-task N   Max iterations per task (default: 100)"
     echo "  --task-gen-agent NAME External generator agent: mini|claude|codex (default: $TASK_GEN_AGENT)"
-    echo "  --mode MODE          Generation mode: standard|hard (default: $MODE)"
+    echo "  --difficulty LEVEL   Generation difficulty preset: standard|hard (default: $GENERATION_DIFFICULTY)"
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
     echo "  --retry-verification FILE  Retry generation using required fixes from failed ToM verification"
     echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
@@ -287,7 +287,7 @@ print_usage() {
     echo "  --team-model-map MAP Team->model mapping for competitive tasks"
     echo "                       Format: team_0=sonnet,team_1=gpt-5"
     echo "  --observation-mode MODE  Benchmark observation mode: text|vision (default: $OBSERVATION_MODE)"
-    echo "  --run-mode MODE      Benchmark run mode: standard|baseline|full_info (default: $RUN_MODE)"
+    echo "  --benchmark-run-mode MODE  Benchmark run mode: standard|baseline|full_info (default: $BENCHMARK_RUN_MODE)"
     echo "  --limit N            Optional task limit for salvage-style commands (default: all)"
     echo "  --skip-backup        Skip creating a backup copy during salvage"
     echo "  --selector-min-frames N  Vision mode selector minimum frames (default: $SELECTOR_MIN_FRAMES)"
@@ -307,6 +307,7 @@ print_usage() {
     echo "  --task FILE          Task file to evaluate (required)"
     echo "  --model MODEL        LLM model name (default: gpt-5.2, provider auto-detected)"
     echo "  --threshold N        Overall score threshold for passing (default: 0.7)"
+    echo "  --judge-difficulty LEVEL  Judge rubric difficulty: easy|medium|hard"
     echo "  --no-auto-retry      Disable automatic retry on failure (just show required fixes)"
     echo ""
     echo -e "${BOLD}Static Verify Options:${NC}"
@@ -318,7 +319,7 @@ print_usage() {
     echo ""
     echo -e "${BOLD}Seed Loop:${NC}"
     echo "  Evolution is now the normal generate loop."
-    echo "  Use --mode standard for the 80/20 sampled-task mix or --mode hard for the 90/10 mix. You can still override --target-pass-rate and seed pass/fail ratios directly."
+    echo "  Use --difficulty standard for the 80/20 sampled-task mix or --difficulty hard for the 90/10 mix. You can still override --target-pass-rate and seed pass/fail ratios directly."
     echo "  Seed selection populates sampled_tasks/ for inspiration only; working_task.json starts from the blank template."
     echo "  ./emtom/run_emtom.sh evolve ... still works as a deprecated alias for generate."
     echo ""
@@ -341,8 +342,8 @@ print_usage() {
     echo "  ./emtom/run_emtom.sh benchmark --category competitive"
     echo "  ./emtom/run_emtom.sh benchmark --task data/emtom/tasks/my_task.json --model gpt-5 --observation-mode vision"
     echo "  ./emtom/run_emtom.sh benchmark --team-model-map team_0=sonnet,team_1=gpt-5"
-    echo "  ./emtom/run_emtom.sh benchmark --run-mode baseline"
-    echo "  ./emtom/run_emtom.sh benchmark --run-mode full_info"
+    echo "  ./emtom/run_emtom.sh benchmark --benchmark-run-mode baseline"
+    echo "  ./emtom/run_emtom.sh benchmark --benchmark-run-mode full_info"
     echo "  ./emtom/run_emtom.sh test --mechanics inverse_state remote_control"
     echo -e "  ./emtom/run_emtom.sh judge --task data/emtom/tasks/my_task.json"
     echo "  ./emtom/run_emtom.sh verify --task data/emtom/tasks/my_task.json"
@@ -362,7 +363,7 @@ print_benchmark_usage_short() {
     echo "  --model MODEL        Model name, e.g. gpt-5.4"
     echo "  --max-workers N      Parallel benchmark workers"
     echo "  --category TYPE      cooperative|competitive|mixed"
-    echo "  --run-mode MODE      standard|baseline|full_info"
+    echo "  --benchmark-run-mode MODE  standard|baseline|full_info"
     echo "  --observation-mode MODE  text|vision"
     echo ""
     echo "Example:"
@@ -476,7 +477,7 @@ run_generate() {
     echo "Iterations per task: $ITERATIONS_PER_TASK"
     echo "K-level: ${K_LEVEL:-random per task}"
     echo "Target model: $TARGET_MODEL"
-    echo "Mode: $MODE"
+    echo "Difficulty: $GENERATION_DIFFICULTY"
     echo "Target pass rate: $TARGET_PASS_RATE"
     echo "Seed pass ratio: $SEED_PASS_RATIO"
     echo "Seed fail ratio: $SEED_FAIL_RATIO"
@@ -516,8 +517,8 @@ run_generate() {
     if [ -n "$TARGET_MODEL" ]; then
         EXTRA_ARGS+=(--target-model "$TARGET_MODEL")
     fi
-    if [ -n "$MODE" ]; then
-        EXTRA_ARGS+=(--mode "$MODE")
+    if [ -n "$GENERATION_DIFFICULTY" ]; then
+        EXTRA_ARGS+=(--difficulty "$GENERATION_DIFFICULTY")
     fi
     if [ -n "$TARGET_PASS_RATE" ]; then
         EXTRA_ARGS+=(--target-pass-rate "$TARGET_PASS_RATE")
@@ -537,8 +538,8 @@ run_generate() {
     if [ "$THRESHOLD" != "0.7" ]; then
         EXTRA_ARGS+=(--judge-threshold "$THRESHOLD")
     fi
-    if [ -n "$DIFFICULTY" ]; then
-        EXTRA_ARGS+=(--difficulty "$DIFFICULTY")
+    if [ -n "$JUDGE_DIFFICULTY" ]; then
+        EXTRA_ARGS+=(--judge-difficulty "$JUDGE_DIFFICULTY")
     fi
     if [ -n "$TEST_MODEL" ]; then
         EXTRA_ARGS+=(--test-model "$TEST_MODEL")
@@ -594,8 +595,8 @@ run_benchmark() {
     fi
 
     OBSERVATION_MODE_OVERRIDE="++benchmark_observation_mode=$OBSERVATION_MODE"
-    RUN_MODE_OVERRIDE="++benchmark_run_mode=$RUN_MODE"
-    if [ "$RUN_MODE" = "standard" ]; then
+    RUN_MODE_OVERRIDE="++benchmark_run_mode=$BENCHMARK_RUN_MODE"
+    if [ "$BENCHMARK_RUN_MODE" = "standard" ]; then
         OBSERVABILITY_OVERRIDES="++world_model.partial_obs=true ++agent_asymmetry=true"
     else
         OBSERVABILITY_OVERRIDES="++world_model.partial_obs=false ++agent_asymmetry=false"
@@ -632,7 +633,7 @@ run_benchmark() {
         echo "Agents: $TASK_NUM_AGENTS (from task)"
         echo "Max simulation steps: $MAX_SIM_STEPS"
         echo "Observation mode: $OBSERVATION_MODE"
-        echo "Benchmark mode: $RUN_MODE"
+        echo "Benchmark mode: $BENCHMARK_RUN_MODE"
         if [ -n "$CATEGORY" ]; then
             echo "Category filter: $CATEGORY"
         fi
@@ -720,7 +721,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
     echo "Task source: $TASK_DIR ($TASK_COUNT tasks)"
     echo "Agent counts: $AGENT_COUNTS"
     echo "Observation mode: $OBSERVATION_MODE"
-    echo "Benchmark mode: $RUN_MODE"
+    echo "Benchmark mode: $BENCHMARK_RUN_MODE"
     if [ -n "$CATEGORY" ]; then
         echo "Category: $CATEGORY"
     fi
@@ -747,7 +748,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
             --model $MODEL_SHORT \
             --output-dir $OUTPUT_BASE \
             --max-workers $MAX_WORKERS \
-            --run-mode $RUN_MODE \
+            --benchmark-run-mode $BENCHMARK_RUN_MODE \
             --observation-mode $OBSERVATION_MODE \
             --selector-min-frames $SELECTOR_MIN_FRAMES \
             --selector-max-frames $SELECTOR_MAX_FRAMES \
@@ -909,8 +910,8 @@ run_judge() {
     echo ""
 
     JUDGE_ARGS=("$TASK_FILE" --threshold "$THRESHOLD")
-    if [ -n "$DIFFICULTY" ]; then
-        JUDGE_ARGS+=(--difficulty "$DIFFICULTY")
+    if [ -n "$JUDGE_DIFFICULTY" ]; then
+        JUDGE_ARGS+=(--difficulty "$JUDGE_DIFFICULTY")
     fi
 
     python -m emtom.cli.judge_task "${JUDGE_ARGS[@]}"
@@ -1103,8 +1104,8 @@ run_test_task() {
     if [ -n "$TEST_MODEL" ]; then
         TEST_ARGS+=(--test-model "$TEST_MODEL")
     fi
-    if [ -n "$RUN_MODE" ]; then
-        TEST_ARGS+=(--run-mode "$RUN_MODE")
+    if [ -n "$BENCHMARK_RUN_MODE" ]; then
+        TEST_ARGS+=(--run-mode "$BENCHMARK_RUN_MODE")
     fi
     python -m emtom.cli.test_task "${TEST_ARGS[@]}"
 }
@@ -1311,10 +1312,10 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2
             ;;
-        --run-mode)
-            RUN_MODE=$2
-            if [[ "$RUN_MODE" != "standard" && "$RUN_MODE" != "baseline" && "$RUN_MODE" != "full_info" ]]; then
-                echo "Error: --run-mode must be 'standard', 'baseline', or 'full_info'"
+        --benchmark-run-mode)
+            BENCHMARK_RUN_MODE=$2
+            if [[ "$BENCHMARK_RUN_MODE" != "standard" && "$BENCHMARK_RUN_MODE" != "baseline" && "$BENCHMARK_RUN_MODE" != "full_info" ]]; then
+                echo "Error: --benchmark-run-mode must be 'standard', 'baseline', or 'full_info'"
                 exit 1
             fi
             shift 2
@@ -1331,18 +1332,18 @@ while [[ $# -gt 0 ]]; do
             SELECTOR_MAX_CANDIDATES=$2
             shift 2
             ;;
-        --difficulty)
-            DIFFICULTY=$2
-            if [[ "$DIFFICULTY" != "easy" && "$DIFFICULTY" != "medium" && "$DIFFICULTY" != "hard" ]]; then
-                echo "Error: --difficulty must be 'easy', 'medium', or 'hard'"
+        --judge-difficulty)
+            JUDGE_DIFFICULTY=$2
+            if [[ "$JUDGE_DIFFICULTY" != "easy" && "$JUDGE_DIFFICULTY" != "medium" && "$JUDGE_DIFFICULTY" != "hard" ]]; then
+                echo "Error: --judge-difficulty must be 'easy', 'medium', or 'hard'"
                 exit 1
             fi
             shift 2
             ;;
-        --mode)
-            MODE=$2
-            if [[ "$MODE" != "standard" && "$MODE" != "hard" ]]; then
-                echo "Error: --mode must be 'standard' or 'hard'"
+        --difficulty)
+            GENERATION_DIFFICULTY=$2
+            if [[ "$GENERATION_DIFFICULTY" != "standard" && "$GENERATION_DIFFICULTY" != "hard" ]]; then
+                echo "Error: --difficulty must be 'standard' or 'hard'"
                 exit 1
             fi
             shift 2
@@ -1504,8 +1505,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Apply difficulty presets for flags not explicitly set
-if [ -n "$DIFFICULTY" ]; then
-    case $DIFFICULTY in
+if [ -n "$JUDGE_DIFFICULTY" ]; then
+    case $JUDGE_DIFFICULTY in
         easy)
             [ "$TOM_L1_EXPLICIT" = false ]      && TOM_TARGET_L1=0.60
             [ "$TOM_L2_EXPLICIT" = false ]      && TOM_TARGET_L2=0.30
@@ -1531,7 +1532,7 @@ if [ -n "$DIFFICULTY" ]; then
 fi
 
 # Apply generation mode presets for flags not explicitly set
-case $MODE in
+case $GENERATION_DIFFICULTY in
     standard)
         [ "$TARGET_PASS_RATE_EXPLICIT" = false ] && TARGET_PASS_RATE="0.10"
         [ "$SEED_PASS_RATIO_EXPLICIT" = false ] && SEED_PASS_RATIO="0.20"

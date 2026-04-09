@@ -64,13 +64,13 @@ def parse_extra_args():
     parser.add_argument("--seed-tasks-dir", type=str, default=None)
     parser.add_argument("--seed-pass-ratio", type=float, default=0.20)
     parser.add_argument("--seed-fail-ratio", type=float, default=0.80)
-    parser.add_argument("--mode", type=str, default="standard", choices=["standard", "hard"])
+    parser.add_argument("--difficulty", type=str, default="standard", choices=["standard", "hard"])
     parser.add_argument("--sampled-tasks-dir", type=str, default=None)
     parser.add_argument("--no-icl", action="store_true",
                         help="Disable ICL: do not prepare calibration-based sampled tasks")
     parser.add_argument("--judge-threshold", type=float, default=None)
     parser.add_argument(
-        "--difficulty",
+        "--judge-difficulty",
         type=str,
         default=None,
         choices=["easy", "medium", "hard"],
@@ -415,7 +415,8 @@ def main() -> None:
     seed_pass_ratio = extra_args.seed_pass_ratio if extra_args else 0.20
     seed_fail_ratio = extra_args.seed_fail_ratio if extra_args else 0.80
     judge_threshold = extra_args.judge_threshold if extra_args else None
-    difficulty = extra_args.difficulty if extra_args else None
+    generation_mode = extra_args.difficulty if extra_args else "standard"
+    difficulty = extra_args.judge_difficulty if extra_args else None
     test_model = extra_args.test_model if extra_args else None
     k_levels = extra_args.k_level if extra_args else None
     task_gen_agent = extra_args.task_gen_agent if extra_args else "mini"

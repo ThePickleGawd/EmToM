@@ -598,7 +598,7 @@ def run_benchmark_parallel(
                     "--tasks-dir", task_input,
                     "--model", model,
                     "--output-dir", bench_out,
-                    "--run-mode", run_mode,
+                    "--benchmark-run-mode", run_mode,
                     "--observation-mode", observation_mode,
                     "--selector-min-frames", str(selector_min_frames),
                     "--selector-max-frames", str(selector_max_frames),

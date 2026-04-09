@@ -1229,18 +1229,19 @@ class TaskGenSession:
             else:
                 failed_models.append(model)
 
-        gate_passed = len(failed_models) >= 2
+        required_failures = len(SUBMISSION_VERIFICATION_MODELS)
+        gate_passed = len(failed_models) == required_failures
         verification_payload = {
-            "required_failures": 2,
+            "required_failures": required_failures,
             "gate_passed": gate_passed,
             "models": summaries,
             "failed_models": failed_models,
             "passed_models": passed_models,
             "trajectory_dir": str(run_dir),
             "message": (
-                "Submission verification passed. At least two verification models failed."
+                "Submission verification passed. All verification models failed."
                 if gate_passed
-                else "Submission verification failed. Fewer than two verification models failed."
+                else "Submission verification failed. At least one verification model passed."
             ),
         }
         with open(run_dir / "verification_summary.json", "w") as f:
@@ -1258,7 +1259,7 @@ class TaskGenSession:
             return success(payload)
 
         payload["action_required"] = (
-            "At least two of gpt-5.4, claude-sonnet-4-6, and gemini-flash must fail. "
+            "All of gpt-5.4, claude-sonnet-4-6, and gemini-flash must fail. "
             "Revise the task, then run taskgen judge -> taskgen test_task -> taskgen verify_task again."
         )
         payload["next_step"] = payload["action_required"]
@@ -1431,7 +1432,7 @@ class TaskGenSession:
         if not self.state.get("last_submission_verification_passed"):
             return failure(
                 "Must run verify_task successfully before submitting. "
-                "Submission requires at least two of gpt-5.4, claude-sonnet-4-6, and gemini-flash to fail."
+                "Submission requires all of gpt-5.4, claude-sonnet-4-6, and gemini-flash to fail."
             )
 
         allowed_tom_levels = (
