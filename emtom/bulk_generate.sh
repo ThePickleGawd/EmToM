@@ -222,7 +222,6 @@ CATEGORY_FILTER=""  # Empty = all 3 categories (round-robin)
 OUTPUT_DIR="data/emtom/tasks"
 TASK_GEN_AGENT="mini"
 EXTRA_ARGS=()  # Extra args forwarded verbatim to run_emtom.sh generate
-DIFFICULTY=""
 MODE="standard"
 K_LEVEL=""  # Allowed k-levels (e.g. "2 3"). Empty = random per task.
 K_DISTRIBUTION=""  # Slot distribution (e.g. "1:2,2:3,3:3"). Overrides --k-level.
@@ -246,8 +245,8 @@ print_usage() {
     echo "  --run-until N       Keep recycling workers until at least N new tasks are submitted"
     echo "  --task-gen-agent A  External generator agent: mini|claude|codex (default: mini)"
     echo "  --category C [C ..] Categories to generate (cooperative, competitive, mixed). Default: all 3."
-    echo "  --difficulty LEVEL  Difficulty for generation (easy, medium, hard)"
-    echo "  --mode MODE         Generation mode preset: standard|hard (default: $MODE)"
+    echo "  --difficulty LEVEL  Generation difficulty preset: standard|hard (default: $MODE)"
+    echo "  --mode MODE         Deprecated alias for --difficulty standard|hard"
     echo "  --k-level L [L ...] Allowed k-levels, e.g. --k-level 2 3 (default: random per task)"
     echo "  --k-distribution D  Slots per k-level, e.g. 1:2,2:3,3:3 = 2 slots K=1, 3 K=2, 3 K=3"
     echo "                      Slot counts must sum to --per-gpu. Overrides --k-level."
@@ -316,9 +315,9 @@ while [[ $# -gt 0 ]]; do
             fi
             ;;
         --difficulty)
-            DIFFICULTY=$2
-            if [[ "$DIFFICULTY" != "easy" && "$DIFFICULTY" != "medium" && "$DIFFICULTY" != "hard" ]]; then
-                echo "Error: --difficulty must be 'easy', 'medium', or 'hard'"
+            MODE=$2
+            if [[ "$MODE" != "standard" && "$MODE" != "hard" ]]; then
+                echo "Error: --difficulty must be 'standard' or 'hard'"
                 exit 1
             fi
             shift 2
@@ -329,6 +328,7 @@ while [[ $# -gt 0 ]]; do
                 echo "Error: --mode must be 'standard' or 'hard'"
                 exit 1
             fi
+            echo -e "${YELLOW}Warning: --mode is deprecated in bulk_generate.sh. Use --difficulty instead.${NC}" >&2
             shift 2
             ;;
         --k-level)
@@ -413,8 +413,8 @@ if [ "$SHOW_QUEUE_STATUS" = true ]; then
 fi
 
 for extra_arg in "${EXTRA_ARGS[@]}"; do
-    if [[ "$extra_arg" == "--num-tasks" || "$extra_arg" == "--tasks" || "$extra_arg" == "--mode" ]]; then
-        echo -e "${RED}Error: bulk_generate.sh owns task count and mode. Use top-level --num-tasks/--mode instead of forwarding ${extra_arg}.${NC}"
+    if [[ "$extra_arg" == "--num-tasks" || "$extra_arg" == "--tasks" || "$extra_arg" == "--mode" || "$extra_arg" == "--difficulty" ]]; then
+        echo -e "${RED}Error: bulk_generate.sh owns task count and generation difficulty. Use top-level --num-tasks/--difficulty instead of forwarding ${extra_arg}.${NC}"
         exit 1
     fi
 done
@@ -566,14 +566,11 @@ build_worker_command() {
         ./emtom/run_emtom.sh generate
         --task-gen-agent "$TASK_GEN_AGENT"
         --model "$MODEL"
-        --mode "$MODE"
+        --difficulty "$MODE"
         --num-tasks 1
         --category "$category"
         --output-dir "$TASK_DIR"
     )
-    if [ -n "$DIFFICULTY" ]; then
-        cmd+=(--difficulty "$DIFFICULTY")
-    fi
     if [ "${#SLOT_K_LEVELS[@]}" -gt 0 ]; then
         cmd+=(--k-level "${SLOT_K_LEVELS[$slot]}")
     elif [ -n "$K_LEVEL" ]; then
