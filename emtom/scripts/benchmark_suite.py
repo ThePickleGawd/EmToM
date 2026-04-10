@@ -265,7 +265,7 @@ def main() -> int:
                 model,
                 "--observation-mode",
                 args.observation_mode,
-                "--run-mode",
+                "--benchmark-run-mode",
                 args.run_mode,
                 "--max-workers",
                 str(args.max_workers),
