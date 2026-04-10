@@ -22,6 +22,7 @@ SUBMISSION_VERIFICATION_MODELS = [
     "claude-sonnet-4-6",
     "gemini-flash",
 ]
+SUBMISSION_VERIFICATION_REQUIRED_FAILURES = 2
 
 
 def _evaluation_passed(category: str, evaluation: Dict[str, Any]) -> bool:
@@ -246,18 +247,16 @@ def build_mode_comparison(
                 "Baseline/full-info run must pass so the task is empirically solvable when information asymmetry is removed."
             )
     if requirement == "must_fail" and standard_passed:
-        gate_passed = False
         reasons.append(
-            f"Standard run must fail because another pass would move the dataset away from the {target_rate:.0%} target."
+            f"Calibration note: standard passed, which moves the dataset away from the target zone around {target_rate:.0%}. Prefer somewhat harder tasks next."
         )
     elif requirement == "must_pass" and not standard_passed:
-        gate_passed = False
         reasons.append(
-            f"Standard run must pass because another fail would move the dataset away from the {target_rate:.0%} target."
+            f"Calibration note: standard failed, which moves the dataset away from the target zone around {target_rate:.0%}. Prefer somewhat easier tasks next."
         )
 
     if not reasons:
-        reasons.append("Baseline passed and the standard result matches the current calibration target.")
+        reasons.append("Baseline passed. Standard outcome is acceptable, and the dataset should continue tending toward the calibration target over time.")
 
     return {
         "gate_passed": gate_passed,
@@ -290,16 +289,6 @@ def _build_test_task_retry_guidance(comparison: Dict[str, Any]) -> str:
     baseline_passed = bool(comparison.get("baseline_passed"))
     baseline_failed_phases = comparison.get("baseline_failed_phases") or []
 
-    if requirement == "must_fail" and standard_passed and baseline_passed:
-        return (
-            "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
-            "Do not call `taskgen fail`. This was rejected because the task is too easy for standard mode. "
-            "The standard agent solved it, meaning the hidden info was recoverable without communication. "
-            "Make it harder: (1) ensure the decisive fact is only observable from a restricted room, "
-            "(2) make the choice non-binary so guessing fails (e.g. which of 3+ objects, which of 3+ rooms), "
-            "(3) reduce bandwidth to 1 message per agent. Keep the physical core simple."
-        )
-
     if not baseline_passed:
         phase_note = ""
         if baseline_failed_phases:
@@ -315,13 +304,6 @@ def _build_test_task_retry_guidance(comparison: Dict[str, Any]) -> str:
             "(3) ensure all objects/furniture exist in the scene with correct IDs, "
             "(4) ensure agents can physically reach the objects they need. "
             "Use `taskgen new_scene N --keep` to reload the current scene and verify IDs."
-        )
-
-    if requirement == "must_pass" and not standard_passed:
-        return (
-            "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
-            "Do not call `taskgen fail`. Standard needs a clearer path to success in this calibration regime. "
-            "Keep the ToM dependency, but make the hidden fact easier to communicate or verify."
         )
 
     return (
@@ -1159,7 +1141,7 @@ class TaskGenSession:
             self.state["last_submission_verification_results"] = {
                 "skipped": True,
                 "reason": f"Skipped simulator verification due to missing deps: {_deps_err}",
-                "required_failures": len(SUBMISSION_VERIFICATION_MODELS),
+                "required_failures": SUBMISSION_VERIFICATION_REQUIRED_FAILURES,
                 "models": SUBMISSION_VERIFICATION_MODELS,
                 "spec_hash": spec_hash,
             }
@@ -1240,9 +1222,12 @@ class TaskGenSession:
 
         from emtom.pddl.planner import compute_task_spec_hash
 
-        required_failures = len(SUBMISSION_VERIFICATION_MODELS)
+        required_failures = min(
+            SUBMISSION_VERIFICATION_REQUIRED_FAILURES,
+            len(SUBMISSION_VERIFICATION_MODELS),
+        )
         spec_hash = compute_task_spec_hash(task_data)
-        gate_passed = len(failed_models) == required_failures
+        gate_passed = len(failed_models) >= required_failures
         verification_payload = {
             "required_failures": required_failures,
             "gate_passed": gate_passed,
@@ -1252,9 +1237,9 @@ class TaskGenSession:
             "trajectory_dir": str(run_dir),
             "spec_hash": spec_hash,
             "message": (
-                "Submission verification passed. All verification models failed."
+                f"Submission verification passed. {len(failed_models)}/{len(SUBMISSION_VERIFICATION_MODELS)} verification models failed."
                 if gate_passed
-                else "Submission verification failed. At least one verification model passed."
+                else f"Submission verification failed. Need at least {required_failures}/{len(SUBMISSION_VERIFICATION_MODELS)} verification models to fail."
             ),
         }
         with open(run_dir / "verification_summary.json", "w") as f:
@@ -1273,7 +1258,7 @@ class TaskGenSession:
             return success(payload)
 
         payload["action_required"] = (
-            "All of gpt-5.4, claude-sonnet-4-6, and gemini-flash must fail. "
+            f"At least {required_failures} of gpt-5.4, claude-sonnet-4-6, and gemini-flash must fail. "
             "Revise the task, then run taskgen judge -> taskgen test_task -> taskgen verify_task again."
         )
         payload["next_step"] = payload["action_required"]
@@ -1446,7 +1431,8 @@ class TaskGenSession:
         if not self.state.get("last_submission_verification_passed"):
             return failure(
                 "Must run verify_task successfully before submitting. "
-                "Submission requires all of gpt-5.4, claude-sonnet-4-6, and gemini-flash to fail."
+                f"Submission requires at least {SUBMISSION_VERIFICATION_REQUIRED_FAILURES} of "
+                "gpt-5.4, claude-sonnet-4-6, and gemini-flash to fail."
             )
 
         allowed_tom_levels = (

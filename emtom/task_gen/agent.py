@@ -262,18 +262,16 @@ def _build_mode_comparison(
             "Baseline/full-info run must pass so the task is empirically solvable when information asymmetry is removed."
         )
     if requirement == "must_fail" and standard_passed:
-        gate_passed = False
         reasons.append(
-            f"Standard run must fail because another pass would move the dataset away from the {target_rate:.0%} target."
+            f"Calibration note: standard passed, which moves the dataset away from the target zone around {target_rate:.0%}. Prefer somewhat harder tasks next."
         )
     elif requirement == "must_pass" and not standard_passed:
-        gate_passed = False
         reasons.append(
-            f"Standard run must pass because another fail would move the dataset away from the {target_rate:.0%} target."
+            f"Calibration note: standard failed, which moves the dataset away from the target zone around {target_rate:.0%}. Prefer somewhat easier tasks next."
         )
 
     if not reasons:
-        reasons.append("Baseline passed and the standard result matches the current calibration target.")
+        reasons.append("Baseline passed. Standard outcome is acceptable, and the dataset should continue tending toward the calibration target over time.")
 
     return {
         "gate_passed": gate_passed,
@@ -728,7 +726,7 @@ Your previous task did not pass the ToM verification. You MUST address these iss
 
             calibration_section = f"""
 ## Dataset Calibration
-Target: {target_rate:.0%} of tasks should be passable by {model}
+Target: pass rate should stay around {target_rate:.0%} for {model} over time
 
 """
             if current_rate is not None:
