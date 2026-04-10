@@ -34,6 +34,7 @@ Generate {num_tasks} quality benchmark tasks.
 - `{task_file}`: edit this task JSON.
 - `{working_dir}/current_scene.json`: current scene after `taskgen new_scene`.
 - `{working_dir}/template.json`: task structure reference.
+- `{benchmark_feedback_file}`: created after failed `taskgen test_task` or `taskgen verify_task`. If it exists, read it before editing again and fix the listed issues first.
 - Commands already start in `{working_dir}`. Do not prefix every command with `cd {working_dir} &&`.
 {sampled_files_block}- `available_predicates.md`, `available_mechanics.md`, `available_actions.md`: inspect only when needed.
 
@@ -87,6 +88,7 @@ Generate {num_tasks} quality benchmark tasks.
 - Avoid relying on vague aliases like 'display table' or hidden trigger objects whose exact runtime ID is hard to recover.
 - NEVER design tasks requiring object handoff through a shared room, agents try Place[obj, on, room_name] and fail at runtime.
 - If a task passes `judge` but fails `test_task`, simplify the physical core first before adding more ToM structure.
+- If `{benchmark_feedback_file}` exists, treat it as the ground truth for why the last benchmark gate rejected the task. Fix those issues before trying new variations.
 
 ## Empirical Winning Formula (from 46 tasks that passed test_task)
 This is the most common solvable pattern in the current pool, not the only acceptable stack. Use it as one reference point, then vary.
@@ -112,7 +114,7 @@ Vary at least TWO of these dimensions each task. Check sampled tasks to avoid du
 - Knowledge split: A knows object / B knows target; A knows both but cannot reach; B can reach but knows neither; both know partial info.
 - Narrative framing: household chore, museum setup, safety inspection, party prep, moving day, or another concrete scene-grounded story.
 {test_gate_line}
-- `taskgen verify_task` is the final submission gate: it runs `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` in standard mode. You may submit only if all 3 models fail.
+- `taskgen verify_task` is the final submission gate: it runs `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` in standard mode. You may submit only if at least 2 of the 3 models fail.
 
 ## Pre-Submit Checklist
 - The physical goal requires communication or partner modeling.
@@ -120,7 +122,7 @@ Vary at least TWO of these dimensions each task. Check sampled tasks to avoid du
 - Category fields are valid for the selected category.
 - Mechanics and secrets agree about actual constraints, but secrets do not explain the coordination plan.
 - No malformed bindings, missing required mechanic fields, or invalid message limits.
-{pddl_checklist}{test_checklist}- After `taskgen test_task` passes, run `taskgen verify_task`. Submit only if all of `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` fail.
+{pddl_checklist}{test_checklist}- After `taskgen test_task` passes, run `taskgen verify_task`. Submit only if at least 2 of `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` fail.
 ## References
 - `available_predicates.md`: valid predicates and goal syntax.
 - `available_mechanics.md`: mechanic names and fields.
@@ -272,6 +274,7 @@ def build_external_taskgen_prompt(
             "Submissions are rejected if the computed tom_level does not match."
         )
 
+    benchmark_feedback_file = str(Path(working_dir) / "benchmark_retry_feedback.md")
     sampled_task_block = ""
     sampled_files_block = ""
     # Only show sampled task guidance if the sampled_tasks directory has files.
@@ -336,10 +339,13 @@ def build_external_taskgen_prompt(
         final_step_number += 1
     workflow_lines.append(f"{final_step_number}. Run `taskgen verify_task`.")
     workflow_lines.append(
-        f"{final_step_number + 1}. Submit only if verification passes, meaning all of `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` fail in standard mode."
+        f"{final_step_number + 1}. If `taskgen test_task` or `taskgen verify_task` rejects the task, read `{benchmark_feedback_file}` and fix those exact issues before editing further."
     )
-    workflow_lines.append(f"{final_step_number + 2}. Run `taskgen submit_task`.")
-    workflow_lines.append(f"{final_step_number + 3}. When you have submitted {num_tasks} tasks, run `taskgen finish`.")
+    workflow_lines.append(
+        f"{final_step_number + 2}. Submit only if verification passes, meaning at least 2 of `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` fail in standard mode."
+    )
+    workflow_lines.append(f"{final_step_number + 3}. Run `taskgen submit_task`.")
+    workflow_lines.append(f"{final_step_number + 4}. When you have submitted {num_tasks} tasks, run `taskgen finish`.")
     workflow_block = "\n".join(workflow_lines)
 
     if category == "cooperative":
@@ -406,6 +412,7 @@ def build_external_taskgen_prompt(
     prompt = MINISWEAGENT_TASKGEN_PROMPT.format(
         working_dir=working_dir,
         task_file=task_file,
+        benchmark_feedback_file=benchmark_feedback_file,
         query_block=query_block,
         verification_block=verification_block,
         calibration_block=calibration_block,

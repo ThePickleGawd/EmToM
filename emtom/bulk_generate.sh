@@ -218,7 +218,8 @@ MODEL="gpt-5.2"
 NUM_TASKS=""
 RUN_UNTIL=""
 DRY_RUN=false
-CATEGORY_FILTER=""  # Empty = all 3 categories (round-robin)
+DEFAULT_CATEGORIES=("cooperative" "mixed")
+CATEGORY_FILTER=""  # Empty = default categories only (round-robin)
 DEFAULT_OUTPUT_ROOT="data/emtom/tasks"
 OUTPUT_DIR=""
 OUTPUT_DIR_EXPLICIT=false
@@ -258,18 +259,19 @@ print_usage() {
     echo -e "${BOLD}Bulk EMTOM Task Generation${NC}"
     echo ""
     echo "Generates tasks across all GPUs with configurable concurrency"
-    echo "All 3 categories covered: cooperative, competitive, mixed"
+    echo "Default categories: cooperative, mixed"
+    echo "Competitive remains available only when explicitly requested with --category competitive"
     echo ""
     echo "Usage: ./emtom/bulk_generate.sh [options] [-- <run_emtom.sh args>]"
     echo ""
     echo "Options:"
-    echo "  --per-gpu N         Concurrent processes per GPU (default: 3, one per category)"
+    echo "  --per-gpu N         Concurrent processes per GPU (default: 3)"
     echo "  --model MODEL       LLM model (default: gpt-5.2)"
     echo "  --num-tasks N       Target new tasks for this bulk run (default: one full saturated run)"
     echo "                      The launcher divides N across fixed workers and starts them once"
     echo "  --run-until N       Keep recycling workers until at least N new tasks are submitted"
     echo "  --task-gen-agent A  External generator agent: mini|claude|codex (default: mini)"
-    echo "  --category C [C ..] Categories to generate (cooperative, competitive, mixed). Default: all 3."
+    echo "  --category C [C ..] Categories to generate (cooperative, competitive, mixed). Default: cooperative mixed."
     echo "  --difficulty LEVEL  Generation difficulty preset: standard|hard (default: $MODE)"
     echo "  --mode MODE         Deprecated alias for --difficulty standard|hard"
     echo "  --k-level L [L ...] Allowed k-levels, e.g. --k-level 2 3 (default: random per task)"
@@ -287,7 +289,7 @@ print_usage() {
     echo "  See: ./emtom/run_emtom.sh generate --help"
     echo ""
     echo "Examples:"
-    echo "  ./emtom/bulk_generate.sh                                  # one full saturated run (defaults to --remove $DEFAULT_REMOVE_STEPS)"
+    echo "  ./emtom/bulk_generate.sh                                  # one full saturated run over cooperative+mixed (defaults to --remove $DEFAULT_REMOVE_STEPS)"
     echo "  ./emtom/bulk_generate.sh --per-gpu 6                      # 48 concurrent slots"
     echo "  ./emtom/bulk_generate.sh --num-tasks 4                    # assign 4 total tasks across workers"
     echo "  ./emtom/bulk_generate.sh --per-gpu 8 --k-distribution 1:2,2:3,3:3  # Weighted K-levels"
@@ -485,7 +487,7 @@ if [ -n "$CATEGORY_FILTER" ]; then
     # shellcheck disable=SC2206
     CATEGORIES=($CATEGORY_FILTER)
 else
-    CATEGORIES=("cooperative" "competitive" "mixed")
+    CATEGORIES=("${DEFAULT_CATEGORIES[@]}")
 fi
 
 # Detect GPUs

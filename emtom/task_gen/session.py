@@ -312,6 +312,201 @@ def _build_test_task_retry_guidance(comparison: Dict[str, Any]) -> str:
     )
 
 
+def _format_percent(value: Any) -> str:
+    try:
+        return f"{float(value):.0%}"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _build_test_task_failure_feedback(
+    category: str,
+    comparison: Dict[str, Any],
+    trajectory_dir: Optional[str],
+) -> Dict[str, Any]:
+    failed_baseline_phases = comparison.get("baseline_failed_phases") or []
+    reasons = [str(reason).strip() for reason in comparison.get("reasons") or [] if str(reason).strip()]
+    evidence = [
+        f"standard: passed={comparison.get('standard_passed', False)}, "
+        f"progress={_format_percent(comparison.get('standard_progress'))}, "
+        f"turns={comparison.get('standard_turns', 0)}",
+        f"baseline: passed={comparison.get('baseline_passed', False)}, "
+        f"progress={_format_percent(comparison.get('baseline_progress'))}, "
+        f"turns={comparison.get('baseline_turns', 0)}",
+    ]
+
+    required_fixes: List[str] = []
+    if category == "competitive" and failed_baseline_phases:
+        phase_results = comparison.get("baseline_phase_results") or {}
+        for phase_id in ("team_0_only", "team_1_only"):
+            phase = phase_results.get(phase_id)
+            if not isinstance(phase, dict):
+                continue
+            evidence.append(
+                f"{phase_id}: passed={phase.get('passed', False)}, "
+                f"progress={_format_percent(phase.get('progress'))}, "
+                f"turns={phase.get('turns', 0)}"
+            )
+        summary = (
+            "Competitive solo-team baseline failed, so at least one team branch is not executable "
+            "even with full information."
+        )
+        required_fixes.extend(
+            [
+                "Repair the failed solo-team phases before adding more hidden information pressure.",
+                f"Failed phases to unblock first: {', '.join(failed_baseline_phases)}.",
+                "Remove dependencies on the opposing team for any action that a solo baseline branch must complete.",
+                "Keep the incompatible end states, but make each team's branch physically solvable on its own with full info.",
+            ]
+        )
+    else:
+        summary = (
+            "Baseline/full-info failed, so the task is not empirically solvable yet and should be simplified "
+            "before adding more ToM structure."
+        )
+        required_fixes.extend(
+            [
+                "Simplify the physical core first; do not add more hidden-information structure yet.",
+                "Reduce to 2-3 decisive goals and remove unnecessary mechanics, extra objects, or extra room bans.",
+                "Verify every referenced object, furniture item, and room exists in the scene and is physically reachable.",
+                "Prefer one clean information asymmetry instead of stacking multiple brittle dependencies.",
+            ]
+        )
+
+    if comparison.get("baseline_turns", 0) >= 20:
+        required_fixes.append(
+            "The baseline is hitting the full benchmark budget, which usually means too much search or too much coordination load."
+        )
+
+    artifact_paths: Dict[str, str] = {}
+    if trajectory_dir:
+        trajectory_path = Path(trajectory_dir)
+        artifact_paths["trajectory_dir"] = str(trajectory_path)
+        artifact_paths["comparison_json"] = str(trajectory_path / "comparison.json")
+
+    snapshot = {
+        "standard_passed": comparison.get("standard_passed"),
+        "baseline_passed": comparison.get("baseline_passed"),
+        "standard_progress": comparison.get("standard_progress"),
+        "baseline_progress": comparison.get("baseline_progress"),
+        "standard_turns": comparison.get("standard_turns"),
+        "baseline_turns": comparison.get("baseline_turns"),
+        "baseline_failed_phases": failed_baseline_phases,
+    }
+    return {
+        "source_gate": "test_task",
+        "summary": summary,
+        "overall_reasoning": " ".join(reasons),
+        "required_fixes": required_fixes,
+        "evidence": evidence,
+        "artifact_paths": artifact_paths,
+        "comparison_snapshot": snapshot,
+    }
+
+
+def _build_submission_verification_feedback(
+    category: str,
+    verification_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    passed_models = [str(model) for model in verification_payload.get("passed_models") or []]
+    failed_models = [str(model) for model in verification_payload.get("failed_models") or []]
+    model_summaries = verification_payload.get("models") or {}
+    required_failures = int(verification_payload.get("required_failures", 0) or 0)
+    total_models = len(model_summaries)
+
+    evidence: List[str] = []
+    fast_passing_models: List[str] = []
+    for model, summary in model_summaries.items():
+        if not isinstance(summary, dict):
+            continue
+        passed = bool(summary.get("passed", False))
+        turns = int(summary.get("turns", 0) or 0)
+        evidence.append(
+            f"{model}: passed={passed}, progress={_format_percent(summary.get('progress'))}, turns={turns}"
+        )
+        if passed and turns <= 10:
+            fast_passing_models.append(str(model))
+
+    if passed_models:
+        summary = (
+            f"Submission verification rejected the task because {len(passed_models)}/{max(total_models, 1)} "
+            "verification models still solved it in standard mode."
+        )
+    else:
+        summary = (
+            "Submission verification rejected the task because not enough verification models failed."
+        )
+
+    required_fixes = [
+        f"Strengthen one decisive hidden-information dependency so at least {required_failures} of {max(total_models, 1)} verification models fail in standard mode.",
+        "Keep the physical core baseline-solvable; harden the information split instead of adding clutter or extra search.",
+        "Use a hidden choice or incompatible end state that cannot be guessed from public information alone.",
+    ]
+    if fast_passing_models:
+        required_fixes.append(
+            f"Priority: {', '.join(fast_passing_models)} solved the task quickly, so the current information bottleneck is too weak or too easy to guess."
+        )
+    if category == "competitive":
+        required_fixes.append(
+            "For competitive tasks, keep both solo-team baseline branches solvable and make the difficulty come from private team knowledge, not from physically broken team branches."
+        )
+
+    artifact_paths: Dict[str, str] = {}
+    trajectory_dir = verification_payload.get("trajectory_dir")
+    if trajectory_dir:
+        trajectory_path = Path(str(trajectory_dir))
+        artifact_paths["trajectory_dir"] = str(trajectory_path)
+        artifact_paths["verification_summary_json"] = str(trajectory_path / "verification_summary.json")
+
+    snapshot = {
+        "required_failures": required_failures,
+        "passed_models": passed_models,
+        "failed_models": failed_models,
+    }
+    return {
+        "source_gate": "verify_task",
+        "summary": summary,
+        "overall_reasoning": str(verification_payload.get("message", "")),
+        "required_fixes": required_fixes,
+        "evidence": evidence,
+        "artifact_paths": artifact_paths,
+        "verification_snapshot": snapshot,
+    }
+
+
+def _render_benchmark_feedback_markdown(feedback: Dict[str, Any]) -> str:
+    lines = [
+        "# Benchmark Retry Feedback",
+        "",
+        f"Gate: `{feedback.get('source_gate', 'unknown')}`",
+        "",
+        "## Summary",
+        str(feedback.get("summary", "")),
+    ]
+
+    overall_reasoning = str(feedback.get("overall_reasoning", "") or "").strip()
+    if overall_reasoning:
+        lines.extend(["", "## Why It Failed", overall_reasoning])
+
+    required_fixes = feedback.get("required_fixes") or []
+    if required_fixes:
+        lines.extend(["", "## Required Fixes"])
+        lines.extend(f"- {fix}" for fix in required_fixes)
+
+    evidence = feedback.get("evidence") or []
+    if evidence:
+        lines.extend(["", "## Evidence"])
+        lines.extend(f"- {item}" for item in evidence)
+
+    artifact_paths = feedback.get("artifact_paths") or {}
+    if artifact_paths:
+        lines.extend(["", "## Artifacts"])
+        for name, path in artifact_paths.items():
+            lines.append(f"- `{name}`: `{path}`")
+
+    return "\n".join(lines) + "\n"
+
+
 def default_state(
     *,
     working_dir: str,
@@ -393,6 +588,8 @@ class TaskGenSession:
         self.trajectories_dir = self.working_dir / "agent_trajectories"
         self.submitted_tasks_dir = self.working_dir / "submitted_tasks"
         self.scene_file = self.working_dir / "current_scene.json"
+        self.benchmark_feedback_json = self.working_dir / "benchmark_retry_feedback.json"
+        self.benchmark_feedback_md = self.working_dir / "benchmark_retry_feedback.md"
         self.state = self._read_state()
 
     def _resolve_asset_path(self, path: str) -> str:
@@ -448,6 +645,25 @@ class TaskGenSession:
         with open(self.state_path, "w") as f:
             json.dump(self.state, f, indent=2)
 
+    def _clear_benchmark_feedback(self) -> None:
+        for path in (self.benchmark_feedback_json, self.benchmark_feedback_md):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def _write_benchmark_feedback(self, feedback: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(feedback)
+        payload["json_path"] = str(self.benchmark_feedback_json)
+        payload["markdown_path"] = str(self.benchmark_feedback_md)
+        with open(self.benchmark_feedback_json, "w") as f:
+            json.dump(payload, f, indent=2)
+        self.benchmark_feedback_md.write_text(
+            _render_benchmark_feedback_markdown(payload),
+            encoding="utf-8",
+        )
+        return payload
+
     def _load_scene_data(self) -> Optional[SceneData]:
         if not self.scene_file.exists():
             return None
@@ -497,6 +713,8 @@ class TaskGenSession:
             "working_dir": str(self.working_dir),
             "task_file": str(self.task_file),
             "prompt_file": str(self.working_dir / "taskgen_prompt.md"),
+            "benchmark_feedback_file": str(self.benchmark_feedback_md) if self.benchmark_feedback_md.exists() else None,
+            "benchmark_feedback_json": str(self.benchmark_feedback_json) if self.benchmark_feedback_json.exists() else None,
             "submitted_tasks": self.state.get("submitted_tasks", []),
             "submitted_count": len(self.state.get("submitted_tasks", [])),
             "num_tasks_target": self.state["num_tasks_target"],
@@ -686,6 +904,8 @@ class TaskGenSession:
             self.state["scene_id"] = loaded_scene.scene_id
             self.state["episode_id"] = loaded_scene.episode_id
             self._reset_gate_state()
+            if not keep:
+                self._clear_benchmark_feedback()
 
             if keep and self.task_file.exists():
                 try:
@@ -1136,6 +1356,7 @@ class TaskGenSession:
             from emtom.pddl.planner import compute_task_spec_hash
 
             spec_hash = compute_task_spec_hash(task_data)
+            self._clear_benchmark_feedback()
             self.state["last_submission_verification_passed"] = True
             self.state["last_submission_verification_spec_hash"] = spec_hash
             self.state["last_submission_verification_results"] = {
@@ -1254,12 +1475,18 @@ class TaskGenSession:
         payload.update(verification_payload)
         payload["gate"] = "PASSED" if gate_passed else "REJECTED"
         if gate_passed:
+            self._clear_benchmark_feedback()
             payload["next_step"] = "Verification passed. Submit the task without changing the spec."
             return success(payload)
 
+        feedback = _build_submission_verification_feedback(category, verification_payload)
+        feedback_payload = self._write_benchmark_feedback(feedback)
+        payload["benchmark_feedback"] = feedback_payload
+        payload["feedback_file"] = feedback_payload["markdown_path"]
         payload["action_required"] = (
             f"At least {required_failures} of gpt-5.4, claude-sonnet-4-6, and gemini-flash must fail. "
-            "Revise the task, then run taskgen judge -> taskgen test_task -> taskgen verify_task again."
+            f"Read `{self.benchmark_feedback_md.name}` and address every listed issue before rerunning "
+            "taskgen judge -> taskgen test_task -> taskgen verify_task."
         )
         payload["next_step"] = payload["action_required"]
         return failure("Submission verification rejected the task.", data=payload)
@@ -1268,6 +1495,7 @@ class TaskGenSession:
         _skip_test = self.state.get("skip_steps") or []
         if "test" in _skip_test or "task-evolution" in _skip_test:
             self.state["last_test_passed"] = True
+            self._clear_benchmark_feedback()
             self._write_state()
             _reason = "--remove task-evolution" if "task-evolution" in _skip_test else "--remove test"
             return success({"gate": "PASSED", "skipped": True, "reason": _reason})
@@ -1300,6 +1528,7 @@ class TaskGenSession:
 
         if not _deps_ok:
             self.state["last_test_passed"] = True
+            self._clear_benchmark_feedback()
             self._write_state()
             payload = dict(validation_result["data"])
             payload.update({"warning": f"Skipped simulator test due to missing deps: {_deps_err}", "gate": "PASSED"})
@@ -1331,9 +1560,21 @@ class TaskGenSession:
         payload["gate"] = "PASSED" if self.state["last_test_passed"] else "REJECTED"
         payload["gate_reason"] = " ".join(results["comparison"].get("reasons", []))
         if self.state["last_test_passed"]:
+            self._clear_benchmark_feedback()
             payload["next_step"] = "Test passed. Run taskgen verify_task, then submit the task without changing the spec."
         else:
-            payload["action_required"] = _build_test_task_retry_guidance(results["comparison"])
+            feedback = _build_test_task_failure_feedback(
+                task_data.get("category", "cooperative"),
+                results["comparison"],
+                results.get("trajectory_dir"),
+            )
+            feedback_payload = self._write_benchmark_feedback(feedback)
+            payload["benchmark_feedback"] = feedback_payload
+            payload["feedback_file"] = feedback_payload["markdown_path"]
+            payload["action_required"] = (
+                _build_test_task_retry_guidance(results["comparison"])
+                + f" Read `{self.benchmark_feedback_md.name}` and fix every listed issue before editing again."
+            )
             payload["next_step"] = payload["action_required"]
         return success(payload)
 
@@ -1456,6 +1697,7 @@ class TaskGenSession:
         self.state.setdefault("submitted_tasks", []).append(data["output_path"])
         self._refresh_calibration_stats()
         self._reset_gate_state()
+        self._clear_benchmark_feedback()
         self.state["_test_run_count"] = 0
         self.state["_verification_run_count"] = 0
         if len(self.state["submitted_tasks"]) < self.state["num_tasks_target"]:

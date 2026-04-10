@@ -1,5 +1,7 @@
 from emtom.task_gen.session import (
     _aggregate_competitive_baseline_phase_results,
+    _build_submission_verification_feedback,
+    _build_test_task_failure_feedback,
     _build_test_task_retry_guidance,
     build_mode_comparison,
 )
@@ -17,8 +19,9 @@ def test_build_mode_comparison_uses_count_based_calibration_gate():
     )
 
     assert comparison["standard_requirement"] == "must_fail"
-    assert comparison["gate_passed"] is False
+    assert comparison["gate_passed"] is True
     assert comparison["next_standard_pass_rate_if_fail"] < comparison["next_standard_pass_rate_if_pass"]
+    assert "Calibration note: standard passed" in comparison["reasons"][0]
 
 
 def test_build_mode_comparison_can_require_a_pass_when_that_moves_toward_target():
@@ -33,10 +36,11 @@ def test_build_mode_comparison_can_require_a_pass_when_that_moves_toward_target(
     )
 
     assert comparison["standard_requirement"] == "must_pass"
-    assert comparison["gate_passed"] is False
+    assert comparison["gate_passed"] is True
+    assert "Calibration note: standard failed" in comparison["reasons"][0]
 
 
-def test_test_task_retry_guidance_explains_too_easy_case():
+def test_test_task_retry_guidance_returns_generic_retry_for_non_baseline_failures():
     guidance = _build_test_task_retry_guidance(
         {
             "standard_requirement": "must_fail",
@@ -46,8 +50,7 @@ def test_test_task_retry_guidance_explains_too_easy_case():
     )
 
     assert "Do not call `taskgen fail`" in guidance
-    assert "too easy for standard mode" in guidance
-    assert "non-binary" in guidance
+    assert "run `taskgen judge` -> `taskgen test_task` again" in guidance
 
 
 def test_test_task_retry_guidance_explains_unsolved_baseline_case():
@@ -122,3 +125,58 @@ def test_build_mode_comparison_reports_failed_competitive_baseline_phases():
     assert comparison["baseline_passed"] is False
     assert comparison["baseline_failed_phases"] == ["team_1_only"]
     assert "both solo-team phases" in comparison["reasons"][0]
+
+
+def test_build_test_task_failure_feedback_highlights_competitive_phase_failures():
+    feedback = _build_test_task_failure_feedback(
+        "competitive",
+        {
+            "baseline_passed": False,
+            "standard_passed": True,
+            "standard_progress": 1.0,
+            "baseline_progress": 0.75,
+            "standard_turns": 3,
+            "baseline_turns": 28,
+            "baseline_failed_phases": ["team_1_only"],
+            "baseline_phase_results": {
+                "team_0_only": {"passed": True, "progress": 1.0, "turns": 8},
+                "team_1_only": {"passed": False, "progress": 0.75, "turns": 20},
+            },
+            "reasons": [
+                "Competitive baseline must pass in both solo-team phases (team_0_only and team_1_only). Failed phases: team_1_only."
+            ],
+        },
+        "/tmp/taskgen/run_3",
+    )
+
+    assert feedback["source_gate"] == "test_task"
+    assert "Competitive solo-team baseline failed" in feedback["summary"]
+    assert any("Failed phases to unblock first: team_1_only." == fix for fix in feedback["required_fixes"])
+    assert any("team_1_only: passed=False" in item for item in feedback["evidence"])
+    assert feedback["artifact_paths"]["comparison_json"].endswith("/tmp/taskgen/run_3/comparison.json")
+
+
+def test_build_submission_verification_feedback_reports_passing_models():
+    feedback = _build_submission_verification_feedback(
+        "cooperative",
+        {
+            "required_failures": 2,
+            "message": "Submission verification failed. Need at least 2/3 verification models to fail.",
+            "passed_models": ["gpt-5.4", "gemini-flash"],
+            "failed_models": ["claude-sonnet-4-6"],
+            "trajectory_dir": "/tmp/taskgen/verification_2",
+            "models": {
+                "gpt-5.4": {"passed": True, "progress": 1.0, "turns": 5},
+                "claude-sonnet-4-6": {"passed": False, "progress": 0.6, "turns": 20},
+                "gemini-flash": {"passed": True, "progress": 1.0, "turns": 8},
+            },
+        },
+    )
+
+    assert feedback["source_gate"] == "verify_task"
+    assert "2/3 verification models still solved it" in feedback["summary"]
+    assert any("gpt-5.4: passed=True" in item for item in feedback["evidence"])
+    assert any("gemini-flash solved the task quickly" in fix for fix in feedback["required_fixes"])
+    assert feedback["artifact_paths"]["verification_summary_json"].endswith(
+        "/tmp/taskgen/verification_2/verification_summary.json"
+    )

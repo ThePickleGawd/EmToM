@@ -38,12 +38,13 @@ def test_build_external_taskgen_prompt_inlines_runtime_context(tmp_path):
     assert "## Sampled Task Context" in prompt
     assert "## Required Commands" in prompt
     assert "`taskgen verify_task`" in prompt
+    assert "benchmark_retry_feedback.md" in prompt
     assert "1. Run `taskgen status`." in prompt
     assert "2. Run `taskgen new_scene N`" in prompt
     assert "Read all 10 `task_*_fields.json`" in prompt
     assert "`task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents`" in prompt
     assert "Open the matching raw `task_*.json` only" in prompt
-    assert "all of `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` fail" in prompt
+    assert "at least 2 of `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` fail" in prompt
     assert "extra_sections" not in prompt
 
 
