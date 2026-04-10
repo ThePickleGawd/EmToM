@@ -235,7 +235,7 @@ SHOW_QUEUE_STATUS=false
 allocate_default_output_dir() {
     local run_date day_dir max_generation next_generation existing_dir generation_name generation_num
     run_date="$(date +%Y%m%d)"
-    day_dir="${DEFAULT_OUTPUT_ROOT}/${run_date}"
+    day_dir="${DEFAULT_OUTPUT_ROOT}/bulk_generation_${run_date}"
 
     max_generation=0
     if [ -d "$day_dir" ]; then
@@ -280,7 +280,7 @@ print_usage() {
     echo "  --remove STEP [...] Skip pipeline components: pddl, llm-council, simulation, task-evolution, tom, structure, test"
     echo "                      Default for bulk runs: $DEFAULT_REMOVE_STEPS"
     echo "  --output-dir DIR    Output directory for submitted tasks"
-    echo "                      Default: data/emtom/tasks/YYYYMMDD/generation_N"
+    echo "                      Default: data/emtom/tasks/bulk_generation_YYYYMMDD/generation_N"
     echo "  --dry-run           Show commands without executing"
     echo "  --queue-status      Show current queue status and exit"
     echo ""
