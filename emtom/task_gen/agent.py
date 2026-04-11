@@ -563,8 +563,8 @@ class TaskGeneratorAgent:
         # Don't create working_task.json yet - agent must call new_scene first
         # self._create_working_task_from_template() is called in _new_scene()
 
-        # Select category (random if not specified)
-        task_category = self.category or random.choice(["cooperative", "competitive", "mixed"])
+        # Default generation excludes competitive unless explicitly requested.
+        task_category = self.category or random.choice(["cooperative", "mixed"])
 
         # Select k-level for this task
         if self._allowed_k_levels:

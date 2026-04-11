@@ -151,7 +151,7 @@ QUERY=""  # seed query for task generation
 THRESHOLD=0.7  # ToM judge threshold
 RETRY_VERIFICATION=""  # Path to failed ToM verification file
 NO_AUTO_RETRY=false  # Disable automatic retry on judge failure
-CATEGORY=""  # Task category: cooperative, competitive, or mixed
+CATEGORY=""  # Task category: cooperative, competitive, or mixed (default generate: cooperative/mixed only)
 SEED_TASKS_DIR=""  # Task pool used by the sampled_tasks selector
 NO_ICL=false  # Disable ICL (calibration-based sampled tasks with trajectories)
 SEED_PASS_RATIO="0.20"  # Logical seed mix for target-model passing tasks
@@ -266,7 +266,8 @@ print_usage() {
     echo "  --difficulty LEVEL   Generation difficulty preset: standard|hard (default: $GENERATION_DIFFICULTY)"
     echo "  --query \"TEXT\"       Seed query to guide task generation (e.g., \"A task using the radio\")"
     echo "  --retry-verification FILE  Retry generation using required fixes from failed ToM verification"
-    echo "  --category TYPE      Task category: cooperative, competitive, or mixed (default: random)"
+    echo "  --category TYPE      Task category: cooperative, competitive, or mixed"
+    echo "                       Default for generate: random over cooperative and mixed only"
     echo "  --seed-tasks-dir DIR Task pool for sampled_tasks selection (default: output dir, then data/emtom/tasks)"
     echo "  --target-model MODEL Model the generator is targeting for calibration + seed selection (default: $TARGET_MODEL)"
     echo "  --target-pass-rate R Desired pass rate for --target-model (mode default: standard=10%, hard=3%)"

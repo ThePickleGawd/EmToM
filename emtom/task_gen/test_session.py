@@ -160,21 +160,21 @@ def test_build_submission_verification_feedback_reports_passing_models():
     feedback = _build_submission_verification_feedback(
         "cooperative",
         {
-            "required_failures": 2,
-            "message": "Submission verification failed. Need at least 2/3 verification models to fail.",
-            "passed_models": ["gpt-5.4", "gemini-flash"],
-            "failed_models": ["claude-sonnet-4-6"],
+            "required_failures": 1,
+            "message": "Submission verification failed. Need at least 1/3 verification models to fail.",
+            "passed_models": ["gpt-5.4", "claude-sonnet-4-6", "gemini-flash"],
+            "failed_models": [],
             "trajectory_dir": "/tmp/taskgen/verification_2",
             "models": {
                 "gpt-5.4": {"passed": True, "progress": 1.0, "turns": 5},
-                "claude-sonnet-4-6": {"passed": False, "progress": 0.6, "turns": 20},
+                "claude-sonnet-4-6": {"passed": True, "progress": 0.6, "turns": 20},
                 "gemini-flash": {"passed": True, "progress": 1.0, "turns": 8},
             },
         },
     )
 
     assert feedback["source_gate"] == "verify_task"
-    assert "2/3 verification models still solved it" in feedback["summary"]
+    assert "3/3 verification models still solved it" in feedback["summary"]
     assert any("gpt-5.4: passed=True" in item for item in feedback["evidence"])
     assert any("gemini-flash solved the task quickly" in fix for fix in feedback["required_fixes"])
     assert feedback["artifact_paths"]["verification_summary_json"].endswith(

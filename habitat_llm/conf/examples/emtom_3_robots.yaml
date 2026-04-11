@@ -8,9 +8,11 @@ defaults:
   - /evaluation: decentralized_evaluation_runner_3_agent_openai
   - /world_model@world_model: gt_graph
   - /trajectory@trajectory : trajectory_logger
+  # Use the same oracle_rearrange_agent for all agents so standard motor skills are always available
+  # (Navigate/Pick/Place/Open/Close/Wait and Find* tools). Missing these causes "Tool not found".
   - /agent/@agents.agent_0.config: oracle_rearrange_agent
-  - /agent/@agents.agent_1.config: oracle_rearrange_object_states_agent
-  - /agent/@agents.agent_2.config: oracle_rearrange_object_states_agent
+  - /agent/@agents.agent_1.config: oracle_rearrange_agent
+  - /agent/@agents.agent_2.config: oracle_rearrange_agent
   # Planners for all agents come from decentralized_evaluation_runner_3_agent_openai
   - /wandb_conf@                : own
   - override /hydra/output : output
