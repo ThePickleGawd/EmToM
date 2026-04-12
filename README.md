@@ -138,7 +138,7 @@ AWS_DEFAULT_REGION=...
 ### Generate
 
 ```bash
-./emtom/run_emtom.sh generate --task-gen-agent mini --model gpt-5.2 --target-model gpt-5.2 --seed-tasks-dir data/emtom/tasks --num-tasks 4
+./emtom/run_emtom.sh generate --task-gen-agent mini --model gpt-5.2 --target-model gpt-5.4 --seed-tasks-dir data/emtom/tasks --num-tasks 4
 ```
 
 ### Verify and judge

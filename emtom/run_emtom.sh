@@ -166,7 +166,7 @@ OUTPUT_DIR=""  # Override output directory for generate/benchmark
 SCENE_DATA_FILE=""  # Optional scene data JSON for static verification
 JUDGE_DIFFICULTY=""  # Difficulty level for judge context: easy, medium, hard
 GENERATION_DIFFICULTY="standard"  # Generation preset: standard (80/20, <=10%) or hard (90/10, <=3%)
-TARGET_MODEL="gpt-5.2"  # Model that generation is targeting for seed selection + calibration
+TARGET_MODEL="gpt-5.4"  # Model that generation is targeting for seed selection + calibration
 TARGET_PASS_RATE="0.10"  # Desired pass rate for TARGET_MODEL
 TEST_MODEL=""  # Override model used for test_task calibration
 K_LEVEL=""  # Allowed k-levels (e.g. "2 3"). Empty = random per task.
