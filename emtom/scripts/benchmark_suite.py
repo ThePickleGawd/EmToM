@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from emtom.evolve.benchmark_wrapper import parse_benchmark_results
+from emtom.evolve.benchmark_wrapper import BenchmarkResults, parse_benchmark_results
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -77,6 +77,8 @@ def _format_rate(value: Optional[float]) -> str:
 def _status_style(status: str) -> tuple[str, ...]:
     if status == "complete":
         return (GREEN, BOLD)
+    if status == "partial":
+        return (YELLOW, BOLD)
     if status == "failed":
         return (RED, BOLD)
     if status == "running":
@@ -145,7 +147,7 @@ def _write_suite_summary(
     summary_text = render_suite_summary(results, tasks_dir, current_model=current_model)
     print(summary_text)
 
-    completed = sum(1 for result in results if result.status in {"complete", "failed"})
+    completed = sum(1 for result in results if result.status in {"complete", "partial", "failed"})
     pending = max(len(results) - completed, 0)
 
     summary_path = suite_dir / "suite_summary.json"
@@ -170,9 +172,98 @@ def _write_suite_summary(
     print(f"\nSaved suite summary to: {summary_path}")
 
 
+def _parse_nested_benchmark_results(output_dir: str, model: str) -> BenchmarkResults:
+    """Aggregate per-task benchmark summaries written by parallel benchmark mode."""
+    output_path = Path(output_dir)
+    summary_files = sorted(output_path.glob("**/results/benchmark_summary.json"))
+    if not summary_files:
+        raise FileNotFoundError(
+            f"No nested benchmark_summary.json found under '{output_dir}'."
+        )
+
+    total = 0
+    passed = 0
+    failed = 0
+    all_results = []
+    parse_errors = []
+    for summary_file in summary_files:
+        try:
+            parsed = parse_benchmark_results(str(summary_file.parent.parent), model=model)
+        except Exception as exc:
+            parse_errors.append(f"{summary_file}: {exc}")
+            continue
+        total += parsed.total
+        passed += parsed.passed
+        failed += parsed.failed
+        all_results.extend(parsed.results)
+
+    if total == 0:
+        details = parse_errors[0] if parse_errors else f"No parseable nested results under '{output_dir}'."
+        raise RuntimeError(details)
+
+    return BenchmarkResults(
+        model=model,
+        total=total,
+        passed=passed,
+        failed=failed,
+        pass_rate=(passed / total * 100.0) if total else 0.0,
+        results=all_results,
+    )
+
+
+def _parse_suite_model_results(output_dir: str, model: str) -> BenchmarkResults:
+    """Parse either a direct benchmark output or a benchmark-suite model directory."""
+    direct_error = ""
+    try:
+        return parse_benchmark_results(output_dir, model=model)
+    except Exception as exc:
+        direct_error = str(exc)
+
+    try:
+        return _parse_nested_benchmark_results(output_dir, model=model)
+    except Exception as exc:
+        if direct_error:
+            raise RuntimeError(f"{direct_error} Nested parse also failed: {exc}") from exc
+        raise
+
+
+def _build_suite_result(
+    model: str,
+    output_dir: str,
+    return_code: int,
+    parsed: Optional[BenchmarkResults],
+    error: str = "",
+) -> SuiteResult:
+    if parsed is None:
+        return SuiteResult(
+            model=model,
+            status="failed",
+            total=0,
+            passed=0,
+            failed=0,
+            pass_rate=None,
+            output_dir=output_dir,
+            return_code=return_code,
+            error=error or f"benchmark exited with code {return_code}",
+        )
+
+    status = "complete" if return_code == 0 else "partial"
+    return SuiteResult(
+        model=model,
+        status=status,
+        total=parsed.total,
+        passed=parsed.passed,
+        failed=parsed.failed,
+        pass_rate=parsed.pass_rate,
+        output_dir=output_dir,
+        return_code=return_code,
+        error=error,
+    )
+
+
 def _refresh_running_result(result: SuiteResult) -> SuiteResult:
     try:
-        parsed = parse_benchmark_results(result.output_dir, model=result.model)
+        parsed = _parse_suite_model_results(result.output_dir, model=result.model)
     except Exception:
         return result
     return SuiteResult(
@@ -297,35 +388,17 @@ def main() -> int:
             parsed = None
             parse_error = ""
             try:
-                parsed = parse_benchmark_results(str(model_output_dir), model=model)
+                parsed = _parse_suite_model_results(str(model_output_dir), model=model)
             except Exception as exc:
                 parse_error = str(exc)
 
-            if parsed is not None:
-                status = "complete" if return_code == 0 else "failed"
-                results[idx] = SuiteResult(
-                    model=model,
-                    status=status,
-                    total=parsed.total,
-                    passed=parsed.passed,
-                    failed=parsed.failed,
-                    pass_rate=parsed.pass_rate,
-                    output_dir=str(model_output_dir),
-                    return_code=return_code,
-                    error=parse_error,
-                )
-            else:
-                results[idx] = SuiteResult(
-                    model=model,
-                    status="failed",
-                    total=0,
-                    passed=0,
-                    failed=0,
-                    pass_rate=None,
-                    output_dir=str(model_output_dir),
-                    return_code=return_code,
-                    error=parse_error or f"benchmark exited with code {return_code}",
-                )
+            results[idx] = _build_suite_result(
+                model=model,
+                output_dir=str(model_output_dir),
+                return_code=return_code,
+                parsed=parsed,
+                error=parse_error,
+            )
             _write_suite_summary(suite_dir, tasks_dir, args, results, current_model=model)
     finally:
         if prepared_task_dir is not None and prepared_task_dir.exists():
