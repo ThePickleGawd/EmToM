@@ -180,3 +180,31 @@ def test_build_submission_verification_feedback_reports_passing_models():
     assert feedback["artifact_paths"]["verification_summary_json"].endswith(
         "/tmp/taskgen/verification_2/verification_summary.json"
     )
+
+
+def test_build_submission_verification_feedback_mentions_infra_failures():
+    feedback = _build_submission_verification_feedback(
+        "cooperative",
+        {
+            "required_failures": 1,
+            "message": "Submission verification failed. Need at least 1/2 completed verification models to fail.",
+            "passed_models": ["gpt-5.4", "gemini-flash"],
+            "failed_models": [],
+            "infra_failures": {
+                "claude-sonnet-4-6": "credit balance is too low",
+            },
+            "trajectory_dir": "/tmp/taskgen/verification_3",
+            "models": {
+                "gpt-5.4": {"passed": True, "progress": 1.0, "turns": 5},
+                "gemini-flash": {"passed": True, "progress": 0.8, "turns": 14},
+            },
+        },
+    )
+
+    assert feedback["verification_snapshot"]["infra_failures"] == {
+        "claude-sonnet-4-6": "credit balance is too low",
+    }
+    assert any(
+        "infrastructure errors prevented evaluation for claude-sonnet-4-6" in fix
+        for fix in feedback["required_fixes"]
+    )

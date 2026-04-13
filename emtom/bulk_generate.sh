@@ -214,7 +214,7 @@ acquire_lock_or_queue() {
 
 # Defaults
 PER_GPU=3
-MODEL="gpt-5.2"
+MODEL="gpt-5.4"
 NUM_TASKS=""
 RUN_UNTIL=""
 DRY_RUN=false
@@ -266,7 +266,7 @@ print_usage() {
     echo ""
     echo "Options:"
     echo "  --per-gpu N         Concurrent processes per GPU (default: 3)"
-    echo "  --model MODEL       LLM model (default: gpt-5.2)"
+    echo "  --model MODEL       LLM model (default: gpt-5.4)"
     echo "  --num-tasks N       Target new tasks for this bulk run (default: one full saturated run)"
     echo "                      The launcher divides N across fixed workers and starts them once"
     echo "  --run-until N       Keep recycling workers until at least N new tasks are submitted"

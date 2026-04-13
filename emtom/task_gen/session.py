@@ -410,6 +410,7 @@ def _build_submission_verification_feedback(
 ) -> Dict[str, Any]:
     passed_models = [str(model) for model in verification_payload.get("passed_models") or []]
     failed_models = [str(model) for model in verification_payload.get("failed_models") or []]
+    infra_failures = verification_payload.get("infra_failures") or {}
     model_summaries = verification_payload.get("models") or {}
     required_failures = int(verification_payload.get("required_failures", 0) or 0)
     total_models = len(model_summaries)
@@ -446,6 +447,11 @@ def _build_submission_verification_feedback(
         required_fixes.append(
             f"Priority: {', '.join(fast_passing_models)} solved the task quickly, so the current information bottleneck is too weak or too easy to guess."
         )
+    if infra_failures:
+        failed_infra_models = ", ".join(sorted(str(model) for model in infra_failures))
+        required_fixes.append(
+            f"Note: infrastructure errors prevented evaluation for {failed_infra_models}; the task was judged only on the verification models that completed."
+        )
     if category == "competitive":
         required_fixes.append(
             "For competitive tasks, keep both solo-team baseline branches solvable and make the difficulty come from private team knowledge, not from physically broken team branches."
@@ -462,6 +468,7 @@ def _build_submission_verification_feedback(
         "required_failures": required_failures,
         "passed_models": passed_models,
         "failed_models": failed_models,
+        "infra_failures": infra_failures,
     }
     return {
         "source_gate": "verify_task",
@@ -1413,8 +1420,13 @@ class TaskGenSession:
             for model, result in model_results.items()
             if result.get("error")
         }
-        if errors:
-            joined = "; ".join(f"{model}: {err}" for model, err in sorted(errors.items()))
+        usable_model_results = {
+            model: result
+            for model, result in model_results.items()
+            if not result.get("error")
+        }
+        if not usable_model_results:
+            joined = "; ".join(f"{model}: {err}" for model, err in sorted(errors.items())) or "unknown error"
             return failure(
                 f"Submission verification failed to run: {joined}",
                 data={"model_results": model_results, "trajectory_dir": str(run_dir)},
@@ -1424,7 +1436,7 @@ class TaskGenSession:
         summaries: Dict[str, Any] = {}
         failed_models: List[str] = []
         passed_models: List[str] = []
-        for model, result in model_results.items():
+        for model, result in usable_model_results.items():
             evaluation = result.get("evaluation", {})
             passed = _evaluation_passed(category, evaluation)
             progress = _evaluation_progress(category, evaluation)
@@ -1455,12 +1467,13 @@ class TaskGenSession:
             "models": summaries,
             "failed_models": failed_models,
             "passed_models": passed_models,
+            "infra_failures": errors,
             "trajectory_dir": str(run_dir),
             "spec_hash": spec_hash,
             "message": (
-                f"Submission verification passed. {len(failed_models)}/{len(SUBMISSION_VERIFICATION_MODELS)} verification models failed."
+                f"Submission verification passed. {len(failed_models)}/{len(usable_model_results)} completed verification models failed."
                 if gate_passed
-                else f"Submission verification failed. Need at least {required_failures}/{len(SUBMISSION_VERIFICATION_MODELS)} verification models to fail."
+                else f"Submission verification failed. Need at least {required_failures}/{len(usable_model_results)} completed verification models to fail."
             ),
         }
         with open(run_dir / "verification_summary.json", "w") as f:

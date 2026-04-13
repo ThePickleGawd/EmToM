@@ -138,7 +138,7 @@ AWS_DEFAULT_REGION=...
 ### Generate
 
 ```bash
-./emtom/run_emtom.sh generate --task-gen-agent mini --model gpt-5.2 --target-model gpt-5.4 --seed-tasks-dir data/emtom/tasks --num-tasks 4
+./emtom/run_emtom.sh generate --task-gen-agent mini --model gpt-5.4 --target-model gpt-5.4 --seed-tasks-dir data/emtom/tasks --num-tasks 4
 ```
 
 ### Verify and judge
@@ -164,7 +164,7 @@ AWS_DEFAULT_REGION=...
 ### Bulk generation
 
 ```bash
-./emtom/bulk_generate.sh --num-tasks 8 --task-gen-agent mini --model gpt-5.2
+./emtom/bulk_generate.sh --num-tasks 8 --task-gen-agent mini --model gpt-5.4
 ```
 
 ## What The Benchmark Measures
