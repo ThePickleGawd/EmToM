@@ -122,7 +122,7 @@ def parse_args() -> argparse.Namespace:
                         help="Minimum seed pool size — generate extra if copied tasks < this (default: 30)")
     parser.add_argument("--seed-tasks-dir", type=str, default="data/emtom/tasks",
                         help="Source directory for seed tasks (default: data/emtom/tasks)")
-    parser.add_argument("--icl-total-examples", type=int, default=10)
+    parser.add_argument("--icl-total-examples", type=int, default=30)
     parser.add_argument("--icl-failure-ratio", type=float, default=0.9)
     parser.add_argument("--judge-threshold", type=float, default=0.7,
                         help="Judge threshold for generation quality gate (default: 0.7)")

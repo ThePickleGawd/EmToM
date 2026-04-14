@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 _DIVERSITY_START_MARKER = "<!-- DIVERSITY_SECTION_START -->"
 _DIVERSITY_END_MARKER = "<!-- DIVERSITY_SECTION_END -->"
 _CALIBRATION_TOLERANCE = 0.05
+_HARD_MODE_STANDARD_PROGRESS_CAP = 0.45
 
 _SYSTEM_PROMPT = """You are a puzzle designer creating multi-agent collaboration benchmark tasks.
 
@@ -255,11 +256,21 @@ def _build_mode_comparison(
         next_rate_if_fail = current_passed / next_total
 
     gate_passed = baseline_passed
+    progress_cap_exceeded = False
     reasons: List[str] = []
     if not baseline_passed:
         gate_passed = False
         reasons.append(
             "Baseline/full-info run must pass so the task is empirically solvable when information asymmetry is removed."
+        )
+    if target_rate <= 0.05 + 1e-9 and standard_progress >= _HARD_MODE_STANDARD_PROGRESS_CAP:
+        gate_passed = False
+        progress_cap_exceeded = True
+        reasons.append(
+            "Hard calibration gate: standard reached "
+            f"{standard_progress:.1%} progress, but hard-mode tasks must stay below "
+            f"{_HARD_MODE_STANDARD_PROGRESS_CAP:.0%} standard progress. "
+            "Discard this task for hard-mode generation."
         )
     if requirement == "must_fail" and standard_passed:
         reasons.append(
@@ -276,6 +287,8 @@ def _build_mode_comparison(
     return {
         "gate_passed": gate_passed,
         "functional_tom_signal": baseline_passed,
+        "progress_cap_exceeded": progress_cap_exceeded,
+        "hard_standard_progress_cap": _HARD_MODE_STANDARD_PROGRESS_CAP,
         "standard_requirement": requirement,
         "current_standard_pass_rate": current_rate,
         "target_standard_pass_rate": target_rate,

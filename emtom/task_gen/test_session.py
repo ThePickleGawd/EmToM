@@ -61,7 +61,7 @@ def test_build_mode_comparison_rejects_hard_tasks_that_break_pass_rate_cap():
 def test_build_mode_comparison_allows_hard_tasks_when_projected_rate_stays_under_cap():
     comparison = build_mode_comparison(
         category="cooperative",
-        standard={"evaluation": {"success": True, "percent_complete": 1.0}},
+        standard={"evaluation": {"success": False, "percent_complete": 0.4}},
         baseline={"evaluation": {"success": True, "percent_complete": 1.0}},
         current_rate=0.025,
         target_rate=0.05,
@@ -73,7 +73,25 @@ def test_build_mode_comparison_allows_hard_tasks_when_projected_rate_stays_under
     assert comparison["standard_requirement"] == "either"
     assert comparison["gate_passed"] is True
     assert comparison["pass_rate_cap_exceeded"] is False
-    assert "hard cap of 5%" in comparison["reasons"][0]
+    assert "5% pass-rate cap" in comparison["reasons"][0]
+
+
+def test_build_mode_comparison_rejects_hard_tasks_that_reach_45_percent_progress():
+    comparison = build_mode_comparison(
+        category="cooperative",
+        standard={"evaluation": {"success": False, "percent_complete": 0.66}},
+        baseline={"evaluation": {"success": True, "percent_complete": 1.0}},
+        current_rate=0.025,
+        target_rate=0.05,
+        current_passed=1,
+        current_failed=39,
+        hard_pass_rate_cap=True,
+    )
+
+    assert comparison["gate_passed"] is False
+    assert comparison["progress_cap_exceeded"] is True
+    assert comparison["hard_standard_progress_cap"] == 0.45
+    assert "below 45%" in comparison["reasons"][0]
 
 
 def test_test_task_retry_guidance_returns_generic_retry_for_non_baseline_failures():
@@ -96,12 +114,33 @@ def test_test_task_retry_guidance_explains_hard_cap_failure():
             "standard_passed": True,
             "baseline_passed": True,
             "pass_rate_cap_exceeded": True,
+            "standard_progress": 0.66,
+            "hard_standard_progress_cap": 0.45,
             "target_standard_pass_rate": 0.05,
         }
     )
 
     assert "too easy for hard-mode generation" in guidance
     assert "above the 5% cap" in guidance
+    assert "66% progress" in guidance
+    assert "below 45%" in guidance
+
+
+def test_test_task_retry_guidance_explains_hard_progress_failure():
+    guidance = _build_test_task_retry_guidance(
+        {
+            "standard_requirement": "must_fail",
+            "standard_passed": False,
+            "baseline_passed": True,
+            "progress_cap_exceeded": True,
+            "standard_progress": 0.66,
+            "hard_standard_progress_cap": 0.45,
+        }
+    )
+
+    assert "too easy for hard-mode generation" in guidance
+    assert "66% progress" in guidance
+    assert "below 45%" in guidance
 
 
 def test_test_task_retry_guidance_explains_unsolved_baseline_case():
@@ -218,10 +257,13 @@ def test_build_test_task_failure_feedback_highlights_hard_cap_rejection():
             "standard_turns": 6,
             "baseline_turns": 5,
             "pass_rate_cap_exceeded": True,
+            "progress_cap_exceeded": True,
+            "hard_standard_progress_cap": 0.45,
             "target_standard_pass_rate": 0.05,
             "next_standard_pass_rate_if_pass": 0.073,
             "reasons": [
-                "Hard calibration gate: standard passed, which would leave the dataset at 7.3%, above the hard cap of 5%."
+                "Hard calibration gate: standard passed, which would leave the dataset at 7.3%, above the hard cap of 5%.",
+                "Hard calibration gate: standard reached 100.0% progress, but hard-mode tasks must stay below 45% standard progress. Discard this task for hard-mode generation.",
             ],
         },
         "/tmp/taskgen/run_4",
@@ -229,7 +271,10 @@ def test_build_test_task_failure_feedback_highlights_hard_cap_rejection():
 
     assert feedback["source_gate"] == "test_task"
     assert "Hard-mode calibration rejected the task" in feedback["summary"]
+    assert any("Hard-mode tasks must keep standard progress below 45%." == fix for fix in feedback["required_fixes"])
+    assert any("This task let standard reach 100% progress" in fix for fix in feedback["required_fixes"])
     assert any("Projected standard pass rate would be 7%" in fix for fix in feedback["required_fixes"])
+    assert any("hard_mode_standard_progress=100%" in item for item in feedback["evidence"])
     assert any("projected_standard_pass_rate_if_kept=7%" in item for item in feedback["evidence"])
     assert feedback["artifact_paths"]["comparison_json"].endswith("/tmp/taskgen/run_4/comparison.json")
 

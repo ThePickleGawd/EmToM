@@ -23,6 +23,7 @@ SUBMISSION_VERIFICATION_MODELS = [
     "gemini-flash",
 ]
 SUBMISSION_VERIFICATION_REQUIRED_FAILURES = 2
+HARD_MODE_STANDARD_PROGRESS_CAP = 0.45
 
 
 def _evaluation_passed(category: str, evaluation: Dict[str, Any]) -> bool:
@@ -246,6 +247,7 @@ def build_mode_comparison(
 
     gate_passed = baseline_passed
     pass_rate_cap_exceeded = False
+    progress_cap_exceeded = False
     reasons: List[str] = []
     if not baseline_passed:
         gate_passed = False
@@ -269,6 +271,15 @@ def build_mode_comparison(
         reasons.append(
             "Hard calibration gate: standard passed, which would leave the dataset at "
             f"{projected_text}, above the hard cap of {target_rate:.0%}. "
+            "Discard this task for hard-mode generation."
+        )
+    if hard_pass_rate_cap and standard_progress >= HARD_MODE_STANDARD_PROGRESS_CAP:
+        gate_passed = False
+        progress_cap_exceeded = True
+        reasons.append(
+            "Hard calibration gate: standard reached "
+            f"{standard_progress:.1%} progress, but hard-mode tasks must stay below "
+            f"{HARD_MODE_STANDARD_PROGRESS_CAP:.0%} standard progress. "
             "Discard this task for hard-mode generation."
         )
     elif requirement == "must_fail" and standard_passed:
@@ -300,6 +311,8 @@ def build_mode_comparison(
         "functional_tom_signal": baseline_passed,
         "hard_pass_rate_cap": hard_pass_rate_cap,
         "pass_rate_cap_exceeded": pass_rate_cap_exceeded,
+        "progress_cap_exceeded": progress_cap_exceeded,
+        "hard_standard_progress_cap": HARD_MODE_STANDARD_PROGRESS_CAP,
         "standard_requirement": requirement,
         "current_standard_pass_rate": current_rate,
         "target_standard_pass_rate": target_rate,
@@ -326,13 +339,27 @@ def _build_test_task_retry_guidance(comparison: Dict[str, Any]) -> str:
     baseline_passed = bool(comparison.get("baseline_passed"))
     baseline_failed_phases = comparison.get("baseline_failed_phases") or []
     pass_rate_cap_exceeded = bool(comparison.get("pass_rate_cap_exceeded"))
+    progress_cap_exceeded = bool(comparison.get("progress_cap_exceeded"))
 
     if pass_rate_cap_exceeded:
         target_text = _format_percent(comparison.get("target_standard_pass_rate"))
+        progress_text = _format_percent(comparison.get("standard_progress"))
+        cap_text = _format_percent(comparison.get("hard_standard_progress_cap"))
         return (
             "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
             "Do not call `taskgen fail`. The task is physically solvable, but it is too easy for hard-mode generation "
-            f"because a standard pass would push the calibrated pool above the {target_text} cap. "
+            f"because a standard pass would push the calibrated pool above the {target_text} cap"
+            f" and standard already reached {progress_text} progress (hard target: below {cap_text}). "
+            "Strengthen the hidden-information bottleneck instead of adding physical clutter."
+        )
+
+    if progress_cap_exceeded:
+        progress_text = _format_percent(comparison.get("standard_progress"))
+        cap_text = _format_percent(comparison.get("hard_standard_progress_cap"))
+        return (
+            "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
+            "Do not call `taskgen fail`. The task is physically solvable, but it is too easy for hard-mode generation "
+            f"because standard reached {progress_text} progress and hard-mode tasks must stay below {cap_text}. "
             "Strengthen the hidden-information bottleneck instead of adding physical clutter."
         )
 
@@ -373,6 +400,7 @@ def _build_test_task_failure_feedback(
 ) -> Dict[str, Any]:
     failed_baseline_phases = comparison.get("baseline_failed_phases") or []
     pass_rate_cap_exceeded = bool(comparison.get("pass_rate_cap_exceeded"))
+    progress_cap_exceeded = bool(comparison.get("progress_cap_exceeded"))
     reasons = [str(reason).strip() for reason in comparison.get("reasons") or [] if str(reason).strip()]
     evidence = [
         f"standard: passed={comparison.get('standard_passed', False)}, "
@@ -384,26 +412,41 @@ def _build_test_task_failure_feedback(
     ]
 
     required_fixes: List[str] = []
-    if pass_rate_cap_exceeded:
+    if pass_rate_cap_exceeded or progress_cap_exceeded:
         target_rate = comparison.get("target_standard_pass_rate")
         projected_rate = comparison.get("next_standard_pass_rate_if_pass")
-        if projected_rate is not None:
+        progress_cap = comparison.get("hard_standard_progress_cap")
+        standard_progress = comparison.get("standard_progress")
+        if projected_rate is not None and pass_rate_cap_exceeded:
             evidence.append(
                 f"projected_standard_pass_rate_if_kept={_format_percent(projected_rate)} "
                 f"(cap={_format_percent(target_rate)})"
             )
+        if progress_cap is not None and standard_progress is not None:
+            evidence.append(
+                f"hard_mode_standard_progress={_format_percent(standard_progress)} "
+                f"(cap=<{_format_percent(progress_cap)})"
+            )
         summary = (
-            "Hard-mode calibration rejected the task because standard solved it and keeping it would "
-            "push the calibrated pass rate above the allowed cap."
+            "Hard-mode calibration rejected the task because standard still made too much progress "
+            "for the hard target."
         )
         required_fixes.extend(
             [
-                "Keep the physical core baseline-solvable; the problem is that standard still solved the task.",
+                "Keep the physical core baseline-solvable; the problem is that standard still got too far through the task.",
                 "Strengthen one decisive hidden-information dependency so the correct action cannot be guessed from public facts alone.",
                 "Prefer a non-binary hidden choice or tighter message routing instead of adding extra rooms, objects, or search clutter.",
             ]
         )
-        if projected_rate is not None and target_rate is not None:
+        if progress_cap is not None:
+            required_fixes.append(
+                f"Hard-mode tasks must keep standard progress below {_format_percent(progress_cap)}."
+            )
+        if standard_progress is not None:
+            required_fixes.append(
+                f"This task let standard reach {_format_percent(standard_progress)} progress, so the hidden-information bottleneck is still too weak."
+            )
+        if projected_rate is not None and target_rate is not None and pass_rate_cap_exceeded:
             required_fixes.append(
                 f"Projected standard pass rate would be {_format_percent(projected_rate)}; hard-mode tasks must stay at or below {_format_percent(target_rate)}."
             )

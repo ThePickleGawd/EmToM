@@ -41,9 +41,10 @@ def test_build_external_taskgen_prompt_inlines_runtime_context(tmp_path):
     assert "benchmark_retry_feedback.md" in prompt
     assert "1. Run `taskgen status`." in prompt
     assert "2. Run `taskgen new_scene N`" in prompt
-    assert "Read all 10 `task_*_fields.json`" in prompt
+    assert "Read all 1 sampled tasks" in prompt
+    assert "Start with any `*_fields.json` compact views when present" in prompt
     assert "`task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents`" in prompt
-    assert "Open the matching raw `task_*.json` only" in prompt
+    assert "Open the matching raw task JSON only" in prompt
     assert "at least 2 of `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` fail" in prompt
     assert "extra_sections" not in prompt
 
@@ -120,6 +121,7 @@ def test_build_external_taskgen_prompt_encourages_full_supported_mechanic_set_fo
     assert "remote_control" in prompt
     assert "state_mirroring" in prompt
     assert "inverse_state" in prompt
+    assert "standard benchmark progress to stay below 45%" in prompt
     assert "the affected agent's secret may briefly state that mechanic fact in plain language" in prompt
     assert "Use the mechanic that creates the cleanest ToM bottleneck for the scene." in prompt
 
@@ -144,6 +146,7 @@ def test_build_external_taskgen_prompt_uses_hard_cap_language_for_low_target_rat
     assert "hard cap is 5%" in prompt
     assert "Anything below the cap is acceptable." in prompt
     assert "Discard any task whose standard pass would leave the calibrated pool above the cap." in prompt
+    assert "standard benchmark progress below 45%" in prompt
 
 
 def test_build_external_taskgen_prompt_removes_secret_strategy_rules_when_requested():

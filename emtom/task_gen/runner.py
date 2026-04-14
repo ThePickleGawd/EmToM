@@ -49,6 +49,9 @@ from emtom.task_gen.seed_selector import (
 from emtom.task_gen.session import TaskGenSession, default_state
 
 
+DEFAULT_SAMPLED_TASK_COUNT = 30
+
+
 def parse_extra_args():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--query", type=str, default=None)
@@ -308,6 +311,14 @@ def _copy_sample(src_path: Path, sampled_tasks_dir: Path, index: int) -> None:
     shutil.copy(src_path, sampled_tasks_dir / f"task_{index}.json")
 
 
+def _raw_sampled_task_paths(sampled_tasks_dir: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in sampled_tasks_dir.glob("*.json")
+        if not path.stem.endswith("_fields")
+    )
+
+
 def _write_sampled_task_field_views(sampled_tasks_dir: Path) -> None:
     field_names = [
         "task",
@@ -319,7 +330,7 @@ def _write_sampled_task_field_views(sampled_tasks_dir: Path) -> None:
         "num_agents",
     ]
 
-    for task_path in sorted(sampled_tasks_dir.glob("task_*.json")):
+    for task_path in _raw_sampled_task_paths(sampled_tasks_dir):
         try:
             with open(task_path) as f:
                 task_data = json.load(f)
@@ -335,13 +346,33 @@ def _write_sampled_task_field_views(sampled_tasks_dir: Path) -> None:
 def populate_sampled_tasks_dir(
     sampled_tasks_dir: Path,
     selection_config: SeedSelectionConfig,
-    sample_count: int = 10,
+    sample_count: int = DEFAULT_SAMPLED_TASK_COUNT,
 ) -> tuple[Optional[Path], int]:
     selected = select_seed_tasks(selection_config, count=sample_count)
     for i, candidate in enumerate(selected, 1):
         _copy_sample(candidate.path, sampled_tasks_dir, i)
     _write_sampled_task_field_views(sampled_tasks_dir)
     return selection_config.tasks_dir if selected else None, len(selected)
+
+
+def _sample_bucket_counts(
+    sample_count: int,
+    *,
+    fail_ratio: float,
+    pass_ratio: float,
+) -> tuple[int, int]:
+    if sample_count <= 0:
+        return 0, 0
+    if fail_ratio <= 0:
+        return 0, sample_count
+    if pass_ratio <= 0:
+        return sample_count, 0
+
+    total_ratio = fail_ratio + pass_ratio
+    pass_count = int(round(sample_count * (pass_ratio / total_ratio)))
+    pass_count = max(0, min(sample_count, pass_count))
+    fail_count = sample_count - pass_count
+    return fail_count, pass_count
 
 
 def compute_calibration_stats(tasks_dir: Union[str, Iterable[str]], model: str) -> dict:
@@ -638,9 +669,10 @@ def main() -> None:
         # Explicit override — copy files as-is
         override_path = Path(sampled_tasks_override)
         override_files = [p for p in override_path.glob("*.json") if is_task_like_json(p)]
-        selected = sorted(override_files)[:10]
+        selected = sorted(override_files)[:DEFAULT_SAMPLED_TASK_COUNT]
         for task_path in selected:
             shutil.copy(task_path, sampled_tasks_dir / task_path.name)
+        _write_sampled_task_field_views(sampled_tasks_dir)
     elif _no_icl:
         # --no-icl: use basic seed selection (no calibration trajectories)
         if seed_tasks_dir is not None:
@@ -657,7 +689,7 @@ def main() -> None:
             populate_sampled_tasks_dir(
                 sampled_tasks_dir,
                 selection_config,
-                sample_count=10,
+                sample_count=DEFAULT_SAMPLED_TASK_COUNT,
             )
     elif seed_tasks_dir is not None:
         # Default: ICL with calibration trajectories
@@ -666,13 +698,19 @@ def main() -> None:
             compute_pass_rate_from_calibration,
             build_evolution_query,
         )
+        fail_count, pass_count = _sample_bucket_counts(
+            DEFAULT_SAMPLED_TASK_COUNT,
+            fail_ratio=seed_fail_ratio,
+            pass_ratio=seed_pass_ratio,
+        )
         prepare_sampled_tasks_dir_from_calibration(
             tasks_dir=str(seed_tasks_dir),
             model=target_model,
             output_dir=str(sampled_tasks_dir),
-            fail_count=8,
-            pass_count=2,
+            fail_count=fail_count,
+            pass_count=pass_count,
         )
+        _write_sampled_task_field_views(sampled_tasks_dir)
         # Build and inject evolution query if not already set
         if not query:
             stats = compute_pass_rate_from_calibration(str(seed_tasks_dir), target_model)

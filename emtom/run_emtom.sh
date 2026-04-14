@@ -321,7 +321,7 @@ print_usage() {
     echo -e "${BOLD}Seed Loop:${NC}"
     echo "  Evolution is now the normal generate loop."
     echo "  Use --difficulty standard for the 80/20 sampled-task mix or --difficulty hard for the 90/10 mix. You can still override --target-pass-rate and seed pass/fail ratios directly."
-    echo "  Seed selection populates sampled_tasks/ for inspiration only; working_task.json starts from the blank template."
+    echo "  Seed selection populates sampled_tasks/ with 30 examples by default for inspiration only; working_task.json starts from the blank template."
     echo "  ./emtom/run_emtom.sh evolve ... still works as a deprecated alias for generate."
     echo ""
     echo -e "${BOLD}Golden Verify Options:${NC}"

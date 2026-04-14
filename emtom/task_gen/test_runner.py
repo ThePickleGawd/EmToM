@@ -1,6 +1,10 @@
 import json
 
-from emtom.task_gen.runner import compute_calibration_stats, _write_sampled_task_field_views
+from emtom.task_gen.runner import (
+    _sample_bucket_counts,
+    _write_sampled_task_field_views,
+    compute_calibration_stats,
+)
 
 
 def _write_task(path, title, tom_level, calibration):
@@ -112,3 +116,28 @@ def test_write_sampled_task_field_views_include_only_useful_fields(tmp_path):
     assert filtered["task"] == "Move the bottle to the table."
     assert filtered["mechanic_bindings"] == [{"mechanic_type": "room_restriction"}]
     assert filtered["agent_secrets"] == {"agent_0": ["secret"], "agent_1": ["other secret"]}
+
+
+def test_write_sampled_task_field_views_supports_failed_and_passed_sample_names(tmp_path):
+    task_path = tmp_path / "failed_1_25pct.json"
+    task_path.write_text(
+        json.dumps(
+            {
+                "title": "Failed Sample",
+                "task": "Open the cabinet.",
+                "agent_actions": {"agent_0": ["Wait"], "agent_1": ["Wait"]},
+                "num_agents": 2,
+            }
+        )
+    )
+
+    _write_sampled_task_field_views(tmp_path)
+
+    filtered = json.loads((tmp_path / "failed_1_25pct_fields.json").read_text())
+    assert filtered["task"] == "Open the cabinet."
+    assert filtered["num_agents"] == 2
+
+
+def test_sample_bucket_counts_scale_default_mix_to_thirty_examples():
+    assert _sample_bucket_counts(30, fail_ratio=0.8, pass_ratio=0.2) == (24, 6)
+    assert _sample_bucket_counts(30, fail_ratio=0.9, pass_ratio=0.1) == (27, 3)

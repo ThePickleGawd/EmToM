@@ -22,7 +22,7 @@ class EvolutionConfig:
     generator_model: str = "gpt-5.2"
     tasks_per_round: int = 20
     icl_failure_ratio: float = 0.9
-    icl_total_examples: int = 10
+    icl_total_examples: int = 30
     # Destination directory for evolved task JSONs.
     output_dir: str = "data/emtom/tasks"
     max_workers: int = 50

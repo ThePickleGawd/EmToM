@@ -141,6 +141,14 @@ def _strip_secret_strategy_rules(prompt: str) -> str:
     return "\n".join(filtered_lines)
 
 
+def _count_raw_sampled_tasks(sampled_dir: Path) -> int:
+    return sum(
+        1
+        for path in sampled_dir.glob("*.json")
+        if not path.stem.endswith("_fields")
+    )
+
+
 def build_external_taskgen_prompt(
     *,
     working_dir: str,
@@ -195,6 +203,7 @@ def build_external_taskgen_prompt(
             "hard": (
                 "## Difficulty: HARD\n"
                 "- Prefer tasks that the target model fails.\n"
+                "- Hard-mode acceptance requires standard benchmark progress to stay below 45%; if standard reaches 45% or more, `test_task` will reject the task.\n"
                 "- Make the core difficulty a **belief-routing problem**, not a search problem.\n"
                 "- Use one or two decisive hidden facts, not a pile of decorative secrets.\n"
                 "- Constrained but meaningful communication — messages must carry load.\n"
@@ -234,6 +243,7 @@ def build_external_taskgen_prompt(
                 calibration_text = (
                     f"No calibration data yet for {model}. Hard-task generation uses a hard pass-rate cap of {target_rate:.0%}.\n"
                     "Anything below the cap is acceptable. Discard any task whose standard pass would push the calibrated pool above the cap.\n"
+                    "Hard-mode tasks must also keep standard benchmark progress below 45%; tasks at 45% or higher are too easy and must be discarded.\n"
                     "The test gate still requires baseline/full-info to pass."
                 )
             else:
@@ -245,6 +255,7 @@ def build_external_taskgen_prompt(
             calibration_text = (
                 f"Current {model} pass rate is {current_rate:.1%}; the hard cap is {target_rate:.0%}.\n"
                 "Anything below the cap is acceptable. Discard any task whose standard pass would leave the calibrated pool above the cap.\n"
+                "Hard-mode tasks must also keep standard benchmark progress below 45%; tasks at 45% or higher are too easy and must be discarded.\n"
                 "The test gate REQUIRES baseline to pass, and tasks where standard also passes may still be rejected if they break the cap.\n"
                 "To keep hard tasks under the cap:\n"
                 "- The decisive action must depend on a fact the standard agent cannot observe.\n"
@@ -299,22 +310,25 @@ def build_external_taskgen_prompt(
     sampled_files_block = ""
     # Only show sampled task guidance if the sampled_tasks directory has files.
     sampled_dir = Path(working_dir) / "sampled_tasks"
-    has_sampled_files = sampled_dir.exists() and any(sampled_dir.glob("*.json"))
+    sampled_task_count = _count_raw_sampled_tasks(sampled_dir) if sampled_dir.exists() else 0
+    has_sampled_files = sampled_task_count > 0
     if not skip_evolution and has_sampled_files:
         target_model = (calibration_stats or {}).get("model", "unknown")
         sampled_task_block = (
             "\n\n## Sampled Task Context\n"
             f"Target model: {target_model}. Sampled-task mix: fail {seed_fail_ratio:.0%}, pass {seed_pass_ratio:.0%}.\n"
-            "Inspect sampled tasks before authoring. Read all `*.json` files in `sampled_tasks/`.\n"
+            "Inspect sampled tasks before authoring. Read all sampled tasks in `sampled_tasks/`.\n"
             "Files named `failed_*` have a `_benchmark_result` with the agent's trajectory.\n"
             "Files named `passed_*` show tasks the target model could solve.\n"
+            "Start with any `*_fields.json` compact views when present, then open the matching raw task JSON only when you need full benchmark-behavior detail.\n"
             "Study `task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents`.\n"
             "Borrow only structural patterns that look empirically solvable under test_task, especially short physical cores, strong secrets, and clean mechanic usage.\n"
             "Do not infer that rare mechanics are forbidden just because the sampled pool underuses them. The supported authoring set is `room_restriction`, `limited_bandwidth`, `restricted_communication`, `remote_control`, `state_mirroring`, and `inverse_state`.\n"
             "Start each task from the scene-grounded template in working_task.json. Do not copy a seed task directly."
         )
         sampled_files_block = (
-            f"- `{working_dir}/sampled_tasks/*.json`: sampled tasks with benchmark results. Read all before authoring.\n"
+            f"- `{working_dir}/sampled_tasks/*_fields.json`: compact sampled-task views when present. Start here.\n"
+            f"- `{working_dir}/sampled_tasks/*.json`: raw sampled tasks with benchmark results.\n"
             "- Study `task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents` first.\n"
         )
 
@@ -345,9 +359,9 @@ def build_external_taskgen_prompt(
         "1. Run `taskgen status`.",
         f"2. Run `taskgen new_scene N` with `N` between {agents_min} and {agents_max}. Never use `1`. Use only the returned `valid_agent_ids` in mechanic bindings, secrets, message targets, and teams.",
     ]
-    if not skip_evolution:
+    if not skip_evolution and has_sampled_files:
         workflow_lines.append(
-            f"3. Read all 10 `task_*_fields.json` sampled-task views in `{working_dir}/sampled_tasks/` before authoring. For each one, inspect `task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents`. Open the matching raw `task_*.json` only if you need `calibration` or extra benchmark-behavior detail. Look for good practices in secrets, information splits, and mechanic usage. Reuse only structural patterns that look empirically solvable. Do not copy IDs directly."
+            f"3. Read all {sampled_task_count} sampled tasks in `{working_dir}/sampled_tasks/` before authoring. Start with any `*_fields.json` compact views when present. For each task, inspect `task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents`. Open the matching raw task JSON only if you need `calibration` or extra benchmark-behavior detail. Look for good practices in secrets, information splits, and mechanic usage. Reuse only structural patterns that look empirically solvable. Do not copy IDs directly."
         )
     edit_step_number = len(workflow_lines) + 1
     edit_text = "Write the natural-language task, secrets, and mechanics." if skip_pddl else "Author `problem_pddl :goal` first, then make the natural-language fields and mechanics match it."
