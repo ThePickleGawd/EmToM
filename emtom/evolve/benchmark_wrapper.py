@@ -414,6 +414,37 @@ def _detect_gpu_ids() -> List[int]:
     return [0]
 
 
+def _build_subprocess_env(base_env: Dict[str, str], out_path: Path, stem: str, gpu_id: int) -> Dict[str, str]:
+    """Build a subprocess environment that keeps temp files off the root filesystem."""
+    tmp_root = out_path / "_tmp" / stem
+    wandb_root = out_path / "_wandb" / stem
+    cache_root = out_path / "_cache" / stem
+
+    for path in (
+        tmp_root,
+        wandb_root,
+        wandb_root / "cache",
+        wandb_root / "config",
+        cache_root,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+
+    env = dict(base_env)
+    env.update(
+        {
+            "CUDA_VISIBLE_DEVICES": str(gpu_id),
+            "TMPDIR": str(tmp_root),
+            "TMP": str(tmp_root),
+            "TEMP": str(tmp_root),
+            "WANDB_DIR": str(wandb_root),
+            "WANDB_CACHE_DIR": str(wandb_root / "cache"),
+            "WANDB_CONFIG_DIR": str(wandb_root / "config"),
+            "XDG_CACHE_HOME": str(cache_root),
+        }
+    )
+    return env
+
+
 def run_benchmark_parallel(
     tasks_dir: str,
     model: str,
@@ -614,9 +645,9 @@ def run_benchmark_parallel(
                 if extra_args:
                     cmd.extend(extra_args)
 
-                # Round-robin GPU assignment
+                # Round-robin GPU assignment and keep temp files under the benchmark output tree.
                 gpu_id = gpu_ids[job_idx % len(gpu_ids)]
-                env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu_id)}
+                env = _build_subprocess_env(os.environ, out_path, stem, gpu_id)
 
                 log_file = log_dir / f"bench_{stem}.log"
                 fh = open(log_file, "w")
