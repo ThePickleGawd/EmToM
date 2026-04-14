@@ -59,9 +59,9 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - Judge-time ToM evidence must come from the strict Fast Downward proof path. Structural or syntactic fallback metadata is not valid submission evidence.
 - `test_task` now runs `standard` plus a `baseline` solvability check. For competitive tasks, that baseline check consists of two solo-team runs, one for each side.
 - `verify_task` is a separate pre-submit gate. It runs `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` in `standard` mode and requires at least two failures before submission.
-- Dataset difficulty calibration uses the `standard` result only, with a target pass rate of 10% by default for the current target model. Hard generation uses a stricter 3% target.
+- Dataset difficulty calibration uses the `standard` result only, with a target pass rate of 10% by default for the current target model. Hard generation uses a hard standard-mode pass-rate cap of 5%; anything below 5% is acceptable, and candidate tasks that would push the calibrated pool above 5% must be rejected.
 - Calibration and sampled-task selection ignore `tom_level = 0` tasks. New submissions with `tom_level < 1` must be rejected.
-- The `test_task` acceptance gate should use the current calibrated pass/fail counts and accept only the next `standard` outcome that moves the dataset closer to the target pass rate.
+- The `test_task` acceptance gate should use the current calibrated pass/fail counts. Standard generation may continue using target-tracking, but hard generation must enforce the 5% max-pass-rate cap and reject any candidate task whose kept `standard` outcome would exceed that cap.
 - `baseline` does not replace the planner/golden-trajectory check; it is an additional empirical check that the task becomes solvable when private information is removed.
 - Submitted benchmark tasks must stay grounded in a real dataset `scene_id` and `episode_id`. Synthetic fallback scenes are allowed for lightweight authoring environments, but they must be rejected before submission and benchmark runs.
 

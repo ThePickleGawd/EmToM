@@ -165,7 +165,7 @@ SAMPLED_TASKS_DIR=""  # Pre-built sampled_tasks directory (skips random sampling
 OUTPUT_DIR=""  # Override output directory for generate/benchmark
 SCENE_DATA_FILE=""  # Optional scene data JSON for static verification
 JUDGE_DIFFICULTY=""  # Difficulty level for judge context: easy, medium, hard
-GENERATION_DIFFICULTY="standard"  # Generation preset: standard (80/20, <=10%) or hard (90/10, <=3%)
+GENERATION_DIFFICULTY="standard"  # Generation preset: standard (80/20, <=10%) or hard (90/10, hard cap <=5%)
 TARGET_MODEL="gpt-5.4"  # Model that generation is targeting for seed selection + calibration
 TARGET_PASS_RATE="0.10"  # Desired pass rate for TARGET_MODEL
 TEST_MODEL=""  # Override model used for test_task calibration
@@ -270,7 +270,7 @@ print_usage() {
     echo "                       Default for generate: random over cooperative and mixed only"
     echo "  --seed-tasks-dir DIR Task pool for sampled_tasks selection (default: output dir, then data/emtom/tasks)"
     echo "  --target-model MODEL Model the generator is targeting for calibration + seed selection (default: $TARGET_MODEL)"
-    echo "  --target-pass-rate R Desired pass rate for --target-model (mode default: standard=10%, hard=3%)"
+    echo "  --target-pass-rate R Desired pass rate for --target-model (mode default: standard=10%, hard cap=5%)"
     echo "  --seed-pass-ratio R  Logical fraction of selected seeds that should pass the target model (default: $SEED_PASS_RATIO)"
     echo "  --seed-fail-ratio R  Logical fraction of selected seeds that should fail the target model (default: $SEED_FAIL_RATIO)"
     echo "  --sampled-tasks-dir DIR  Pre-built sampled_tasks directory (skips random sampling)"
@@ -1540,7 +1540,7 @@ case $GENERATION_DIFFICULTY in
         [ "$SEED_FAIL_RATIO_EXPLICIT" = false ] && SEED_FAIL_RATIO="0.80"
         ;;
     hard)
-        [ "$TARGET_PASS_RATE_EXPLICIT" = false ] && TARGET_PASS_RATE="0.03"
+        [ "$TARGET_PASS_RATE_EXPLICIT" = false ] && TARGET_PASS_RATE="0.05"
         [ "$SEED_PASS_RATIO_EXPLICIT" = false ] && SEED_PASS_RATIO="0.10"
         [ "$SEED_FAIL_RATIO_EXPLICIT" = false ] && SEED_FAIL_RATIO="0.90"
         ;;

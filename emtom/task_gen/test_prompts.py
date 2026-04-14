@@ -124,6 +124,28 @@ def test_build_external_taskgen_prompt_encourages_full_supported_mechanic_set_fo
     assert "Use the mechanic that creates the cleanest ToM bottleneck for the scene." in prompt
 
 
+def test_build_external_taskgen_prompt_uses_hard_cap_language_for_low_target_rate():
+    prompt = build_external_taskgen_prompt(
+        working_dir="/tmp/taskgen",
+        task_file="/tmp/taskgen/working_task.json",
+        category="cooperative",
+        num_tasks=1,
+        agents_min=2,
+        agents_max=4,
+        subtasks_min=2,
+        subtasks_max=5,
+        calibration_stats={
+            "model": "gpt-5.4",
+            "target_rate": 0.05,
+            "rate": 0.07,
+        },
+    )
+
+    assert "hard cap is 5%" in prompt
+    assert "Anything below the cap is acceptable." in prompt
+    assert "Discard any task whose standard pass would leave the calibrated pool above the cap." in prompt
+
+
 def test_build_external_taskgen_prompt_removes_secret_strategy_rules_when_requested():
     prompt = build_external_taskgen_prompt(
         working_dir="/tmp/taskgen",

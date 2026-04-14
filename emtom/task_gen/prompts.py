@@ -228,10 +228,29 @@ def build_external_taskgen_prompt(
         model = calibration_stats.get("model", "unknown")
         target_rate = calibration_stats.get("target_rate", 0.10)
         current_rate = calibration_stats.get("rate")
+        hard_cap_mode = target_rate <= 0.05 + 1e-9
         if current_rate is None:
+            if hard_cap_mode:
+                calibration_text = (
+                    f"No calibration data yet for {model}. Hard-task generation uses a hard pass-rate cap of {target_rate:.0%}.\n"
+                    "Anything below the cap is acceptable. Discard any task whose standard pass would push the calibrated pool above the cap.\n"
+                    "The test gate still requires baseline/full-info to pass."
+                )
+            else:
+                calibration_text = (
+                    f"No calibration data yet for {model}. Generate varied tasks.\n"
+                    "The test gate only requires baseline/full-info to pass. Standard mode results are tracked but do not block submission."
+                )
+        elif hard_cap_mode:
             calibration_text = (
-                f"No calibration data yet for {model}. Generate varied tasks.\n"
-                "The test gate only requires baseline/full-info to pass. Standard mode results are tracked but do not block submission."
+                f"Current {model} pass rate is {current_rate:.1%}; the hard cap is {target_rate:.0%}.\n"
+                "Anything below the cap is acceptable. Discard any task whose standard pass would leave the calibrated pool above the cap.\n"
+                "The test gate REQUIRES baseline to pass, and tasks where standard also passes may still be rejected if they break the cap.\n"
+                "To keep hard tasks under the cap:\n"
+                "- The decisive action must depend on a fact the standard agent cannot observe.\n"
+                "- The fact should be non-binary or otherwise hard to guess from public information.\n"
+                "- Keep communication load-bearing so the right fact must be routed, not trivially broadcast.\n"
+                "- Keep the physical core simple enough that baseline still passes."
             )
         elif current_rate > target_rate + 0.05:
             calibration_text = (
@@ -261,7 +280,8 @@ def build_external_taskgen_prompt(
             if cs.get("total", 0) > 0:
                 cat_lines.append(f"  {cat_name}: {cs['rate']:.0%} pass ({cs['passed']}/{cs['total']})")
         if cat_lines:
-            calibration_text += f"\n\nPer-category standard pass rates (each targeting {target_rate:.0%}):\n" + "\n".join(cat_lines)
+            label = f"hard cap {target_rate:.0%}" if hard_cap_mode else f"each targeting {target_rate:.0%}"
+            calibration_text += f"\n\nPer-category standard pass rates ({label}):\n" + "\n".join(cat_lines)
 
         calibration_block = f"\n\n## Dataset Calibration\n{calibration_text}"
 

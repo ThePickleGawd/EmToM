@@ -93,7 +93,17 @@ def _standard_requirement(
     tolerance: float = 0.05,
     current_passed: Optional[int] = None,
     current_failed: Optional[int] = None,
+    hard_pass_rate_cap: bool = False,
 ) -> str:
+    if hard_pass_rate_cap:
+        if current_passed is not None and current_failed is not None:
+            next_total = current_passed + current_failed + 1
+            pass_rate_if_pass = (current_passed + 1) / next_total
+            return "must_fail" if pass_rate_if_pass > target_rate + 1e-9 else "either"
+        if current_rate is None:
+            return "either"
+        return "must_fail" if current_rate >= target_rate - 1e-9 else "either"
+
     if current_passed is not None and current_failed is not None:
         total = current_passed + current_failed
         next_total = total + 1
@@ -202,6 +212,7 @@ def build_mode_comparison(
     tolerance: float = 0.05,
     current_passed: Optional[int] = None,
     current_failed: Optional[int] = None,
+    hard_pass_rate_cap: bool = False,
 ) -> Dict[str, Any]:
     std_eval = standard.get("evaluation", {})
     base_eval = baseline.get("evaluation", {})
@@ -223,6 +234,7 @@ def build_mode_comparison(
         tolerance=tolerance,
         current_passed=current_passed,
         current_failed=current_failed,
+        hard_pass_rate_cap=hard_pass_rate_cap,
     )
     next_total = None
     next_rate_if_pass = None
@@ -233,6 +245,7 @@ def build_mode_comparison(
         next_rate_if_fail = current_passed / next_total
 
     gate_passed = baseline_passed
+    pass_rate_cap_exceeded = False
     reasons: List[str] = []
     if not baseline_passed:
         gate_passed = False
@@ -246,7 +259,19 @@ def build_mode_comparison(
             reasons.append(
                 "Baseline/full-info run must pass so the task is empirically solvable when information asymmetry is removed."
             )
-    if requirement == "must_fail" and standard_passed:
+    projected_pass_rate = next_rate_if_pass if next_rate_if_pass is not None else current_rate
+    if hard_pass_rate_cap and requirement == "must_fail" and standard_passed:
+        gate_passed = False
+        pass_rate_cap_exceeded = True
+        projected_text = (
+            f"{projected_pass_rate:.1%}" if projected_pass_rate is not None else "an unknown projected rate"
+        )
+        reasons.append(
+            "Hard calibration gate: standard passed, which would leave the dataset at "
+            f"{projected_text}, above the hard cap of {target_rate:.0%}. "
+            "Discard this task for hard-mode generation."
+        )
+    elif requirement == "must_fail" and standard_passed:
         reasons.append(
             f"Calibration note: standard passed, which moves the dataset away from the target zone around {target_rate:.0%}. Prefer somewhat harder tasks next."
         )
@@ -256,11 +281,25 @@ def build_mode_comparison(
         )
 
     if not reasons:
-        reasons.append("Baseline passed. Standard outcome is acceptable, and the dataset should continue tending toward the calibration target over time.")
+        if hard_pass_rate_cap:
+            if standard_passed:
+                reasons.append(
+                    "Baseline passed. Standard outcome is acceptable because the projected dataset "
+                    f"pass rate stays at or below the hard cap of {target_rate:.0%}."
+                )
+            else:
+                reasons.append(
+                    "Baseline passed and standard failed, which keeps the hard-mode dataset at or "
+                    f"below the {target_rate:.0%} pass-rate cap."
+                )
+        else:
+            reasons.append("Baseline passed. Standard outcome is acceptable, and the dataset should continue tending toward the calibration target over time.")
 
     return {
         "gate_passed": gate_passed,
         "functional_tom_signal": baseline_passed,
+        "hard_pass_rate_cap": hard_pass_rate_cap,
+        "pass_rate_cap_exceeded": pass_rate_cap_exceeded,
         "standard_requirement": requirement,
         "current_standard_pass_rate": current_rate,
         "target_standard_pass_rate": target_rate,
@@ -284,10 +323,18 @@ def build_mode_comparison(
 
 
 def _build_test_task_retry_guidance(comparison: Dict[str, Any]) -> str:
-    requirement = comparison.get("standard_requirement")
-    standard_passed = bool(comparison.get("standard_passed"))
     baseline_passed = bool(comparison.get("baseline_passed"))
     baseline_failed_phases = comparison.get("baseline_failed_phases") or []
+    pass_rate_cap_exceeded = bool(comparison.get("pass_rate_cap_exceeded"))
+
+    if pass_rate_cap_exceeded:
+        target_text = _format_percent(comparison.get("target_standard_pass_rate"))
+        return (
+            "Revise the task and run `taskgen judge` -> `taskgen test_task` again. "
+            "Do not call `taskgen fail`. The task is physically solvable, but it is too easy for hard-mode generation "
+            f"because a standard pass would push the calibrated pool above the {target_text} cap. "
+            "Strengthen the hidden-information bottleneck instead of adding physical clutter."
+        )
 
     if not baseline_passed:
         phase_note = ""
@@ -325,6 +372,7 @@ def _build_test_task_failure_feedback(
     trajectory_dir: Optional[str],
 ) -> Dict[str, Any]:
     failed_baseline_phases = comparison.get("baseline_failed_phases") or []
+    pass_rate_cap_exceeded = bool(comparison.get("pass_rate_cap_exceeded"))
     reasons = [str(reason).strip() for reason in comparison.get("reasons") or [] if str(reason).strip()]
     evidence = [
         f"standard: passed={comparison.get('standard_passed', False)}, "
@@ -336,7 +384,30 @@ def _build_test_task_failure_feedback(
     ]
 
     required_fixes: List[str] = []
-    if category == "competitive" and failed_baseline_phases:
+    if pass_rate_cap_exceeded:
+        target_rate = comparison.get("target_standard_pass_rate")
+        projected_rate = comparison.get("next_standard_pass_rate_if_pass")
+        if projected_rate is not None:
+            evidence.append(
+                f"projected_standard_pass_rate_if_kept={_format_percent(projected_rate)} "
+                f"(cap={_format_percent(target_rate)})"
+            )
+        summary = (
+            "Hard-mode calibration rejected the task because standard solved it and keeping it would "
+            "push the calibrated pass rate above the allowed cap."
+        )
+        required_fixes.extend(
+            [
+                "Keep the physical core baseline-solvable; the problem is that standard still solved the task.",
+                "Strengthen one decisive hidden-information dependency so the correct action cannot be guessed from public facts alone.",
+                "Prefer a non-binary hidden choice or tighter message routing instead of adding extra rooms, objects, or search clutter.",
+            ]
+        )
+        if projected_rate is not None and target_rate is not None:
+            required_fixes.append(
+                f"Projected standard pass rate would be {_format_percent(projected_rate)}; hard-mode tasks must stay at or below {_format_percent(target_rate)}."
+            )
+    elif category == "competitive" and failed_baseline_phases:
         phase_results = comparison.get("baseline_phase_results") or {}
         for phase_id in ("team_0_only", "team_1_only"):
             phase = phase_results.get(phase_id)
@@ -373,7 +444,7 @@ def _build_test_task_failure_feedback(
             ]
         )
 
-    if comparison.get("baseline_turns", 0) >= 20:
+    if not pass_rate_cap_exceeded and comparison.get("baseline_turns", 0) >= 20:
         required_fixes.append(
             "The baseline is hitting the full benchmark budget, which usually means too much search or too much coordination load."
         )
@@ -1055,32 +1126,52 @@ class TaskGenSession:
     ) -> Dict[str, Any]:
         """Parse JSON result from a benchmark subprocess.
 
-        Some simulator dependencies emit noisy logs to stdout (and/or stderr)
-        before printing the CLIResult JSON payload. We therefore scan stdout for
-        the first JSON object and attempt to decode from there.
+        Some simulator dependencies emit noisy logs to stdout and/or stderr
+        before printing the CLIResult JSON payload. Search both streams for the
+        first JSON object and decode whichever stream actually contains one.
         """
 
-        stdout = proc.stdout or ""
-        json_start = stdout.find("{")
-        if json_start >= 0:
-            stdout = stdout[json_start:]
+        streams = []
+        if proc.stdout:
+            streams.append(proc.stdout)
+        if proc.stderr and proc.stderr != proc.stdout:
+            streams.append(proc.stderr)
 
-        try:
-            result_data = json.loads(stdout)
-        except (json.JSONDecodeError, ValueError):
-            # Fall back: sometimes warnings/logs appear after the JSON payload.
-            # Decode only the first complete JSON object.
+        result_data = None
+        decoder = json.JSONDecoder()
+        for stream in streams:
+            candidate = stream
+            json_start = candidate.find("{")
+            if json_start >= 0:
+                candidate = candidate[json_start:]
+            else:
+                continue
+
             try:
-                decoder = json.JSONDecoder()
-                result_data, _ = decoder.raw_decode(stdout)
-            except Exception:
-                noisy = (proc.stdout or proc.stderr or "")[:500]
-                return {
-                    "steps": 0,
-                    "done": False,
-                    "error": f"Failed to parse output: {noisy}",
-                    "trajectory_dir": str(run_dir),
-                }
+                result_data = json.loads(candidate)
+                break
+            except (json.JSONDecodeError, ValueError):
+                # Fall back: sometimes warnings/logs appear after the JSON payload.
+                # Decode only the first complete JSON object.
+                try:
+                    result_data, _ = decoder.raw_decode(candidate)
+                    break
+                except Exception:
+                    continue
+
+        if result_data is None:
+            noisy_parts = []
+            if proc.stdout:
+                noisy_parts.append(proc.stdout[:250])
+            if proc.stderr and proc.stderr != proc.stdout:
+                noisy_parts.append(proc.stderr[:250])
+            noisy = "\n--- STDERR/STDOUT SPLIT ---\n".join(noisy_parts)[:500]
+            return {
+                "steps": 0,
+                "done": False,
+                "error": f"Failed to parse output: {noisy}",
+                "trajectory_dir": str(run_dir),
+            }
 
         if not isinstance(result_data, dict):
             return {
@@ -1325,6 +1416,7 @@ class TaskGenSession:
                 target_rate=calibration_stats.get("target_rate", 0.10),
                 current_passed=cal_passed,
                 current_failed=cal_failed,
+                hard_pass_rate_cap=calibration_stats.get("target_rate", 0.10) <= 0.05 + 1e-9,
             )
             payload = {
                 "standard": mode_results["standard"],

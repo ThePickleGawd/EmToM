@@ -40,6 +40,42 @@ def test_build_mode_comparison_can_require_a_pass_when_that_moves_toward_target(
     assert "Calibration note: standard failed" in comparison["reasons"][0]
 
 
+def test_build_mode_comparison_rejects_hard_tasks_that_break_pass_rate_cap():
+    comparison = build_mode_comparison(
+        category="cooperative",
+        standard={"evaluation": {"success": True, "percent_complete": 1.0}},
+        baseline={"evaluation": {"success": True, "percent_complete": 1.0}},
+        current_rate=0.05,
+        target_rate=0.05,
+        current_passed=2,
+        current_failed=38,
+        hard_pass_rate_cap=True,
+    )
+
+    assert comparison["standard_requirement"] == "must_fail"
+    assert comparison["gate_passed"] is False
+    assert comparison["pass_rate_cap_exceeded"] is True
+    assert "hard cap of 5%" in comparison["reasons"][0]
+
+
+def test_build_mode_comparison_allows_hard_tasks_when_projected_rate_stays_under_cap():
+    comparison = build_mode_comparison(
+        category="cooperative",
+        standard={"evaluation": {"success": True, "percent_complete": 1.0}},
+        baseline={"evaluation": {"success": True, "percent_complete": 1.0}},
+        current_rate=0.025,
+        target_rate=0.05,
+        current_passed=1,
+        current_failed=39,
+        hard_pass_rate_cap=True,
+    )
+
+    assert comparison["standard_requirement"] == "either"
+    assert comparison["gate_passed"] is True
+    assert comparison["pass_rate_cap_exceeded"] is False
+    assert "hard cap of 5%" in comparison["reasons"][0]
+
+
 def test_test_task_retry_guidance_returns_generic_retry_for_non_baseline_failures():
     guidance = _build_test_task_retry_guidance(
         {
@@ -51,6 +87,21 @@ def test_test_task_retry_guidance_returns_generic_retry_for_non_baseline_failure
 
     assert "Do not call `taskgen fail`" in guidance
     assert "run `taskgen judge` -> `taskgen test_task` again" in guidance
+
+
+def test_test_task_retry_guidance_explains_hard_cap_failure():
+    guidance = _build_test_task_retry_guidance(
+        {
+            "standard_requirement": "must_fail",
+            "standard_passed": True,
+            "baseline_passed": True,
+            "pass_rate_cap_exceeded": True,
+            "target_standard_pass_rate": 0.05,
+        }
+    )
+
+    assert "too easy for hard-mode generation" in guidance
+    assert "above the 5% cap" in guidance
 
 
 def test_test_task_retry_guidance_explains_unsolved_baseline_case():
@@ -154,6 +205,33 @@ def test_build_test_task_failure_feedback_highlights_competitive_phase_failures(
     assert any("Failed phases to unblock first: team_1_only." == fix for fix in feedback["required_fixes"])
     assert any("team_1_only: passed=False" in item for item in feedback["evidence"])
     assert feedback["artifact_paths"]["comparison_json"].endswith("/tmp/taskgen/run_3/comparison.json")
+
+
+def test_build_test_task_failure_feedback_highlights_hard_cap_rejection():
+    feedback = _build_test_task_failure_feedback(
+        "cooperative",
+        {
+            "baseline_passed": True,
+            "standard_passed": True,
+            "standard_progress": 1.0,
+            "baseline_progress": 1.0,
+            "standard_turns": 6,
+            "baseline_turns": 5,
+            "pass_rate_cap_exceeded": True,
+            "target_standard_pass_rate": 0.05,
+            "next_standard_pass_rate_if_pass": 0.073,
+            "reasons": [
+                "Hard calibration gate: standard passed, which would leave the dataset at 7.3%, above the hard cap of 5%."
+            ],
+        },
+        "/tmp/taskgen/run_4",
+    )
+
+    assert feedback["source_gate"] == "test_task"
+    assert "Hard-mode calibration rejected the task" in feedback["summary"]
+    assert any("Projected standard pass rate would be 7%" in fix for fix in feedback["required_fixes"])
+    assert any("projected_standard_pass_rate_if_kept=7%" in item for item in feedback["evidence"])
+    assert feedback["artifact_paths"]["comparison_json"].endswith("/tmp/taskgen/run_4/comparison.json")
 
 
 def test_build_submission_verification_feedback_reports_passing_models():
