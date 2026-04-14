@@ -160,8 +160,8 @@ def test_build_submission_verification_feedback_reports_passing_models():
     feedback = _build_submission_verification_feedback(
         "cooperative",
         {
-            "required_failures": 1,
-            "message": "Submission verification failed. Need at least 1/3 verification models to fail.",
+            "required_failures": 2,
+            "message": "Submission verification failed. Need at least 2/3 verification models to fail.",
             "passed_models": ["gpt-5.4", "claude-sonnet-4-6", "gemini-flash"],
             "failed_models": [],
             "trajectory_dir": "/tmp/taskgen/verification_2",
@@ -186,8 +186,8 @@ def test_build_submission_verification_feedback_mentions_infra_failures():
     feedback = _build_submission_verification_feedback(
         "cooperative",
         {
-            "required_failures": 1,
-            "message": "Submission verification failed. Need at least 1/2 completed verification models to fail.",
+            "required_failures": 2,
+            "message": "Submission verification failed. Need at least 2/2 completed verification models to fail.",
             "passed_models": ["gpt-5.4", "gemini-flash"],
             "failed_models": [],
             "infra_failures": {

@@ -22,7 +22,7 @@ SUBMISSION_VERIFICATION_MODELS = [
     "claude-sonnet-4-6",
     "gemini-flash",
 ]
-SUBMISSION_VERIFICATION_REQUIRED_FAILURES = 1
+SUBMISSION_VERIFICATION_REQUIRED_FAILURES = 2
 
 
 def _evaluation_passed(category: str, evaluation: Dict[str, Any]) -> bool:

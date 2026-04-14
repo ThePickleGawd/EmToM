@@ -44,7 +44,7 @@ def test_build_external_taskgen_prompt_inlines_runtime_context(tmp_path):
     assert "Read all 10 `task_*_fields.json`" in prompt
     assert "`task`, `active_mechanics`, `mechanic_bindings`, `agent_secrets`, `agent_actions`, `problem_pddl`, and `num_agents`" in prompt
     assert "Open the matching raw `task_*.json` only" in prompt
-    assert "at least 1 of `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` fails" in prompt
+    assert "at least 2 of `gpt-5.4`, `claude-sonnet-4-6`, and `gemini-flash` fail" in prompt
     assert "extra_sections" not in prompt
 
 
