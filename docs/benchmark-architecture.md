@@ -40,6 +40,8 @@ There is no separate evolution pipeline. Difficulty shaping happens inside norma
 - When benchmark semantics change enough to invalidate comparability, archive the active campaign into `data/emtom/results/archives/<campaign_id>/` before starting a new one.
 - The visualizer should expose both the active campaign and archived campaigns, but never merge their leaderboards.
 - Campaign reporting must keep `pass_rate` and `literal_tom_score` separate. They answer different questions and should be shown side by side, not collapsed into one metric.
+- `benchmark` and `benchmark-suite` may repeat the same evaluation `num_times`; when `num_times > 1`, those repeats run in parallel and the report must include mean pass rate, pass-rate standard deviation, `pass@k`, and `pass^k` with `k = num_times`.
+- Repeated-run reliability metrics must use the exact article formulas: `pass@k = 1 - C(n-c, k) / C(n, k)` and `pass^k = (c/n)^k`. In EMTOM repeated benchmarks, `n` is the requested repeated-run count per task, `c` is the number of successful benchmark runs for that task, and benchmark attempts that fail before producing task results count toward `n` with zero contribution to `c`.
 
 ## Benchmark Modes
 

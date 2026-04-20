@@ -14,6 +14,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from emtom.benchmark_metrics import (
+    BenchmarkRepeatSummary,
+    build_single_run_summary,
+    load_repeat_summary,
+    repeat_summary_path,
+)
 from emtom.evolve.benchmark_wrapper import BenchmarkResults, parse_benchmark_results
 
 
@@ -45,6 +51,12 @@ class SuiteResult:
     output_dir: str
     return_code: int
     error: str = ""
+    num_times: int = 1
+    completed_runs: int = 0
+    average_pass_rate: Optional[float] = None
+    std_pass_rate: float = 0.0
+    pass_at_k: Optional[float] = None
+    pass_power_k: Optional[float] = None
 
 
 def _style(text: str, *codes: str) -> str:
@@ -103,7 +115,8 @@ def render_suite_summary(
     tasks_dir: Path,
     current_model: Optional[str] = None,
 ) -> str:
-    width = 88
+    show_repeat_metrics = any(result.num_times > 1 for result in results)
+    width = 124 if show_repeat_metrics else 88
     lines = [
         "",
         _style("=" * width, BOLD, CYAN),
@@ -113,26 +126,65 @@ def render_suite_summary(
     ]
     if current_model:
         lines.append(f"Current model: {_style(current_model, BOLD, MAGENTA)}")
-    lines.extend([
-        "",
-        _style(f"{'Model':<24} {'Status':<10} {'Passed':>8} {'Total':>8} {'Pass rate':>10}", BOLD),
-        _style("-" * width, DIM),
-    ])
+    if show_repeat_metrics:
+        lines.extend([
+            "",
+            _style(
+                f"{'Model':<24} {'Status':<10} {'Runs':>8} {'Avg pass':>10} {'Std':>10} {'Pass@k':>10} {'Pass^k':>10}",
+                BOLD,
+            ),
+            _style("-" * width, DIM),
+        ])
+    else:
+        lines.extend([
+            "",
+            _style(f"{'Model':<24} {'Status':<10} {'Passed':>8} {'Total':>8} {'Pass rate':>10}", BOLD),
+            _style("-" * width, DIM),
+        ])
     for result in results:
         passed = str(result.passed) if result.total > 0 else "-"
         total = str(result.total) if result.total > 0 else "-"
         model_label = _style(result.model, BOLD, MAGENTA) if result.model == current_model else _style(result.model, WHITE)
         status_label = _style(f"{result.status:<10}", *_status_style(result.status))
-        passed_label = _style(
-            f"{passed:>8}",
-            GREEN if result.passed > 0 else DIM,
-            BOLD if result.passed > 0 else "",
-        )
-        total_label = _style(f"{total:>8}", CYAN if result.total > 0 else DIM)
-        rate_label = _style(f"{_format_rate(result.pass_rate):>10}", *_rate_style(result.pass_rate, result.status))
-        lines.append(
-            f"{model_label:<24} {status_label} {passed_label} {total_label} {rate_label}"
-        )
+        if show_repeat_metrics:
+            runs_label = _style(
+                f"{result.completed_runs}/{result.num_times}",
+                CYAN if result.completed_runs > 0 else DIM,
+                BOLD if result.completed_runs == result.num_times and result.num_times > 0 else "",
+            )
+            avg_label = _style(
+                f"{_format_rate(result.average_pass_rate):>10}",
+                *_rate_style(result.average_pass_rate, result.status),
+            )
+            std_label = _style(
+                f"{_format_rate(result.std_pass_rate if result.completed_runs > 0 else None):>10}",
+                CYAN if result.completed_runs > 0 else DIM,
+            )
+            pass_at_k_label = _style(
+                f"{_format_rate(result.pass_at_k):>10}",
+                *_rate_style(result.pass_at_k, result.status),
+            )
+            pass_power_k_label = _style(
+                f"{_format_rate(result.pass_power_k):>10}",
+                *_rate_style(result.pass_power_k, result.status),
+            )
+            lines.append(
+                f"{model_label:<24} {status_label} {runs_label:>8} {avg_label} {std_label} {pass_at_k_label} {pass_power_k_label}"
+            )
+        else:
+            passed_label = _style(
+                f"{passed:>8}",
+                GREEN if result.passed > 0 else DIM,
+                BOLD if result.passed > 0 else "",
+            )
+            total_label = _style(f"{total:>8}", CYAN if result.total > 0 else DIM)
+            rate_label = _style(
+                f"{_format_rate(result.pass_rate):>10}",
+                *_rate_style(result.pass_rate, result.status),
+            )
+            lines.append(
+                f"{model_label:<24} {status_label} {passed_label} {total_label} {rate_label}"
+            )
     return "\n".join(lines)
 
 
@@ -159,6 +211,7 @@ def _write_suite_summary(
                 "observation_mode": args.observation_mode,
                 "run_mode": args.run_mode,
                 "category": args.category,
+                "num_times": args.num_times,
                 "completed_models": completed,
                 "pending_models": pending,
                 "results": [asdict(result) for result in results],
@@ -227,14 +280,24 @@ def _parse_suite_model_results(output_dir: str, model: str) -> BenchmarkResults:
         raise
 
 
+def _parse_suite_model_summary(output_dir: str, model: str) -> BenchmarkRepeatSummary:
+    """Parse either a repeated benchmark summary or a single benchmark output."""
+    if repeat_summary_path(output_dir).exists():
+        return load_repeat_summary(output_dir)
+
+    parsed = _parse_suite_model_results(output_dir, model=model)
+    return build_single_run_summary(model=model, output_dir=output_dir, parsed=parsed)
+
+
 def _build_suite_result(
     model: str,
     output_dir: str,
     return_code: int,
-    parsed: Optional[BenchmarkResults],
+    summary: Optional[BenchmarkRepeatSummary],
     error: str = "",
+    num_times: int = 1,
 ) -> SuiteResult:
-    if parsed is None:
+    if summary is None:
         return SuiteResult(
             model=model,
             status="failed",
@@ -245,37 +308,64 @@ def _build_suite_result(
             output_dir=output_dir,
             return_code=return_code,
             error=error or f"benchmark exited with code {return_code}",
+            num_times=num_times,
         )
 
     status = "complete" if return_code == 0 else "partial"
+    total = max((run.total for run in summary.runs), default=0)
+    average_pass_rate = summary.average_pass_rate
+    estimated_passed = (
+        round(total * average_pass_rate / 100.0)
+        if total > 0 and average_pass_rate is not None
+        else 0
+    )
     return SuiteResult(
         model=model,
         status=status,
-        total=parsed.total,
-        passed=parsed.passed,
-        failed=parsed.failed,
-        pass_rate=parsed.pass_rate,
+        total=total,
+        passed=estimated_passed,
+        failed=max(total - estimated_passed, 0),
+        pass_rate=average_pass_rate,
         output_dir=output_dir,
         return_code=return_code,
         error=error,
+        num_times=summary.num_times,
+        completed_runs=summary.completed_runs,
+        average_pass_rate=summary.average_pass_rate,
+        std_pass_rate=summary.std_pass_rate,
+        pass_at_k=summary.pass_at_k,
+        pass_power_k=summary.pass_power_k,
     )
 
 
 def _refresh_running_result(result: SuiteResult) -> SuiteResult:
     try:
-        parsed = _parse_suite_model_results(result.output_dir, model=result.model)
+        summary = _parse_suite_model_summary(result.output_dir, model=result.model)
     except Exception:
         return result
+    total = max((run.total for run in summary.runs), default=0)
+    average_pass_rate = summary.average_pass_rate
+    estimated_passed = (
+        round(total * average_pass_rate / 100.0)
+        if total > 0 and average_pass_rate is not None
+        else 0
+    )
     return SuiteResult(
         model=result.model,
         status=result.status,
-        total=parsed.total,
-        passed=parsed.passed,
-        failed=parsed.failed,
-        pass_rate=parsed.pass_rate,
+        total=total,
+        passed=estimated_passed,
+        failed=max(total - estimated_passed, 0),
+        pass_rate=average_pass_rate,
         output_dir=result.output_dir,
         return_code=result.return_code,
         error=result.error,
+        num_times=summary.num_times,
+        completed_runs=summary.completed_runs,
+        average_pass_rate=summary.average_pass_rate,
+        std_pass_rate=summary.std_pass_rate,
+        pass_at_k=summary.pass_at_k,
+        pass_power_k=summary.pass_power_k,
     )
 
 
@@ -291,6 +381,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--observation-mode", default="text", choices=["text", "vision"])
     parser.add_argument("--category", default=None, help="Optional category filter.")
     parser.add_argument("--run-mode", default="standard", choices=["standard", "baseline", "full_info"])
+    parser.add_argument("--num-times", type=int, default=1, help="Repeat each model benchmark N times.")
     parser.add_argument("--output-dir", default=None, help="Optional parent output directory for the suite.")
     parser.add_argument("--no-calibration", action="store_true", default=False)
     return parser.parse_args()
@@ -318,6 +409,9 @@ def _prepare_task_dir(args: argparse.Namespace, suite_dir: Path) -> tuple[Path, 
 
 def main() -> int:
     args = parse_args()
+    if args.num_times < 1:
+        print("ERROR: --num-times must be at least 1.", file=sys.stderr)
+        return 1
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     suite_dir = Path(args.output_dir) if args.output_dir else OUTPUTS_DIR / f"{timestamp}-benchmark-suite"
@@ -338,6 +432,7 @@ def main() -> int:
             pass_rate=None,
             output_dir=str(suite_dir / model.replace("/", "_")),
             return_code=-1,
+            num_times=args.num_times,
         )
         for model in args.models
     ]
@@ -358,6 +453,8 @@ def main() -> int:
                 args.observation_mode,
                 "--benchmark-run-mode",
                 args.run_mode,
+                "--num-times",
+                str(args.num_times),
                 "--max-workers",
                 str(args.max_workers),
                 "--output-dir",
@@ -385,10 +482,10 @@ def main() -> int:
                 return_code = proc.poll()
             results[idx] = _refresh_running_result(results[idx])
 
-            parsed = None
+            summary = None
             parse_error = ""
             try:
-                parsed = _parse_suite_model_results(str(model_output_dir), model=model)
+                summary = _parse_suite_model_summary(str(model_output_dir), model=model)
             except Exception as exc:
                 parse_error = str(exc)
 
@@ -396,8 +493,9 @@ def main() -> int:
                 model=model,
                 output_dir=str(model_output_dir),
                 return_code=return_code,
-                parsed=parsed,
+                summary=summary,
                 error=parse_error,
+                num_times=args.num_times,
             )
             _write_suite_summary(suite_dir, tasks_dir, args, results, current_model=model)
     finally:

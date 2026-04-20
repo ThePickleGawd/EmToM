@@ -159,6 +159,7 @@ SEED_FAIL_RATIO="0.80"  # Logical seed mix for target-model failing tasks
 NO_VIDEO=true  # Disable video saving (default: true for speed)
 MAX_WORKERS=""  # Parallel benchmark: max concurrent processes (empty = sequential)
 NUM_GPUS=8  # GPU count for round-robin subprocess assignment
+NUM_TIMES=1  # Benchmark repeats: run the same benchmark N times
 TASKS_DIR=""  # Custom tasks directory for benchmark
 TEAM_MODEL_MAP=""  # Optional team -> model mapping for benchmark competitive tasks
 SAMPLED_TASKS_DIR=""  # Pre-built sampled_tasks directory (skips random sampling)
@@ -295,6 +296,7 @@ print_usage() {
     echo "  --selector-max-frames N  Vision mode selector maximum frames (default: $SELECTOR_MAX_FRAMES)"
     echo "  --selector-max-candidates N  Vision mode selector candidate pool size (default: $SELECTOR_MAX_CANDIDATES)"
     echo "  --max-workers N      Run benchmark in parallel (N concurrent processes, GPU round-robin)"
+    echo "  --num-times N        Repeat the benchmark N times (default: $NUM_TIMES; repeats run in parallel when N > 1)"
     echo "  --num-gpus N         Number of GPUs for round-robin assignment (default: $NUM_GPUS)"
     echo "  --video              Enable video recording (default: off)"
     echo "  --no-calibration     Don't write results back into source task JSONs"
@@ -363,6 +365,7 @@ print_benchmark_usage_short() {
     echo "  --task FILE          Run a single task file"
     echo "  --model MODEL        Model name, e.g. gpt-5.4"
     echo "  --max-workers N      Parallel benchmark workers"
+    echo "  --num-times N        Repeat the benchmark N times"
     echo "  --category TYPE      cooperative|competitive|mixed"
     echo "  --benchmark-run-mode MODE  standard|baseline|full_info"
     echo "  --observation-mode MODE  text|vision"
@@ -613,6 +616,87 @@ run_benchmark() {
         CATEGORY_OVERRIDE="+task_category_filter=$CATEGORY"
     fi
 
+    TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+    OUTPUT_BASE="${OUTPUT_DIR:-./outputs/emtom/${TIMESTAMP}-benchmark}"
+
+    if [ "$NUM_TIMES" -gt 1 ]; then
+        if [ -n "$TASK_FILE" ] && [ ! -f "$TASK_FILE" ]; then
+            echo -e "${RED}ERROR: Task file not found: $TASK_FILE${NC}"
+            exit 1
+        fi
+        if [ -z "$TASK_FILE" ] && [ ! -d "${TASKS_DIR:-data/emtom/tasks}" ]; then
+            echo -e "${RED}ERROR: Task directory not found: ${TASKS_DIR:-data/emtom/tasks}${NC}"
+            echo "Run task generation first: ./emtom/run_emtom.sh generate"
+            exit 1
+        fi
+
+        echo "=============================================="
+        echo "Running EMTOM Habitat Benchmark (Repeated)"
+        echo "=============================================="
+        echo "LLM: $LLM_PROVIDER ($MODEL)"
+        echo "Runs: $NUM_TIMES"
+        echo "Output dir: $OUTPUT_BASE"
+        if [ -n "$TASK_FILE" ]; then
+            echo "Task file: $TASK_FILE"
+        else
+            echo "Task source: ${TASKS_DIR:-data/emtom/tasks}"
+        fi
+        echo "Observation mode: $OBSERVATION_MODE"
+        echo "Benchmark mode: $BENCHMARK_RUN_MODE"
+        if [ -n "$MAX_WORKERS" ]; then
+            echo "Per-run task parallelism: max_workers=$MAX_WORKERS"
+        fi
+        if [ -n "$CATEGORY" ]; then
+            echo "Category: $CATEGORY"
+        fi
+        if [ -n "$TEAM_MODEL_MAP" ]; then
+            echo "Team model map: $TEAM_MODEL_MAP"
+        fi
+        echo "=============================================="
+
+        REPEAT_CMD=(
+            python -m emtom.scripts.benchmark_repeat
+            --model "$MODEL_SHORT"
+            --output-dir "$OUTPUT_BASE"
+            --num-times "$NUM_TIMES"
+            --max-sim-steps "$MAX_SIM_STEPS"
+            --agent-type "$AGENT_TYPE"
+            --benchmark-run-mode "$BENCHMARK_RUN_MODE"
+            --observation-mode "$OBSERVATION_MODE"
+            --selector-min-frames "$SELECTOR_MIN_FRAMES"
+            --selector-max-frames "$SELECTOR_MAX_FRAMES"
+            --selector-max-candidates "$SELECTOR_MAX_CANDIDATES"
+        )
+        if [ -n "$TASK_FILE" ]; then
+            REPEAT_CMD+=(--task "$TASK_FILE")
+        else
+            REPEAT_CMD+=(--tasks-dir "${TASKS_DIR:-data/emtom/tasks}")
+        fi
+        if [ -n "$MAX_LLM_CALLS" ]; then
+            REPEAT_CMD+=(--max-llm-calls "$MAX_LLM_CALLS")
+        fi
+        if [ -n "$MAX_WORKERS" ]; then
+            REPEAT_CMD+=(--max-workers "$MAX_WORKERS")
+        fi
+        if [ -n "$NUM_GPUS" ]; then
+            REPEAT_CMD+=(--num-gpus "$NUM_GPUS")
+        fi
+        if [ -n "$CATEGORY" ]; then
+            REPEAT_CMD+=(--category "$CATEGORY")
+        fi
+        if [ -n "$TEAM_MODEL_MAP" ]; then
+            REPEAT_CMD+=(--team-model-map "$TEAM_MODEL_MAP")
+        fi
+        if [ "$NO_VIDEO" != true ]; then
+            REPEAT_CMD+=(--video)
+        fi
+        if [ "$NO_CALIBRATION" = true ]; then
+            REPEAT_CMD+=(--no-calibration)
+        fi
+        "${REPEAT_CMD[@]}"
+        return
+    fi
+
     # Single task mode: auto-detect agents from task file
     if [ -n "$TASK_FILE" ]; then
         if [ ! -f "$TASK_FILE" ]; then
@@ -644,11 +728,7 @@ run_benchmark() {
         echo "=============================================="
 
         CONFIG_NAME=$(get_agent_config $TASK_NUM_AGENTS $AGENT_TYPE)
-        if [ -n "$OUTPUT_DIR" ]; then
-            SINGLE_TASK_OUTPUT_DIR="$OUTPUT_DIR"
-        else
-            SINGLE_TASK_OUTPUT_DIR='./outputs/emtom/${now:%Y-%m-%d_%H-%M-%S}-benchmark'
-        fi
+        SINGLE_TASK_OUTPUT_DIR="$OUTPUT_BASE"
 
         # Build optional overrides
         MAX_TURNS_OVERRIDE=""
@@ -736,37 +816,35 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
     fi
     echo "=============================================="
 
-    # Create timestamp for this benchmark run
-    TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
-    OUTPUT_BASE="${OUTPUT_DIR:-./outputs/emtom/${TIMESTAMP}-benchmark}"
-
     if [ -n "$MAX_WORKERS" ]; then
         # ── Parallel mode: one process per task with GPU round-robin ──
         echo -e "${CYAN}Running parallel benchmark (max_workers=$MAX_WORKERS)${NC}"
 
-        PARALLEL_CMD="python -m emtom.scripts.run_benchmark_parallel \
-            --tasks-dir $TASK_DIR \
-            --model $MODEL_SHORT \
-            --output-dir $OUTPUT_BASE \
-            --max-workers $MAX_WORKERS \
-            --benchmark-run-mode $BENCHMARK_RUN_MODE \
-            --observation-mode $OBSERVATION_MODE \
-            --selector-min-frames $SELECTOR_MIN_FRAMES \
-            --selector-max-frames $SELECTOR_MAX_FRAMES \
-            --selector-max-candidates $SELECTOR_MAX_CANDIDATES"
+        PARALLEL_CMD=(
+            python -m emtom.scripts.run_benchmark_parallel
+            --tasks-dir "$TASK_DIR"
+            --model "$MODEL_SHORT"
+            --output-dir "$OUTPUT_BASE"
+            --max-workers "$MAX_WORKERS"
+            --benchmark-run-mode "$BENCHMARK_RUN_MODE"
+            --observation-mode "$OBSERVATION_MODE"
+            --selector-min-frames "$SELECTOR_MIN_FRAMES"
+            --selector-max-frames "$SELECTOR_MAX_FRAMES"
+            --selector-max-candidates "$SELECTOR_MAX_CANDIDATES"
+        )
         if [ "$NO_VIDEO" != true ]; then
-            PARALLEL_CMD="$PARALLEL_CMD --video"
+            PARALLEL_CMD+=(--video)
         fi
         if [ -n "$CATEGORY" ]; then
-            PARALLEL_CMD="$PARALLEL_CMD --category $CATEGORY"
+            PARALLEL_CMD+=(--category "$CATEGORY")
         fi
         if [ -n "$TEAM_MODEL_MAP" ]; then
-            PARALLEL_CMD="$PARALLEL_CMD --team-model-map $TEAM_MODEL_MAP"
+            PARALLEL_CMD+=(--team-model-map "$TEAM_MODEL_MAP")
         fi
         if [ "$NO_CALIBRATION" = true ]; then
-            PARALLEL_CMD="$PARALLEL_CMD --no-calibration"
+            PARALLEL_CMD+=(--no-calibration)
         fi
-        eval $PARALLEL_CMD
+        "${PARALLEL_CMD[@]}"
         python -m emtom.scripts.print_benchmark_summary --output-dir "$OUTPUT_BASE" --model "$MODEL_SHORT" --parallel
     else
         # ── Sequential mode: one run_habitat_benchmark.py per agent-count group ──
@@ -816,14 +894,16 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
         if [ "$NO_CALIBRATION" != true ]; then
             echo ""
             echo "Writing calibration data back to task files..."
-            CALIBRATION_CMD="python -m emtom.scripts.update_calibration \
-                --tasks-dir $TASK_DIR \
-                --benchmark-output-base $OUTPUT_BASE \
-                --model $MODEL_SHORT"
+            CALIBRATION_CMD=(
+                python -m emtom.scripts.update_calibration
+                --tasks-dir "$TASK_DIR"
+                --benchmark-output-base "$OUTPUT_BASE"
+                --model "$MODEL_SHORT"
+            )
             if [ -n "$TEAM_MODEL_MAP" ]; then
-                CALIBRATION_CMD="$CALIBRATION_CMD --team-model-map $TEAM_MODEL_MAP"
+                CALIBRATION_CMD+=(--team-model-map "$TEAM_MODEL_MAP")
             fi
-            eval $CALIBRATION_CMD
+            "${CALIBRATION_CMD[@]}"
         fi
         python -m emtom.scripts.print_benchmark_summary --output-dir "$OUTPUT_BASE" --model "$MODEL_SHORT"
     fi
@@ -1433,6 +1513,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --max-workers)
             MAX_WORKERS=$2
+            shift 2
+            ;;
+        --num-times)
+            NUM_TIMES=$2
+            if ! [[ "$NUM_TIMES" =~ ^[0-9]+$ ]] || [ "$NUM_TIMES" -lt 1 ]; then
+                echo "Error: --num-times must be an integer >= 1"
+                exit 1
+            fi
             shift 2
             ;;
         --num-gpus)
