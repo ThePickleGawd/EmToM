@@ -115,3 +115,25 @@ def test_build_repeat_summary_counts_missing_attempts_in_n() -> None:
 
     assert summary.pass_at_k == 100.0
     assert round(summary.pass_power_k or 0.0, 3) == 3.704
+
+
+def test_build_repeat_summary_defaults_k_to_num_times() -> None:
+    run_1 = BenchmarkResults(
+        model="gpt-5.4",
+        total=1,
+        passed=1,
+        failed=0,
+        pass_rate=100.0,
+        results=[_make_task_result("task_a", True)],
+    )
+
+    summary = build_repeat_summary(
+        model="gpt-5.4",
+        num_times=4,
+        runs=[],
+        parsed_runs={1: run_1},
+        expected_task_ids=["task_a"],
+    )
+
+    assert summary.num_times == 4
+    assert summary.k == 4

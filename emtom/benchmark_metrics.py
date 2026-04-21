@@ -118,6 +118,7 @@ def build_repeat_summary(
     where k == num_times, n is the number of requested repeated attempts per
     task, and c is the number of successful attempts for that task.
     """
+    metric_k = num_times
     pass_rates = [results.pass_rate for _, results in sorted(parsed_runs.items())]
 
     task_successes: Dict[str, int] = {}
@@ -159,8 +160,8 @@ def build_repeat_summary(
     for task_id in task_order:
         n = num_times
         c = task_successes.get(task_id, 0)
-        pass_at_k_value = _pass_at_k_from_counts(n=n, c=c, k=num_times)
-        pass_power_k_value = _pass_power_k_from_counts(n=n, c=c, k=num_times)
+        pass_at_k_value = _pass_at_k_from_counts(n=n, c=c, k=metric_k)
+        pass_power_k_value = _pass_power_k_from_counts(n=n, c=c, k=metric_k)
         if pass_at_k_value is not None:
             pass_at_k_values.append(pass_at_k_value)
         if pass_power_k_value is not None:
@@ -184,7 +185,7 @@ def build_repeat_summary(
     return BenchmarkRepeatSummary(
         model=model,
         num_times=num_times,
-        k=num_times,
+        k=metric_k,
         completed_runs=completed_runs,
         scored_task_count=len(task_order),
         average_pass_rate=average_pass_rate,
