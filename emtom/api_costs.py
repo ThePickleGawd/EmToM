@@ -350,6 +350,29 @@ def summarize_worker_costs(worker_dir: Path) -> Dict[str, Any]:
     )
 
 
+def summarize_task_costs(task_dir: Path) -> Dict[str, Any]:
+    return merge_summaries(
+        read_usage_log(task_dir / "api_usage.jsonl"),
+        read_external_trace(task_dir / "agent_trace.json"),
+    )
+
+
+def summarize_path_costs(root_dir: Path) -> Dict[str, Any]:
+    merged = _empty_summary()
+    if not root_dir.exists():
+        return merged
+
+    for usage_log in sorted(root_dir.rglob("api_usage.jsonl")):
+        if usage_log.is_file():
+            merged = merge_summaries(merged, read_usage_log(usage_log))
+
+    for trace_path in sorted(root_dir.rglob("agent_trace.json")):
+        if trace_path.is_file():
+            merged = merge_summaries(merged, read_external_trace(trace_path))
+
+    return merged
+
+
 def summarize_run_costs(run_dir: Path) -> Dict[str, Any]:
     merged = _empty_summary()
     workers_dir = run_dir / "workers"
@@ -411,4 +434,55 @@ def format_cost_summary(summary: Dict[str, Any], *, heading: str = "API Cost Sum
         lines.append(f"{BOLD}{WHITE}Net cost:{RESET} {cost_color}${summary['total_cost']:.6f}{suffix}{RESET}")
     else:
         lines.append(f"{BOLD}{WHITE}Net cost:{RESET} {YELLOW}unavailable{RESET}")
+    return lines
+
+
+def format_cost_table(summary: Dict[str, Any], *, heading: str = "API Cost Summary") -> list[str]:
+    lines = [
+        f"{BOLD}{CYAN}{'=' * 60}{RESET}",
+        f"{BOLD}{CYAN}{heading}{RESET}",
+        f"{BOLD}{CYAN}{'=' * 60}{RESET}",
+    ]
+
+    models = (summary or {}).get("models", {})
+    if not models:
+        lines.append(f"{YELLOW}No API usage recorded.{RESET}")
+        return lines
+
+    lines.append(
+        f"{BOLD}{WHITE}{'Model':<34} {'Calls':>8} {'Cost':>14}{RESET}"
+    )
+    lines.append(f"{DIM}{'-' * 60}{RESET}")
+
+    sorted_models = sorted(
+        models.items(),
+        key=lambda item: (
+            0 if item[1].get("has_cost") else 1,
+            -(item[1].get("cost", 0.0) if item[1].get("has_cost") else 0.0),
+            item[0],
+        ),
+    )
+
+    for model, bucket in sorted_models:
+        cost_text = f"${bucket['cost']:.6f}" if bucket.get("has_cost") else "unavailable"
+        cost_color = GREEN if bucket.get("has_cost") else YELLOW
+        lines.append(
+            f"{WHITE}{model:<34}{RESET} "
+            f"{CYAN}{bucket.get('api_calls', 0):>8}{RESET} "
+            f"{cost_color}{cost_text:>14}{RESET}"
+        )
+
+    lines.append(f"{DIM}{'-' * 60}{RESET}")
+    lines.append(
+        f"{BOLD}{WHITE}Total API calls:{RESET} {CYAN}{summary.get('total_api_calls', 0)}{RESET}"
+    )
+    if summary.get("has_any_cost"):
+        suffix = " (partial)" if summary.get("has_incomplete_costs") else ""
+        cost_color = YELLOW if summary.get("has_incomplete_costs") else GREEN
+        lines.append(
+            f"{BOLD}{WHITE}Total cost:{RESET} "
+            f"{cost_color}${summary.get('total_cost', 0.0):.6f}{suffix}{RESET}"
+        )
+    else:
+        lines.append(f"{BOLD}{WHITE}Total cost:{RESET} {YELLOW}unavailable{RESET}")
     return lines

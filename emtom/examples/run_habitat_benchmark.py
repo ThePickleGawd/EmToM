@@ -35,6 +35,7 @@ from habitat_llm.agent.env import (
 from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 from habitat_llm.utils import cprint, setup_config, fix_config
 
+from emtom.api_costs import summarize_task_costs
 from emtom.task_gen import GeneratedTask
 
 
@@ -550,94 +551,108 @@ def run_single_task(
     # Create task-specific output directory
     task_output_dir = f"{output_dir}/{task_id}"
     Path(task_output_dir).mkdir(parents=True, exist_ok=True)
-
-    # Create and setup benchmark runner
-    runner = BenchmarkRunner(config)
-    runner.setup(
-        env_interface=env_interface,
-        task=task,
-        output_dir=task_output_dir,
-    )
-
-    # Build instruction
-    run_mode = str(getattr(config, "benchmark_run_mode", "standard")).strip().lower()
-    instruction = task_to_instruction(task, run_mode=run_mode)
-
-    print(f"\nPer-agent instructions:")
-    for agent_id, instr in instruction.items():
-        print(f"\n--- {agent_id} ---")
-        print(instr)
-
-    # Print agent info
-    cprint(f"\nAgents: {list(runner.agents.keys())}", "blue")
-    for uid, agent in runner.agents.items():
-        cprint(f"  agent_{uid} tools: {list(agent.tools.keys())}", "blue")
-
-    # Get max steps from config
-    max_steps = config.habitat.environment.get("max_episode_steps", 2000)
-
-    # Calculate max turns as 4x golden trajectory length.
-    golden_trajectory = task_raw.get("golden_trajectory", [])
-    if "max_turns" in config:
-        max_turns = config.max_turns
-    else:
-        max_turns = len(golden_trajectory) * 4
-
-    cprint(f"\nMax simulation steps: {max_steps}", "blue")
-    cprint(f"Max LLM turns: {max_turns} (golden trajectory: {len(golden_trajectory)} steps)", "blue")
-
-    # Run benchmark
-    results = {
-        "task_id": task_id,
-        "title": task.title,
-        "category": task.category,
-        "run_mode": run_mode,
-        "skipped": False,
-        "success": False,
-        "steps": 0,
-        "turns": 0,
-        "error": None,
-        "team_model_map_requested": team_model_map_requested,
-        "team_model_mapping": model_assignment["team_model_mapping"],
-        "agent_model_mapping": model_assignment["agent_model_mapping"],
-        "team_model_overrides_applied": model_assignment["team_model_overrides_applied"],
-        "unused_requested_team_mappings": model_assignment["unused_requested_team_mappings"],
-    }
+    api_usage_log = Path(task_output_dir) / "api_usage.jsonl"
+    previous_api_usage_log = os.environ.get("EMTOM_API_USAGE_LOG")
+    if api_usage_log.exists():
+        api_usage_log.unlink()
+    os.environ["EMTOM_API_USAGE_LOG"] = str(api_usage_log)
 
     try:
-        cprint("Starting task execution with LLM planners...", "blue")
-        run_results = runner.run(instruction=instruction, max_steps=max_steps, max_turns=max_turns)
+        # Create and setup benchmark runner
+        runner = BenchmarkRunner(config)
+        runner.setup(
+            env_interface=env_interface,
+            task=task,
+            output_dir=task_output_dir,
+        )
 
-        results["success"] = run_results.get("success", False)
-        results["steps"] = run_results.get("steps", 0)
-        results["turns"] = run_results.get("turns", 0)
-        results["done"] = run_results.get("done", False)
-        results["episode_over"] = run_results.get("episode_over", False)
-        results["evaluation"] = run_results.get("evaluation", {})
+        # Build instruction
+        run_mode = str(getattr(config, "benchmark_run_mode", "standard")).strip().lower()
+        instruction = task_to_instruction(task, run_mode=run_mode)
 
-        if results["success"]:
-            cprint(f"\n✓ TASK PASSED: {task.title}", "green")
+        print(f"\nPer-agent instructions:")
+        for agent_id, instr in instruction.items():
+            print(f"\n--- {agent_id} ---")
+            print(instr)
+
+        # Print agent info
+        cprint(f"\nAgents: {list(runner.agents.keys())}", "blue")
+        for uid, agent in runner.agents.items():
+            cprint(f"  agent_{uid} tools: {list(agent.tools.keys())}", "blue")
+
+        # Get max steps from config
+        max_steps = config.habitat.environment.get("max_episode_steps", 2000)
+
+        # Calculate max turns as 4x golden trajectory length.
+        golden_trajectory = task_raw.get("golden_trajectory", [])
+        if "max_turns" in config:
+            max_turns = config.max_turns
         else:
-            cprint(f"\n✗ TASK FAILED: {task.title}", "red")
+            max_turns = len(golden_trajectory) * 4
 
-        print(f"Steps: {results['steps']}, Turns: {results['turns']}")
+        cprint(f"\nMax simulation steps: {max_steps}", "blue")
+        cprint(f"Max LLM turns: {max_turns} (golden trajectory: {len(golden_trajectory)} steps)", "blue")
 
-    except Exception as e:
-        error_str = str(e)
-        is_timeout = "Episode over" in error_str or "call reset before calling step" in error_str
+        # Run benchmark
+        results = {
+            "task_id": task_id,
+            "title": task.title,
+            "category": task.category,
+            "run_mode": run_mode,
+            "skipped": False,
+            "success": False,
+            "steps": 0,
+            "turns": 0,
+            "error": None,
+            "team_model_map_requested": team_model_map_requested,
+            "team_model_mapping": model_assignment["team_model_mapping"],
+            "agent_model_mapping": model_assignment["agent_model_mapping"],
+            "team_model_overrides_applied": model_assignment["team_model_overrides_applied"],
+            "unused_requested_team_mappings": model_assignment["unused_requested_team_mappings"],
+        }
 
-        if is_timeout:
-            cprint(f"\nTask timed out (max simulation steps reached)", "yellow")
-            results["error"] = "timeout"
+        try:
+            cprint("Starting task execution with LLM planners...", "blue")
+            run_results = runner.run(instruction=instruction, max_steps=max_steps, max_turns=max_turns)
+
+            results["success"] = run_results.get("success", False)
+            results["steps"] = run_results.get("steps", 0)
+            results["turns"] = run_results.get("turns", 0)
+            results["done"] = run_results.get("done", False)
+            results["episode_over"] = run_results.get("episode_over", False)
+            results["evaluation"] = run_results.get("evaluation", {})
+
+            if results["success"]:
+                cprint(f"\n✓ TASK PASSED: {task.title}", "green")
+            else:
+                cprint(f"\n✗ TASK FAILED: {task.title}", "red")
+
+            print(f"Steps: {results['steps']}, Turns: {results['turns']}")
+
+        except Exception as e:
+            error_str = str(e)
+            is_timeout = "Episode over" in error_str or "call reset before calling step" in error_str
+
+            if is_timeout:
+                cprint(f"\nTask timed out (max simulation steps reached)", "yellow")
+                results["error"] = "timeout"
+            else:
+                cprint(f"Error during task execution: {e}", "red")
+                import traceback
+                traceback.print_exc()
+                raise BenchmarkExecutionError(
+                    f"Benchmark aborted for task '{task_id}': {e}"
+                ) from e
+
+        task_cost_summary = summarize_task_costs(Path(task_output_dir))
+        if task_cost_summary.get("models"):
+            results["api_cost_summary"] = task_cost_summary
+        return results
+    finally:
+        if previous_api_usage_log is None:
+            os.environ.pop("EMTOM_API_USAGE_LOG", None)
         else:
-            cprint(f"Error during task execution: {e}", "red")
-            import traceback
-            traceback.print_exc()
-            raise BenchmarkExecutionError(
-                f"Benchmark aborted for task '{task_id}': {e}"
-            ) from e
-
-    return results
+            os.environ["EMTOM_API_USAGE_LOG"] = previous_api_usage_log
 
 
 def _build_category_stats(all_results: list) -> dict:

@@ -13,6 +13,7 @@ import boto3
 from botocore.exceptions import ClientError
 from omegaconf import DictConfig
 
+from emtom.api_costs import maybe_append_usage_event
 from habitat_llm.llm.base_llm import BaseLLM, LLMRequestError, Prompt
 
 # Load .env file if it exists (for AWS credentials)
@@ -265,6 +266,31 @@ class BedrockClaude(BaseLLM):
         # Parse response
         response_body = json.loads(response["body"].read())
         text_response = response_body["content"][0]["text"]
+        usage = response_body.get("usage") or {}
+        if isinstance(usage, dict) and any(
+            usage.get(key)
+            for key in (
+                "input_tokens",
+                "inputTokens",
+                "output_tokens",
+                "outputTokens",
+                "cache_read_input_tokens",
+                "cacheReadInputTokens",
+            )
+        ):
+            maybe_append_usage_event(
+                provider="bedrock",
+                model=model_id,
+                usage={
+                    "input_tokens": usage.get("input_tokens", usage.get("inputTokens", 0)),
+                    "output_tokens": usage.get("output_tokens", usage.get("outputTokens", 0)),
+                    "cached_input_tokens": usage.get(
+                        "cache_read_input_tokens",
+                        usage.get("cacheReadInputTokens", 0),
+                    ),
+                },
+                source="habitat_llm.bedrock_claude.invoke_model",
+            )
         self.response = text_response
 
         # Update message history
@@ -396,6 +422,31 @@ class BedrockClaude(BaseLLM):
 
         # Parse response
         text_response = response["output"]["message"]["content"][0]["text"]
+        usage = response.get("usage") or {}
+        if isinstance(usage, dict) and any(
+            usage.get(key)
+            for key in (
+                "inputTokens",
+                "input_tokens",
+                "outputTokens",
+                "output_tokens",
+                "cacheReadInputTokens",
+                "cache_read_input_tokens",
+            )
+        ):
+            maybe_append_usage_event(
+                provider="bedrock",
+                model=model_id,
+                usage={
+                    "input_tokens": usage.get("inputTokens", usage.get("input_tokens", 0)),
+                    "output_tokens": usage.get("outputTokens", usage.get("output_tokens", 0)),
+                    "cached_input_tokens": usage.get(
+                        "cacheReadInputTokens",
+                        usage.get("cache_read_input_tokens", 0),
+                    ),
+                },
+                source="habitat_llm.bedrock_claude.converse",
+            )
         self.response = text_response
 
         # Update message history (convert back to simple format)

@@ -10,6 +10,16 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from emtom.api_costs import (
+    BOLD,
+    CYAN,
+    GREEN,
+    RESET,
+    WHITE,
+    YELLOW,
+    format_cost_table,
+    summarize_path_costs,
+)
 from emtom.benchmark_metrics import (
     BenchmarkRepeatRun,
     build_repeat_summary,
@@ -25,6 +35,10 @@ from emtom.evolve.benchmark_wrapper import (
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 RUN_EMTOM = PROJECT_ROOT / "emtom" / "run_emtom.sh"
+
+
+def _style(text: str, *codes: str) -> str:
+    return "".join(code for code in codes if code) + text + RESET
 
 
 def parse_args() -> argparse.Namespace:
@@ -191,28 +205,31 @@ def _parse_run_results(args: argparse.Namespace, run_output_dir: Path) -> Benchm
     return parse_benchmark_results(str(run_output_dir), args.model)
 
 
-def _print_summary(summary_path: Path, summary) -> None:
+def _print_summary(summary_path: Path, summary, output_dir: Path) -> None:
     print("")
-    print("==============================================")
-    print("EMTOM REPEATED BENCHMARK SUMMARY")
-    print("==============================================")
-    print(f"Model: {summary.model}")
-    print(f"Runs requested: {summary.num_times}")
-    print(f"Runs completed with results: {summary.completed_runs}")
+    print(_style("=" * 46, BOLD, CYAN))
+    print(_style("EMTOM REPEATED BENCHMARK SUMMARY", BOLD, WHITE))
+    print(_style("=" * 46, BOLD, CYAN))
+    print(f"Model: {_style(summary.model, BOLD, CYAN)}")
+    print(f"Runs requested: {_style(str(summary.num_times), BOLD, WHITE)}")
+    print(f"Runs completed with results: {_style(str(summary.completed_runs), BOLD, WHITE)}")
     if summary.average_pass_rate is not None:
-        print(f"Average pass rate: {summary.average_pass_rate:.1f}%")
+        print(f"Average pass rate: {_style(f'{summary.average_pass_rate:.1f}%', BOLD, GREEN)}")
     else:
-        print("Average pass rate: --")
-    print(f"Pass-rate std dev: {summary.std_pass_rate:.1f}%")
+        print(f"Average pass rate: {_style('--', BOLD, YELLOW)}")
+    print(f"Pass-rate std dev: {_style(f'{summary.std_pass_rate:.1f}%', BOLD, WHITE)}")
     if summary.pass_at_k is not None:
-        print(f"Pass@{summary.k}: {summary.pass_at_k:.1f}%")
+        print(f"Pass@{summary.k}: {_style(f'{summary.pass_at_k:.1f}%', BOLD, GREEN)}")
     else:
-        print(f"Pass@{summary.k}: --")
+        print(f"Pass@{summary.k}: {_style('--', BOLD, YELLOW)}")
     if summary.pass_power_k is not None:
-        print(f"Pass^{summary.k}: {summary.pass_power_k:.1f}%")
+        print(f"Pass^{summary.k}: {_style(f'{summary.pass_power_k:.1f}%', BOLD, GREEN)}")
     else:
-        print(f"Pass^{summary.k}: --")
-    print(f"Results saved to: {summary_path}")
+        print(f"Pass^{summary.k}: {_style('--', BOLD, YELLOW)}")
+    print("")
+    for line in format_cost_table(summarize_path_costs(output_dir), heading="BENCHMARK API COSTS"):
+        print(line)
+    print(f"Results saved to: {_style(str(summary_path), BOLD, CYAN)}")
 
 
 def main() -> int:
@@ -327,7 +344,7 @@ def main() -> int:
                 team_model_map=team_model_map,
             )
 
-    _print_summary(summary_path, summary)
+    _print_summary(summary_path, summary, output_dir)
     return 0 if all(code == 0 for code in exit_codes) else 1
 
 
