@@ -40,6 +40,21 @@ CYAN = "\033[36m"
 WHITE = "\033[37m"
 
 
+def _normalize_model_alias(model: str) -> str:
+    model = str(model).strip()
+    if model == "deepseek":
+        return "deepseek-v3.2"
+    return model
+
+
+class ConciseArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        self.exit(
+            2,
+            f"Error: {message}\nHint: ./emtom/run_emtom.sh benchmark-suite --help\n",
+        )
+
+
 @dataclass
 class SuiteResult:
     model: str
@@ -369,8 +384,8 @@ def _refresh_running_result(result: SuiteResult) -> SuiteResult:
     )
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    parser = ConciseArgumentParser(
         description="Benchmark one task folder across multiple models."
     )
     source = parser.add_mutually_exclusive_group(required=True)
@@ -384,7 +399,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-times", type=int, default=1, help="Repeat each model benchmark N times.")
     parser.add_argument("--output-dir", default=None, help="Optional parent output directory for the suite.")
     parser.add_argument("--no-calibration", action="store_true", default=False)
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    args.models = [_normalize_model_alias(model) for model in args.models]
+    return args
 
 
 def _prepare_task_dir(args: argparse.Namespace, suite_dir: Path) -> tuple[Path, Optional[Path]]:

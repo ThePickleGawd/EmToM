@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from emtom.benchmark_metrics import build_single_run_summary
 from emtom.evolve.benchmark_wrapper import BenchmarkResults
 from emtom.scripts.benchmark_suite import (
     _build_suite_result,
     _parse_suite_model_summary,
     _parse_suite_model_results,
+    parse_args,
 )
 
 
@@ -127,3 +130,28 @@ def test_parse_suite_model_summary_reads_repeated_summary_file(tmp_path: Path) -
     assert summary.average_pass_rate == 40.0
     assert summary.pass_at_k == 78.4
     assert summary.pass_power_k == 6.4
+
+
+def test_parse_args_normalizes_deepseek_alias() -> None:
+    args = parse_args(
+        [
+            "--tasks-dir",
+            "data/emtom/tasks",
+            "--models",
+            "deepseek",
+            "gemini-flash",
+        ]
+    )
+
+    assert args.models == ["deepseek-v3.2", "gemini-flash"]
+
+
+def test_parse_args_reports_concise_errors(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        parse_args(["--models", "deepseek"])
+
+    assert excinfo.value.code == 2
+    captured = capsys.readouterr()
+    assert "Error: one of the arguments --tasks-dir --task is required" in captured.err
+    assert "Hint: ./emtom/run_emtom.sh benchmark-suite --help" in captured.err
+    assert "usage:" not in captured.err.lower()

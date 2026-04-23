@@ -42,6 +42,7 @@ from emtom.task_gen import GeneratedTask
 MODEL_ALIASES = {
     "kimi-k2.5": "accounts/fireworks/models/kimi-k2p5",
     "kimi-k2-thinking": "moonshot.kimi-k2-thinking",
+    "deepseek": "accounts/fireworks/models/deepseek-v3p2",
     "deepseek-v3.2": "accounts/fireworks/models/deepseek-v3p2",
     "llama-4-maverick": "accounts/fireworks/models/llama4-maverick-instruct-basic",
     "gemini-pro": "gemini-3.1-pro-preview",
@@ -75,6 +76,7 @@ MODEL_PROVIDER_MAP = {
     "claude-opus-4-5-20251101": "anthropic_claude",
     "kimi-k2.5": "openai_chat",
     "accounts/fireworks/models/kimi-k2p5": "openai_chat",
+    "deepseek": "openai_chat",
     "deepseek-v3.2": "openai_chat",
     "accounts/fireworks/models/deepseek-v3p2": "openai_chat",
     "llama-4-maverick": "openai_chat",

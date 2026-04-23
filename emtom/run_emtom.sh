@@ -25,11 +25,72 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
-# Expand short model names to full model IDs
-expand_model_name() {
+normalize_model_alias() {
     local model=$1
     case $model in
+        deepseek) echo "deepseek-v3.2" ;;
+        *)        echo "$model" ;;
+    esac
+}
+
+print_model_shortcuts() {
+    echo "Known model shortcuts: gpt-5.4, gpt-5.4-mini, o3, sonnet, haiku, opus, kimi-k2.5, deepseek-v3.2 (or deepseek), gemini-pro, gemini-flash" >&2
+}
+
+print_help_hint() {
+    local command=$1
+    if [ -n "$command" ]; then
+        echo "Hint: ./emtom/run_emtom.sh $command --help" >&2
+    else
+        echo "Hint: ./emtom/run_emtom.sh --help" >&2
+    fi
+}
+
+die_cli_error() {
+    local message=$1
+    local command=${2:-$COMMAND}
+    echo -e "${RED}Error:${NC} $message" >&2
+    print_help_hint "$command"
+    exit 1
+}
+
+die_unknown_model() {
+    local model=$1
+    local command=${2:-$COMMAND}
+    echo -e "${RED}Error:${NC} unknown model '$model'" >&2
+    print_model_shortcuts
+    print_help_hint "$command"
+    exit 1
+}
+
+require_option_value() {
+    local flag=$1
+    local value=${2:-}
+    local command=${3:-$COMMAND}
+    if [ -z "$value" ] || [[ "$value" == --* ]]; then
+        die_cli_error "$flag requires a value" "$command"
+    fi
+}
+
+print_command_help() {
+    local command=$1
+    case $command in
+        benchmark)
+            print_benchmark_usage_short
+            ;;
+        *)
+            print_usage
+            ;;
+    esac
+}
+
+# Expand short model names to full model IDs
+expand_model_name() {
+    local model
+    model=$(normalize_model_alias "$1")
+    case $model in
         kimi-k2.5)             echo "accounts/fireworks/models/kimi-k2p5" ;;
+        deepseek-v3.2)         echo "accounts/fireworks/models/deepseek-v3p2" ;;
         kimi-k2-thinking)       echo "moonshot.kimi-k2-thinking" ;;
         ministral-3-8b)         echo "mistral.ministral-3-8b-instruct" ;;
         ministral-3-14b)        echo "mistral.ministral-3-14b-instruct" ;;
@@ -64,7 +125,8 @@ has_anthropic_api_key() {
 
 # Auto-detect LLM provider from model name
 detect_llm_provider() {
-    local model=$1
+    local model
+    model=$(normalize_model_alias "$1")
     case $model in
         gpt-4o|gpt-4o-mini|gpt-5|gpt-5-mini|gpt-5.1|gpt-5.2|gpt-5.4|gpt-5.4-mini|o3)
             echo "openai_chat" ;;
@@ -96,37 +158,10 @@ detect_llm_provider() {
 
 print_llm_options() {
     echo ""
-    echo -e "${RED}Error: LLM model must be specified${NC}"
+    echo -e "${RED}Error:${NC} unknown or missing model"
     echo ""
-    echo -e "${BOLD}Available Models:${NC}"
-    echo -e "┌───────────────────────────┬────────────────────┐"
-    echo -e "│ ${BOLD}Model Name${NC}                │ ${BOLD}--model${NC}            │"
-    echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ GPT-5.4                   │ ${GREEN}gpt-5.4${NC}            │"
-    echo -e "│ GPT-5.4 Mini              │ ${GREEN}gpt-5.4-mini${NC}       │"
-    echo -e "│ GPT-5.2                   │ ${GREEN}gpt-5.2${NC}            │"
-    echo -e "│ O3                        │ ${GREEN}o3${NC}                 │"
-    echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ Claude Sonnet (4.6)       │ ${GREEN}sonnet${NC}             │"
-    echo -e "│ Claude Haiku (4.5)        │ ${GREEN}haiku${NC}              │"
-    echo -e "│ Claude Opus (4.6)         │ ${GREEN}opus${NC}               │"
-    echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ Kimi K2.5                │ ${GREEN}kimi-k2.5${NC}          │"
-    echo -e "│ DeepSeek V3.2             │ ${GREEN}deepseek-v3.2${NC}      │"
-    echo -e "│ Llama 4 Maverick          │ ${GREEN}llama-4-maverick${NC}   │"
-    echo -e "│ Qwen3 VL 235B             │ ${GREEN}qwen3-vl-235b${NC}      │"
-    echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ Gemini 3.1 Pro            │ ${GREEN}gemini-pro${NC}         │"
-    echo -e "│ Gemini 3 Flash            │ ${GREEN}gemini-flash${NC}       │"
-    echo -e "├───────────────────────────┼────────────────────┤"
-    echo -e "│ Mistral Large 3           │ ${GREEN}mistral-large-3${NC}    │"
-    echo -e "│ Kimi K2 Thinking          │ ${GREEN}kimi-k2-thinking${NC}   │"
-    echo -e "│ Qwen3 Next 80B            │ ${GREEN}qwen3-next-80b${NC}     │"
-    echo -e "└───────────────────────────┴────────────────────┘"
-    echo ""
-    echo -e "${YELLOW}Example usage:${NC}"
-    echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model gpt-5${NC}"
-    echo -e "  ./emtom/run_emtom.sh judge --task task.json ${GREEN}--model kimi-k2.5${NC}"
+    print_model_shortcuts
+    print_help_hint "${COMMAND:-}"
     echo ""
 }
 
@@ -258,6 +293,7 @@ print_usage() {
     echo -e "  │ Qwen3 Next 80B            │ ${GREEN}qwen3-next-80b${NC}     │"
     echo -e "  │ Qwen3 VL 235B             │ ${GREEN}qwen3-vl-235b${NC}      │"
     echo -e "  └───────────────────────────┴────────────────────┘"
+    echo "  Also accepted: deepseek-v3.2 (or deepseek), gemini-pro, gemini-flash, llama-4-maverick"
     echo ""
     echo "  --subtasks N         Exact number of subtasks per task (sets both min and max)"
     echo "  --subtasks-min N     Minimum subtasks per task (default: $SUBTASKS_MIN)"
@@ -363,7 +399,7 @@ print_benchmark_usage_short() {
     echo "Common options:"
     echo "  --tasks-dir DIR      Directory of task JSONs (default: data/emtom/tasks)"
     echo "  --task FILE          Run a single task file"
-    echo "  --model MODEL        Model name, e.g. gpt-5.4"
+    echo "  --model MODEL        Model shortcut, e.g. gpt-5.4, deepseek, gemini-flash"
     echo "  --max-workers N      Parallel benchmark workers"
     echo "  --num-times N        Repeat the benchmark N times"
     echo "  --category TYPE      cooperative|competitive|mixed"
@@ -420,9 +456,7 @@ run_exploration() {
     if [ -z "$LLM_PROVIDER" ]; then
         LLM_PROVIDER=$(detect_llm_provider "$MODEL")
         if [ -z "$LLM_PROVIDER" ]; then
-            echo -e "${RED}Error: Could not auto-detect provider for model '$MODEL'${NC}"
-            print_llm_options
-            exit 1
+            die_unknown_model "$MODEL" "explore"
         fi
     fi
 
@@ -460,6 +494,11 @@ run_generate() {
         if [ -z "$LLM_PROVIDER" ]; then
             LLM_PROVIDER="external_cli"
         fi
+    fi
+
+    TARGET_MODEL=$(normalize_model_alias "$TARGET_MODEL")
+    if [ -n "$TEST_MODEL" ]; then
+        TEST_MODEL=$(normalize_model_alias "$TEST_MODEL")
     fi
 
     # Expand short model names to full IDs
@@ -577,15 +616,13 @@ run_generate() {
 
 run_benchmark() {
     # Save short model name before expansion (used for calibration)
-    MODEL_SHORT="$MODEL"
+    MODEL_SHORT=$(normalize_model_alias "$MODEL")
 
     # Auto-detect LLM provider if not specified
     if [ -z "$LLM_PROVIDER" ]; then
         LLM_PROVIDER=$(detect_llm_provider "$MODEL")
         if [ -z "$LLM_PROVIDER" ]; then
-            echo -e "${RED}Error: Could not auto-detect provider for model '$MODEL'${NC}"
-            print_llm_options
-            exit 1
+            die_unknown_model "$MODEL" "benchmark"
         fi
     fi
 
@@ -977,9 +1014,7 @@ run_all() {
 
 run_judge() {
     if [ -z "$TASK_FILE" ]; then
-        echo "Error: --task is required for judge command"
-        echo "Usage: ./emtom/run_emtom.sh judge --task <path_to_task.json>"
-        exit 1
+        die_cli_error "--task is required" "judge"
     fi
 
     echo "=============================================="
@@ -1000,9 +1035,7 @@ run_judge() {
 
 run_verify() {
     if [ -z "$TASK_FILE" ]; then
-        echo "Error: --task is required for verify command"
-        echo "Usage: ./emtom/run_emtom.sh verify --task <path_to_task.json>"
-        exit 1
+        die_cli_error "--task is required" "verify"
     fi
     if [ ! -f "$TASK_FILE" ]; then
         echo -e "${RED}ERROR: Task file not found: $TASK_FILE${NC}"
@@ -1148,9 +1181,7 @@ run_verify_static() {
 
 run_verify_pddl() {
     if [ -z "$TASK_FILE" ]; then
-        echo "Error: --task is required for verify-pddl command"
-        echo "Usage: ./emtom/run_emtom.sh verify-pddl --task <path_to_task.json>"
-        exit 1
+        die_cli_error "--task is required" "verify-pddl"
     fi
     PDDL_ARGS=("$TASK_FILE")
     if [ -n "$OUTPUT_DIR" ]; then
@@ -1161,9 +1192,7 @@ run_verify_pddl() {
 
 run_validate_task() {
     if [ -z "$TASK_FILE" ]; then
-        echo "Error: --task is required for validate-task command"
-        echo "Usage: ./emtom/run_emtom.sh validate-task --task <path_to_task.json>"
-        exit 1
+        die_cli_error "--task is required" "validate-task"
     fi
     VALIDATE_ARGS=("$TASK_FILE")
     if [ -n "$SCENE_DATA_FILE" ]; then
@@ -1174,9 +1203,7 @@ run_validate_task() {
 
 run_test_task() {
     if [ -z "$TASK_FILE" ]; then
-        echo "Error: --task is required for test-task command"
-        echo "Usage: ./emtom/run_emtom.sh test-task --task <path_to_task.json>"
-        exit 1
+        die_cli_error "--task is required" "test-task"
     fi
     TEST_ARGS=("$TASK_FILE")
     if [ -n "$OUTPUT_DIR" ]; then
@@ -1200,9 +1227,7 @@ run_new_scene() {
 
 run_submit_task() {
     if [ -z "$TASK_FILE" ]; then
-        echo "Error: --task is required for submit-task command"
-        echo "Usage: ./emtom/run_emtom.sh submit-task --task <path_to_task.json>"
-        exit 1
+        die_cli_error "--task is required" "submit-task"
     fi
     SUBMIT_ARGS=("$TASK_FILE" --output-dir "${OUTPUT_DIR:-data/emtom/tasks}")
     python -m emtom.cli.submit_task "${SUBMIT_ARGS[@]}"
@@ -1246,6 +1271,15 @@ run_salvage_literal_tom() {
 # Parse command line arguments
 COMMAND=""
 while [[ $# -gt 0 ]]; do
+    if [[ "$1" == --* ]]; then
+        case $1 in
+            --max-sim-steps|--max-llm-calls|--steps|--num-tasks|--tasks|--model|--llm|--subtasks|--subtasks-min|--subtasks-max|--iterations-per-task|--task-gen-agent|--query|--retry-verification|--agents|--agents-min|--agents-max|--num-agents|--agent-type|--task|--threshold|--tasks-dir|--team-model-map|--observation-mode|--benchmark-run-mode|--selector-min-frames|--selector-max-frames|--selector-max-candidates|--judge-difficulty|--difficulty|--test-model|--target-model|--target-pass-rate|--seed-pass-ratio|--seed-fail-ratio|--tom-target-l1|--tom-target-l2|--tom-target-l3|--tom-ratio-tolerance|--max-workers|--num-times|--num-gpus|--category|--seed-tasks-dir|--sampled-tasks-dir|--output-dir|--limit|--scene-data|--report-file)
+                require_option_value "$1" "${2:-}"
+                ;;
+            --mechanics|--llm-agents|--remove|--k-level|--video|--no-calibration|--no-icl|--skip-backup|--strict-object-ids|--no-auto-retry|--help)
+                ;;
+        esac
+    fi
     case $1 in
         campaign)
             COMMAND=campaign
@@ -1312,8 +1346,7 @@ while [[ $# -gt 0 ]]; do
         --task-gen-agent)
             TASK_GEN_AGENT=$2
             if [[ "$TASK_GEN_AGENT" != "mini" && "$TASK_GEN_AGENT" != "claude" && "$TASK_GEN_AGENT" != "codex" ]]; then
-                echo "Error: --task-gen-agent must be 'mini', 'claude', or 'codex'"
-                exit 1
+                die_cli_error "--task-gen-agent must be one of: mini, claude, codex" "$COMMAND"
             fi
             shift 2
             ;;
@@ -1347,8 +1380,7 @@ while [[ $# -gt 0 ]]; do
         --agent-type)
             AGENT_TYPE=$2
             if [[ "$AGENT_TYPE" != "human" && "$AGENT_TYPE" != "robot" ]]; then
-                echo "Error: --agent-type must be 'human' or 'robot'"
-                exit 1
+                die_cli_error "--agent-type must be 'human' or 'robot'" "$COMMAND"
             fi
             shift 2
             ;;
@@ -1380,24 +1412,21 @@ while [[ $# -gt 0 ]]; do
         --team-model-map)
             TEAM_MODEL_MAP=$2
             if [[ "$TEAM_MODEL_MAP" != *"="* ]]; then
-                echo "Error: --team-model-map must include '=' entries, e.g. team_0=sonnet,team_1=gpt-5"
-                exit 1
+                die_cli_error "--team-model-map must look like team_0=sonnet,team_1=gpt-5" "$COMMAND"
             fi
             shift 2
             ;;
         --observation-mode)
             OBSERVATION_MODE=$2
             if [[ "$OBSERVATION_MODE" != "text" && "$OBSERVATION_MODE" != "vision" ]]; then
-                echo "Error: --observation-mode must be 'text' or 'vision'"
-                exit 1
+                die_cli_error "--observation-mode must be 'text' or 'vision'" "$COMMAND"
             fi
             shift 2
             ;;
         --benchmark-run-mode)
             BENCHMARK_RUN_MODE=$2
             if [[ "$BENCHMARK_RUN_MODE" != "standard" && "$BENCHMARK_RUN_MODE" != "baseline" && "$BENCHMARK_RUN_MODE" != "full_info" ]]; then
-                echo "Error: --benchmark-run-mode must be 'standard', 'baseline', or 'full_info'"
-                exit 1
+                die_cli_error "--benchmark-run-mode must be standard, baseline, or full_info" "$COMMAND"
             fi
             shift 2
             ;;
@@ -1416,16 +1445,14 @@ while [[ $# -gt 0 ]]; do
         --judge-difficulty)
             JUDGE_DIFFICULTY=$2
             if [[ "$JUDGE_DIFFICULTY" != "easy" && "$JUDGE_DIFFICULTY" != "medium" && "$JUDGE_DIFFICULTY" != "hard" ]]; then
-                echo "Error: --judge-difficulty must be 'easy', 'medium', or 'hard'"
-                exit 1
+                die_cli_error "--judge-difficulty must be easy, medium, or hard" "$COMMAND"
             fi
             shift 2
             ;;
         --difficulty)
             GENERATION_DIFFICULTY=$2
             if [[ "$GENERATION_DIFFICULTY" != "standard" && "$GENERATION_DIFFICULTY" != "hard" ]]; then
-                echo "Error: --difficulty must be 'standard' or 'hard'"
-                exit 1
+                die_cli_error "--difficulty must be 'standard' or 'hard'" "$COMMAND"
             fi
             shift 2
             ;;
@@ -1481,8 +1508,7 @@ while [[ $# -gt 0 ]]; do
             done
             K_LEVEL="${K_LEVEL# }"  # trim leading space
             if [ -z "$K_LEVEL" ]; then
-                echo "Error: --k-level requires at least one integer (1, 2, or 3)"
-                exit 1
+                die_cli_error "--k-level requires at least one integer (1, 2, or 3)" "$COMMAND"
             fi
             ;;
         --remove)
@@ -1495,8 +1521,7 @@ while [[ $# -gt 0 ]]; do
             done
             REMOVE_STEPS="${REMOVE_STEPS# }"  # trim leading space
             if [ -z "$REMOVE_STEPS" ]; then
-                echo "Error: --remove requires at least one step (pddl, llm-council, simulation, task-evolution, tom, structure, test)"
-                exit 1
+                die_cli_error "--remove requires at least one step" "$COMMAND"
             fi
             ;;
         --video)
@@ -1518,8 +1543,7 @@ while [[ $# -gt 0 ]]; do
         --num-times)
             NUM_TIMES=$2
             if ! [[ "$NUM_TIMES" =~ ^[0-9]+$ ]] || [ "$NUM_TIMES" -lt 1 ]; then
-                echo "Error: --num-times must be an integer >= 1"
-                exit 1
+                die_cli_error "--num-times must be an integer >= 1" "$COMMAND"
             fi
             shift 2
             ;;
@@ -1539,8 +1563,7 @@ while [[ $# -gt 0 ]]; do
         --category)
             CATEGORY=$2
             if [[ "$CATEGORY" != "cooperative" && "$CATEGORY" != "competitive" && "$CATEGORY" != "mixed" ]]; then
-                echo "Error: --category must be 'cooperative', 'competitive', or 'mixed'"
-                exit 1
+                die_cli_error "--category must be cooperative, competitive, or mixed" "$COMMAND"
             fi
             shift 2
             ;;
@@ -1577,18 +1600,15 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -h|--help)
-            print_usage
+            print_command_help "$COMMAND"
             exit 0
             ;;
         *)
-            echo "Unknown option: $1"
-            if [ "$COMMAND" = "benchmark" ]; then
-                echo ""
-                print_benchmark_usage_short
+            if [ -z "$COMMAND" ] && [[ "$1" != --* ]]; then
+                die_cli_error "unknown command '$1'"
             else
-                print_usage
+                die_cli_error "unknown option '$1'" "$COMMAND"
             fi
-            exit 1
             ;;
     esac
 done
