@@ -13,17 +13,16 @@ The conceptual source of truth is [docs/benchmark-architecture.md](/data4/parth/
 
 ```mermaid
 flowchart LR
-    A[Explore Scene] --> B[Author Task]
-    B --> C[Verify Static + PDDL]
-    C --> D[Replay Golden Trajectory]
-    D --> E[Judge ToM Requirement]
-    E --> F[Benchmark Models]
+    A[Load Task Set] --> B[Verify Static + PDDL]
+    B --> C[Replay Golden Trajectory]
+    C --> D[Judge ToM Requirement]
+    D --> E[Benchmark Models]
 ```
 
 | Layer | Owns |
 | --- | --- |
 | [emtom/pddl](/data4/parth/Partnr-EmToM/emtom/pddl) | Goal syntax, epistemic compilation, solvability checks |
-| [emtom/task_gen](/data4/parth/Partnr-EmToM/emtom/task_gen) | Task authoring, validation, calibration, submission |
+| [emtom/task_gen](/data4/parth/Partnr-EmToM/emtom/task_gen) | Task validation and calibration flow |
 | [emtom/runner](/data4/parth/Partnr-EmToM/emtom/runner) | Habitat execution runtime |
 | [emtom/cli](/data4/parth/Partnr-EmToM/emtom/cli) | User-facing command surface |
 | [docs](/data4/parth/Partnr-EmToM/docs) | Benchmark semantics and architecture |
@@ -85,13 +84,10 @@ AWS_DEFAULT_REGION=...
 
 | GPU required | Lightweight |
 | --- | --- |
-| `explore` | `validate-task` |
-| `generate` | `verify-static` |
-| `new-scene` | `verify-pddl` |
-| `test-task` | `judge` |
-| `verify` |  |
-| `benchmark` |  |
-| `benchmark-suite` |  |
+| `test-task` | `validate-task` |
+| `verify` | `verify-static` |
+| `benchmark` | `verify-pddl` |
+| `benchmark-suite` | `judge` |
 
 ## Instructions
 
@@ -107,8 +103,6 @@ AWS_DEFAULT_REGION=...
 
 | Command | What it does | Typical use |
 | --- | --- | --- |
-| `explore` | Explore a scene with an LLM agent | Inspect mechanics and scene affordances |
-| `generate` | Author new EMTOM tasks | Create tasks targeted to a benchmark model |
 | `validate-task` | Validate task JSON structure | Fast pre-check before deeper verification |
 | `verify-static` | Run static task checks | Catch schema and structural issues |
 | `verify-pddl` | Check goal and solvability logic | Validate PDDL and epistemic structure |
@@ -117,29 +111,14 @@ AWS_DEFAULT_REGION=...
 | `benchmark` | Run one model on one task set | Main evaluation command |
 | `benchmark-suite` | Run many models on one task set | Multi-model comparison in one tmux run |
 | `campaign` | Manage the active benchmark campaign | Track a canonical benchmark set |
-| `bulk_generate` | Generate tasks across GPUs in parallel | Larger task-authoring batches |
 
 ### Recommended workflow
 
-1. `explore` a scene if you are authoring new tasks.
-2. `generate` a batch of candidate tasks.
-3. `validate-task`, `verify-static`, `verify-pddl`, `verify`, and `judge` before submission.
-4. `benchmark` a single model when testing locally.
-5. `benchmark-suite` when comparing several models on the same task directory.
+1. `validate-task`, `verify-static`, `verify-pddl`, `verify`, and `judge` on the task set you want to evaluate.
+2. `benchmark` a single model when testing locally.
+3. `benchmark-suite` when comparing several models on the same task directory.
 
 ## Quick Start
-
-### Explore
-
-```bash
-./emtom/run_emtom.sh explore --steps 30 --model gpt-5.4
-```
-
-### Generate
-
-```bash
-./emtom/run_emtom.sh generate --task-gen-agent mini --model gpt-5.4 --target-model gpt-5.4 --seed-tasks-dir data/emtom/tasks --num-tasks 4
-```
 
 ### Verify and judge
 
@@ -168,12 +147,6 @@ AWS_DEFAULT_REGION=...
 Repeated benchmark runs report mean pass rate, pass-rate standard deviation, `pass@k`, and `pass^k` with `k = --num-times`, using the exact `pass@k = 1 - C(n-c, k) / C(n, k)` and `pass^k = (c/n)^k` formulas.
 The default `--num-times` is `3`; pass `--num-times 1` for a single benchmark run.
 
-### Bulk generation
-
-```bash
-./emtom/bulk_generate.sh --num-tasks 8 --task-gen-agent mini --model gpt-5.4
-```
-
 ## What The Benchmark Measures
 
 ```text
@@ -188,12 +161,10 @@ These should be reported separately.
 - Use [docs/benchmark-architecture.md](/data4/parth/Partnr-EmToM/docs/benchmark-architecture.md) as the authoritative benchmark description.
 - Use [emtom/run_emtom.sh](/data4/parth/Partnr-EmToM/emtom/run_emtom.sh) as the main entrypoint.
 - Keep exactly one active campaign in `data/emtom/results/`.
-- Submitted benchmark tasks must stay grounded in real dataset `scene_id` and `episode_id`.
 - When benchmark architecture changes, update `docs/*.md` in the same change.
 
 ## Pointers
 
 - Architecture: [docs/benchmark-architecture.md](/data4/parth/Partnr-EmToM/docs/benchmark-architecture.md)
 - Main CLI: [emtom/run_emtom.sh](/data4/parth/Partnr-EmToM/emtom/run_emtom.sh)
-- Bulk generation: [emtom/bulk_generate.sh](/data4/parth/Partnr-EmToM/emtom/bulk_generate.sh)
 - PARTNR background: [docs/partnr/partnr.md](/data4/parth/Partnr-EmToM/docs/partnr/partnr.md)
