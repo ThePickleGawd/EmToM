@@ -7,6 +7,7 @@ import argparse
 import json
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -39,6 +40,15 @@ RUN_EMTOM = PROJECT_ROOT / "emtom" / "run_emtom.sh"
 
 def _style(text: str, *codes: str) -> str:
     return "".join(code for code in codes if code) + text + RESET
+
+
+@dataclass
+class ActiveRun:
+    run_index: int
+    output_dir: Path
+    log_path: Path
+    log_handle: object
+    proc: subprocess.Popen
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -205,6 +215,41 @@ def _parse_run_results(args: argparse.Namespace, run_output_dir: Path) -> Benchm
     return parse_benchmark_results(str(run_output_dir), args.model)
 
 
+def _run_log_path(run_output_dir: Path) -> Path:
+    return run_output_dir / "benchmark.log"
+
+
+def _launch_run(
+    args: argparse.Namespace,
+    run_index: int,
+    run_output_dir: Path,
+) -> ActiveRun:
+    cmd = _build_run_command(args, run_output_dir)
+    log_path = _run_log_path(run_output_dir)
+    log_handle = open(log_path, "w", encoding="utf-8")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=PROJECT_ROOT,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    except Exception:
+        log_handle.close()
+        raise
+
+    print(f"[repeat] starting run {run_index}/{args.num_times}: {' '.join(cmd)}")
+    print(f"[repeat] run {run_index}/{args.num_times} log: {log_path}")
+    return ActiveRun(
+        run_index=run_index,
+        output_dir=run_output_dir,
+        log_path=log_path,
+        log_handle=log_handle,
+        proc=proc,
+    )
+
+
 def _print_summary(summary_path: Path, summary, output_dir: Path) -> None:
     print("")
     print(_style("=" * 46, BOLD, CYAN))
@@ -242,37 +287,33 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     expected_task_ids = _collect_expected_task_ids(args)
 
-    run_specs = []
+    run_specs: List[ActiveRun] = []
     for run_index in range(1, args.num_times + 1):
         run_output_dir = output_dir / f"run_{run_index}"
         run_output_dir.mkdir(parents=True, exist_ok=True)
-        cmd = _build_run_command(args, run_output_dir)
-        print(
-            f"[repeat] starting run {run_index}/{args.num_times}: {' '.join(cmd)}"
-        )
-        proc = subprocess.Popen(cmd, cwd=PROJECT_ROOT)
-        run_specs.append((run_index, run_output_dir, proc))
+        run_specs.append(_launch_run(args, run_index, run_output_dir))
 
     runs = []
     parsed_runs: Dict[int, BenchmarkResults] = {}
     exit_codes = []
 
-    for run_index, run_output_dir, proc in run_specs:
-        return_code = proc.wait()
+    for active_run in run_specs:
+        return_code = active_run.proc.wait()
+        active_run.log_handle.close()
         exit_codes.append(return_code)
 
         parsed = None
         error = ""
         try:
-            parsed = _parse_run_results(args, run_output_dir)
+            parsed = _parse_run_results(args, active_run.output_dir)
         except Exception as exc:
             error = str(exc)
 
         if parsed is None:
             status = "failed"
             run = BenchmarkRepeatRun(
-                run_index=run_index,
-                output_dir=str(run_output_dir),
+                run_index=active_run.run_index,
+                output_dir=str(active_run.output_dir),
                 status=status,
                 return_code=return_code,
                 error=error or f"benchmark exited with code {return_code}",
@@ -280,8 +321,8 @@ def main() -> int:
         else:
             status = "complete" if return_code == 0 else "partial"
             run = BenchmarkRepeatRun(
-                run_index=run_index,
-                output_dir=str(run_output_dir),
+                run_index=active_run.run_index,
+                output_dir=str(active_run.output_dir),
                 status=status,
                 return_code=return_code,
                 total=parsed.total,
@@ -290,19 +331,20 @@ def main() -> int:
                 pass_rate=parsed.pass_rate,
                 error=error,
             )
-            parsed_runs[run_index] = parsed
+            parsed_runs[active_run.run_index] = parsed
 
         runs.append(run)
         if run.pass_rate is not None:
             print(
-                f"[repeat] finished run {run_index}/{args.num_times}: "
+                f"[repeat] finished run {active_run.run_index}/{args.num_times}: "
                 f"status={run.status} pass_rate={run.pass_rate:.1f}% "
-                f"({run.passed}/{run.total})"
+                f"({run.passed}/{run.total}) log={active_run.log_path}"
             )
         else:
             print(
-                f"[repeat] finished run {run_index}/{args.num_times}: "
-                f"status={run.status} error={run.error or 'unknown error'}"
+                f"[repeat] finished run {active_run.run_index}/{args.num_times}: "
+                f"status={run.status} error={run.error or 'unknown error'} "
+                f"log={active_run.log_path}"
             )
 
     summary = build_repeat_summary(
