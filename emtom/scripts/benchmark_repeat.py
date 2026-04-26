@@ -41,7 +41,7 @@ def _style(text: str, *codes: str) -> str:
     return "".join(code for code in codes if code) + text + RESET
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Repeat EMTOM benchmark runs and aggregate pass@k / pass^k metrics."
     )
@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     source.add_argument("--task", help="Single task JSON to benchmark.")
     parser.add_argument("--model", required=True, help="Model to benchmark.")
     parser.add_argument("--output-dir", required=True, help="Parent output directory for all repeats.")
-    parser.add_argument("--num-times", type=int, default=1, help="Number of repeated runs.")
+    parser.add_argument("--num-times", type=int, default=3, help="Number of repeated runs.")
     parser.add_argument("--max-sim-steps", type=int, default=200000)
     parser.add_argument("--max-llm-calls", type=int, default=None)
     parser.add_argument("--max-workers", type=int, default=None)
@@ -69,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--selector-max-candidates", type=int, default=12)
     parser.add_argument("--video", action="store_true", default=False)
     parser.add_argument("--no-calibration", action="store_true", default=False)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def _parse_team_model_map(raw_value: Optional[str]) -> Optional[Dict[str, str]]:

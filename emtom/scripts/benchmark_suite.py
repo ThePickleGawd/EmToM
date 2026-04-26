@@ -28,6 +28,11 @@ RUN_EMTOM = PROJECT_ROOT / "emtom" / "run_emtom.sh"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs" / "emtom"
 USE_COLOR = sys.stdout.isatty()
 SUMMARY_REFRESH_SECONDS = 600
+MODEL_COL_WIDTH = 24
+STATUS_COL_WIDTH = 10
+COUNT_COL_WIDTH = 8
+RATE_COL_WIDTH = 10
+COLUMN_SEPARATOR = " | "
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -101,6 +106,14 @@ def _format_rate(value: Optional[float]) -> str:
     return f"{value:.1f}%" if value is not None else "--"
 
 
+def _format_cell(text: str, width: int, *, align: str = "<") -> str:
+    return f"{text:<{width}}" if align == "<" else f"{text:>{width}}"
+
+
+def _styled_cell(text: str, width: int, *, align: str = "<", codes: tuple[str, ...] = ()) -> str:
+    return _style(_format_cell(text, width, align=align), *codes)
+
+
 def _status_style(status: str) -> tuple[str, ...]:
     if status == "complete":
         return (GREEN, BOLD)
@@ -131,7 +144,29 @@ def render_suite_summary(
     current_model: Optional[str] = None,
 ) -> str:
     show_repeat_metrics = any(result.num_times > 1 for result in results)
-    width = 124 if show_repeat_metrics else 88
+    if show_repeat_metrics:
+        header = COLUMN_SEPARATOR.join(
+            [
+                _format_cell("Model", MODEL_COL_WIDTH),
+                _format_cell("Status", STATUS_COL_WIDTH),
+                _format_cell("Runs", COUNT_COL_WIDTH, align=">"),
+                _format_cell("Avg pass", RATE_COL_WIDTH, align=">"),
+                _format_cell("Std", RATE_COL_WIDTH, align=">"),
+                _format_cell("Pass@k", RATE_COL_WIDTH, align=">"),
+                _format_cell("Pass^k", RATE_COL_WIDTH, align=">"),
+            ]
+        )
+    else:
+        header = COLUMN_SEPARATOR.join(
+            [
+                _format_cell("Model", MODEL_COL_WIDTH),
+                _format_cell("Status", STATUS_COL_WIDTH),
+                _format_cell("Passed", COUNT_COL_WIDTH, align=">"),
+                _format_cell("Total", COUNT_COL_WIDTH, align=">"),
+                _format_cell("Pass rate", RATE_COL_WIDTH, align=">"),
+            ]
+        )
+    width = len(header)
     lines = [
         "",
         _style("=" * width, BOLD, CYAN),
@@ -141,64 +176,97 @@ def render_suite_summary(
     ]
     if current_model:
         lines.append(f"Current model: {_style(current_model, BOLD, MAGENTA)}")
-    if show_repeat_metrics:
-        lines.extend([
-            "",
-            _style(
-                f"{'Model':<24} {'Status':<10} {'Runs':>8} {'Avg pass':>10} {'Std':>10} {'Pass@k':>10} {'Pass^k':>10}",
-                BOLD,
-            ),
-            _style("-" * width, DIM),
-        ])
-    else:
-        lines.extend([
-            "",
-            _style(f"{'Model':<24} {'Status':<10} {'Passed':>8} {'Total':>8} {'Pass rate':>10}", BOLD),
-            _style("-" * width, DIM),
-        ])
+    lines.extend([
+        "",
+        _style(header, BOLD),
+        _style("-" * width, DIM),
+    ])
     for result in results:
         passed = str(result.passed) if result.total > 0 else "-"
         total = str(result.total) if result.total > 0 else "-"
-        model_label = _style(result.model, BOLD, MAGENTA) if result.model == current_model else _style(result.model, WHITE)
-        status_label = _style(f"{result.status:<10}", *_status_style(result.status))
+        model_codes = (BOLD, MAGENTA) if result.model == current_model else (WHITE,)
+        model_label = _styled_cell(result.model, MODEL_COL_WIDTH, codes=model_codes)
+        status_label = _styled_cell(
+            result.status,
+            STATUS_COL_WIDTH,
+            codes=_status_style(result.status),
+        )
         if show_repeat_metrics:
-            runs_label = _style(
+            runs_label = _styled_cell(
                 f"{result.completed_runs}/{result.num_times}",
-                CYAN if result.completed_runs > 0 else DIM,
-                BOLD if result.completed_runs == result.num_times and result.num_times > 0 else "",
+                COUNT_COL_WIDTH,
+                align=">",
+                codes=(
+                    CYAN if result.completed_runs > 0 else DIM,
+                    BOLD if result.completed_runs == result.num_times and result.num_times > 0 else "",
+                ),
             )
-            avg_label = _style(
-                f"{_format_rate(result.average_pass_rate):>10}",
-                *_rate_style(result.average_pass_rate, result.status),
+            avg_label = _styled_cell(
+                _format_rate(result.average_pass_rate),
+                RATE_COL_WIDTH,
+                align=">",
+                codes=_rate_style(result.average_pass_rate, result.status),
             )
-            std_label = _style(
-                f"{_format_rate(result.std_pass_rate if result.completed_runs > 0 else None):>10}",
-                CYAN if result.completed_runs > 0 else DIM,
+            std_label = _styled_cell(
+                _format_rate(result.std_pass_rate if result.completed_runs > 0 else None),
+                RATE_COL_WIDTH,
+                align=">",
+                codes=(CYAN if result.completed_runs > 0 else DIM,),
             )
-            pass_at_k_label = _style(
-                f"{_format_rate(result.pass_at_k):>10}",
-                *_rate_style(result.pass_at_k, result.status),
+            pass_at_k_label = _styled_cell(
+                _format_rate(result.pass_at_k),
+                RATE_COL_WIDTH,
+                align=">",
+                codes=_rate_style(result.pass_at_k, result.status),
             )
-            pass_power_k_label = _style(
-                f"{_format_rate(result.pass_power_k):>10}",
-                *_rate_style(result.pass_power_k, result.status),
+            pass_power_k_label = _styled_cell(
+                _format_rate(result.pass_power_k),
+                RATE_COL_WIDTH,
+                align=">",
+                codes=_rate_style(result.pass_power_k, result.status),
             )
             lines.append(
-                f"{model_label:<24} {status_label} {runs_label:>8} {avg_label} {std_label} {pass_at_k_label} {pass_power_k_label}"
+                COLUMN_SEPARATOR.join(
+                    [
+                        model_label,
+                        status_label,
+                        runs_label,
+                        avg_label,
+                        std_label,
+                        pass_at_k_label,
+                        pass_power_k_label,
+                    ]
+                )
             )
         else:
-            passed_label = _style(
-                f"{passed:>8}",
-                GREEN if result.passed > 0 else DIM,
-                BOLD if result.passed > 0 else "",
+            passed_label = _styled_cell(
+                passed,
+                COUNT_COL_WIDTH,
+                align=">",
+                codes=(GREEN if result.passed > 0 else DIM, BOLD if result.passed > 0 else ""),
             )
-            total_label = _style(f"{total:>8}", CYAN if result.total > 0 else DIM)
-            rate_label = _style(
-                f"{_format_rate(result.pass_rate):>10}",
-                *_rate_style(result.pass_rate, result.status),
+            total_label = _styled_cell(
+                total,
+                COUNT_COL_WIDTH,
+                align=">",
+                codes=(CYAN if result.total > 0 else DIM,),
+            )
+            rate_label = _styled_cell(
+                _format_rate(result.pass_rate),
+                RATE_COL_WIDTH,
+                align=">",
+                codes=_rate_style(result.pass_rate, result.status),
             )
             lines.append(
-                f"{model_label:<24} {status_label} {passed_label} {total_label} {rate_label}"
+                COLUMN_SEPARATOR.join(
+                    [
+                        model_label,
+                        status_label,
+                        passed_label,
+                        total_label,
+                        rate_label,
+                    ]
+                )
             )
     return "\n".join(lines)
 
@@ -396,7 +464,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--observation-mode", default="text", choices=["text", "vision"])
     parser.add_argument("--category", default=None, help="Optional category filter.")
     parser.add_argument("--run-mode", default="standard", choices=["standard", "baseline", "full_info"])
-    parser.add_argument("--num-times", type=int, default=1, help="Repeat each model benchmark N times.")
+    parser.add_argument("--num-times", type=int, default=3, help="Repeat each model benchmark N times.")
     parser.add_argument("--output-dir", default=None, help="Optional parent output directory for the suite.")
     parser.add_argument("--no-calibration", action="store_true", default=False)
     args = parser.parse_args(argv)

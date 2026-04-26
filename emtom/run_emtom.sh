@@ -194,7 +194,7 @@ SEED_FAIL_RATIO="0.80"  # Logical seed mix for target-model failing tasks
 NO_VIDEO=true  # Disable video saving (default: true for speed)
 MAX_WORKERS=""  # Parallel benchmark: max concurrent processes (empty = sequential)
 NUM_GPUS=8  # GPU count for round-robin subprocess assignment
-NUM_TIMES=1  # Benchmark repeats: run the same benchmark N times
+NUM_TIMES=3  # Benchmark repeats: run the same benchmark N times
 TASKS_DIR=""  # Custom tasks directory for benchmark
 TEAM_MODEL_MAP=""  # Optional team -> model mapping for benchmark competitive tasks
 SAMPLED_TASKS_DIR=""  # Pre-built sampled_tasks directory (skips random sampling)

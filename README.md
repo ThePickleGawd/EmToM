@@ -154,7 +154,7 @@ AWS_DEFAULT_REGION=...
 ### Benchmark
 
 ```bash
-./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/tasks_claude --model gpt-5.4 --max-workers 8
+./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/tasks_claude --model gpt-5.4 --max-workers 8 --num-times 1
 ```
 
 ```bash
@@ -166,6 +166,7 @@ AWS_DEFAULT_REGION=...
 ```
 
 Repeated benchmark runs report mean pass rate, pass-rate standard deviation, `pass@k`, and `pass^k` with `k = --num-times`, using the exact `pass@k = 1 - C(n-c, k) / C(n, k)` and `pass^k = (c/n)^k` formulas.
+The default `--num-times` is `3`; pass `--num-times 1` for a single benchmark run.
 
 ### Bulk generation
 

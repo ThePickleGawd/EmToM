@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from emtom.benchmark_metrics import build_single_run_summary
 from emtom.evolve.benchmark_wrapper import BenchmarkResults
+import emtom.scripts.benchmark_suite as benchmark_suite
+from emtom.scripts.benchmark_repeat import parse_args as parse_repeat_args
 from emtom.scripts.benchmark_suite import (
     _build_suite_result,
     _parse_suite_model_summary,
     _parse_suite_model_results,
     parse_args,
+    render_suite_summary,
 )
 
 
@@ -144,6 +148,66 @@ def test_parse_args_normalizes_deepseek_alias() -> None:
     )
 
     assert args.models == ["deepseek-v3.2", "gemini-flash"]
+
+
+def test_parse_args_defaults_num_times_to_three() -> None:
+    args = parse_args(
+        [
+            "--tasks-dir",
+            "data/emtom/tasks",
+            "--models",
+            "gpt-5.4",
+        ]
+    )
+
+    assert args.num_times == 3
+
+
+def test_benchmark_repeat_parse_args_defaults_num_times_to_three() -> None:
+    args = parse_repeat_args(
+        [
+            "--tasks-dir",
+            "data/emtom/tasks",
+            "--model",
+            "gpt-5.4",
+            "--output-dir",
+            "outputs/emtom/test",
+        ]
+    )
+
+    assert args.num_times == 3
+
+
+def test_render_suite_summary_keeps_repeat_metric_columns_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(benchmark_suite, "USE_COLOR", True)
+    result = benchmark_suite.SuiteResult(
+        model="gpt-5.4",
+        status="complete",
+        total=5,
+        passed=2,
+        failed=3,
+        pass_rate=40.0,
+        output_dir=str(tmp_path / "out"),
+        return_code=0,
+        num_times=3,
+        completed_runs=3,
+        average_pass_rate=40.0,
+        std_pass_rate=10.0,
+        pass_at_k=78.4,
+        pass_power_k=6.4,
+    )
+
+    rendered = render_suite_summary([result], tmp_path, current_model="gpt-5.4")
+    stripped = re.sub(r"\x1b\[[0-9;]*m", "", rendered)
+    lines = [line for line in stripped.splitlines() if line.strip()]
+    header = next(line for line in lines if "Pass@k" in line and "Pass^k" in line)
+    row = next(line for line in lines if "gpt-5.4" in line and "complete" in line)
+
+    assert header.split(" | ")[-2:] == ["    Pass@k", "    Pass^k"]
+    assert row.split(" | ")[-2:] == ["     78.4%", "      6.4%"]
 
 
 def test_parse_args_reports_concise_errors(capsys: pytest.CaptureFixture[str]) -> None:
