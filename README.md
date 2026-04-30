@@ -146,6 +146,7 @@ AWS_DEFAULT_REGION=...
 
 Repeated benchmark runs report mean pass rate, pass-rate standard deviation, `pass@k`, and `pass^k` with `k = --num-times`, using the exact `pass@k = 1 - C(n-c, k) / C(n, k)` and `pass^k = (c/n)^k` formulas.
 The default `--num-times` is `3`; pass `--num-times 1` for a single benchmark run.
+Benchmark commands default to `--no-calibration`; pass `--calibration` to write results back into source task JSONs. `--task-dir` is accepted as an alias for `--tasks-dir`.
 
 ## What The Benchmark Measures
 

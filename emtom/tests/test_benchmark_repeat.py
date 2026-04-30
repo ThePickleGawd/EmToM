@@ -26,7 +26,7 @@ def _repeat_args(**overrides):
         "selector_max_frames": 5,
         "selector_max_candidates": 12,
         "video": False,
-        "no_calibration": False,
+        "no_calibration": True,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)

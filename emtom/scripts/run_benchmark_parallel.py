@@ -2,7 +2,7 @@
 
 Called by run_emtom.sh when --max-workers is specified.
 Runs one benchmark subprocess per task JSON with GPU round-robin.
-Calibration is written per-task as each subprocess completes.
+Calibration is skipped by default; pass --calibration to write per-task updates.
 
 Usage:
     python -m emtom.scripts.run_benchmark_parallel \
@@ -29,14 +29,26 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run benchmark in parallel (one process per task)."
     )
-    parser.add_argument("--tasks-dir", required=True)
+    parser.add_argument("--tasks-dir", "--task-dir", dest="tasks_dir", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--max-workers", type=int, default=50)
     parser.add_argument("--no-video", action="store_true", default=True)
     parser.add_argument("--category", default=None)
     parser.add_argument("--team-model-map", default=None)
-    parser.add_argument("--no-calibration", action="store_true", default=False)
+    parser.set_defaults(no_calibration=True)
+    parser.add_argument(
+        "--no-calibration",
+        dest="no_calibration",
+        action="store_true",
+        help="Do not write calibration back into source task JSONs (default).",
+    )
+    parser.add_argument(
+        "--calibration",
+        dest="no_calibration",
+        action="store_false",
+        help="Write calibration back into source task JSONs.",
+    )
     parser.add_argument(
         "--benchmark-run-mode",
         "--run-mode",

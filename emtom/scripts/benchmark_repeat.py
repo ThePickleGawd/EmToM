@@ -56,7 +56,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         description="Repeat EMTOM benchmark runs and aggregate pass@k / pass^k metrics."
     )
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--tasks-dir", help="Task directory to benchmark.")
+    source.add_argument("--tasks-dir", "--task-dir", dest="tasks_dir", help="Task directory to benchmark.")
     source.add_argument("--task", help="Single task JSON to benchmark.")
     parser.add_argument("--model", required=True, help="Model to benchmark.")
     parser.add_argument("--output-dir", required=True, help="Parent output directory for all repeats.")
@@ -78,7 +78,19 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--selector-max-frames", type=int, default=5)
     parser.add_argument("--selector-max-candidates", type=int, default=12)
     parser.add_argument("--video", action="store_true", default=False)
-    parser.add_argument("--no-calibration", action="store_true", default=False)
+    parser.set_defaults(no_calibration=True)
+    parser.add_argument(
+        "--no-calibration",
+        dest="no_calibration",
+        action="store_true",
+        help="Do not write calibration back into source task JSONs (default).",
+    )
+    parser.add_argument(
+        "--calibration",
+        dest="no_calibration",
+        action="store_false",
+        help="Write calibration back into source task JSONs after repeats finish.",
+    )
     return parser.parse_args(argv)
 
 

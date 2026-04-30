@@ -163,6 +163,20 @@ def test_parse_args_defaults_num_times_to_three() -> None:
     assert args.num_times == 3
 
 
+def test_parse_args_accepts_task_dir_alias_and_defaults_no_calibration() -> None:
+    args = parse_args(
+        [
+            "--task-dir",
+            "data/emtom/tasks",
+            "--models",
+            "gpt-5.4",
+        ]
+    )
+
+    assert args.tasks_dir == "data/emtom/tasks"
+    assert args.no_calibration is True
+
+
 def test_benchmark_repeat_parse_args_defaults_num_times_to_three() -> None:
     args = parse_repeat_args(
         [
@@ -176,6 +190,22 @@ def test_benchmark_repeat_parse_args_defaults_num_times_to_three() -> None:
     )
 
     assert args.num_times == 3
+
+
+def test_benchmark_repeat_parse_args_accepts_task_dir_alias_and_defaults_no_calibration() -> None:
+    args = parse_repeat_args(
+        [
+            "--task-dir",
+            "data/emtom/tasks",
+            "--model",
+            "gpt-5.4",
+            "--output-dir",
+            "outputs/emtom/test",
+        ]
+    )
+
+    assert args.tasks_dir == "data/emtom/tasks"
+    assert args.no_calibration is True
 
 
 def test_render_suite_summary_keeps_repeat_metric_columns_distinct(
@@ -216,6 +246,8 @@ def test_parse_args_reports_concise_errors(capsys: pytest.CaptureFixture[str]) -
 
     assert excinfo.value.code == 2
     captured = capsys.readouterr()
-    assert "Error: one of the arguments --tasks-dir --task is required" in captured.err
+    assert "Error: one of the arguments" in captured.err
+    assert "--tasks-dir" in captured.err
+    assert "--task" in captured.err
     assert "Hint: ./emtom/run_emtom.sh benchmark-suite --help" in captured.err
     assert "usage:" not in captured.err.lower()

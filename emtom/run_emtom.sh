@@ -208,7 +208,7 @@ TEST_MODEL=""  # Override model used for test_task calibration
 K_LEVEL=""  # Allowed k-levels (e.g. "2 3"). Empty = random per task.
 STRICT_OBJECT_IDS=false  # Strict object ID checks for static verification
 REPORT_FILE=""  # Optional JSON report output path for static verification
-NO_CALIBRATION=false  # Don't write benchmark results back into source task JSONs
+NO_CALIBRATION=true  # Don't write benchmark results back into source task JSONs by default
 OBSERVATION_MODE="text"  # Benchmark observation mode: text or vision
 BENCHMARK_RUN_MODE="standard"  # Benchmark run mode: standard, baseline, or full_info
 LIMIT=0  # Optional task limit for salvage-style commands
@@ -321,7 +321,7 @@ print_usage() {
     echo "  --max-sim-steps N    Max simulation steps before timeout (default: $MAX_SIM_STEPS)"
     echo "  --max-llm-calls N    Max LLM calls per agent (default: 4x golden trajectory)"
     echo "  --category TYPE      Filter benchmark tasks by category: cooperative|competitive|mixed"
-    echo "  --tasks-dir DIR      Custom tasks directory (default: data/emtom/tasks)"
+    echo "  --tasks-dir DIR      Custom tasks directory (alias: --task-dir; default: data/emtom/tasks)"
     echo "  --team-model-map MAP Team->model mapping for competitive tasks"
     echo "                       Format: team_0=sonnet,team_1=gpt-5"
     echo "  --observation-mode MODE  Benchmark observation mode: text|vision (default: $OBSERVATION_MODE)"
@@ -335,7 +335,8 @@ print_usage() {
     echo "  --num-times N        Repeat the benchmark N times (default: $NUM_TIMES; repeats run in parallel when N > 1)"
     echo "  --num-gpus N         Number of GPUs for round-robin assignment (default: $NUM_GPUS)"
     echo "  --video              Enable video recording (default: off)"
-    echo "  --no-calibration     Don't write results back into source task JSONs"
+    echo "  --no-calibration     Don't write results back into source task JSONs (default)"
+    echo "  --calibration        Write results back into source task JSONs"
     echo ""
     echo -e "${BOLD}Test Options:${NC}"
     echo "  --mechanics M1 M2    Mechanics to enable (e.g., inverse_state remote_control)"
@@ -351,7 +352,7 @@ print_usage() {
     echo ""
     echo -e "${BOLD}Static Verify Options:${NC}"
     echo "  --task FILE          Task JSON file to verify"
-    echo "  --tasks-dir DIR      Verify all task JSON files in directory (default: data/emtom/tasks)"
+    echo "  --tasks-dir DIR      Verify all task JSON files in directory (alias: --task-dir; default: data/emtom/tasks)"
     echo "  --scene-data FILE    Optional scene data JSON with rooms/furniture/objects for strict checks"
     echo "  --strict-object-ids  Fail on unknown object IDs in trajectory actions"
     echo "  --report-file FILE   Write JSON verification report to this path"
@@ -376,7 +377,7 @@ print_usage() {
     echo -e "  ./emtom/run_emtom.sh generate --agents-min 2 --agents-max 4 ${GREEN}--model gpt-5${NC}"
     echo -e "  ./emtom/run_emtom.sh generate ${GREEN}--model mistral-large-3${NC} --query \"A task using the radio\""
     echo "  ./emtom/run_emtom.sh all"
-    echo "  ./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/my_tasks"
+    echo "  ./emtom/run_emtom.sh benchmark --task-dir data/emtom/my_tasks"
     echo "  ./emtom/run_emtom.sh benchmark --max-sim-steps 1000"
     echo "  ./emtom/run_emtom.sh benchmark --category competitive"
     echo "  ./emtom/run_emtom.sh benchmark --task data/emtom/tasks/my_task.json --model gpt-5 --observation-mode vision"
@@ -397,7 +398,7 @@ print_benchmark_usage_short() {
     echo "Usage: ./emtom/run_emtom.sh benchmark [options]"
     echo ""
     echo "Common options:"
-    echo "  --tasks-dir DIR      Directory of task JSONs (default: data/emtom/tasks)"
+    echo "  --tasks-dir DIR      Directory of task JSONs (alias: --task-dir; default: data/emtom/tasks)"
     echo "  --task FILE          Run a single task file"
     echo "  --model MODEL        Model shortcut, e.g. gpt-5.4, deepseek, gemini-flash"
     echo "  --max-workers N      Parallel benchmark workers"
@@ -405,9 +406,10 @@ print_benchmark_usage_short() {
     echo "  --category TYPE      cooperative|competitive|mixed"
     echo "  --benchmark-run-mode MODE  standard|baseline|full_info"
     echo "  --observation-mode MODE  text|vision"
+    echo "  --calibration        Write results back into source task JSONs (default: off)"
     echo ""
     echo "Example:"
-    echo "  ./emtom/run_emtom.sh benchmark --tasks-dir data/emtom/tasks_20260330_batch23 --model gpt-5.4 --max-workers 8"
+    echo "  ./emtom/run_emtom.sh benchmark --task-dir data/emtom/tasks_20260330_batch23 --model gpt-5.4 --max-workers 8"
     echo ""
     echo "Tip: use --model, not model."
 }
@@ -729,6 +731,8 @@ run_benchmark() {
         fi
         if [ "$NO_CALIBRATION" = true ]; then
             REPEAT_CMD+=(--no-calibration)
+        else
+            REPEAT_CMD+=(--calibration)
         fi
         "${REPEAT_CMD[@]}"
         return
@@ -880,6 +884,8 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
         fi
         if [ "$NO_CALIBRATION" = true ]; then
             PARALLEL_CMD+=(--no-calibration)
+        else
+            PARALLEL_CMD+=(--calibration)
         fi
         "${PARALLEL_CMD[@]}"
         python -m emtom.scripts.print_benchmark_summary --output-dir "$OUTPUT_BASE" --model "$MODEL_SHORT" --parallel
@@ -1273,10 +1279,10 @@ COMMAND=""
 while [[ $# -gt 0 ]]; do
     if [[ "$1" == --* ]]; then
         case $1 in
-            --max-sim-steps|--max-llm-calls|--steps|--num-tasks|--tasks|--model|--llm|--subtasks|--subtasks-min|--subtasks-max|--iterations-per-task|--task-gen-agent|--query|--retry-verification|--agents|--agents-min|--agents-max|--num-agents|--agent-type|--task|--threshold|--tasks-dir|--team-model-map|--observation-mode|--benchmark-run-mode|--selector-min-frames|--selector-max-frames|--selector-max-candidates|--judge-difficulty|--difficulty|--test-model|--target-model|--target-pass-rate|--seed-pass-ratio|--seed-fail-ratio|--tom-target-l1|--tom-target-l2|--tom-target-l3|--tom-ratio-tolerance|--max-workers|--num-times|--num-gpus|--category|--seed-tasks-dir|--sampled-tasks-dir|--output-dir|--limit|--scene-data|--report-file)
+            --max-sim-steps|--max-llm-calls|--steps|--num-tasks|--tasks|--model|--llm|--subtasks|--subtasks-min|--subtasks-max|--iterations-per-task|--task-gen-agent|--query|--retry-verification|--agents|--agents-min|--agents-max|--num-agents|--agent-type|--task|--threshold|--tasks-dir|--task-dir|--team-model-map|--observation-mode|--benchmark-run-mode|--selector-min-frames|--selector-max-frames|--selector-max-candidates|--judge-difficulty|--difficulty|--test-model|--target-model|--target-pass-rate|--seed-pass-ratio|--seed-fail-ratio|--tom-target-l1|--tom-target-l2|--tom-target-l3|--tom-ratio-tolerance|--max-workers|--num-times|--num-gpus|--category|--seed-tasks-dir|--sampled-tasks-dir|--output-dir|--limit|--scene-data|--report-file)
                 require_option_value "$1" "${2:-}"
                 ;;
-            --mechanics|--llm-agents|--remove|--k-level|--video|--no-calibration|--no-icl|--skip-backup|--strict-object-ids|--no-auto-retry|--help)
+            --mechanics|--llm-agents|--remove|--k-level|--video|--no-calibration|--calibration|--no-icl|--skip-backup|--strict-object-ids|--no-auto-retry|--help)
                 ;;
         esac
     fi
@@ -1405,9 +1411,13 @@ while [[ $# -gt 0 ]]; do
             NO_AUTO_RETRY=true
             shift
             ;;
-        --tasks-dir)
+        --tasks-dir|--task-dir)
             TASKS_DIR=$2
             shift 2
+            ;;
+        --calibration)
+            NO_CALIBRATION=false
+            shift
             ;;
         --team-model-map)
             TEAM_MODEL_MAP=$2

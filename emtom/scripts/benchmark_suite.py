@@ -457,7 +457,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         description="Benchmark one task folder across multiple models."
     )
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--tasks-dir", help="Task directory to benchmark.")
+    source.add_argument("--tasks-dir", "--task-dir", dest="tasks_dir", help="Task directory to benchmark.")
     source.add_argument("--task", dest="task_files", action="append", help="Specific task JSON to benchmark. Repeat for multiple tasks.")
     parser.add_argument("--models", nargs="+", required=True, help="Models to benchmark.")
     parser.add_argument("--max-workers", type=int, default=8, help="Parallel workers per model run.")
@@ -466,7 +466,19 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--run-mode", default="standard", choices=["standard", "baseline", "full_info"])
     parser.add_argument("--num-times", type=int, default=3, help="Repeat each model benchmark N times.")
     parser.add_argument("--output-dir", default=None, help="Optional parent output directory for the suite.")
-    parser.add_argument("--no-calibration", action="store_true", default=False)
+    parser.set_defaults(no_calibration=True)
+    parser.add_argument(
+        "--no-calibration",
+        dest="no_calibration",
+        action="store_true",
+        help="Do not write calibration back into source task JSONs (default).",
+    )
+    parser.add_argument(
+        "--calibration",
+        dest="no_calibration",
+        action="store_false",
+        help="Write calibration back into source task JSONs.",
+    )
     args = parser.parse_args(argv)
     args.models = [_normalize_model_alias(model) for model in args.models]
     return args
@@ -549,6 +561,8 @@ def main() -> int:
                 cmd.extend(["--category", args.category])
             if args.no_calibration:
                 cmd.append("--no-calibration")
+            else:
+                cmd.append("--calibration")
 
             print()
             print(_style("=" * 72, BOLD, MAGENTA))

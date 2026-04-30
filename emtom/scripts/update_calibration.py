@@ -26,7 +26,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Write benchmark results back into task JSONs as calibration metadata."
     )
-    parser.add_argument("--tasks-dir", required=True, help="Directory containing source task JSONs")
+    parser.add_argument("--tasks-dir", "--task-dir", dest="tasks_dir", required=True, help="Directory containing source task JSONs")
     parser.add_argument("--benchmark-output-base", required=True, help="Benchmark output base path (before -Nagents suffix)")
     parser.add_argument("--model", required=True, help="Model short name used in benchmark")
     parser.add_argument(
