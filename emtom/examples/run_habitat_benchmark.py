@@ -36,6 +36,7 @@ from habitat_llm.agent.env.dataset import CollaborationDatasetV0
 from habitat_llm.utils import cprint, setup_config, fix_config
 
 from emtom.api_costs import summarize_task_costs
+from emtom.runner.benchmark import BenchmarkExecutionError
 from emtom.task_gen import GeneratedTask
 
 
@@ -479,7 +480,7 @@ def run_single_task(
         Results dict with success, steps, turns, etc.
     """
     from emtom.runner import BenchmarkRunner
-    from emtom.runner.benchmark import BenchmarkExecutionError, task_to_instruction
+    from emtom.runner.benchmark import task_to_instruction
 
     task_id = task.task_id
     prefix = f"[{task_index + 1}/{total_tasks}]" if total_tasks > 1 else ""

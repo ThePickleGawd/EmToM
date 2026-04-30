@@ -123,6 +123,24 @@ has_anthropic_api_key() {
     return 1
 }
 
+# Load ANTHROPIC_API_KEY from .env into the process environment if not already set.
+# This ensures subprocesses (Python benchmark scripts) can read the key via os.getenv().
+load_anthropic_api_key() {
+    if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+        return 0
+    fi
+    if [[ -f ".env" ]]; then
+        local line value
+        line=$(grep -E '^[[:space:]]*ANTHROPIC_API_KEY[[:space:]]*=' .env | tail -n 1 || true)
+        if [[ -n "$line" ]]; then
+            value=$(printf '%s' "$line" | sed -E "s/^[^=]+=//; s/^[[:space:]]+//; s/[[:space:]]+$//; s/^['\\\"]//; s/['\\\"]$//")
+            if [[ -n "$value" ]]; then
+                export ANTHROPIC_API_KEY="$value"
+            fi
+        fi
+    fi
+}
+
 # Auto-detect LLM provider from model name
 detect_llm_provider() {
     local model
@@ -781,6 +799,7 @@ run_benchmark() {
             done
         fi
 
+        [[ "$LLM_PROVIDER" == "anthropic_claude" ]] && load_anthropic_api_key
         EMTOM_TEAM_MODEL_MAP="$TEAM_MODEL_MAP" python emtom/examples/run_habitat_benchmark.py \
             --config-name $CONFIG_NAME \
             habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
@@ -909,6 +928,7 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
                 done
             fi
 
+            [[ "$LLM_PROVIDER" == "anthropic_claude" ]] && load_anthropic_api_key
             EMTOM_TEAM_MODEL_MAP="$TEAM_MODEL_MAP" python emtom/examples/run_habitat_benchmark.py \
                 --config-name $CONFIG_NAME \
                 habitat.environment.max_episode_steps=$MAX_SIM_STEPS \
