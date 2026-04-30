@@ -193,6 +193,8 @@ def _build_run_command(args: argparse.Namespace, run_output_dir: Path) -> list[s
         "--selector-max-candidates",
         str(args.selector_max_candidates),
         "--no-calibration",
+        "--num-times",
+        "1",
     ]
 
     if args.tasks_dir:
@@ -299,17 +301,14 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     expected_task_ids = _collect_expected_task_ids(args)
 
-    run_specs: List[ActiveRun] = []
-    for run_index in range(1, args.num_times + 1):
-        run_output_dir = output_dir / f"run_{run_index}"
-        run_output_dir.mkdir(parents=True, exist_ok=True)
-        run_specs.append(_launch_run(args, run_index, run_output_dir))
-
     runs = []
     parsed_runs: Dict[int, BenchmarkResults] = {}
     exit_codes = []
 
-    for active_run in run_specs:
+    for run_index in range(1, args.num_times + 1):
+        run_output_dir = output_dir / f"run_{run_index}"
+        run_output_dir.mkdir(parents=True, exist_ok=True)
+        active_run = _launch_run(args, run_index, run_output_dir)
         return_code = active_run.proc.wait()
         active_run.log_handle.close()
         exit_codes.append(return_code)
