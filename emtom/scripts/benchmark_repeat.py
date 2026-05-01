@@ -28,6 +28,7 @@ from emtom.benchmark_metrics import (
 )
 from emtom.evolve.benchmark_wrapper import (
     BenchmarkResults,
+    kill_proc_group,
     parse_benchmark_results,
     parse_parallel_benchmark_results,
     update_calibration_from_benchmark,
@@ -64,6 +65,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-sim-steps", type=int, default=200000)
     parser.add_argument("--max-llm-calls", type=int, default=None)
     parser.add_argument("--max-workers", type=int, default=None)
+    parser.add_argument("--workers-per-gpu", type=int, default=None)
     parser.add_argument("--num-gpus", type=int, default=None)
     parser.add_argument("--category", default=None)
     parser.add_argument("--team-model-map", default=None)
@@ -204,7 +206,9 @@ def _build_run_command(args: argparse.Namespace, run_output_dir: Path) -> list[s
 
     if args.max_llm_calls is not None:
         cmd.extend(["--max-llm-calls", str(args.max_llm_calls)])
-    if args.max_workers is not None:
+    if args.workers_per_gpu is not None:
+        cmd.extend(["--workers-per-gpu", str(args.workers_per_gpu)])
+    elif args.max_workers is not None:
         cmd.extend(["--max-workers", str(args.max_workers)])
     if args.num_gpus is not None:
         cmd.extend(["--num-gpus", str(args.num_gpus)])
@@ -248,6 +252,7 @@ def _launch_run(
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             text=True,
+            start_new_session=True,
         )
     except Exception:
         log_handle.close()
@@ -301,62 +306,75 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     expected_task_ids = _collect_expected_task_ids(args)
 
+    # Launch all repeat runs in parallel
+    active_runs: List[ActiveRun] = []
+    for run_index in range(1, args.num_times + 1):
+        run_output_dir = output_dir / f"run_{run_index}"
+        run_output_dir.mkdir(parents=True, exist_ok=True)
+        active_runs.append(_launch_run(args, run_index, run_output_dir))
+
     runs = []
     parsed_runs: Dict[int, BenchmarkResults] = {}
     exit_codes = []
 
-    for run_index in range(1, args.num_times + 1):
-        run_output_dir = output_dir / f"run_{run_index}"
-        run_output_dir.mkdir(parents=True, exist_ok=True)
-        active_run = _launch_run(args, run_index, run_output_dir)
-        return_code = active_run.proc.wait()
-        active_run.log_handle.close()
-        exit_codes.append(return_code)
+    try:
+        for active_run in active_runs:
+            return_code = active_run.proc.wait()
+            active_run.log_handle.close()
+            exit_codes.append(return_code)
 
-        parsed = None
-        error = ""
-        try:
-            parsed = _parse_run_results(args, active_run.output_dir)
-        except Exception as exc:
-            error = str(exc)
+            parsed = None
+            error = ""
+            try:
+                parsed = _parse_run_results(args, active_run.output_dir)
+            except Exception as exc:
+                error = str(exc)
 
-        if parsed is None:
-            status = "failed"
-            run = BenchmarkRepeatRun(
-                run_index=active_run.run_index,
-                output_dir=str(active_run.output_dir),
-                status=status,
-                return_code=return_code,
-                error=error or f"benchmark exited with code {return_code}",
-            )
-        else:
-            status = "complete" if return_code == 0 else "partial"
-            run = BenchmarkRepeatRun(
-                run_index=active_run.run_index,
-                output_dir=str(active_run.output_dir),
-                status=status,
-                return_code=return_code,
-                total=parsed.total,
-                passed=parsed.passed,
-                failed=parsed.failed,
-                pass_rate=parsed.pass_rate,
-                error=error,
-            )
-            parsed_runs[active_run.run_index] = parsed
+            if parsed is None:
+                status = "failed"
+                run = BenchmarkRepeatRun(
+                    run_index=active_run.run_index,
+                    output_dir=str(active_run.output_dir),
+                    status=status,
+                    return_code=return_code,
+                    error=error or f"benchmark exited with code {return_code}",
+                )
+            else:
+                status = "complete" if return_code == 0 else "partial"
+                run = BenchmarkRepeatRun(
+                    run_index=active_run.run_index,
+                    output_dir=str(active_run.output_dir),
+                    status=status,
+                    return_code=return_code,
+                    total=parsed.total,
+                    passed=parsed.passed,
+                    failed=parsed.failed,
+                    pass_rate=parsed.pass_rate,
+                    error=error,
+                )
+                parsed_runs[active_run.run_index] = parsed
 
-        runs.append(run)
-        if run.pass_rate is not None:
-            print(
-                f"[repeat] finished run {active_run.run_index}/{args.num_times}: "
-                f"status={run.status} pass_rate={run.pass_rate:.1f}% "
-                f"({run.passed}/{run.total}) log={active_run.log_path}"
-            )
-        else:
-            print(
-                f"[repeat] finished run {active_run.run_index}/{args.num_times}: "
-                f"status={run.status} error={run.error or 'unknown error'} "
-                f"log={active_run.log_path}"
-            )
+            runs.append(run)
+            if run.pass_rate is not None:
+                print(
+                    f"[repeat] finished run {active_run.run_index}/{args.num_times}: "
+                    f"status={run.status} pass_rate={run.pass_rate:.1f}% "
+                    f"({run.passed}/{run.total}) log={active_run.log_path}"
+                )
+            else:
+                print(
+                    f"[repeat] finished run {active_run.run_index}/{args.num_times}: "
+                    f"status={run.status} error={run.error or 'unknown error'} "
+                    f"log={active_run.log_path}"
+                )
+    finally:
+        for active_run in active_runs:
+            if active_run.proc.poll() is None:
+                kill_proc_group(active_run.proc)
+            try:
+                active_run.log_handle.close()
+            except Exception:
+                pass
 
     summary = build_repeat_summary(
         model=args.model,

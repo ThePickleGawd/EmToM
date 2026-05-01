@@ -211,6 +211,7 @@ SEED_PASS_RATIO="0.20"  # Logical seed mix for target-model passing tasks
 SEED_FAIL_RATIO="0.80"  # Logical seed mix for target-model failing tasks
 NO_VIDEO=true  # Disable video saving (default: true for speed)
 MAX_WORKERS=""  # Parallel benchmark: max concurrent processes (empty = sequential)
+WORKERS_PER_GPU=""  # Parallel benchmark: processes per GPU (sets MAX_WORKERS = num_gpus × this)
 NUM_GPUS=8  # GPU count for round-robin subprocess assignment
 NUM_TIMES=3  # Benchmark repeats: run the same benchmark N times
 TASKS_DIR=""  # Custom tasks directory for benchmark
@@ -732,7 +733,9 @@ run_benchmark() {
         if [ -n "$MAX_LLM_CALLS" ]; then
             REPEAT_CMD+=(--max-llm-calls "$MAX_LLM_CALLS")
         fi
-        if [ -n "$MAX_WORKERS" ]; then
+        if [ -n "$WORKERS_PER_GPU" ]; then
+            REPEAT_CMD+=(--workers-per-gpu "$WORKERS_PER_GPU")
+        elif [ -n "$MAX_WORKERS" ]; then
             REPEAT_CMD+=(--max-workers "$MAX_WORKERS")
         fi
         if [ -n "$NUM_GPUS" ]; then
@@ -876,22 +879,30 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
     fi
     echo "=============================================="
 
-    if [ -n "$MAX_WORKERS" ]; then
+    if [ -n "$WORKERS_PER_GPU" ] || [ -n "$MAX_WORKERS" ]; then
         # ── Parallel mode: one process per task with GPU round-robin ──
-        echo -e "${CYAN}Running parallel benchmark (max_workers=$MAX_WORKERS)${NC}"
+        if [ -n "$WORKERS_PER_GPU" ]; then
+            echo -e "${CYAN}Running parallel benchmark (workers_per_gpu=$WORKERS_PER_GPU)${NC}"
+        else
+            echo -e "${CYAN}Running parallel benchmark (max_workers=$MAX_WORKERS)${NC}"
+        fi
 
         PARALLEL_CMD=(
             python -m emtom.scripts.run_benchmark_parallel
             --tasks-dir "$TASK_DIR"
             --model "$MODEL_SHORT"
             --output-dir "$OUTPUT_BASE"
-            --max-workers "$MAX_WORKERS"
             --benchmark-run-mode "$BENCHMARK_RUN_MODE"
             --observation-mode "$OBSERVATION_MODE"
             --selector-min-frames "$SELECTOR_MIN_FRAMES"
             --selector-max-frames "$SELECTOR_MAX_FRAMES"
             --selector-max-candidates "$SELECTOR_MAX_CANDIDATES"
         )
+        if [ -n "$WORKERS_PER_GPU" ]; then
+            PARALLEL_CMD+=(--workers-per-gpu "$WORKERS_PER_GPU")
+        else
+            PARALLEL_CMD+=(--max-workers "$MAX_WORKERS")
+        fi
         if [ "$NO_VIDEO" != true ]; then
             PARALLEL_CMD+=(--video)
         fi
@@ -1299,7 +1310,7 @@ COMMAND=""
 while [[ $# -gt 0 ]]; do
     if [[ "$1" == --* ]]; then
         case $1 in
-            --max-sim-steps|--max-llm-calls|--steps|--num-tasks|--tasks|--model|--llm|--subtasks|--subtasks-min|--subtasks-max|--iterations-per-task|--task-gen-agent|--query|--retry-verification|--agents|--agents-min|--agents-max|--num-agents|--agent-type|--task|--threshold|--tasks-dir|--task-dir|--team-model-map|--observation-mode|--benchmark-run-mode|--selector-min-frames|--selector-max-frames|--selector-max-candidates|--judge-difficulty|--difficulty|--test-model|--target-model|--target-pass-rate|--seed-pass-ratio|--seed-fail-ratio|--tom-target-l1|--tom-target-l2|--tom-target-l3|--tom-ratio-tolerance|--max-workers|--num-times|--num-gpus|--category|--seed-tasks-dir|--sampled-tasks-dir|--output-dir|--limit|--scene-data|--report-file)
+            --max-sim-steps|--max-llm-calls|--steps|--num-tasks|--tasks|--model|--llm|--subtasks|--subtasks-min|--subtasks-max|--iterations-per-task|--task-gen-agent|--query|--retry-verification|--agents|--agents-min|--agents-max|--num-agents|--agent-type|--task|--threshold|--tasks-dir|--task-dir|--team-model-map|--observation-mode|--benchmark-run-mode|--selector-min-frames|--selector-max-frames|--selector-max-candidates|--judge-difficulty|--difficulty|--test-model|--target-model|--target-pass-rate|--seed-pass-ratio|--seed-fail-ratio|--tom-target-l1|--tom-target-l2|--tom-target-l3|--tom-ratio-tolerance|--max-workers|--workers-per-gpu|--num-times|--num-gpus|--category|--seed-tasks-dir|--sampled-tasks-dir|--output-dir|--limit|--scene-data|--report-file)
                 require_option_value "$1" "${2:-}"
                 ;;
             --mechanics|--llm-agents|--remove|--k-level|--video|--no-calibration|--calibration|--no-icl|--skip-backup|--strict-object-ids|--no-auto-retry|--help)
@@ -1568,6 +1579,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --max-workers)
             MAX_WORKERS=$2
+            shift 2
+            ;;
+        --workers-per-gpu)
+            WORKERS_PER_GPU=$2
             shift 2
             ;;
         --num-times)

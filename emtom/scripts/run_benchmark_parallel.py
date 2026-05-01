@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--model", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--max-workers", type=int, default=50)
+    parser.add_argument("--workers-per-gpu", type=int, default=None)
     parser.add_argument("--no-video", action="store_true", default=True)
     parser.add_argument("--category", default=None)
     parser.add_argument("--team-model-map", default=None)
@@ -68,6 +69,7 @@ def main():
         model=args.model,
         output_dir=args.output_dir,
         max_workers=args.max_workers,
+        workers_per_gpu=args.workers_per_gpu,
         no_video=args.no_video,
         category=args.category,
         team_model_map=args.team_model_map,

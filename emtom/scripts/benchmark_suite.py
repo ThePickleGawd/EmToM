@@ -20,7 +20,7 @@ from emtom.benchmark_metrics import (
     load_repeat_summary,
     repeat_summary_path,
 )
-from emtom.evolve.benchmark_wrapper import BenchmarkResults, parse_benchmark_results
+from emtom.evolve.benchmark_wrapper import BenchmarkResults, kill_proc_group, parse_benchmark_results
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -460,7 +460,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     source.add_argument("--tasks-dir", "--task-dir", dest="tasks_dir", help="Task directory to benchmark.")
     source.add_argument("--task", dest="task_files", action="append", help="Specific task JSON to benchmark. Repeat for multiple tasks.")
     parser.add_argument("--models", nargs="+", required=True, help="Models to benchmark.")
-    parser.add_argument("--max-workers", type=int, default=8, help="Parallel workers per model run.")
+    parser.add_argument("--max-workers", type=int, default=None, help="Total parallel workers per model run.")
+    parser.add_argument("--workers-per-gpu", type=int, default=None, help="Parallel workers per GPU (sets max-workers = num_gpus × this).")
     parser.add_argument("--observation-mode", default="text", choices=["text", "vision"])
     parser.add_argument("--category", default=None, help="Optional category filter.")
     parser.add_argument("--run-mode", default="standard", choices=["standard", "baseline", "full_info"])
@@ -552,11 +553,13 @@ def main() -> int:
                 args.run_mode,
                 "--num-times",
                 str(args.num_times),
-                "--max-workers",
-                str(args.max_workers),
                 "--output-dir",
                 str(model_output_dir),
             ]
+            if args.workers_per_gpu is not None:
+                cmd.extend(["--workers-per-gpu", str(args.workers_per_gpu)])
+            elif args.max_workers is not None:
+                cmd.extend(["--max-workers", str(args.max_workers)])
             if args.category:
                 cmd.extend(["--category", args.category])
             if args.no_calibration:
@@ -568,17 +571,21 @@ def main() -> int:
             print(_style("=" * 72, BOLD, MAGENTA))
             print(f"Running benchmark for {_style(model, BOLD, MAGENTA)}")
             print(_style("=" * 72, BOLD, MAGENTA))
-            proc = subprocess.Popen(cmd, cwd=PROJECT_ROOT)
-            last_refresh = time.monotonic()
-            return_code = proc.poll()
-            while return_code is None:
-                time.sleep(5)
-                now = time.monotonic()
-                if now - last_refresh >= SUMMARY_REFRESH_SECONDS:
-                    results[idx] = _refresh_running_result(results[idx])
-                    _write_suite_summary(suite_dir, tasks_dir, args, results, current_model=model)
-                    last_refresh = now
+            proc = subprocess.Popen(cmd, cwd=PROJECT_ROOT, start_new_session=True)
+            try:
+                last_refresh = time.monotonic()
                 return_code = proc.poll()
+                while return_code is None:
+                    time.sleep(5)
+                    now = time.monotonic()
+                    if now - last_refresh >= SUMMARY_REFRESH_SECONDS:
+                        results[idx] = _refresh_running_result(results[idx])
+                        _write_suite_summary(suite_dir, tasks_dir, args, results, current_model=model)
+                        last_refresh = now
+                    return_code = proc.poll()
+            finally:
+                if proc.poll() is None:
+                    kill_proc_group(proc)
             results[idx] = _refresh_running_result(results[idx])
 
             summary = None

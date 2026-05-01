@@ -401,7 +401,7 @@ def parse_benchmark_results(output_dir: str, model: str) -> BenchmarkResults:
     )
 
 
-def _kill_proc_group(proc: subprocess.Popen, timeout: float = 10.0) -> None:
+def kill_proc_group(proc: subprocess.Popen, timeout: float = 10.0) -> None:
     """Send SIGTERM to the process group, then SIGKILL if still alive after timeout."""
     try:
         pgid = os.getpgid(proc.pid)
@@ -476,6 +476,7 @@ def run_benchmark_parallel(
     model: str,
     output_dir: str,
     max_workers: int = 50,
+    workers_per_gpu: Optional[int] = None,
     no_video: bool = True,
     category: Optional[str] = None,
     team_model_map: Optional[str] = None,
@@ -554,6 +555,8 @@ def run_benchmark_parallel(
 
     # Detect GPUs for round-robin distribution
     gpu_ids = _detect_gpu_ids()
+    if workers_per_gpu is not None:
+        max_workers = len(gpu_ids) * workers_per_gpu
 
     # Prepare per-task jobs: (task_stem, task_input_dir, benchmark_output_dir)
     jobs = []
@@ -710,7 +713,7 @@ def run_benchmark_parallel(
             time.sleep(10)
     finally:
         for stem, bench_out, proc, fh in active:
-            _kill_proc_group(proc)
+            kill_proc_group(proc)
             fh.close()
 
     if failed_stems:
