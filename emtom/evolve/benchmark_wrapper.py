@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -400,6 +401,31 @@ def parse_benchmark_results(output_dir: str, model: str) -> BenchmarkResults:
     )
 
 
+def _kill_proc_group(proc: subprocess.Popen, timeout: float = 10.0) -> None:
+    """Send SIGTERM to the process group, then SIGKILL if still alive after timeout."""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except OSError:
+        return  # process already gone
+
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except OSError:
+        return
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            pass
+
+
 def _detect_gpu_ids() -> List[int]:
     """Detect available CUDA GPU IDs via nvidia-smi."""
     try:
@@ -651,7 +677,9 @@ def run_benchmark_parallel(
 
                 log_file = log_dir / f"bench_{stem}.log"
                 fh = open(log_file, "w")
-                proc = subprocess.Popen(cmd, stdout=fh, stderr=fh, env=env)
+                proc = subprocess.Popen(
+                    cmd, stdout=fh, stderr=fh, env=env, start_new_session=True
+                )
                 active.append((stem, bench_out, proc, fh))
                 job_idx += 1
 
@@ -682,9 +710,7 @@ def run_benchmark_parallel(
             time.sleep(10)
     finally:
         for stem, bench_out, proc, fh in active:
-            proc.terminate()
-        for stem, bench_out, proc, fh in active:
-            proc.wait()
+            _kill_proc_group(proc)
             fh.close()
 
     if failed_stems:
