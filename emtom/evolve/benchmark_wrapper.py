@@ -664,6 +664,7 @@ def run_benchmark_parallel(
                     "--selector-max-frames", str(selector_max_frames),
                     "--selector-max-candidates", str(selector_max_candidates),
                     "--no-calibration",
+                    "--num-times", "1",
                 ]
                 if not no_video:
                     cmd.append("--video")

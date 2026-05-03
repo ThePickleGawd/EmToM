@@ -872,7 +872,9 @@ print(f'{total}|{\" \".join(map(str, sorted(counts)))}')
     if [ -n "$TEAM_MODEL_MAP" ]; then
         echo "Team model map: $TEAM_MODEL_MAP"
     fi
-    if [ -n "$MAX_WORKERS" ]; then
+    if [ -n "$WORKERS_PER_GPU" ]; then
+        echo "Mode: parallel (workers_per_gpu=$WORKERS_PER_GPU)"
+    elif [ -n "$MAX_WORKERS" ]; then
         echo "Mode: parallel (max_workers=$MAX_WORKERS)"
     else
         echo "Mode: sequential"

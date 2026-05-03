@@ -225,7 +225,7 @@ def _build_run_command(args: argparse.Namespace, run_output_dir: Path) -> list[s
 def _parse_run_results(args: argparse.Namespace, run_output_dir: Path) -> BenchmarkResults:
     if args.task:
         return parse_benchmark_results(str(run_output_dir), args.model)
-    if args.max_workers is not None:
+    if args.max_workers is not None or args.workers_per_gpu is not None:
         try:
             return parse_parallel_benchmark_results(str(run_output_dir), args.model)
         except Exception:
